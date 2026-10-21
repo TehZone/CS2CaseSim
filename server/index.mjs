@@ -16,7 +16,8 @@ import { Trades } from './trade.mjs';
 import { Live } from './live.mjs';
 import * as A from './accounts.mjs';
 import { D, initData } from '../src/js/engine/data.js';
-import { makeCtx, runAction, delta, GameError } from '../src/js/engine/actions.js';
+import { makeCtx, runAction, delta, credit, GameError } from '../src/js/engine/actions.js';
+import * as M from '../src/js/engine/manager.js';
 import { itemValue } from '../src/js/engine/items.js';
 
 const require = createRequire(import.meta.url);
@@ -150,6 +151,49 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
     }
   });
 
+  // ---- team ladder: play against other players' saved lineups ------------------------------------------
+  const challenged = new Map(); // "a|b" -> time of last challenge
+  async function social(user, m, a) {
+    if (m === 'ladder') {
+      await store.flush().catch(() => {});
+      const { rows } = await db.query(`SELECT name, state->'team'->>'name' AS team, (state->'team'->>'elo')::int AS elo,
+        (state->'team'->>'w')::int AS w, (state->'team'->>'l')::int AS l FROM users ORDER BY elo DESC NULLS LAST, name LIMIT 30`);
+      return { r: rows.map((x) => ({ name: x.name, team: x.team || 'My Team', elo: x.elo ?? 1000, w: x.w || 0, l: x.l || 0, me: x.name === user.name })) };
+    }
+    if (m === 'challenge') {
+      const { rows } = await db.query('SELECT id, name FROM users WHERE name_lc = $1', [String(a.name || '').toLowerCase()]);
+      if (!rows.length) throw new GameError('No such player');
+      const other = rows[0];
+      if (other.id === user.id) throw new GameError('You can’t play yourself');
+      const key = user.id + '|' + other.id;
+      if (Date.now() - (challenged.get(key) || 0) < 120000) throw new GameError('You played them a moment ago. Try again in two minutes.');
+      return store.lock([user.id, other.id], async (entries) => {
+        const me = entries.find((e) => e.id === user.id), them = entries.find((e) => e.id === other.id);
+        const mine = M.lineupFromState(me.st), theirs = M.lineupFromState(them.st);
+        const rm = M.teamRating(mine), rt = M.teamRating(theirs);
+        if (!rm.complete) throw new GameError('Fill all five roles first');
+        if (!rt.complete) throw new GameError(`${other.name} doesn't have a full team yet`);
+        const match = M.simulateMatch({ name: me.st.team.name, lineup: mine }, { name: them.st.team.name, lineup: theirs });
+        const won = match.winner === 'A';
+        const ea = me.st.team.elo, eb = them.st.team.elo;
+        const exp = 1 / (1 + 10 ** ((eb - ea) / 400));
+        const dA = Math.round(32 * ((won ? 1 : 0) - exp));
+        const ctx = makeCtx(me.st, { online: true });
+        const reward = M.matchReward(rm.rating, rt.rating, won);
+        credit(ctx, reward);
+        const hist = (t, opp, score, w) => [{ opp, score, won: w, at: Date.now() }, ...t.history].slice(0, 20);
+        me.st.team = { ...me.st.team, elo: ea + dA, w: me.st.team.w + (won ? 1 : 0), l: me.st.team.l + (won ? 0 : 1), history: hist(me.st.team, `${them.st.team.name} (${other.name})`, match.score, won) };
+        them.st.team = { ...them.st.team, elo: eb - dA, w: them.st.team.w + (won ? 0 : 1), l: them.st.team.l + (won ? 1 : 0), history: hist(them.st.team, `${me.st.team.name} (${user.name})`, [match.score[1], match.score[0]], !won) };
+        ctx.dirty.add('team');
+        await store.commit([me, them]);
+        challenged.set(key, Date.now());
+        srv.deltaTo(other.id, { set: { team: them.st.team }, add: [], del: [], upd: [] }, `<b>${user.name}</b> challenged your team: ${won ? 'you lost' : 'you won'} ${match.score[1]}-${match.score[0]}`);
+        return { r: { match, reward, elo: dA, opp: { name: `${them.st.team.name} (${other.name})`, rating: rt.rating } }, d: delta(ctx) };
+      });
+    }
+    throw new GameError('Unknown request');
+  }
+
   // ---- WebSocket ------------------------------------------------------------------------------------
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: MAX_MSG });
   const playersList = () => [...sockets.keys()].map((id) => {
@@ -224,6 +268,10 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
           reply(true, { r: out.r, d: out.d });
           srv.sendTo(user.id, { t: 'delta', d: out.d }, ws); // other tabs of the same player
           return;
+        }
+        if (msg.ns === 'social') {
+          const out = await social(user, String(msg.m), msg.args || {});
+          return reply(true, { r: out.r, d: out.d });
         }
         if (msg.ns === 'trade') return reply(true, { r: await trades.rpc(user, String(msg.m), msg.args || {}) });
         if (msg.ns === 'gamble') return reply(true, { r: await live.rpc(user, String(msg.m), msg.args || {}) });

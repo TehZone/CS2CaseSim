@@ -179,6 +179,13 @@ function tierFreq(box, n) {
   check('item.sell credits item value', near(st.money, before + sold.r.total, 1e-9) && !st.inv.find((i) => i.uid === r.items[0].uid));
   threw = false; try { run('item.sell', { uids: [r.items[0].uid] }); } catch { threw = true; }
   check('cannot sell the same item twice', threw);
+  {
+    // A failure part-way (inventory full after paying) leaves the state untouched.
+    const m = st.money, n = st.inv.length, opened = st.stats.opened;
+    const ctx = ACT.makeCtx(st, { rng, invCap: st.inv.length + 1 });
+    let e = null; try { ACT.runAction(ctx, 'case.open', { id: box.id, n: 3 }); } catch (x) { e = x; }
+    check('failed actions change nothing (all-or-nothing)', e?.code === 'full' && st.money === m && st.inv.length === n && st.stats.opened === opened);
+  }
   run('item.lock', { uid: r.items[1].uid, lk: true });
   threw = false; try { run('item.sell', { uids: [r.items[1].uid] }); } catch { threw = true; }
   check('locked items cannot be sold', threw);

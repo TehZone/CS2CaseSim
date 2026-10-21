@@ -114,16 +114,40 @@ export function lineupFromState(st) {
   return out;
 }
 
-// Best lineup from a set of cards (greedy by effective rating), used for AI teams and "auto pick".
-export function autoLineup(cards) {
-  const left = [...cards].sort((a, b) => b.ovr - a.ovr);
-  const out = {};
-  for (const slot of ['AWP', 'IGL', 'Entry', 'Lurk', 'Support']) {
-    let best = -1, bi = -1;
-    left.forEach((c, i) => { const v = c.ovr - roleFit(c, slot); if (v > best) { best = v; bi = i; } });
-    out[slot] = bi >= 0 ? left.splice(bi, 1)[0] : null;
+// Best lineup from a set of cards, used for AI teams and "auto pick": tries every way to seat the strongest
+// cards (one card per player) and keeps the highest team rating, chemistry included.
+export function autoLineup(cards, { pool = 10 } = {}) {
+  const byPlayer = new Map();
+  for (const c of cards) if (!byPlayer.has(c.pid) || byPlayer.get(c.pid).ovr < c.ovr) byPlayer.set(c.pid, c);
+  const top = [...byPlayer.values()].sort((a, b) => b.ovr - a.ovr).slice(0, pool);
+  if (top.length < 5) {
+    const out = {};
+    const left = [...top];
+    for (const slot of SLOTS) {
+      let best = -Infinity, bi = -1;
+      left.forEach((c, i) => { const v = c.ovr - roleFit(c, slot); if (v > best) { best = v; bi = i; } });
+      out[slot] = bi >= 0 ? left.splice(bi, 1)[0] : null;
+    }
+    return out;
   }
-  return out;
+  let best = null, bestScore = -Infinity;
+  const pick = new Array(5), used = new Array(top.length).fill(false);
+  const rec = (k, effSum) => {
+    if (k === 5) {
+      const lu = Object.fromEntries(SLOTS.map((s, i) => [s, pick[i]]));
+      const score = effSum / 5 + chemistry(lu).value * 0.2;
+      if (score > bestScore) { bestScore = score; best = lu; }
+      return;
+    }
+    for (let i = 0; i < top.length; i++) {
+      if (used[i]) continue;
+      used[i] = true; pick[k] = top[i];
+      rec(k + 1, effSum + top[i].ovr - roleFit(top[i], SLOTS[k]));
+      used[i] = false;
+    }
+  };
+  rec(0, 0);
+  return best;
 }
 
 // ---- opponents -----------------------------------------------------------------------------------

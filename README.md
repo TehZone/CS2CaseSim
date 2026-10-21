@@ -17,7 +17,18 @@ game). Models/textures are extracted the first time you inspect each weapon and 
 shader) and agents still use the icon-based 3D view. Without CS2 installed, everything falls back to that view.
 
 ## Features
-- 42 real weapon cases, 229 sticker/autograph capsules, an Agent Locker and a Chicken Coop Crate, with Valve's published odds
+- 42 real weapon cases, 150 souvenir packages (each Major's team stickers and gold MVP autographs), packages
+  (X-Ray, Anubis, Genesis/Dead Hand Terminals), 229 sticker/autograph capsules, an Agent Locker and a Chicken Coop Crate
+- All 94 weapon collections (e.g. Cobblestone with the Dragon Lore), browsable with odds and prices
+- Trade Up Contracts with CS2's rules: 10 skins of one rarity, ticket-based odds per collection, normalised output
+  floats, StatTrak contracts, and 5-Covert contracts into a knife or gloves
+- The Armory: Armory Stars (Armory Pass, or earned by opening cases) spent on drops from featured collections that
+  rotate every 10-15 minutes
+- Gambling (virtual money, no house edge, provably fair with a verify button): case battles (1v1 to 2v2, normal or
+  crazy), coinflip and jackpot, against bots or, online, other players
+- Team manager: 2,570 pro player cards (one per player per Major, rated from real Major results), packs, a
+  five-role lineup with chemistry, round-by-round match simulation, cups, LANs and Majors against real rosters
+- Online play (optional): accounts on your own server, trading between players, live lobbies; see DEPLOY.md
 - Floats (CS2 wear distribution), pattern seeds 0-1000 with rare patterns (blue gems, Fire & Ice, full fades, Doppler phases...)
 - StatTrak™, knives and gloves, stickers with free placement, scraping, and craft bonuses
 - 3D inspect (drag, zoom, F to inspect, B to flip), clicker with upgrades and ranks, passive income, offline earnings
@@ -32,8 +43,13 @@ npm run vendor    # copy three.js into src/vendor
 npm start         # run the game
 npm run dev       # browser preview at http://localhost:5178
 npm run dist      # build dist/CS2-Case-Simulator-Setup.exe and dist/CS2-Case-Simulator.exe
+node scripts/test-engine.mjs            # game rule checks (odds, trade-ups, armory, gambling, team manager)
+cd server && npm install && cd ..       # multiplayer server dependencies
+PGLITE_DIR=server/.data node server/index.mjs   # run the server locally (port 8787)
+node server/test.mjs                    # server checks (accounts, trading, live gambling, restarts)
 node scripts/cs2/dev-index.cjs           # build the CS2 index from your install (dev)
 node scripts/cs2/dev-prepare.cjs weapon_ak47 aq_oiled   # extract one skin's assets (dev)
 ```
-`tools/s2v` holds the patched Source 2 Viewer CLI (adds GLSL ES output with combined samplers so CS2's
-shaders run in WebGL); rebuild it from the ValveResourceFormat sources with the `VRF_GLSL_ES` patch if needed.
+Game rules live in `src/js/engine` and are shared by the game and the server (`server/`), so offline and online
+play follow the same code. `tools/s2v` holds the patched Source 2 Viewer CLI (adds GLSL ES output with combined samplers so CS2's
+shaders run in WebGL); rebuild it from the ValveResourceFormat sources with `tools/vrf-glsl-es.patch` applied (the exe is not in git).

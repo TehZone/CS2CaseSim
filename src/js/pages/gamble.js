@@ -60,12 +60,13 @@ function draw() {
 }
 
 // ---- case battles ------------------------------------------------------------------------------
+const KIND_ORDER = ['case', 'package', 'souvenir', 'agents', 'chickens', 'capsule', 'autograph'];
 const battleCases = () => Object.entries(view.battle.cases).flatMap(([id, n]) => Array(n).fill(id));
 function drawBattleBuilder(el) {
   const b = view.battle;
   const list = D.cases.filter((c) => c.price != null && ['case', 'souvenir', 'package', 'capsule', 'autograph', 'agents', 'chickens'].includes(c.kind))
     .filter((c) => !b.q || c.n.toLowerCase().includes(b.q))
-    .sort((a, c) => (b.cases[c.id] || 0) - (b.cases[a.id] || 0) || casePrice(a) - casePrice(c));
+    .sort((a, c) => (b.cases[c.id] || 0) - (b.cases[a.id] || 0) || KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(c.kind) || casePrice(a) - casePrice(c));
   const cases = battleCases();
   const cost = cases.length ? G.battleCost(cases) : 0;
   el.innerHTML = `<div class="two-col">

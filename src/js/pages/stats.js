@@ -3,6 +3,7 @@ import { D, RARITY, rarityColor, CASE_ODDS } from '../data.js';
 import * as I from '../items.js';
 import { S, save, resetSave, idleRate, clickValue, rankName } from '../state.js';
 import { toast, confirmDialog } from '../ui.js';
+import { online } from '../backend.js';
 import { sfx } from '../audio.js';
 import { cs2Status } from '../cs2/api.js';
 
@@ -26,9 +27,11 @@ function draw() {
     ['Knives & gloves unboxed', st.knives], ['Best drop', st.bestName ? `${esc(st.bestName)}<br><span class="green">${money(st.bestValue)}</span>` : '—'],
     ['Stickers applied', st.stickersApplied], ['Clicks', st.clicks.toLocaleString()], ['Earned by clicking', money(st.clickEarned)],
     ['Earned passively', money(st.passiveEarned)], ['Rank', rankName()], ['Per click / per second', `${money(clickValue())} / ${money(idleRate())}`],
+    ['Trade-ups signed', st.tradeups || 0], ['Armory redemptions', st.armory || 0], ['Player packs opened', st.packs || 0], ['Team matches', st.matches || 0],
+    ['Case battles', st.battles || 0], ['Gambled', money(st.gambleWagered || 0)], ['Gambling result', `<span class="${(st.gambleWon || 0) >= 0 ? 'green' : 'red'}">${money(st.gambleWon || 0)}</span>`],
   ];
   root.innerHTML = `<div class="page">
-    <div class="page-head"><h1>Stats &amp; Settings</h1></div>
+    <div class="page-head"><h1>Stats &amp; Settings</h1>${online() ? '<span class="sub">Showing your online account. Settings below are saved on this PC.</span>' : ''}</div>
     <div class="statgrid">${stats.map(([k, v]) => `<div class="stat"><span>${k}</span><b>${v}</b></div>`).join('')}</div>
 
     <div class="section-title">Your luck vs. official odds (all containers)</div>
@@ -44,12 +47,12 @@ function draw() {
       <div class="setting"><div>Market prices<p>Prices from ${D.pricedAt ? new Date(D.pricedAt).toLocaleString() : 'the bundled snapshot'}. Refreshing downloads the latest Skinport, CSFloat, Buff163, YouPin and Steam prices.</p>
         <div class="log" data-log></div></div>
         <div style="display:flex;gap:8px;flex-direction:column">
-          <button class="btn primary" data-a="refresh" ${window.native ? '' : 'disabled title="Available in the desktop app"'}>Refresh prices</button>
+          <button class="btn primary" data-a="refresh" ${window.native && !online() ? '' : `disabled title="${online() ? 'Online play uses the server’s prices' : 'Available in the desktop app'}"`}>Refresh prices</button>
           <button class="btn ghost sm" data-a="resetprices" ${window.native ? '' : 'disabled'}>Use bundled prices</button>
         </div></div>
       <div class="setting"><div>Real CS2 models<p data-cs2>Checking for Counter-Strike 2…</p></div><button class="btn" data-a="cs2clear" ${window.native ? '' : 'disabled'}>Rebuild CS2 cache</button></div>
       <div class="setting"><div>Image cache<p>Skin images are cached on disk after the first download so the game works offline.</p></div><button class="btn" data-a="clearcache" ${window.native ? '' : 'disabled'}>Clear cache</button></div>
-      <div class="setting"><div>Reset progress<p>Deletes your money, inventory, upgrades and stats.</p></div><button class="btn danger" data-a="reset">Reset save</button></div>
+      <div class="setting"><div>Reset progress<p>Deletes your money, inventory, upgrades and stats.</p></div><button class="btn danger" data-a="reset" ${online() ? 'disabled title="Log out to reset your offline save"' : ''}>Reset save</button></div>
     </div>
 
     <div class="section-title">About</div>

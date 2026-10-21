@@ -191,8 +191,47 @@ function createWindow() {
 const SMOKE = !!process.env.CS2SIM_SMOKE;
 if (SMOKE) app.setPath('userData', path.join(app.getPath('temp'), 'cs2sim-smoke'));
 
+// `CS2SIM_SMOKE=features`: opens a souvenir package and a player pack, plays a bot battle and a team match, signs
+// a trade-up, then screenshots every page into userData/smoke-<page>.png.
+async function runFeatureSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `smoke-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  await wait(3500);
+  const log = await js(`(async () => {
+    const out = [];
+    const { act } = await import('./js/backend.js'); const st = await import('./js/state.js'); const { D } = await import('./js/data.js');
+    const I = await import('./js/items.js'); const M = await import('./js/engine/manager.js');
+    st.S.money = 100000; st.S.settings.fast = true;
+    const sv = D.cases.find((c) => /Cologne 2014 Cobblestone Souvenir/.test(c.n));
+    const r1 = await act('case.open', { id: sv.id, n: 3 }); out.push('souvenir: ' + r1.items.map((i) => I.itemName(i) + ' [' + i.stk.length + ' stickers]').join(', '));
+    for (let i = 0; i < 3; i++) await act('team.pack', { pack: 'premium' });
+    out.push('pro cards: ' + st.S.inv.filter((i) => i.t === 'pro').length);
+    const box = D.cases.find((c) => c.n === 'Chroma 2 Case');
+    const b = await act('gamble.battle', { cases: [box.id, box.id], format: '2v2', mode: 'normal', clientSeed: 'smoke' });
+    out.push('battle: ' + (b.won ? 'won ' + b.prize.length + ' items' : 'lost') + ', totals ' + b.teamTotals.join(' vs '));
+    for (let i = 0; i < 3; i++) await act('case.open', { id: box.id, n: 10 });
+    const mil = st.S.inv.filter((it) => it.t === 'skin' && D.skins[it.id].r === 2 && !it.stt && !it.sv).slice(0, 10);
+    if (mil.length === 10) { const t = await act('tradeup.sign', { uids: mil.map((i) => i.uid) }); out.push('trade-up: ' + I.itemName(t.item)); }
+    return out.join('\\n');
+  })()`);
+  console.log('SMOKE features\n' + log);
+  for (const page of ['cases', 'inventory', 'tradeup', 'armory', 'gamble', 'team', 'stats']) {
+    await js(`document.querySelector('#nav [data-page=${page}]').click()`);
+    await wait(page === 'team' ? 600 : 1500);
+    if (page === 'team') { await js(`document.querySelector('[data-auto]')?.click()`); await wait(1500); }
+    await shot(page);
+  }
+  await js(`document.querySelector('#nav [data-page=cases]').click(); (async () => { const c = await import('./js/pages/cases.js'); c.openCollectionView('collection-set-cobblestone'); })()`);
+  await wait(1500);
+  await shot('collection');
+  console.log('SMOKE screenshots saved to', app.getPath('userData'));
+  app.quit();
+}
+
 function runSmokeTest(win) {
   win.webContents.on('console-message', (e, level, message) => console.log('[renderer]', e.message ?? message));
+  if (process.env.CS2SIM_SMOKE === 'features') { win.webContents.once('did-finish-load', () => runFeatureSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   win.webContents.once('did-finish-load', async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     await wait(4000);

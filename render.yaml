@@ -1,0 +1,18 @@
+# Render Blueprint for the multiplayer server (free web service + Neon Postgres). See DEPLOY.md.
+services:
+  - type: web
+    name: cs2-case-sim-server
+    runtime: node
+    plan: free
+    buildCommand: cd server && npm ci --omit=dev
+    startCommand: node server/index.mjs
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22.12.0"
+      # Your Neon connection string (postgres://...). Render asks for it when you create the Blueprint.
+      - key: DATABASE_URL
+        sync: false

@@ -560,7 +560,7 @@ export function showResults(c, items, n, { cost = casePrice(c) * n, again = () =
     title: items.length > 1 ? `You unboxed ${items.length} items` : 'You unboxed',
     cls: items.length > 2 ? 'xwide' : 'wide',
     body: `<div class="results">${items.map(resultCard).join('')}</div>
-      <p class="muted" style="text-align:center;margin:16px 0 0">Total value <b class="${total >= cost ? 'green' : 'red'}">${money(total)}</b> for ${money(cost)} spent</p>`,
+      <p class="muted" style="text-align:center;margin:16px 0 0">Total value <b class="${total >= cost ? 'green' : 'red'}">${money(total)}</b>${cost ? ` for ${money(cost)} spent` : ''}</p>`,
     foot: `<button class="btn" data-a="sellall">Sell all</button><span class="spacer"></span><button class="btn ghost" data-close>Keep</button>${again ? `<button class="btn gold" data-a="again">${againLabel}</button>` : ''}`,
   });
   const live = () => items.filter((i) => S.inv.some((x) => x.uid === i.uid));

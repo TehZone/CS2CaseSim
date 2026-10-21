@@ -154,6 +154,24 @@ try {
   const j1 = (await serverState(A.user.id)).money + (await serverState(B.user.id)).money;
   check('jackpot draws and conserves money', je && Math.abs(j0 - j1) < 0.011, je ? `winner ${je.ev.result.winnerName}` : 'no draw');
 
+  // ---- team ladder ------------------------------------------------------------------------------------
+  const M = await import('../src/js/engine/manager.js');
+  for (const c of [A, B]) {
+    await give(c.user.id, 5000);
+    for (let i = 0; i < 4; i++) await c.act('team.pack', { pack: 'premium' });
+    const owned = c.st.inv.filter((i) => i.t === 'pro');
+    const lu = M.autoLineup(owned.map((i) => D.pros[i.id]));
+    await c.act('team.set', { slots: Object.fromEntries(M.SLOTS.map((s) => [s, owned.find((i) => i.id === lu[s].id).uid])) });
+  }
+  const ladder = await A.rpc('social', 'ladder', {});
+  check('ladder lists players by Elo', ladder.length >= 2 && ladder.some((p) => p.me));
+  const eloA = A.st.team.elo, eloB = (await serverState(B.user.id)).team.elo;
+  const ch = await A.rpc('social', 'challenge', { name: 'bob_2' });
+  const eloA2 = (await serverState(A.user.id)).team.elo, eloB2 = (await serverState(B.user.id)).team.elo;
+  check('challenge plays both saved lineups and moves Elo both ways', ch.match.rounds.length >= 13 && eloA2 - eloA === ch.elo && eloB2 - eloB === -ch.elo, `${ch.match.score.join('-')}, Elo ${ch.elo >= 0 ? '+' : ''}${ch.elo}`);
+  err = null; try { await A.rpc('social', 'challenge', { name: 'bob_2' }); } catch (e) { err = e; }
+  check('challenge cooldown', /moment ago/.test(err?.message || ''));
+
   // ---- restart: open escrow is refunded --------------------------------------------------------------
   const r0 = (await serverState(A.user.id)).money;
   await A.rpc('gamble', 'flip.create', { money: 25, side: 't', clientSeed: 'r' });

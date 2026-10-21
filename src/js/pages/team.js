@@ -7,6 +7,8 @@ import { S, on } from '../state.js';
 import { sfx } from '../audio.js';
 import { tryAct, toast, openModal, sellItems, confirmDialog } from '../ui.js';
 import * as M from '../engine/manager.js';
+import { online } from '../backend.js';
+import { net } from '../net/online.js';
 
 const view = { tab: 'squad', pack: 'major', packEv: null, q: '', role: 'all', tier: 'all', opps: null };
 let root = null, offs = [];
@@ -69,13 +71,13 @@ function drawSquad(el, lu, tr, chem) {
   const byUid = new Map(myCards().map((i) => [i.uid, i]));
   const slotCard = (uid, slot, label) => {
     const it = byUid.get(uid);
-    return `<div class="slot-wrap"><span class="lbl">${label}</span>${it ? proCardHTML(D.pros[it.id], { uid, slot, extra: `<button class="x" data-unset="${label}" style="position:absolute;bottom:2px;left:4px">&times;</button>` }) : `<div class="pro-card empty" data-pick="${label}">+ ${label}</div>`}</div>`;
+    return `<div class="slot-wrap"><span class="lbl">${label}</span>${it ? proCardHTML(D.pros[it.id], { uid, slot, extra: `<button class="rm" data-unset="${label}" title="Remove from team">&times;</button>` }) : `<div class="pro-card empty" data-pick="${label}">+ ${label}</div>`}</div>`;
   };
   el.innerHTML = `<div class="pitch">${M.SLOTS.map((s) => slotCard(S.team.slots[s], s, s)).join('')}</div>
     <div class="section-title">Bench</div>
     <div class="cards-row">${[0, 1].map((i) => {
       const it = byUid.get(S.team.bench[i]);
-      return it ? proCardHTML(D.pros[it.id], { uid: it.uid, sm: true, extra: `<button class="x" data-unbench="${i}" style="position:absolute;bottom:2px;left:4px">&times;</button>` }) : `<div class="pro-card sm empty" data-bench="${i}">+ Bench</div>`;
+      return it ? proCardHTML(D.pros[it.id], { uid: it.uid, sm: true, extra: `<button class="rm" data-unbench="${i}" title="Remove from bench">&times;</button>` }) : `<div class="pro-card sm empty" data-bench="${i}">+ Bench</div>`;
     }).join('')}</div>
     <div class="open-row" style="margin-top:16px">
       <button class="btn gold" data-auto ${myCards().length ? '' : 'disabled'}>Auto-pick best team</button>
@@ -199,14 +201,34 @@ function drawPlay(el, lu, tr) {
         <div style="font-size:16px">${esc(c.n)}</div><div class="muted" style="font-size:12px">${c.teams} teams, single elimination. Opponents around your rating${k === 'major' ? ', the best rosters' : ''}.</div>
         <div class="muted" style="font-size:12px">Prizes: ${Object.entries(c.prize).map(([p, v]) => `${M.placeLabel(+p)} ${money(v)}`).join(' · ')}<br>Winner also gets a ${esc(M.packById(c.token).n)} token</div>
         <button class="btn gold" data-cup="${k}">Enter</button></div>`).join('')}</div>`}
+    ${online() ? '<div class="section-title">Online ladder</div><div data-ladder class="muted">Loading…</div>' : ''}
     ${S.team.history.length ? `<div class="section-title">Recent matches</div><div style="display:flex;flex-direction:column;gap:4px">${S.team.history.map((h) => `<div class="entry"><span class="chip ${h.won ? 'green' : 'red'}">${h.won ? 'W' : 'L'}</span>${esc(h.opp)}<span class="pct">${h.score.join(' - ')}</span></div>`).join('')}</div>` : ''}`;
   el.querySelectorAll('[data-play]').forEach((b) => b.addEventListener('click', () => quickMatch(b.dataset.play)));
   el.querySelector('[data-reroll]').addEventListener('click', () => { view.opps = { rating: tr.rating, list: M.suggestOpponents(tr.rating) }; draw(); });
   el.querySelectorAll('[data-cup]').forEach((b) => b.addEventListener('click', async () => { if (await tryAct('team.cupStart', { type: b.dataset.cup })) sfx.buy(); }));
   el.querySelector('[data-cupplay]')?.addEventListener('click', cupPlay);
+  if (online()) drawLadder(el.querySelector('[data-ladder]'));
   el.querySelector('[data-cupleave]')?.addEventListener('click', async () => {
     if (await confirmDialog('Leave this event? You will not get a prize.', { ok: 'Leave', danger: true })) tryAct('team.cupLeave');
   });
+}
+
+// Online: other players' saved lineups, ranked by Elo. Challenging plays your team against theirs.
+async function drawLadder(el) {
+  let list;
+  try { list = await net.social('ladder'); } catch (e) { el.textContent = e.message; return; }
+  if (!el.isConnected) return;
+  el.classList.remove('muted');
+  el.innerHTML = `<table class="sb-table" style="max-width:760px"><tr><th>#</th><th>Player</th><th>Team</th><th>Elo</th><th>W-L</th><th></th></tr>
+    ${list.map((p, i) => `<tr><td>${i + 1}</td><td>${esc(p.name)}</td><td>${esc(p.team)}</td><td>${p.elo}</td><td>${p.w}-${p.l}</td>
+      <td>${p.me ? '<span class="chip gold">You</span>' : `<button class="btn sm primary" data-ch="${esc(p.name)}">Challenge</button>`}</td></tr>`).join('')}</table>
+    <div class="muted" style="font-size:12px;margin-top:6px">Your team plays their saved lineup. Both Elo ratings change; you earn a reward for wins.</div>`;
+  el.querySelectorAll('[data-ch]').forEach((b) => b.addEventListener('click', async () => {
+    let r;
+    try { r = await net.social('challenge', { name: b.dataset.ch }); } catch (e) { sfx.error(); return toast(esc(e.message), 'bad'); }
+    await showMatch(r.match, S.team.name, r.opp.name, `${r.match.winner === 'A' ? 'Win' : 'Loss'} · Elo ${r.elo >= 0 ? '+' : ''}${r.elo}${r.reward ? ' · +' + money(r.reward) : ''}`);
+    draw();
+  }));
 }
 
 function bracketHTML(cup) {

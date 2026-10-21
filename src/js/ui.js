@@ -1,6 +1,6 @@
 // Shared UI: cards, modals, toasts, item detail, 3D inspect overlay, selling.
 import { esc, money, imgUrl } from './util.js';
-import { D, WEARS, wearOf, WEAR_BY_KEY, rarityColor } from './data.js';
+import { D, WEARS, wearOf, WEAR_BY_KEY, rarityColor, eventName } from './data.js';
 import * as I from './items.js';
 import { S, emit } from './state.js';
 import { act } from './backend.js';
@@ -142,6 +142,10 @@ function detailBody(item) {
     kv.push(['Type', d.ty || 'Sticker']);
   } else if (item.t === 'agent') {
     kv.push(['Team', d.team === 'T' ? 'Terrorist' : 'Counter-Terrorist']);
+  } else if (item.t === 'pro') {
+    kv.push(['Overall', d.ovr], ['Role', d.role], ['Team', esc(I.proTeamName(d))], ['Major', esc(eventName(d.ev))]);
+    kv.push(['Aim / Utility / Positioning / Clutch', d.a.join(' / ')]);
+    if (d.geo) kv.push(['Country', esc(d.geo)]);
   } else if (item.t === 'chicken') {
     kv.push(['Breed', BREED[item.id].n.replace('★ ', '')]);
     kv.push(['Hat', HAT[item.hat].n]);
