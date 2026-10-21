@@ -16,4 +16,6 @@ contextBridge.exposeInMainWorld('native', {
   cs2Clear: () => ipcRenderer.invoke('cs2:clear'),
   cs2Sounds: () => ipcRenderer.invoke('cs2:sounds'),
   cs2Sticker: (material) => ipcRenderer.invoke('cs2:sticker', material),
+  cs2VanityMaps: () => ipcRenderer.invoke('cs2:vanityMaps'),
+  cs2Vanity: (id) => ipcRenderer.invoke('cs2:vanity', id),
 });

@@ -2,10 +2,11 @@
 import { esc, money, imgUrl } from './util.js';
 import { D, WEARS, wearOf, WEAR_BY_KEY, rarityColor, eventName } from './data.js';
 import * as I from './items.js';
-import { S, emit } from './state.js';
+import { S, emit, save } from './state.js';
 import { act } from './backend.js';
 import { sfx } from './audio.js';
 import { inspectView } from './inspect.js';
+import { cs2VanityMaps } from './cs2/api.js';
 import { composeItem } from './composite.js';
 import { chickenIncome, featherMult, HAT, BREED } from './chickens.js';
 import { openStickerEditor } from './stickerEditor.js';
@@ -240,6 +241,7 @@ export function openInspect(item) {
     <div class="loading">Loading model…</div>
     <div class="val">${money(I.itemValue(item))}</div>
     <div class="top">
+      <select class="input bg-pick" data-bg title="Background" style="display:none"></select>
       <button class="btn" data-a="inspect">Inspect (F)</button>
       <button class="btn" data-a="flip">Flip (B)</button>
       <button class="btn" data-a="reset">Reset (R)</button>
@@ -261,9 +263,35 @@ export function openInspect(item) {
     const l = wrap.querySelector('.loading');
     if (l) l.textContent = 'Extracting the model from your CS2 install (first time only)…';
   }, 1500);
+  // Backdrops: CS2's own menu/inspect scenes (Dust II, Mirage...) when the game is installed.
+  const bgSel = wrap.querySelector('[data-bg]');
+  const setBg = async (id) => {
+    const l = wrap.querySelector('.loading') || wrap.appendChild(Object.assign(document.createElement('div'), { className: 'loading' }));
+    if (id !== 'studio') l.textContent = 'Loading the backdrop (the first time it is extracted from CS2, about 15 seconds)…';
+    try {
+      await inspectView.setBackdrop(id);
+      wrap.classList.toggle('has-bg', id !== 'studio');
+    } catch (e) {
+      toast('Could not load that backdrop: ' + esc(e.message), 'bad');
+      await inspectView.setBackdrop('studio');
+      wrap.classList.remove('has-bg');
+      bgSel.value = 'studio';
+    }
+    if (!wrap.querySelector('.loading.model')) l.remove();
+  };
+  cs2VanityMaps().then((maps) => {
+    if (!maps.length || !wrap.isConnected) return;
+    const cur = S.settings.inspectBg || 'studio';
+    bgSel.innerHTML = '<option value="studio">Studio</option>' + maps.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
+    bgSel.value = maps.some((m) => m.id === cur) ? cur : 'studio';
+    bgSel.style.display = '';
+    if (bgSel.value !== 'studio') setBg(bgSel.value);
+    bgSel.addEventListener('change', () => { S.settings.inspectBg = bgSel.value; save(); setBg(bgSel.value); });
+  });
+  wrap.querySelector('.loading').classList.add('model');
   inspectView.show(item)
-    .then(() => { clearTimeout(slow); wrap.querySelector('.loading')?.remove(); })
-    .catch((e) => { wrap.querySelector('.loading').textContent = 'Could not load model: ' + e.message; });
+    .then(() => { clearTimeout(slow); wrap.querySelector('.loading.model')?.remove(); })
+    .catch((e) => { wrap.querySelector('.loading.model').textContent = 'Could not load model: ' + e.message; });
   const close = () => {
     inspectView.unmount();
     wrap.remove();

@@ -16,7 +16,7 @@ const IMG = path.join(ROOT, 'cache', 'img');
 const portArg = process.argv.indexOf('--port');
 const PORT = Number(portArg > 0 ? process.argv[portArg + 1] : process.env.PORT) || 5178;
 fs.mkdirSync(IMG, { recursive: true });
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.gltf': 'model/gltf+json', '.bin': 'application/octet-stream', '.exr': 'image/x-exr' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.gltf': 'model/gltf+json', '.glb': 'model/gltf-binary', '.bin': 'application/octet-stream', '.exr': 'image/x-exr' };
 const CS2_CACHE = path.join(ROOT, 'cache', 'cs2');
 const TMP = path.join(process.env.LOCALAPPDATA || '', 'Temp');
 const cs2 = new CS2Service({
@@ -24,6 +24,7 @@ const cs2 = new CS2Service({
   cliPath: process.env.CS2SIM_CLI || path.join(TMP, 'vrfcli', 'Source2Viewer-CLI.exe'),
   cliEnv: { DOTNET_ROOT: path.join(TMP, 'dotnet') },
   log: (m) => console.log('[cs2]', m),
+  shrinkImages: (files, max) => require('../cs2/png.cjs').shrinkPNGs(files, max),
 });
 const json = (res, code, body) => res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(body));
 const HOSTS = /^https:\/\/(community\.(akamai|cloudflare|fastly)\.steamstatic\.com|raw\.githubusercontent\.com)\//;
@@ -55,6 +56,12 @@ http.createServer(async (req, res) => {
       } catch (e) {
         return res.writeHead(500).end(String(e.message || e));
       }
+    }
+    if (url.pathname === '/api/cs2/vanity-maps') {
+      try { return json(res, 200, cs2.vanityMaps()); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
+    }
+    if (url.pathname === '/api/cs2/vanity') {
+      try { return json(res, 200, await cs2.vanity(url.searchParams.get('id'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
     }
     if (url.pathname === '/api/cs2/sticker') {
       try { return json(res, 200, await cs2.sticker(url.searchParams.get('material'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, protocol, net, ipcMain, shell, Menu } = require('electron');
+const { app, BrowserWindow, protocol, net, ipcMain, shell, Menu, nativeImage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
@@ -15,7 +15,7 @@ const IMAGE_HOSTS = /^https:\/\/(community\.(akamai|cloudflare|fastly)\.steamsta
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2',
-  '.gltf': 'model/gltf+json', '.bin': 'application/octet-stream', '.exr': 'image/x-exr',
+  '.gltf': 'model/gltf+json', '.glb': 'model/gltf-binary', '.bin': 'application/octet-stream', '.exr': 'image/x-exr',
 };
 
 let userDir, imgDir, savePath, refreshedDataPath, cs2Cache, cs2;
@@ -32,7 +32,22 @@ function initPaths() {
   const cli = app.isPackaged
     ? path.join(process.resourcesPath, 's2v', 'Source2Viewer-CLI.exe')
     : process.env.CS2SIM_CLI || path.join(__dirname, 'tools', 's2v', 'Source2Viewer-CLI.exe');
-  cs2 = new CS2Service({ cacheDir: cs2Cache, cliPath: cli, log: (m) => console.log('[cs2]', m) });
+  cs2 = new CS2Service({ cacheDir: cs2Cache, cliPath: cli, log: (m) => console.log('[cs2]', m), shrinkImages });
+}
+
+// Shrinks images in place (inspect backdrop textures are drawn blurred, so 512px is plenty).
+async function shrinkImages(files, max) {
+  for (const f of files) {
+    try {
+      const img = nativeImage.createFromPath(f);
+      const { width, height } = img.getSize();
+      if (width && Math.max(width, height) > max) {
+        const k = max / Math.max(width, height);
+        fs.writeFileSync(f, img.resize({ width: Math.max(1, Math.round(width * k)), height: Math.max(1, Math.round(height * k)), quality: 'good' }).toPNG());
+      }
+    } catch {}
+    await new Promise((r) => setImmediate(r));
+  }
 }
 
 const inflight = new Map();
@@ -144,9 +159,11 @@ function registerIpc() {
   ipcMain.handle('cs2:prepare', (_e, req) => cs2.prepare(req));
   ipcMain.handle('cs2:sounds', () => cs2.sounds());
   ipcMain.handle('cs2:sticker', (_e, material) => cs2.sticker(material));
+  ipcMain.handle('cs2:vanityMaps', () => cs2.vanityMaps());
+  ipcMain.handle('cs2:vanity', (_e, id) => cs2.vanity(id));
   ipcMain.handle('cs2:clear', () => {
     fs.rmSync(cs2Cache, { recursive: true, force: true });
-    cs2 = new CS2Service({ cacheDir: cs2Cache, cliPath: cs2.cliPath, log: (m) => console.log('[cs2]', m) });
+    cs2 = new CS2Service({ cacheDir: cs2Cache, cliPath: cs2.cliPath, log: (m) => console.log('[cs2]', m), shrinkImages });
     return true;
   });
 
@@ -271,6 +288,12 @@ function runSmokeTest(win) {
     for (let i = 0; i < 240; i++) {
       await wait(500);
       if (!(await win.webContents.executeJavaScript(`!!document.querySelector('.inspect .loading')`))) break;
+    }
+    // CS2SIM_SMOKE_BG=de_dust2 also shows that inspect backdrop (CS2's menu scene) behind the item.
+    if (process.env.CS2SIM_SMOKE_BG) {
+      const tb = Date.now();
+      const r = await win.webContents.executeJavaScript(`(async () => { const { inspectView } = await import('./js/inspect.js'); try { await inspectView.setBackdrop(${JSON.stringify(process.env.CS2SIM_SMOKE_BG)}); return 'ok ' + inspectView.backdrop?.name; } catch (e) { return 'FAILED ' + e.message; } })()`);
+      console.log('SMOKE backdrop', r, ((Date.now() - tb) / 1000).toFixed(1) + 's');
     }
     await wait(1500);
     const insp = await win.webContents.executeJavaScript(`(async () => { const { inspectView } = await import('./js/inspect.js');

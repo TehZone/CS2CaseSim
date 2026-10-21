@@ -36,6 +36,27 @@ export function cs2Sticker(material) {
   return stickers.get(material);
 }
 
+// Inspect backdrops (CS2's menu/inspect "vanity" scenes) in the player's install: [{ id, name }].
+let vanityList = null;
+export function cs2VanityMaps() {
+  if (!vanityList) {
+    vanityList = (window.native?.cs2VanityMaps ? window.native.cs2VanityMaps() : fetch('api/cs2/vanity-maps').then((r) => (r.ok ? r.json() : [])))
+      .catch(() => []);
+  }
+  return vanityList;
+}
+// One backdrop, exported on first use: { glb, info }.
+const vanities = new Map();
+export function cs2Vanity(id) {
+  if (!vanities.has(id)) {
+    const p = window.native?.cs2Vanity ? window.native.cs2Vanity(id)
+      : fetch(`api/cs2/vanity?id=${encodeURIComponent(id)}`).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); });
+    vanities.set(id, p);
+    p.catch(() => vanities.delete(id));
+  }
+  return vanities.get(id);
+}
+
 const prepared = new Map();
 export function cs2Prepare(weapon, paint) {
   const key = weapon + '|' + (paint || '');

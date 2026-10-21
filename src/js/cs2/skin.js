@@ -398,6 +398,7 @@ export async function buildCS2Model(item, def, renderer) {
   tilt.add(inner);
   wrap.add(tilt);
   wrap.userData.cs2 = { prep, mesh: prep.mesh };
+  wrap.userData.unitScale = 4 / longest; // scene units per glTF metre (lines up CS2 inspect backdrops)
   if (item.stk?.length) {
     try { await addStickerDecals(wrap, item, def); } catch (e) { console.warn('sticker decals failed', e); }
   }

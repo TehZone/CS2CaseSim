@@ -6,6 +6,7 @@ import { itemDef } from './items.js';
 import { buildChicken } from './chicken3d.js';
 import { cs2Status } from './cs2/api.js';
 import { buildCS2Model } from './cs2/skin.js';
+import { buildBackdrop, BlurredBackdrop, backdropEnvironment } from './cs2/backdrop.js';
 import { stickerSurface } from './cs2/sticker.js';
 import { clamp } from './util.js';
 
@@ -287,7 +288,13 @@ class InspectView {
     const key = new THREE.DirectionalLight(0xffffff, 1.7); key.position.set(3, 4, 6);
     const fill = new THREE.DirectionalLight(0xa9c4ff, 0.55); fill.position.set(-5, 1, 3);
     const rim = new THREE.DirectionalLight(0xffe0bd, 1.1); rim.position.set(0, 3, -6);
+    this.studioLights = [key, fill, rim];
     this.scene.add(key, fill, rim, new THREE.AmbientLight(0xffffff, 0.15));
+    // A map backdrop's sun, lighting the weapon too (only on when a backdrop is shown).
+    this.sunLight = new THREE.DirectionalLight(0xffffff, 0);
+    this.scene.add(this.sunLight);
+    this.backdrop = null;
+    this.blurBg = null;
     this.pivot = new THREE.Group();
     this.scene.add(this.pivot);
     this.shadow = shadowBlob();
@@ -355,6 +362,8 @@ class InspectView {
     const w = this.container.clientWidth, h = this.container.clientHeight;
     if (!w || !h) return;
     this.renderer.setSize(w, h, false);
+    const buf = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    this.blurBg?.setSize(buf.x, buf.y);
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
     this.camera.aspect = w / h;
@@ -392,12 +401,63 @@ class InspectView {
     const size = box.getSize(new THREE.Vector3());
     this.model = model;
     this.pivot.add(model);
-    this.scene.environment = this.source === 'cs2' ? this.envStudio : this.envRoom;
-    this.scene.environmentIntensity = this.source === 'cs2' ? 1.0 : 0.95;
+    // Inspect units per real metre: CS2 models carry it; icon models are about 80 cm wide at 4 units.
+    this.unitScale = model.userData.unitScale || 5;
+    this.applyLighting();
     this.size = size;
     this.shadow.scale.set(size.x * 1.1, Math.max(size.z, size.x * 0.35), 1);
     this.shadow.position.y = -size.y / 2 - 0.35;
     this.reset(true);
+  }
+
+  // Lighting for the current model and background (studio, or a map backdrop's sun and reflections).
+  applyLighting() {
+    const bd = this.backdrop;
+    if (bd && this.unitScale && bd.scale !== this.unitScale) {
+      bd.setScale(this.unitScale);
+      bd.scale = this.unitScale;
+      bd.env?.dispose();
+      bd.env = backdropEnvironment(this.renderer, bd);
+    }
+    this.shadow.visible = !bd;
+    for (const l of this.studioLights) l.intensity = l.userData.base ?? (l.userData.base = l.intensity);
+    if (bd) {
+      this.scene.environment = bd.env;
+      this.scene.environmentIntensity = 1.0;
+      for (const l of this.studioLights) l.intensity *= 0.55; // keep a soft inspect key light, like CS2's barn lights
+      this.sunLight.color.copy(bd.sun.color);
+      this.sunLight.intensity = Math.min(2.2, bd.sun.intensity * 0.6);
+      this.sunLight.position.copy(bd.sun.dir).multiplyScalar(-10);
+    } else {
+      this.scene.environment = this.source === 'cs2' ? this.envStudio : this.envRoom;
+      this.scene.environmentIntensity = this.source === 'cs2' ? 1.0 : 0.95;
+      this.sunLight.intensity = 0;
+    }
+  }
+
+  // Shows a CS2 map behind the item ('studio' for the plain inspect room). Resolves when it's ready.
+  async setBackdrop(id) {
+    this.init();
+    const token = (this.bdToken = {});
+    if (!id || id === 'studio') {
+      this.backdrop = null;
+      this.applyLighting();
+      return;
+    }
+    this.backdropCache ||= new Map();
+    let bd = this.backdropCache.get(id);
+    if (!bd) {
+      bd = await buildBackdrop(id);
+      this.backdropCache.set(id, bd);
+    }
+    if (token !== this.bdToken) return;
+    if (!this.blurBg) {
+      this.blurBg = new BlurredBackdrop();
+      const buf = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+      this.blurBg.setSize(buf.x, buf.y);
+    }
+    this.backdrop = bd;
+    this.applyLighting();
   }
 
   async buildModel(item) {
@@ -534,7 +594,18 @@ class InspectView {
       this.camera.position.set(0, -lift, dist * (1 + zOff));
       this.camera.lookAt(0, -lift, 0);
     }
-    this.renderer.render(this.scene, this.camera);
+    if (this.backdrop) {
+      // Map backdrop: draw the scene blurred (CS2's inspect depth of field), then the item on top.
+      const r = this.renderer;
+      r.autoClear = false;
+      r.clear();
+      this.blurBg.render(r, this.backdrop, this.camera, 3);
+      r.clearDepth();
+      r.render(this.scene, this.camera);
+      r.autoClear = true;
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 }
 

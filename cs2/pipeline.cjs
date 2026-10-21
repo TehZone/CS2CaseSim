@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 const { parseKV1, splitDataDump } = require('./kv.cjs');
+const { listVanity, parseEntities, sceneInfo } = require('./vanity.cjs');
 
 const INDEX_VERSION = 3;
 // Parameters a weapon's composite_inputs material provides to the paint shader.
@@ -177,6 +178,34 @@ class CS2 {
       '--gltf_export_format', 'gltf', '--gltf_export_materials', '--gltf_textures_adapt']);
     if (!fs.existsSync(file)) throw new Error('Model export failed for ' + vmdl);
     return file;
+  }
+
+  // The inspect/menu backdrops in this install (maps/<id>_vanity.vpk).
+  vanityMaps() {
+    return listVanity(path.join(this.gameDir, 'maps'));
+  }
+
+  // Exports one backdrop's world to glTF (with its materials) and its entities to scene.json. Cached.
+  async exportVanity(id) {
+    const map = this.vanityMaps().find((m) => m.id === id);
+    if (!map) throw new Error('Unknown backdrop ' + id);
+    const vpk = path.join(this.gameDir, 'maps', map.vpk);
+    const base = map.vpk.replace(/.vpk$/i, '');
+    const dir = path.join(this.cacheDir, 'vanity', id);
+    const glb = path.join(dir, 'scene.glb'), meta = path.join(dir, 'scene.json');
+    if (fs.existsSync(glb) && fs.existsSync(meta)) return { glb, meta, fresh: false };
+    fs.mkdirSync(dir, { recursive: true });
+    await this.run(['-i', vpk, '-f', `maps/${base}/world.vwrld_c`, '-d', '-o', glb,
+      '--gltf_export_format', 'glb', '--gltf_export_materials', '--gltf_textures_adapt']);
+    if (!fs.existsSync(glb)) throw new Error('Backdrop export failed for ' + id);
+    for (const f of fs.readdirSync(dir)) if (/_physics.glb$/i.test(f)) fs.rmSync(path.join(dir, f), { force: true });
+    const entDir = path.join(dir, 'ents');
+    await this.run(['-i', vpk, '-f', `maps/${base}/entities/default_ents.vents_c`, '-d', '-o', entDir]);
+    const entFile = path.join(entDir, 'maps', base, 'entities', 'default_ents.vents');
+    const info = fs.existsSync(entFile) ? sceneInfo(parseEntities(fs.readFileSync(entFile, 'utf8'))) : {};
+    fs.rmSync(entDir, { recursive: true, force: true });
+    fs.writeFileSync(meta, JSON.stringify({ id, name: map.name, ...info }));
+    return { glb, meta, fresh: true };
   }
 
   // GLSL ES 3.00 for one static combo of a compiled pixel shader (needs the patched CLI).

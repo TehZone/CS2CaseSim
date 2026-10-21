@@ -27,7 +27,10 @@ const CASE_SOUNDS = {
 };
 
 class CS2Service {
-  constructor({ cacheDir, cliPath, cliEnv = {}, log = () => {} }) {
+  // shrinkImages(files, maxSize): optional, makes backdrop textures smaller after export (Electron passes one).
+  constructor({ cacheDir, cliPath, cliEnv = {}, log = () => {}, shrinkImages = null }) {
+    this.shrinkImages = shrinkImages;
+    this.vanityJobs = new Map();
     this.cacheDir = cacheDir;
     this.cliPath = cliPath;
     this.cliEnv = { VRF_GLSL_ES: '1', ...cliEnv };
@@ -55,6 +58,34 @@ class CS2Service {
     if (!st.available) throw new Error(st.gameDir ? 'Model extractor is missing' : 'Counter-Strike 2 is not installed');
     if (!this.cs2) this.cs2 = new CS2({ cli: this.cliPath, gameDir: this.gameDir, cacheDir: this.cacheDir, env: this.cliEnv, log: this.log });
     return this.cs2;
+  }
+
+  // Inspect backdrops (CS2's vanity maps) available in this install: [{ id, name }].
+  vanityMaps() {
+    if (!this.status().available) return [];
+    return this.ensureCS2().vanityMaps().map(({ id, name }) => ({ id, name }));
+  }
+
+  // One backdrop, exported on first use: { glb: url, info: { item, cameras, sun, sky, name } }.
+  vanity(id) {
+    if (!this.vanityJobs.has(id)) {
+      const job = (async () => {
+        const cs2 = this.ensureCS2();
+        const r = await cs2.exportVanity(String(id));
+        const dir = path.dirname(r.glb);
+        const stamp = path.join(dir, '.shrunk');
+        if (this.shrinkImages && !fs.existsSync(stamp)) {
+          // The backdrop is drawn blurred behind the weapon, so small textures are plenty (and load fast).
+          const imgs = fs.readdirSync(dir).filter((f) => /.(png|jpe?g)$/i.test(f)).map((f) => path.join(dir, f));
+          await this.shrinkImages(imgs, 512);
+          fs.writeFileSync(stamp, '');
+        }
+        return { glb: this.url(r.glb), info: JSON.parse(fs.readFileSync(r.meta, 'utf8')) };
+      })();
+      this.vanityJobs.set(id, job);
+      job.catch(() => this.vanityJobs.delete(id));
+    }
+    return this.vanityJobs.get(id);
   }
 
   // CS2's case-opening sounds extracted from the player's install, as { name: url }.

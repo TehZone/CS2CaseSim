@@ -1,5 +1,6 @@
 // Minimal PNG decoder/encoder (8/16-bit, non-interlaced) for build scripts and channel checks.
 const zlib = require('zlib');
+const fs = require('fs');
 
 function decodePNG(buf) {
   if (buf.readUInt32BE(0) !== 0x89504e47) throw new Error('not a PNG');
@@ -48,4 +49,31 @@ function encodePNG(width, height, rgba) {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level: 6 })), chunk('IEND', Buffer.alloc(0))]);
 }
 
-module.exports = { decodePNG, encodePNG };
+// Box-downscales PNG files in place so their longest side is at most `max` (8-bit only; others are left alone).
+// Used where Electron's native image resizer isn't available (the dev server).
+async function shrinkPNGs(files, max) {
+  for (const f of files) {
+    try {
+      const img = decodePNG(fs.readFileSync(f));
+      if (img.depth !== 8 || Math.max(img.width, img.height) <= max) continue;
+      const k = Math.ceil(Math.max(img.width, img.height) / max);
+      const w = Math.max(1, Math.floor(img.width / k)), h = Math.max(1, Math.floor(img.height / k)), ch = img.channels;
+      const out = new Uint8Array(w * h * 4);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const acc = [0, 0, 0, 0];
+        for (let dy = 0; dy < k; dy++) for (let dx = 0; dx < k; dx++) {
+          const o = ((y * k + dy) * img.width + x * k + dx) * ch;
+          const g = img.data[o];
+          if (ch === 1) { acc[0] += g; acc[1] += g; acc[2] += g; acc[3] += 255; }
+          else if (ch === 2) { acc[0] += g; acc[1] += g; acc[2] += g; acc[3] += img.data[o + 1]; }
+          else { acc[0] += g; acc[1] += img.data[o + 1]; acc[2] += img.data[o + 2]; acc[3] += ch === 4 ? img.data[o + 3] : 255; }
+        }
+        for (let c = 0; c < 4; c++) out[(y * w + x) * 4 + c] = Math.round(acc[c] / (k * k));
+      }
+      fs.writeFileSync(f, encodePNG(w, h, out));
+    } catch {}
+    await new Promise((r) => setImmediate(r));
+  }
+}
+
+module.exports = { decodePNG, encodePNG, shrinkPNGs };
