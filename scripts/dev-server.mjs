@@ -56,6 +56,9 @@ http.createServer(async (req, res) => {
         return res.writeHead(500).end(String(e.message || e));
       }
     }
+    if (url.pathname === '/api/cs2/sticker') {
+      try { return json(res, 200, await cs2.sticker(url.searchParams.get('material'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
+    }
     if (url.pathname.startsWith('/cs2cache/')) {
       const f = path.normalize(path.join(CS2_CACHE, decodeURIComponent(url.pathname.slice('/cs2cache/'.length))));
       if (!f.startsWith(CS2_CACHE) || !fs.existsSync(f)) return res.writeHead(404).end();

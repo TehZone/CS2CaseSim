@@ -6,6 +6,7 @@ import { itemDef } from './items.js';
 import { buildChicken } from './chicken3d.js';
 import { cs2Status } from './cs2/api.js';
 import { buildCS2Model } from './cs2/skin.js';
+import { stickerSurface } from './cs2/sticker.js';
 import { clamp } from './util.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -155,6 +156,43 @@ export function extrudeImage(src, { width = 4, depth = 0.1, bevel = 0.012, segme
   geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   geo.computeBoundingBox();
   return geo;
+}
+
+// ExtrudeGeometry puts both caps in material group 0: regroup into front (0), back (1) and sides (2).
+function splitCaps(geo) {
+  const tris = [[], [], []];
+  const nrm = geo.attributes.normal;
+  for (const g of geo.groups) {
+    for (let i = g.start; i < g.start + g.count; i += 3) tris[g.materialIndex === 0 ? (nrm.getZ(i) >= 0 ? 0 : 1) : 2].push(i);
+  }
+  const order = tris.flat();
+  for (const attr of Object.values(geo.attributes)) {
+    const n = attr.itemSize, src = attr.array.slice();
+    order.forEach((v, k) => attr.array.set(src.subarray(v * n, (v + 3) * n), k * 3 * n));
+    attr.needsUpdate = true;
+  }
+  geo.clearGroups();
+  let start = 0;
+  tris.forEach((t, m) => { geo.addGroup(start, t.length * 3, m); start += t.length * 3; });
+  return geo;
+}
+
+// A sticker item with CS2's own sticker material: a thin die-cut sticker on CS2's backing paper. The outline is the
+// sticker texture's alpha where the shader's cut-out (alpha * 12.75) passes one half.
+async function buildCS2Sticker(def) {
+  const surf = await stickerSurface(def, { backing: true });
+  const img = surf.image;
+  const c = document.createElement('canvas');
+  c.width = img.width; c.height = img.height;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0);
+  const id = ctx.getImageData(0, 0, c.width, c.height);
+  for (let i = 3; i < id.data.length; i += 4) id.data[i] = id.data[i] >= 10 ? 255 : 0;
+  ctx.putImageData(id, 0, 0);
+  const geo = splitCaps(extrudeImage(c, { width: 2.8, depth: 0.035, bevel: 0.008 }));
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(geo, [surf.material, surf.backing, surf.backing]));
+  return g;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -380,6 +418,18 @@ class InspectView {
         }
       } catch (e) {
         console.warn('CS2 model unavailable, using the icon model instead:', e);
+      }
+    }
+    // Stickers with CS2's own sticker material (holo, foil, gold, glitter, lenticular, embroidered effects).
+    if (item.t === 'sticker' && def.sm) {
+      try {
+        if ((await cs2Status()).available) {
+          const real = await buildCS2Sticker(def);
+          this.source = 'cs2';
+          return real;
+        }
+      } catch (e) {
+        console.warn('CS2 sticker material unavailable, using the icon model instead:', e);
       }
     }
     this.source = 'icon';

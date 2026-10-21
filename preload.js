@@ -15,4 +15,5 @@ contextBridge.exposeInMainWorld('native', {
   cs2Prepare: (req) => ipcRenderer.invoke('cs2:prepare', req),
   cs2Clear: () => ipcRenderer.invoke('cs2:clear'),
   cs2Sounds: () => ipcRenderer.invoke('cs2:sounds'),
+  cs2Sticker: (material) => ipcRenderer.invoke('cs2:sticker', material),
 });

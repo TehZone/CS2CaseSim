@@ -184,6 +184,8 @@ for (const c of crates) {
   }
 }
 
+// The sticker kit's CS2 material (stickers/<sm>.vmat in the game files), used by the real-model renderer.
+const stickerMaterial = (s) => itemsGame.sticker_kits?.[s.def_index]?.sticker_material || '';
 const stickers = {};
 for (const s of stickersRaw) {
   if (!s.market_hash_name) continue;
@@ -196,6 +198,7 @@ for (const s of stickersRaw) {
     t: s.tournament?.name || '',
     ty: s.type || '',
     img: img(s.image),
+    sm: stickerMaterial(s),
     p: null,
   };
 }
@@ -272,7 +275,7 @@ for (const s of stickersRaw) {
   if (!keepStickers.has(s.id) || stickers[s.id]) continue;
   stickers[s.id] = {
     id: s.id, n: s.market_hash_name || s.name, r: ITEM_RARITY[s.rarity?.id] ?? 2, rc: s.rarity?.color || '#4b69ff',
-    fx: s.effect && s.effect !== 'Other' ? s.effect : '', t: s.tournament?.name || '', ty: s.type || '', img: img(s.image), p: null, so: 1,
+    fx: s.effect && s.effect !== 'Other' ? s.effect : '', t: s.tournament?.name || '', ty: s.type || '', img: img(s.image), sm: stickerMaterial(s), p: null, so: 1,
   };
 }
 

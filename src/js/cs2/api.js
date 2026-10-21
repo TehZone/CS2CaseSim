@@ -22,6 +22,20 @@ export function cs2Sounds() {
   return soundsPromise;
 }
 
+// A sticker's CS2 material (parameters + texture URLs), by its sticker kit's `sticker_material`.
+const stickers = new Map();
+export function cs2Sticker(material) {
+  if (!stickers.has(material)) {
+    const p = window.native?.cs2Sticker
+      ? window.native.cs2Sticker(material)
+      : fetch(`api/cs2/sticker?material=${encodeURIComponent(material)}`)
+        .then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); });
+    stickers.set(material, p);
+    p.catch(() => stickers.delete(material));
+  }
+  return stickers.get(material);
+}
+
 const prepared = new Map();
 export function cs2Prepare(weapon, paint) {
   const key = weapon + '|' + (paint || '');

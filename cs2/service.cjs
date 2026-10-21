@@ -9,6 +9,12 @@ const STATIC_COMBOS = ['S_PAINT_STYLE', 'S_OVERRIDE_NORMAL', 'S_USE_ALL_MASKS', 
 
 const toPosix = (p) => p.replace(/\\/g, '/');
 
+// Textures of a csgo_weapon_sticker material the renderer uses. Normal maps are kept raw (hemi-octahedral
+// normal in RG, roughness in B, self-illum mask in A), exactly as CS2's sticker shader samples them.
+const STICKER_TEXTURES = ['g_tSticker0', 'g_tSfxMaskSticker0', 'g_tHoloSpectrumSticker0', 'g_tStickerScratches', 'g_tColor'];
+const STICKER_RAW_TEXTURES = ['g_tNormalRoughnessSticker0', 'g_tGlitterNormalSticker0'];
+const STICKER_META_VERSION = 1;
+
 // CS2's own case-opening sounds.
 const CASE_SOUNDS = {
   unlock: 'sounds/ui/panorama/case_unlock_01.vsnd',
@@ -29,6 +35,9 @@ class CS2Service {
     this.gameDir = undefined;
     this.cs2 = null;
     this.indexPromise = null;
+    this.stickerJobs = new Map();
+    this.stickerBatch = [];
+    this.stickerTimer = null;
   }
 
   status() {
@@ -101,6 +110,67 @@ class CS2Service {
     const info = { meshes, materials };
     fs.writeFileSync(infoFile, JSON.stringify(info));
     return { gltfFile, info };
+  }
+
+  // One sticker's CS2 material (`sticker_material` of its sticker kit, e.g. "standard/aces_high_holo"):
+  // the material's parameters and its extracted textures as URLs. Requests made close together share
+  // one CLI run (each run reloads the VPK), and the parameters are cached per game build.
+  sticker(material) {
+    material = String(material || '').toLowerCase();
+    if (!/^[a-z0-9_\-/]+$/.test(material) || material.includes('..')) return Promise.reject(new Error('Bad sticker material: ' + material));
+    if (!this.stickerJobs.has(material)) {
+      const job = new Promise((resolve, reject) => {
+        this.ensureCS2();
+        this.stickerBatch.push({ material, resolve, reject });
+        if (!this.stickerTimer) this.stickerTimer = setTimeout(() => this.flushStickers(), 25);
+      });
+      this.stickerJobs.set(material, job);
+      job.catch(() => this.stickerJobs.delete(material));
+    }
+    return this.stickerJobs.get(material);
+  }
+
+  async flushStickers() {
+    const batch = this.stickerBatch;
+    this.stickerBatch = [];
+    this.stickerTimer = null;
+    try {
+      const stamp = this.cs2.vpkStamp();
+      const metaFile = (m) => path.join(this.cacheDir, 'stickers', m + '.json');
+      const metas = {};
+      for (const { material } of batch) {
+        try {
+          const m = JSON.parse(fs.readFileSync(metaFile(material), 'utf8'));
+          if (m.version === STICKER_META_VERSION && m.stamp === stamp) metas[material] = m;
+        } catch {}
+      }
+      const need = batch.map((b) => b.material).filter((m) => !metas[m]);
+      if (need.length) {
+        const found = await this.cs2.materialParams(need.map((m) => `stickers/${m}.vmat`));
+        for (const m of need) {
+          const p = found[`stickers/${m}.vmat`];
+          if (!p) continue;
+          metas[m] = { version: STICKER_META_VERSION, stamp, material: m, ...p };
+          fs.mkdirSync(path.dirname(metaFile(m)), { recursive: true });
+          fs.writeFileSync(metaFile(m), JSON.stringify(metas[m]));
+        }
+      }
+      const pick = (names) => [...new Set(Object.values(metas).flatMap((m) => names.map((n) => m.textures[n]).filter(Boolean)))];
+      const files = await this.cs2.extract(pick(STICKER_TEXTURES));
+      const rawFiles = await this.cs2.extract(pick(STICKER_RAW_TEXTURES), { raw: true });
+      for (const { material, resolve, reject } of batch) {
+        const m = metas[material];
+        if (!m) { reject(new Error('Sticker material not found: ' + material)); continue; }
+        const textures = {};
+        for (const [name, vtex] of Object.entries(m.textures)) {
+          const local = (STICKER_RAW_TEXTURES.includes(name) ? rawFiles : STICKER_TEXTURES.includes(name) ? files : {})[vtex + '_c'];
+          if (local) textures[name] = this.url(local);
+        }
+        resolve({ material, shader: m.shader, ints: m.ints, floats: m.floats, vectors: m.vectors, textures });
+      }
+    } catch (e) {
+      for (const b of batch) b.reject(e);
+    }
   }
 
   async prepare({ weapon, paint }) {

@@ -2,84 +2,18 @@
 // model's UV space to bake the colour and roughness/metalness textures for the item's exact float and seed.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
 import { imgUrl, loadImage } from '../util.js';
 import { UniformRandomStream } from './rng.js';
 import { cs2Prepare } from './api.js';
+import { loadSource, texture, whiteTex } from './textures.js';
+import { stickerSurface, contentBox } from './sticker.js';
 import { D } from '../data.js';
 
-const MAX_TEX = 2048;
 const BAKE_SIZE = 2048;
 
-// ---------------------------------------------------------------------------------------------
-// Textures (downscaled on decode; premultiplication off so packed data channels survive)
-// ---------------------------------------------------------------------------------------------
-const sourceCache = new Map();
-async function loadSource(url) {
-  if (!sourceCache.has(url)) {
-    const job = (async () => {
-      if (/\.exr$/i.test(url)) {
-        const t = await new EXRLoader().loadAsync(url);
-        // three's EXRLoader stores rows bottom-up; CS2 (and our PNGs) use top-down rows.
-        const { width: w, height: h, data } = t.image;
-        const row = (data.length / h) | 0;
-        const tmp = new data.constructor(row);
-        for (let y = 0; y < h >> 1; y++) {
-          const a = y * row, b = (h - 1 - y) * row;
-          tmp.set(data.subarray(a, a + row));
-          data.copyWithin(a, b, b + row);
-          data.set(tmp, b);
-        }
-        return { exr: t, w };
-      }
-      const blob = await (await fetch(url)).blob();
-      const head = new DataView(await blob.slice(16, 24).arrayBuffer());
-      const w = head.getUint32(0), h = head.getUint32(4);
-      const k = Math.min(1, MAX_TEX / Math.max(w, h));
-      const opts = { premultiplyAlpha: 'none', colorSpaceConversion: 'none', imageOrientation: 'from-image' };
-      if (k < 1) Object.assign(opts, { resizeWidth: Math.round(w * k), resizeHeight: Math.round(h * k), resizeQuality: 'high' });
-      return { bitmap: await createImageBitmap(blob, opts) };
-    })();
-    sourceCache.set(url, job);
-    job.catch(() => sourceCache.delete(url));
-  }
-  return sourceCache.get(url);
-}
-
 const WRAP = { 0: THREE.RepeatWrapping, 1: THREE.MirroredRepeatWrapping, 2: THREE.ClampToEdgeWrapping, 3: THREE.ClampToEdgeWrapping, 4: THREE.ClampToEdgeWrapping };
-
-async function texture(url, { srgb = false, wrapS = THREE.RepeatWrapping, wrapT = THREE.RepeatWrapping } = {}) {
-  const src = await loadSource(url);
-  let t;
-  if (src.exr) {
-    t = src.exr.clone();
-    t.needsUpdate = true;
-  } else {
-    t = new THREE.Texture(src.bitmap);
-    t.flipY = false;
-    t.premultiplyAlpha = false;
-    t.needsUpdate = true;
-  }
-  t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  t.wrapS = wrapS;
-  t.wrapT = wrapT;
-  t.generateMipmaps = !src.exr;
-  t.minFilter = src.exr ? THREE.LinearFilter : THREE.LinearMipmapLinearFilter;
-  t.magFilter = THREE.LinearFilter;
-  t.anisotropy = 8;
-  return t;
-}
-
-let white = null;
-function whiteTex() {
-  if (!white) {
-    white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
-    white.needsUpdate = true;
-  }
-  return white;
-}
 
 // ---------------------------------------------------------------------------------------------
 // Parameters
@@ -572,10 +506,26 @@ async function placeDecal(wrap, targets, ray, box, sd, s, x, y, width, hit = nul
   }
   if (!hit) return;
   {
-    const tex = new THREE.Texture(await loadImage(imgUrl(sd.img, 'm')));
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.needsUpdate = true;
-    const aspect = tex.image.naturalHeight / tex.image.naturalWidth || 0.75;
+    const icon = await loadImage(imgUrl(sd.img, 'm'));
+    // CS2's own sticker material (effects, scrape wear) when the game has it; the icon image otherwise.
+    let surface = null;
+    if (sd.sm) {
+      try { surface = await stickerSurface(sd, { wear: s.wr || 0 }); } catch (e) { console.warn('CS2 sticker material unavailable, using the icon:', sd.n, e); }
+    }
+    let mat, aspect;
+    if (surface) {
+      // The game texture is padded differently from the icon: keep the visible sticker the size placed on the icon.
+      width *= contentBox(icon).w / Math.max(0.05, contentBox(surface.image).w);
+      aspect = surface.image.height / surface.image.width;
+      mat = surface.material;
+    } else {
+      const tex = new THREE.Texture(icon);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.needsUpdate = true;
+      aspect = icon.naturalHeight / icon.naturalWidth || 0.75;
+      mat = stickerMaterial(sd, tex);
+      mat.opacity = 1 - (s.wr || 0) * 0.8;
+    }
     const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
     const orient = new THREE.Object3D();
     orient.position.copy(hit.point);
@@ -583,8 +533,6 @@ async function placeDecal(wrap, targets, ray, box, sd, s, x, y, width, hit = nul
     orient.rotateZ(-((s.r || 0) * Math.PI) / 180);
     const size = new THREE.Vector3(width, width * aspect, Math.min(width * 0.3, (box.max.z - box.min.z) * 0.45));
     const geo = new DecalGeometry(hit.object, hit.point, orient.rotation, size);
-    const mat = stickerMaterial(sd, tex);
-    mat.opacity = 1 - (s.wr || 0) * 0.8;
     const decal = new THREE.Mesh(geo, mat);
     decal.renderOrder = 2;
     wrap.add(decal);

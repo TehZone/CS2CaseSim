@@ -123,31 +123,48 @@ class CS2 {
   }
 
   // Extract (and decompile) VPK files into the cache, preserving their paths. Returns local paths.
-  async extract(files) {
+  // `raw` keeps textures exactly as the shaders sample them (no normal map reconstruction), in files-raw/.
+  async extract(files, { raw = false } = {}) {
+    const root = raw ? 'files-raw' : 'files';
     const want = [...new Set(files.map((f) => f.replace(/\\/g, '/').replace(/(\.v\w+)$/, '$1_c').replace(/_c_c$/, '_c')))];
-    const missing = want.filter((f) => !this.localPathFor(f));
+    const missing = want.filter((f) => !this.localPathFor(f, root));
     for (let i = 0; i < missing.length; i += 40) {
-      await this.run(['-i', this.vpk, '-f', missing.slice(i, i + 40).join(','), '-d', '-o', path.join(this.cacheDir, 'files')]);
+      const args = ['-i', this.vpk, '-f', missing.slice(i, i + 40).join(','), '-d', '-o', path.join(this.cacheDir, root)];
+      if (raw) args.push('--texture_decode_flags', 'none');
+      await this.run(args);
     }
-    return Object.fromEntries(want.map((f) => [f, this.localPathFor(f)]));
+    return Object.fromEntries(want.map((f) => [f, this.localPathFor(f, root)]));
   }
 
   // Decompiled texture lands as .png or .exr next to the VPK-relative path.
-  localPathFor(vpkFile) {
+  localPathFor(vpkFile, root = 'files') {
     const rel = vpkFile.replace(/_c$/, '');
     if (rel.endsWith('.vsnd')) {
       for (const ext of ['.wav', '.mp3']) {
-        const p = path.join(this.cacheDir, 'files', rel.replace(/\.vsnd$/, ext));
+        const p = path.join(this.cacheDir, root, rel.replace(/\.vsnd$/, ext));
         if (fs.existsSync(p)) return p;
       }
       return null;
     }
-    const stem = path.join(this.cacheDir, 'files', rel.replace(/\.vtex$/, ''));
+    const stem = path.join(this.cacheDir, root, rel.replace(/\.vtex$/, ''));
     for (const ext of ['.png', '.exr', '']) {
-      const p = rel.endsWith('.vtex') ? stem + ext : path.join(this.cacheDir, 'files', rel);
+      const p = rel.endsWith('.vtex') ? stem + ext : path.join(this.cacheDir, root, rel);
       if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
     }
     return null;
+  }
+
+  // Parameters of compiled materials ({ path: { shader, ints, floats, vectors, textures } }), many per CLI run.
+  async materialParams(vmats) {
+    const out = {};
+    for (let i = 0; i < vmats.length; i += 40) {
+      const docs = await this.dump(vmats.slice(i, i + 40).map((f) => f.replace(/\.vmat$/, '.vmat_c')).join(','), null);
+      for (const [p, mat] of Object.entries(docs)) {
+        const { ints, floats, vectors, textures } = params(mat);
+        out[p] = { shader: (mat.m_shaderName || '').replace(/\.vfx$/, ''), ints, floats, vectors, textures };
+      }
+    }
+    return out;
   }
 
   async exportModel(vmdl) {

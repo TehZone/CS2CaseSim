@@ -143,6 +143,7 @@ function registerIpc() {
   ipcMain.handle('cs2:status', () => cs2.status());
   ipcMain.handle('cs2:prepare', (_e, req) => cs2.prepare(req));
   ipcMain.handle('cs2:sounds', () => cs2.sounds());
+  ipcMain.handle('cs2:sticker', (_e, material) => cs2.sticker(material));
   ipcMain.handle('cs2:clear', () => {
     fs.rmSync(cs2Cache, { recursive: true, force: true });
     cs2 = new CS2Service({ cacheDir: cs2Cache, cliPath: cs2.cliPath, log: (m) => console.log('[cs2]', m) });
