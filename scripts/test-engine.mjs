@@ -89,6 +89,11 @@ function tierFreq(box, n) {
     }
     check('armory only features collections that are not in weapon cases', ok, `${seen.size} different collections in 120 rotations`);
   }
+  {
+    const n = A.armoryCollections().length, per = Math.ceil(n / 4), start = Math.ceil(w.i / per) * per;
+    const ids = []; for (let i = start; i < start + per; i++) ids.push(...A.armoryOffers(i).collections);
+    check('a full armory cycle features every collection once, no repeats', new Set(ids).size === n, `${per} rotations, ${new Set(ids).size}/${n} collections`);
+  }
   check('armory offers change between rotations', JSON.stringify(A.armoryOffers(w.i + 1).collections) !== JSON.stringify(offers.collections));
   const cob = D.collections.find((c) => c.n === 'The Cobblestone Collection');
   let found = false;

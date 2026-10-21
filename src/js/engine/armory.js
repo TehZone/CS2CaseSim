@@ -1,7 +1,7 @@
 // The Armory: spend Armory Stars on items from a rotating set of collections. The rotation changes every 10-15
 // minutes. It is computed from the clock alone, so every player (and the server) sees the same armory.
 import { D, casePrice, collectionBox, caseTiers } from './data.js';
-import { hashStr, seededRng, round2, clamp } from './util.js';
+import { hashStr, seededRng, round2, clamp, shuffle } from './util.js';
 
 export const ARMORY_EPOCH = Date.UTC(2026, 0, 1);
 export const PASS_PRICE = 15.99;
@@ -9,10 +9,6 @@ export const PASS_STARS = 40;
 export const STAR_VALUE = PASS_PRICE / PASS_STARS; // $0.40 of value per star
 export const SPEND_PER_STAR = 25; // opening cases earns 1 star per $25 spent
 const FEATURED = 4;
-// Collections people chase (the Dragon Lore, Medusa, Gungnir...). One of them is featured in about 40% of rotations.
-const ICONIC = ['The Cobblestone Collection', 'The Gods and Monsters Collection', 'The Norse Collection', 'The St. Marc Collection',
-  'The Dust Collection', 'The Italy Collection', 'The Militia Collection', 'The Overpass Collection', 'The Dust 2 Collection',
-  'The Aztec Collection', 'The 2018 Inferno Collection', 'The Rising Sun Collection'];
 
 export const windowLength = (i) => (600 + (hashStr('armory:' + i) % 301)) * 1000; // 10:00 to 15:00
 
@@ -56,14 +52,15 @@ export const armoryCollections = () => D.collections.filter((c) => !c.caseId);
 export function armoryOffers(i) {
   if (offersCache.has(i)) return offersCache.get(i);
   const r = seededRng('armory-offers:' + i);
+  // The collections go round in a shuffled order, FEATURED at a time, so none comes back until every one has
+  // been featured (52 collections = 13 rotations, about 2.7 hours per cycle).
   const pool = armoryCollections();
-  const chosen = [];
-  const iconic = pool.filter((c) => ICONIC.includes(c.n));
-  if (iconic.length && r() < 0.4) chosen.push(iconic[Math.floor(r() * iconic.length)]);
-  while (chosen.length < FEATURED && chosen.length < pool.length) {
-    const c = pool[Math.floor(r() * pool.length)];
-    if (!chosen.includes(c)) chosen.push(c);
-  }
+  const per = Math.max(1, Math.ceil(pool.length / FEATURED));
+  const cycle = Math.floor(i / per), slot = i % per;
+  const order = shuffle([...pool], seededRng('armory-cycle:' + cycle));
+  const chosen = order.slice(slot * FEATURED, slot * FEATURED + FEATURED);
+  // A cycle that doesn't divide evenly tops the last rotation up from the start of the order.
+  for (let k = 0; chosen.length < Math.min(FEATURED, pool.length); k++) if (!chosen.includes(order[k])) chosen.push(order[k]);
   const offers = [];
   for (const col of chosen) {
     offers.push({ id: `${i}:drop:${col.id}`, type: 'drop', col: col.id, stars: starsFor(boxEV(collectionBox(col)), 1, 12) });
