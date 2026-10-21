@@ -453,9 +453,24 @@ export const ACTIONS = {
   },
 };
 
-// Runs an action by name. Throws GameError on invalid requests.
+// Runs fn all-or-nothing: if it throws part-way (not enough money after a check, inventory full...), the
+// state's top-level fields, inventory list and stats are put back as they were.
+export function atomically(ctx, fn) {
+  const st = ctx.st;
+  const snap = { ...st, inv: st.inv.slice(), stats: { ...st.stats, drops: { ...st.stats.drops } } };
+  try {
+    return fn();
+  } catch (e) {
+    for (const k of Object.keys(st)) if (!(k in snap)) delete st[k];
+    Object.assign(st, snap);
+    ctx.add.length = 0; ctx.del.length = 0; ctx.upd.clear(); ctx.dirty.clear();
+    throw e;
+  }
+}
+
+// Runs an action by name. Throws GameError on invalid requests (and then nothing has changed).
 export function runAction(ctx, name, args = {}) {
   const fn = ACTIONS[name];
   if (!fn) fail('Unknown action');
-  return fn(ctx, args || {}) ?? {};
+  return atomically(ctx, () => fn(ctx, args || {}) ?? {});
 }
