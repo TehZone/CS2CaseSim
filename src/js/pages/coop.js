@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { money, debounce } from '../util.js';
 import { D } from '../data.js';
-import { S, on, trySpend, save, emit, coopChickens, chickenRate, coopSlotCost } from '../state.js';
+import { S, on, coopChickens, chickenRate, coopSlotCost } from '../state.js';
 import { sfx } from '../audio.js';
-import { itemCard, showItemDetail, toast } from '../ui.js';
+import { itemCard, showItemDetail, toast, tryAct } from '../ui.js';
 import { buildChicken } from '../chicken3d.js';
 import { chickenIncome } from '../chickens.js';
 import { openCaseView } from './cases.js';
@@ -45,12 +45,8 @@ function draw() {
     <div class="section-title">Your chickens (${chickens.length})</div>
     ${chickens.length ? `<div class="grid">${chickens.map((c) => itemCard(c, { extra: inCoop.has(c.uid) ? 'in-coop' : '' })).join('')}</div>` : '<div class="empty">No chickens yet. Open a Chicken Coop Crate to get your first one.</div>'}
   </div>`;
-  root.querySelector('[data-a=slot]').addEventListener('click', () => {
-    if (!trySpend(coopSlotCost())) { sfx.error(); return toast('Not enough money to build a nest.', 'bad'); }
-    S.coopSlots++;
-    sfx.buy();
-    save();
-    emit('inv');
+  root.querySelector('[data-a=slot]').addEventListener('click', async () => {
+    if (await tryAct('coop.slot')) sfx.buy();
   });
   root.querySelector('[data-a=crate]').addEventListener('click', () => {
     document.querySelector('#nav [data-page=cases]').click();

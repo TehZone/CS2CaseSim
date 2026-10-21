@@ -1,9 +1,10 @@
 import { esc, money, imgUrl, debounce } from '../util.js';
 import { D, WEARS, WEAR_BY_KEY, rarityColor, RARITY } from '../data.js';
 import * as I from '../items.js';
-import { S, trySpend, addItems, on } from '../state.js';
+import { S, on } from '../state.js';
+import { marketListings, marketBucket, MARKET_PAGES } from '../engine/actions.js';
 import { sfx } from '../audio.js';
-import { toast, openModal, openInspect } from '../ui.js';
+import { toast, openModal, openInspect, tryAct } from '../ui.js';
 
 const PAGE = 60;
 const view = { tab: 'stickers', q: '', sort: 'pricey', page: 0, fx: 'all', cat: 'all' };
@@ -27,7 +28,7 @@ function lowest(skin) {
 function rows() {
   const q = view.q;
   if (view.tab === 'stickers') {
-    let list = Object.values(D.stickers);
+    let list = Object.values(D.stickers).filter((s) => !s.so); // souvenir-only stickers aren't sold
     if (view.fx !== 'all') list = list.filter((s) => (view.fx === 'Paper' ? !s.fx : s.fx === view.fx));
     if (q) list = list.filter((s) => s.n.toLowerCase().includes(q));
     return list.map((s) => ({ id: s.id, n: s.n.replace('Sticker | ', ''), top: s.t || 'Sticker', img: s.img, p: s.p, rc: rarityColor(s.r) }));
@@ -90,37 +91,29 @@ function preview(id) {
   else openInspect(I.makeSkinItem(D.skins[id], { stt: false }));
 }
 
-function purchase(price, item, label) {
-  if (!trySpend(price)) { sfx.error(); return toast(`Not enough money for ${esc(label)}.`, 'bad'); }
-  item.nw = true;
-  item.src = 'Market';
-  addItems([item]);
+async function purchase(args, label) {
+  const r = await tryAct('market.buy', args);
+  if (!r) return false;
   sfx.buy();
-  toast(`Bought <b>${esc(label)}</b> for ${money(price)}`, 'good');
+  toast(`Bought <b>${esc(label)}</b> for ${money(r.price)}`, 'good');
+  return true;
 }
 
 function buy(id) {
-  if (view.tab === 'stickers') { const s = D.stickers[id]; return purchase(s.p, I.makeStickerItem(s), s.n); }
-  if (view.tab === 'agents') { const a = D.agents[id]; return purchase(a.p, I.makeAgentItem(a), a.n); }
+  if (view.tab === 'stickers') return purchase({ kind: 'sticker', id }, D.stickers[id].n);
+  if (view.tab === 'agents') return purchase({ kind: 'agent', id }, D.agents[id].n);
   chooser(D.skins[id]);
 }
 
-// Real listings: each one is a concrete item (float + pattern seed) priced at its full value.
-function makeListings(skin) {
-  const out = [];
-  const variants = skin.v ? [[null, false], ...(skin.stt ? [[null, true]] : [])]
-    : WEARS.filter((W) => skin.p[W.k]).flatMap((W) => [[W.k, false], ...(skin.stt && skin.cat !== 'gloves' ? [[W.k, true]] : [])]);
-  for (const [wk, st] of variants) {
-    for (let n = 0; n < 2; n++) {
-      const item = I.makeSkinItem(skin, { stt: st, ...(wk ? { fl: I.rollFloatInWear(skin, wk) } : {}) });
-      out.push({ item, p: I.itemValue(item) });
-    }
-  }
-  return out.sort((a, b) => a.p - b.p);
+// Real listings: each one is a concrete item (float + pattern seed) priced at its full value. Listings are
+// generated from the clock (10-minute windows, 10 pages each) so the online server agrees on every listing.
+function makeListings(skin, bucket, page) {
+  return marketListings(skin, bucket, page).map((l) => ({ ...l, bucket, page })).sort((a, b) => a.p - b.p);
 }
 
 function chooser(skin) {
-  let listings = makeListings(skin);
+  let page = 0, bucket = marketBucket();
+  let listings = makeListings(skin, bucket, page);
   const m = openModal({
     title: esc(skin.n) + (skin.ph ? ` (${esc(skin.ph)})` : ''),
     cls: 'wide',
@@ -141,13 +134,20 @@ function chooser(skin) {
           <button class="btn sm primary" data-i="${i}" ${S.money < l.p ? 'disabled' : ''}>${money(l.p)}</button></div>`;
       }).join('')}</div></div>`;
     body.querySelectorAll('[data-insp]').forEach((b) => b.addEventListener('click', () => openInspect(listings[+b.dataset.insp].item)));
-    body.querySelectorAll('[data-i]').forEach((b) => b.addEventListener('click', () => {
+    body.querySelectorAll('[data-i]').forEach((b) => b.addEventListener('click', async () => {
       const l = listings[+b.dataset.i];
-      purchase(l.p, l.item, I.itemName(l.item) + (l.item.fl != null ? ' (' + I.wearName(l.item) + ')' : ''));
-      listings.splice(+b.dataset.i, 1);
-      draw();
+      const label = I.itemName(l.item) + (l.item.fl != null ? ' (' + I.wearName(l.item) + ')' : '');
+      if (await purchase({ kind: 'skin', id: skin.id, n: l.n, bucket: l.bucket, page: l.page }, label)) {
+        listings = listings.filter((x) => x !== l);
+        draw();
+      }
     }));
   };
-  m.el.querySelector('[data-refresh]').addEventListener('click', () => { listings = makeListings(skin); draw(); });
+  m.el.querySelector('[data-refresh]').addEventListener('click', () => {
+    const now = marketBucket();
+    if (now !== bucket) { bucket = now; page = 0; } else page = (page + 1) % MARKET_PAGES;
+    listings = makeListings(skin, bucket, page);
+    draw();
+  });
   draw();
 }

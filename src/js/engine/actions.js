@@ -120,8 +120,9 @@ export function takeStake(ctx, { money: m = 0, uids = [] } = {}) {
 // ---- market listings (deterministic, so the server agrees on each listing's float and pattern) ----------
 export const MARKET_BUCKET_MS = 10 * 60 * 1000;
 export const marketBucket = (now = Date.now()) => Math.floor(now / MARKET_BUCKET_MS);
-export function marketListings(skin, bucket) {
-  const r = seededRng(`market:${skin.id}:${bucket}`);
+export const MARKET_PAGES = 10;
+export function marketListings(skin, bucket, page = 0) {
+  const r = seededRng(`market:${skin.id}:${bucket}:${page}`);
   const variants = skin.v ? [[null, false], ...(skin.stt ? [[null, true]] : [])]
     : Object.keys(WEAR_BY_KEY).filter((k) => skin.p[k]).flatMap((k) => [[k, false], ...(skin.stt && skin.cat !== 'gloves' ? [[k, true]] : [])]);
   const out = [];
@@ -172,7 +173,7 @@ export const ACTIONS = {
     }
   },
 
-  'market.buy'(ctx, { kind, id, n, bucket }) {
+  'market.buy'(ctx, { kind, id, n, bucket, page = 0 }) {
     let item, price;
     if (kind === 'sticker' || kind === 'agent') {
       const d = kind === 'sticker' ? D.stickers[id] : D.agents[id];
@@ -185,7 +186,7 @@ export const ACTIONS = {
       const b = int(bucket, 0, 1e9, 'listing');
       const cur = marketBucket(ctx.now);
       if (b !== cur && b !== cur - 1) fail('That listing has expired. Refresh the market.', 'expired');
-      const listing = marketListings(skin, b)[int(n, 0, 99, 'listing')];
+      const listing = marketListings(skin, b, int(page, 0, MARKET_PAGES - 1, 'page'))[int(n, 0, 99, 'listing')];
       if (!listing) fail('Unknown listing');
       ({ item, p: price } = listing);
     }

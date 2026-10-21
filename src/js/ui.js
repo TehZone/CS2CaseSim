@@ -2,7 +2,8 @@
 import { esc, money, imgUrl } from './util.js';
 import { D, WEARS, wearOf, WEAR_BY_KEY, rarityColor } from './data.js';
 import * as I from './items.js';
-import { S, addMoney, removeItems, emit, save } from './state.js';
+import { S, emit } from './state.js';
+import { act } from './backend.js';
 import { sfx } from './audio.js';
 import { inspectView } from './inspect.js';
 import { composeItem } from './composite.js';
@@ -17,6 +18,18 @@ export function toast(msg, type = '') {
   el.innerHTML = msg;
   document.getElementById('toasts').appendChild(el);
   setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 300); }, 3200);
+}
+
+// Runs a game action and shows its error (not enough money, item locked...) as a toast. Returns null on failure.
+export async function tryAct(name, args) {
+  try {
+    return await act(name, args);
+  } catch (e) {
+    sfx.error();
+    if (e.code || e.remote) toast(esc(e.message), 'bad');
+    else { console.error(e); toast('Something went wrong: ' + esc(e.message), 'bad'); }
+    return null;
+  }
 }
 
 // ---- modals --------------------------------------------------------------------------------
@@ -99,11 +112,11 @@ export async function sellItems(items, { ask = true } = {}) {
     const what = items.length === 1 ? esc(I.itemName(items[0])) : `${items.length} items`;
     if (!(await confirmDialog(`Sell ${what} for <b class="green">${money(total)}</b>?`, { ok: 'Sell' }))) return false;
   }
-  removeItems(items.map((i) => i.uid));
-  S.stats.sold += total;
-  addMoney(total);
+  const name = items.length === 1 ? esc(I.itemName(items[0])) : items.length + ' items';
+  const r = await tryAct('item.sell', { uids: items.map((i) => i.uid) });
+  if (!r) return false;
   sfx.coin();
-  toast(`Sold ${items.length === 1 ? esc(I.itemName(items[0])) : items.length + ' items'} for <b class="green">${money(total)}</b>`, 'good');
+  toast(`Sold ${name} for <b class="green">${money(r.total)}</b>`, 'good');
   return true;
 }
 
@@ -177,7 +190,7 @@ function detailBody(item) {
 }
 
 export function showItemDetail(item, { onChange } = {}) {
-  if (item.nw) { delete item.nw; save(); }
+  if (item.nw) act('item.seen', { uids: [item.uid] }).catch(() => {});
   const m = openModal({ title: 'Item details', body: detailBody(item), cls: 'wide', onClose: onChange });
   const refresh = () => {
     m.el.querySelector('.modal-body').innerHTML = detailBody(item);
@@ -199,7 +212,7 @@ export function showItemDetail(item, { onChange } = {}) {
     m.el.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', async () => {
       const a = b.dataset.a;
       if (a === 'inspect') openInspect(item);
-      if (a === 'lock') { item.lk = !item.lk; save(); emit('inv'); refresh(); }
+      if (a === 'lock') { if (await tryAct('item.lock', { uid: item.uid, lk: !item.lk })) refresh(); }
       if (a === 'sell') { if (await sellItems([item])) m.close(); }
       if (a === 'stickers') openStickerEditor(item, { onDone: () => { emit('inv'); refresh(); } });
     }));
@@ -269,13 +282,13 @@ export function openInspect(item) {
 
 export function rarityOddsHTML(c, tiers) {
   const names = {
-    case: { 2: 'Mil-Spec', 3: 'Restricted', 4: 'Classified', 5: 'Covert', rare: '★ Rare Special' },
+    case: { 0: 'Consumer', 1: 'Industrial', 2: 'Mil-Spec', 3: 'Restricted', 4: 'Classified', 5: 'Covert', rare: '★ Rare Special' },
     capsule: { 2: 'High Grade', 3: 'Remarkable', 4: 'Exotic', 5: 'Extraordinary', 7: 'Contraband' },
     agents: { 2: 'Distinguished', 3: 'Exceptional', 4: 'Superior', 5: 'Master' },
   };
-  const fam = c.kind === 'case' ? 'case' : c.kind === 'agents' ? 'agents' : 'capsule';
+  const fam = ['case', 'souvenir', 'package', 'collection'].includes(c.kind) ? 'case' : c.kind === 'agents' ? 'agents' : 'capsule';
   const total = tiers.reduce((s, t) => s + t[1], 0);
-  return tiers.map(([k, w]) => `<span style="--rc:${rarityColor(k === 'rare' ? 6 : +k)}">${names[fam][k] || k}: ${((w / total) * 100).toFixed(2)}%</span>`).join('');
+  return tiers.map(([k, w]) => `<span style="--rc:${rarityColor(k === 'rare' ? 6 : +k)}">${names[fam][k] || k}: ${((w / total) * 100).toFixed(w / total < 0.001 ? 4 : 2)}%</span>`).join('');
 }
 
 export { WEARS };

@@ -1,6 +1,7 @@
 import { esc, money, debounce } from '../util.js';
 import * as I from '../items.js';
-import { S, on, save } from '../state.js';
+import { S, on } from '../state.js';
+import { act } from '../backend.js';
 import { itemCard, showItemDetail, sellItems, openModal, toast } from '../ui.js';
 
 const view = { type: 'all', sort: 'new', q: '', select: false, selected: new Set(), limit: 150 };
@@ -39,9 +40,8 @@ export function render(r) {
 export function destroy() {
   off?.();
   off = null;
-  let changed = false;
-  for (const it of S.inv) if (it.nw) { delete it.nw; changed = true; }
-  if (changed) save();
+  const seen = S.inv.filter((it) => it.nw).map((it) => it.uid);
+  if (seen.length) act('item.seen', { uids: seen }).catch(() => {});
   view.select = false;
   view.selected.clear();
   root = null;

@@ -1,5 +1,7 @@
 import { money, moneyShort, rand } from '../util.js';
-import { S, on, addMoney, trySpend, save, UPGRADES, RANKS, lvl, upgradeCost, clickValue, critChance, idleRate, rankName, globalMult, chickenRate } from '../state.js';
+import { S, on, UPGRADES, RANKS, lvl, upgradeCost, clickValue, critChance, idleRate, rankName, globalMult, chickenRate } from '../state.js';
+import { act } from '../backend.js';
+import { tryAct } from '../ui.js';
 import { sfx } from '../audio.js';
 
 let root, offs = [];
@@ -47,9 +49,7 @@ export function render(r) {
     e.preventDefault();
     const hs = rand() < critChance();
     const v = clickValue() * (hs ? 10 : 1);
-    addMoney(v);
-    S.stats.clicks++;
-    S.stats.clickEarned += v;
+    act('click', { n: 1, crits: hs ? 1 : 0 }).catch(() => {});
     hs ? sfx.headshot() : sfx.click();
     const z = zone.getBoundingClientRect();
     const f = document.createElement('div');
@@ -85,14 +85,12 @@ function draw() {
   refresh();
 }
 
-function buy(id) {
+async function buy(id) {
   const u = UPGRADES.find((x) => x.id === id);
   if (u.max != null && lvl(id) >= u.max) return;
-  if (!trySpend(upgradeCost(u))) { sfx.error(); return; }
-  S.upg[id] = lvl(id) + 1;
+  if (!(await tryAct('upgrade.buy', { id }))) return;
   sfx.buy();
-  save();
-  draw();
+  if (root) draw();
 }
 
 function refresh() {

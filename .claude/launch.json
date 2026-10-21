@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "game-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/dev-server.mjs", "--port", "5179"],
+      "port": 5179
+    },
+    {
+      "name": "game-server",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server/index.mjs"],
+      "port": 8787
+    }
+  ]
+}

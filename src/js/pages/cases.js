@@ -1,13 +1,15 @@
 import { esc, money, imgUrl, round2 } from '../util.js';
-import { D, WEARS, casePrice, caseTiers, rarityColor, DOPPLER_PHASE_WEIGHT } from '../data.js';
+import { D, WEARS, casePrice, caseTiers, rarityColor, DOPPLER_PHASE_WEIGHT, collectionBox, eventShort, CASE_KINDS } from '../data.js';
 import * as I from '../items.js';
-import { S, trySpend, addItems, save, emit } from '../state.js';
+import { S, save, emit } from '../state.js';
+import { act } from '../backend.js';
 import { sfx } from '../audio.js';
 import { toast, openModal, itemCard, patternTag, sellItems, openInspect, showItemDetail, rarityOddsHTML } from '../ui.js';
 import { renderChickenThumb } from '../chicken3d.js';
 import { BREED, HAT, chickenValue } from '../chickens.js';
 
-const view = { mode: 'list', caseId: null, filter: 'case', sort: 'new', q: '', qty: 1 };
+const view = { mode: 'list', caseId: null, colId: null, filter: 'case', sort: 'new', q: '', qty: 1, major: 'all' };
+const SKIN_KINDS = new Set(['case', 'souvenir', 'package', 'collection']);
 let rootEl = null;
 
 export function openCaseView(id) {
@@ -15,10 +17,16 @@ export function openCaseView(id) {
   view.caseId = id;
   render(rootEl);
 }
+export function openCollectionView(id) {
+  view.mode = 'collection';
+  view.colId = id;
+  render(rootEl);
+}
 
 export function render(root) {
   rootEl = root;
   if (view.mode === 'case' && D.caseById[view.caseId]) renderCase(root, D.caseById[view.caseId]);
+  else if (view.mode === 'collection' && D.colById[view.colId]) renderCollection(root, D.colById[view.colId]);
   else renderList(root);
 }
 
@@ -43,21 +51,23 @@ function wearProbs(skin) {
   }
   return out;
 }
-function expectedSkin(skin) {
+export function expectedSkin(skin, kind = 'case') {
   if (skin.v) return skin.p.V[0] * 0.9 + (skin.p.V[1] ?? skin.p.V[0]) * 0.1;
   const probs = wearProbs(skin);
-  const stt = skin.stt && skin.cat !== 'gloves' ? 0.1 : 0;
+  const stt = (kind === 'case' || skin.star) && skin.stt && skin.cat !== 'gloves' ? 0.1 : 0;
   let ev = 0;
   for (const [k, p] of Object.entries(probs)) {
     const row = skin.p[k];
     if (!row) continue;
+    if (kind === 'souvenir') { ev += p * (row[2] ?? row[0]); continue; }
     ev += p * ((1 - stt) * row[0] + stt * (row[1] ?? row[0]));
   }
   return ev;
 }
-function priceRange(skin) {
+function priceRange(skin, kind = 'case') {
   if (skin.v) return [skin.p.V[0], skin.p.V[1] ?? skin.p.V[0]];
-  const vals = Object.values(skin.p).flatMap((r) => r.filter((x) => x != null));
+  const rows = Object.values(skin.p);
+  const vals = kind === 'souvenir' ? rows.map((r) => r[2] ?? r[0]) : kind === 'case' ? rows.flatMap((r) => [r[0], r[1]].filter((x) => x != null)) : rows.map((r) => r[0]);
   return [Math.min(...vals), Math.max(...vals)];
 }
 const evCache = new Map();
@@ -81,11 +91,11 @@ export function caseEV(c) {
         avg = c.rare.reduce((s, g) => {
           const ws = g.map((id) => (g.length > 1 ? DOPPLER_PHASE_WEIGHT[D.skins[id].ph] ?? 0.2 : 1));
           const t = ws.reduce((a, b) => a + b, 0);
-          return s + g.reduce((a, id, i) => a + (ws[i] / t) * expectedSkin(D.skins[id]), 0);
+          return s + g.reduce((a, id, i) => a + (ws[i] / t) * expectedSkin(D.skins[id], 'case'), 0);
         }, 0) / c.rare.length;
       } else {
         const ids = c.pools[k];
-        const val = (id) => (c.kind === 'case' ? expectedSkin(D.skins[id]) : c.kind === 'agents' ? D.agents[id].p : D.stickers[id].p);
+        const val = (id) => (SKIN_KINDS.has(c.kind) ? expectedSkin(D.skins[id], c.kind) : c.kind === 'agents' ? D.agents[id].p : D.stickers[id].p);
         avg = ids.reduce((s, id) => s + val(id), 0) / ids.length;
       }
       ev += (w / tw) * avg;
@@ -100,11 +110,15 @@ function HAT_EV() {
 }
 
 // ---- case list -----------------------------------------------------------------------------
-const FILTERS = [['case', 'Weapon Cases'], ['capsule', 'Sticker Capsules'], ['autograph', 'Autograph Capsules'], ['special', 'Agents & Chickens']];
+const FILTERS = [['case', 'Weapon Cases'], ['souvenir', 'Souvenir Packages'], ['package', 'Packages'], ['collection', 'Collections'],
+  ['capsule', 'Sticker Capsules'], ['autograph', 'Autograph Capsules'], ['special', 'Agents & Chickens']];
+const majors = () => [...new Set(D.cases.filter((c) => c.kind === 'souvenir').map((c) => c.ev))].sort((a, b) => b - a);
 
 function renderList(root) {
+  if (view.filter === 'collection') return renderCollections(root);
   const list = D.cases.filter((c) => {
     if (view.filter === 'special') return c.custom;
+    if (view.filter === 'souvenir' && view.major !== 'all' && String(c.ev) !== view.major) return false;
     return c.kind === view.filter;
   }).filter((c) => !view.q || c.n.toLowerCase().includes(view.q));
   const sorters = {
@@ -119,7 +133,8 @@ function renderList(root) {
     <div class="page-head"><h1>Cases</h1><span class="sub">Real CS2 drop odds · prices from Skinport, CSFloat, Buff163 & YouPin</span></div>
     <div class="toolbar">
       <div class="seg" data-k="filter">${FILTERS.map(([k, n]) => `<button data-v="${k}" class="${view.filter === k ? 'active' : ''}">${n}</button>`).join('')}</div>
-      <input class="input" type="search" placeholder="Search cases…" value="${esc(view.q)}">
+      <input class="input" type="search" placeholder="Search…" value="${esc(view.q)}">
+      ${view.filter === 'souvenir' ? `<select class="input" data-k="major"><option value="all">All Majors</option>${majors().map((ev) => `<option value="${ev}" ${view.major === String(ev) ? 'selected' : ''}>${esc(eventShort(ev))}</option>`).join('')}</select>` : ''}
       <span class="spacer"></span>
       <select class="input" data-k="sort">
         ${[['new', 'Newest'], ['old', 'Oldest'], ['cheap', 'Cheapest'], ['pricey', 'Most expensive'], ['ev', 'Best return']].map(([k, n]) => `<option value="${k}" ${view.sort === k ? 'selected' : ''}>${n}</option>`).join('')}
@@ -129,6 +144,7 @@ function renderList(root) {
   </div>`;
   root.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => { view.filter = b.dataset.v; renderList(root); }));
   root.querySelector('select[data-k=sort]').addEventListener('change', (e) => { view.sort = e.target.value; renderList(root); });
+  root.querySelector('select[data-k=major]')?.addEventListener('change', (e) => { view.major = e.target.value; renderList(root); });
   const q = root.querySelector('input[type=search]');
   q.addEventListener('input', () => { view.q = q.value.toLowerCase(); renderList(root); q.focus(); q.setSelectionRange(q.value.length, q.value.length); });
   root.querySelectorAll('.case-tile').forEach((t) => t.addEventListener('click', () => openCaseView(t.dataset.id)));
@@ -141,17 +157,92 @@ function caseTile(c) {
     <div class="img"><img loading="lazy" src="${caseImage(c)}" alt=""></div>
     <div class="meta">
       <div class="n2">${esc(c.n)}</div>
-      <div class="row"><span class="price">${money(price)}</span><span class="key">${c.key ? `incl. ${money(D.keyPrice)} key` : 'no key needed'}</span></div>
-      <div class="row"><span class="dim" style="font-size:11px">Return ≈ ${(ret * 100).toFixed(0)}%</span><span class="dim" style="font-size:11px">${c.date ? c.date.slice(0, 4) : ''}</span></div>
+      <div class="row"><span class="price">${money(price)}</span><span class="key">${c.key ? `incl. ${money(D.keyPrice)} ${c.kind === 'package' ? 'decoder' : 'key'}` : 'no key needed'}</span></div>
+      <div class="row"><span class="dim" style="font-size:11px">Return ≈ ${(ret * 100).toFixed(0)}%</span><span class="dim" style="font-size:11px">${c.kind === 'souvenir' ? esc(eventShort(c.ev)) : c.date ? c.date.slice(0, 4) : ''}</span></div>
     </div>
   </div>`;
 }
 
+// ---- collections -----------------------------------------------------------------------------
+function colTopSkin(col) {
+  const top = Math.max(...Object.keys(col.tiers).map(Number));
+  return col.tiers[top].map((id) => D.skins[id]).sort((a, b) => expectedSkin(b, 'collection') - expectedSkin(a, 'collection'))[0];
+}
+function renderCollections(root) {
+  const list = D.collections.filter((c) => !view.q || c.n.toLowerCase().includes(view.q) || Object.values(c.tiers).flat().some((id) => D.skins[id].n.toLowerCase().includes(view.q)));
+  list.sort((a, b) => (view.sort === 'old' ? a.rel.localeCompare(b.rel) : view.sort === 'new' ? b.rel.localeCompare(a.rel) : expectedSkin(colTopSkin(b), 'collection') - expectedSkin(colTopSkin(a), 'collection')));
+  root.innerHTML = `<div class="page">
+    <div class="page-head"><h1>Collections</h1><span class="sub">Every CS2 collection. Get their skins from souvenir packages, the Armory, trade-ups and cases.</span></div>
+    <div class="toolbar">
+      <div class="seg" data-k="filter">${FILTERS.map(([k, n]) => `<button data-v="${k}" class="${view.filter === k ? 'active' : ''}">${n}</button>`).join('')}</div>
+      <input class="input" type="search" placeholder="Search collections or skins…" value="${esc(view.q)}">
+      <span class="spacer"></span>
+      <select class="input" data-k="sort">${[['new', 'Newest'], ['old', 'Oldest'], ['pricey', 'Most valuable']].map(([k, n]) => `<option value="${k}" ${view.sort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
+    </div>
+    <div class="grid lg">${list.map((col) => {
+      const top = colTopSkin(col);
+      const n = Object.values(col.tiers).flat().length;
+      return `<div class="card col-tile" data-col="${col.id}" style="--rc:${rarityColor(top.r)}">
+        <div class="img"><img loading="lazy" src="${imgUrl(top.img, 'm')}" alt=""></div><div class="rbar"></div>
+        <div class="meta"><div class="n2">${esc(col.n)}</div>
+          <div class="row"><span class="dim" style="font-size:11px">${n} skins · ${esc(top.n)}</span></div>
+          <div class="row"><span class="dim" style="font-size:11px">${col.packages.length ? col.packages.length + ' souvenir packages' : col.caseId ? 'Weapon case' : 'Armory / trade-ups'}</span><span class="dim" style="font-size:11px">${col.rel.slice(0, 4)}</span></div>
+        </div></div>`;
+    }).join('') || '<div class="empty">No collections match.</div>'}</div>
+  </div>`;
+  root.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => { view.filter = b.dataset.v; renderList(root); }));
+  root.querySelector('select[data-k=sort]').addEventListener('change', (e) => { view.sort = e.target.value; renderList(root); });
+  const q = root.querySelector('input[type=search]');
+  q.addEventListener('input', () => { view.q = q.value.toLowerCase(); renderList(root); const n = root.querySelector('input[type=search]'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); });
+  root.querySelectorAll('[data-col]').forEach((t) => t.addEventListener('click', () => openCollectionView(t.dataset.col)));
+}
+
+function renderCollection(root, col) {
+  const box = collectionBox(col);
+  const tiers = caseTiers(box);
+  const tw = tiers.reduce((s, t) => s + t[1], 0);
+  const keys = Object.keys(col.tiers).sort((a, b) => b - a);
+  const pkgs = col.packages.map((id) => D.caseById[id]).filter(Boolean);
+  const caseBox = col.caseId && D.caseById[col.caseId];
+  root.innerHTML = `<div class="page">
+    <div class="page-head"><button class="btn ghost" data-back>← Collections</button></div>
+    <div class="case-hero">
+      <img class="ci" src="${imgUrl(colTopSkin(col).img, 'm')}" alt="">
+      <div>
+        <div class="muted" style="text-transform:uppercase;letter-spacing:1.5px;font-size:12px">Collection${col.rel ? ' · ' + col.rel.slice(0, 4) : ''}</div>
+        <h2>${esc(col.n)}</h2>
+        <div class="muted" style="line-height:1.6;max-width:720px">Odds below are for souvenir packages and Armory collection drops (each rarity is 5× rarer than the one below).
+          Trade up ten skins of one rarity from this collection to get the next rarity.${caseBox ? ' Five Covert skins from it can be traded up into a knife or gloves from the ' + esc(caseBox.n) + '.' : ''}</div>
+        <div class="open-row">
+          ${caseBox ? `<button class="btn gold" data-case="${caseBox.id}">Open ${esc(caseBox.n)}</button>` : ''}
+          <button class="btn" data-go="armory">Armory</button>
+          <button class="btn" data-go="tradeup">Trade Up</button>
+        </div>
+        <div class="odds">${rarityOddsHTML(box, tiers)}</div>
+      </div>
+    </div>
+    <div class="section-title">Skins</div>
+    <div class="grid">${keys.map((k) => {
+      const w = (tiers.find((t) => t[0] === k)?.[1] || 0) / tw;
+      return col.tiers[k].map((id) => defTile('collection', id, w / col.tiers[k].length)).join('');
+    }).join('')}</div>
+    ${pkgs.length ? `<div class="section-title">Souvenir packages (${pkgs.length})</div><div class="grid lg">${pkgs.map(caseTile).join('')}</div>` : ''}
+  </div>`;
+  root.querySelector('[data-back]').addEventListener('click', () => { view.mode = 'list'; view.filter = 'collection'; render(root); });
+  root.querySelector('[data-case]')?.addEventListener('click', (e) => openCaseView(e.currentTarget.dataset.case));
+  root.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => document.querySelector(`#nav [data-page=${b.dataset.go}]`)?.click()));
+  root.querySelectorAll('.case-tile').forEach((t) => t.addEventListener('click', () => openCaseView(t.dataset.id)));
+  root.querySelectorAll('[data-prev]').forEach((t) => t.addEventListener('click', () => {
+    const [, ids, odds] = t.dataset.prev.split('|');
+    skinPreview(box, ids.split(','), +odds);
+  }));
+}
+
 // ---- case view -----------------------------------------------------------------------------
 function defTile(kind, id, oddsEach) {
-  if (kind === 'case') {
+  if (SKIN_KINDS.has(kind)) {
     const s = D.skins[id];
-    const [lo, hi] = priceRange(s);
+    const [lo, hi] = priceRange(s, kind);
     const [w, f] = s.n.split(' | ');
     return `<div class="card def" data-prev="skin|${id}|${oddsEach}" style="--rc:${rarityColor(s.r)}">
       <div class="img"><img loading="lazy" src="${imgUrl(s.img, 'm')}"></div><div class="rbar"></div>
@@ -181,7 +272,7 @@ function renderCase(root, c) {
   const keys = Object.keys(c.pools).sort((a, b) => b - a);
   const contents = keys.map((k) => {
     const w = (tiers.find((t) => t[0] === k)?.[1] || 0) / tw;
-    return c.pools[k].map((id) => defTile(c.kind === 'case' ? 'case' : c.kind, id, w / c.pools[k].length)).join('');
+    return c.pools[k].map((id) => defTile(c.kind, id, w / c.pools[k].length)).join('');
   }).join('');
   const rareW = c.rare ? (tiers.find((t) => t[0] === 'rare')?.[1] || 0) / tw : 0;
   const rareTiles = c.rare ? c.rare.map((g) => {
@@ -199,11 +290,13 @@ function renderCase(root, c) {
     <div class="case-hero">
       <img class="ci" src="${caseImage(c)}" alt="">
       <div>
-        <div class="muted" style="text-transform:uppercase;letter-spacing:1.5px;font-size:12px">${c.kind === 'case' ? 'Weapon case' : c.kind === 'agents' ? 'Agent locker' : c.kind === 'chickens' ? 'Chicken crate' : c.kind === 'autograph' ? 'Autograph capsule' : 'Sticker capsule'}</div>
+        <div class="muted" style="text-transform:uppercase;letter-spacing:1.5px;font-size:12px">${({ case: 'Weapon case', agents: 'Agent locker', chickens: 'Chicken crate', autograph: 'Autograph capsule', capsule: 'Sticker capsule', souvenir: 'Souvenir package', package: 'Package' })[c.kind] || ''}</div>
         <h2>${esc(c.n)}</h2>
+        ${c.kind === 'souvenir' ? `<div class="muted" style="margin:-4px 0 10px">${esc(D.events[c.ev]?.n || '')} · every drop is a Souvenir with that Major's team stickers${D.events[c.ev] && Object.keys(D.events[c.ev].mvp).length ? ' and a gold MVP autograph' : ''}${c.col && D.colById[c.col] ? ` · <a href="#" data-col="${c.col}">${esc(D.colById[c.col].n)}</a>` : ''}</div>` : ''}
+        ${c.kind === 'package' && c.col && D.colById[c.col] ? `<div class="muted" style="margin:-4px 0 10px"><a href="#" data-col="${c.col}">${esc(D.colById[c.col].n)}</a></div>` : ''}
         <div class="stats">
-          <div>Container<b>${money(c.price)}</b></div>
-          ${c.key ? `<div>Key<b>${money(D.keyPrice)}</b></div>` : ''}
+          <div>${c.kind === 'souvenir' || c.kind === 'package' ? 'Package' : 'Container'}<b>${money(c.price)}</b></div>
+          ${c.key ? `<div>${c.kind === 'package' ? 'Decoder' : 'Key'}<b>${money(D.keyPrice)}</b></div>` : ''}
           <div>Total per open<b class="green">${money(price)}</b></div>
           <div>Expected value<b>${money(ev)}</b></div>
           <div>Return<b class="${ev >= price ? 'green' : 'red'}">${((ev / price) * 100).toFixed(1)}%</b></div>
@@ -225,6 +318,7 @@ function renderCase(root, c) {
   </div>`;
 
   root.querySelector('[data-back]').addEventListener('click', () => { view.mode = 'list'; render(root); });
+  root.querySelectorAll('[data-col]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); openCollectionView(a.dataset.col); }));
   root.querySelectorAll('[data-k=qty] button').forEach((b) => b.addEventListener('click', () => { view.qty = +b.dataset.v; renderCase(root, c); }));
   root.querySelector('[data-fast]').addEventListener('change', (e) => { S.settings.fast = e.target.checked; save(); });
   root.querySelector('[data-open]').addEventListener('click', () => openCase(c, view.qty));
@@ -281,16 +375,18 @@ function skinPreview(c, ids, odds) {
     const s = D.skins[ids[idx]];
     const wears = s.v ? [] : WEARS.filter((w) => s.p[w.k]);
     if (!s.v && (!wear || !s.p[wear])) wear = (wears.find((w) => w.k === 'FT') || wears[0]).k;
-    const canStt = s.stt && s.cat !== 'gloves';
+    const sv = c.kind === 'souvenir';
+    const canStt = s.stt && s.cat !== 'gloves' && (c.kind === 'case' || s.star);
     if (!canStt) stt = false;
-    const sample = I.makeSkinItem(s, { stt, sd: seed, ...(s.v ? {} : { fl: I.rollFloatInWear(s, wear) }) });
+    const sample = I.makeSkinItem(s, { stt, sv, sd: seed, ...(s.v ? {} : { fl: I.rollFloatInWear(s, wear) }) });
     const pat = I.patternInfo(sample);
     const r = I.rarityInfo(sample);
     const np = I.nameParts(sample);
     titleEl.textContent = s.n + (s.ph ? ` (${s.ph})` : '');
     const rows = s.v
       ? [['Vanilla', s.p.V[0], canStt ? s.p.V[1] : null]]
-      : wears.map((w) => [w.n, s.p[w.k][0], canStt ? s.p[w.k][1] : null]);
+      : wears.map((w) => [w.n, s.p[w.k][0], canStt ? s.p[w.k][1] : sv ? s.p[w.k][2] ?? null : null]);
+    const col2 = canStt ? 'StatTrak™' : sv ? 'Souvenir' : '';
     const info = pat.info.map(([k, v]) => `${k}: ${v}`).join(' · ');
     body.innerHTML = `<div class="detail" style="--rc:${r.c}">
       <div>
@@ -303,12 +399,13 @@ function skinPreview(c, ids, odds) {
         <dl class="kv">
           <dt>Drop chance</dt><dd>${fmtOdds(odds)}${ids.length > 1 ? ' <span class="dim">(all phases)</span>' : ''}</dd>
           ${s.v ? '' : `<dt>Float range</dt><dd>${s.mn.toFixed(2)} – ${s.mx.toFixed(2)}</dd>`}
-          <dt>StatTrak™</dt><dd>${canStt ? 'Available (10% of drops)' : 'Not available'}</dd>
+          ${sv ? '<dt>Souvenir</dt><dd>Always (with match stickers)</dd>' : `<dt>StatTrak™</dt><dd>${canStt ? 'Available (10% of drops)' : 'Not available'}</dd>`}
+          ${s.col && D.colById[s.col] ? `<dt>Collection</dt><dd>${esc(D.colById[s.col].n)}</dd>` : ''}
           <dt>Finish style</dt><dd>${esc(s.st || '—')}</dd>
         </dl>
         <table class="price-table">
-          <tr><th>Exterior</th><th>Price</th>${canStt ? '<th>StatTrak™</th>' : ''}</tr>
-          ${rows.map(([n, a, b]) => `<tr><td>${n}</td><td class="green">${money(a)}</td>${canStt ? `<td class="green">${b != null ? money(b) : '—'}</td>` : ''}</tr>`).join('')}
+          <tr><th>Exterior</th><th>Price</th>${col2 ? `<th>${col2}</th>` : ''}</tr>
+          ${rows.map(([n, a, b]) => `<tr><td>${n}</td><td class="green">${money(a)}</td>${col2 ? `<td class="green">${b != null ? money(b) : '—'}</td>` : ''}</tr>`).join('')}
         </table>
         <div class="section-title">Inspect options</div>
         <div class="insp-opts">
@@ -329,7 +426,9 @@ function skinPreview(c, ids, odds) {
     body.querySelector('[data-a=rnd]')?.addEventListener('click', () => { seed = Math.floor(Math.random() * 1001); draw(); });
     body.querySelector('[data-a=close]').addEventListener('click', () => m.close());
     body.querySelector('[data-a=inspect]').addEventListener('click', () => {
-      openInspect(I.makeSkinItem(s, { stt, sd: seed, ...(s.v ? {} : { fl: I.rollFloatInWear(s, wear) }) }));
+      const it = I.makeSkinItem(s, { stt, sv, sd: seed, ...(s.v ? {} : { fl: I.rollFloatInWear(s, wear) }) });
+      if (sv) it.stk = I.souvenirStickers(c.ev);
+      openInspect(it);
     });
   };
   draw();
@@ -340,35 +439,34 @@ let opening = false;
 export async function openCase(c, n) {
   if (opening) return;
   const cost = round2(casePrice(c) * n);
-  if (!trySpend(cost)) {
+  if (S.money + 1e-9 < cost) {
     sfx.error();
     toast(`You need <b>${money(cost)}</b> to open ${n > 1 ? n + ' of these' : 'this'}. Earn money on the <b>Earn</b> tab or sell items.`, 'bad');
     return;
   }
   opening = true;
-  sfx.open();
-  const items = Array.from({ length: n }, () => I.rollFromCase(c));
-  for (const it of items) {
-    it.nw = true;
-    const v = I.itemValue(it);
-    const rank = I.rarityRank(it);
-    S.stats.drops[rank] = (S.stats.drops[rank] || 0) + 1;
-    if (I.itemDef(it)?.star) S.stats.knives++;
-    if (v > S.stats.bestValue) { S.stats.bestValue = v; S.stats.bestName = I.itemName(it); }
-  }
-  S.stats.opened += n;
-  S.stats.spent = round2(S.stats.spent + cost);
-  addItems(items); // saved before the animation so nothing is lost if the app closes
+  let r;
   try {
-    await playRoulette(c, items);
+    // Rolled and saved (or rolled on the server) before the animation, so nothing is lost if the app closes.
+    r = await act('case.open', { id: c.id, n });
+  } catch (e) {
+    opening = false;
+    sfx.error();
+    toast(esc(e.message), 'bad');
+    return;
+  }
+  sfx.open();
+  if (r.stars) toast(`+${r.stars} Armory Star${r.stars > 1 ? 's' : ''} for opening cases`, 'gold');
+  try {
+    await playRoulette(c, r.items);
   } finally {
     opening = false;
   }
-  showResults(c, items, n);
+  showResults(c, r.items, n);
 }
 
-function slotHTML(entry) {
-  if (entry.t === 'rare-placeholder' || (entry.t === 'skin' && D.skins[entry.id]?.star)) {
+function slotHTML(entry, showAll = false) {
+  if (entry.t === 'rare-placeholder' || (!showAll && entry.t === 'skin' && D.skins[entry.id]?.star)) {
     return `<div class="slot rare" style="--rc:#e4ae39"><span class="rare-glyph">★</span><div class="sn">Rare Special Item</div></div>`;
   }
   const r = I.rarityInfo(entry);
@@ -377,18 +475,19 @@ function slotHTML(entry) {
 }
 
 const WIN_INDEX = 58, REEL_LEN = 66;
-function playRoulette(c, items) {
+export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`) {
   return new Promise((resolve) => {
     const n = items.length;
     const ov = document.createElement('div');
     ov.className = 'opening';
-    ov.innerHTML = `<h3>Unlocking ${esc(c.n)}</h3><div class="strips n${n}">${items.map(() => '<div class="strip"><div class="reel"></div><div class="marker"></div></div>').join('')}</div><div class="hint">Press SPACE or click to skip</div>`;
+    ov.innerHTML = `<h3>${title}</h3><div class="strips n${n}">${items.map(() => '<div class="strip"><div class="reel"></div><div class="marker"></div></div>').join('')}</div><div class="hint">Press SPACE or click to skip</div>`;
     document.body.appendChild(ov);
     const strips = [...ov.querySelectorAll('.strip')];
     const reels = strips.map((strip, si) => {
       const reel = strip.querySelector('.reel');
-      const entries = Array.from({ length: REEL_LEN }, (_, i) => (i === WIN_INDEX ? items[si] : I.fakeRoll(c)));
-      reel.innerHTML = entries.map(slotHTML).join('');
+      // Containers can supply their own fillers (trade-ups, armory) and show gold items in the reel (showAll).
+      const entries = Array.from({ length: REEL_LEN }, (_, i) => (i === WIN_INDEX ? items[si] : c.fake ? c.fake() : I.fakeRoll(c)));
+      reel.innerHTML = entries.map((e) => slotHTML(e, c.showAll)).join('');
       return { strip, reel };
     });
     // measure after layout
@@ -454,30 +553,29 @@ function resultCard(it) {
   </div>`;
 }
 
-function showResults(c, items, n) {
+export function showResults(c, items, n, { cost = casePrice(c) * n, again = () => openCase(c, n), againLabel = `Open again (${money(cost)})` } = {}) {
   const total = items.reduce((s, i) => s + I.itemValue(i), 0);
-  const cost = casePrice(c) * n;
   if (items.some((i) => I.rarityRank(i) >= 6)) setTimeout(() => sfx.gold(), 250);
   const m = openModal({
     title: items.length > 1 ? `You unboxed ${items.length} items` : 'You unboxed',
     cls: items.length > 2 ? 'xwide' : 'wide',
     body: `<div class="results">${items.map(resultCard).join('')}</div>
       <p class="muted" style="text-align:center;margin:16px 0 0">Total value <b class="${total >= cost ? 'green' : 'red'}">${money(total)}</b> for ${money(cost)} spent</p>`,
-    foot: `<button class="btn" data-a="sellall">Sell all</button><span class="spacer"></span><button class="btn ghost" data-close>Keep</button><button class="btn gold" data-a="again">Open again (${money(cost)})</button>`,
+    foot: `<button class="btn" data-a="sellall">Sell all</button><span class="spacer"></span><button class="btn ghost" data-close>Keep</button>${again ? `<button class="btn gold" data-a="again">${againLabel}</button>` : ''}`,
   });
-  const live = () => items.filter((i) => S.inv.includes(i));
+  const live = () => items.filter((i) => S.inv.some((x) => x.uid === i.uid));
   m.el.querySelectorAll('.result').forEach((el) => {
     const it = items.find((i) => i.uid === el.dataset.uid);
     el.querySelector('[data-a=inspect]').addEventListener('click', () => openInspect(it));
     el.querySelector('[data-a=detail]').addEventListener('click', () => showItemDetail(it));
     el.querySelector('[data-a=sell]').addEventListener('click', async () => {
-      if (!S.inv.includes(it)) return;
+      if (!S.inv.some((x) => x.uid === it.uid)) return;
       if (await sellItems([it])) { el.style.opacity = 0.35; el.querySelector('.btns').innerHTML = '<span class="muted">Sold</span>'; }
     });
   });
   m.el.querySelector('[data-a=sellall]').addEventListener('click', async () => {
     if (await sellItems(live())) m.close();
   });
-  m.el.querySelector('[data-a=again]').addEventListener('click', () => { m.close(); openCase(c, n); });
+  m.el.querySelector('[data-a=again]')?.addEventListener('click', () => { m.close(); again(); });
   emit('inv');
 }

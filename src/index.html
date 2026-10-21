@@ -3,9 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' https: wss: http://localhost:* ws://localhost:* http://127.0.0.1:* ws://127.0.0.1:*">
   <title>CS2 Case Simulator</title>
   <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/features.css">
   <script type="importmap">
     { "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/addons/" } }
   </script>
@@ -20,11 +21,17 @@
       <nav id="nav">
         <button data-page="cases">Cases</button>
         <button data-page="inventory">Inventory <span class="pill" id="inv-count">0</span></button>
+        <button data-page="tradeup">Trade Up</button>
+        <button data-page="armory">Armory <span class="pill star" id="star-count">0</span></button>
         <button data-page="clicker">Earn</button>
         <button data-page="market">Market</button>
-        <button data-page="coop">Chicken Coop</button>
-        <button data-page="stats">Stats &amp; Settings</button>
+        <button data-page="gamble">Gamble</button>
+        <button data-page="team">Team</button>
+        <button data-page="trade" class="online-only">Trade</button>
+        <button data-page="coop">Coop</button>
+        <button data-page="stats">Settings</button>
       </nav>
+      <button class="account" id="account" title="Offline / online play"><span class="dot"></span><span id="account-name">Offline</span></button>
       <div class="wallet">
         <div class="wallet-sub"><span id="idle-rate">+$0.00/s</span><span id="net-worth">Inventory $0.00</span></div>
         <div class="balance" id="balance">$0.00</div>

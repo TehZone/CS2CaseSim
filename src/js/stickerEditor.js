@@ -2,12 +2,12 @@
 import { esc, money, imgUrl } from './util.js';
 import { D } from './data.js';
 import * as I from './items.js';
-import { S, removeItems, save, emit } from './state.js';
+import { S } from './state.js';
 import { composeItem, drawStickers, STICKER_BASE } from './composite.js';
 import { cs2Status } from './cs2/api.js';
 import { renderSideView } from './cs2/skin.js';
 import { inspectView } from './inspect.js';
-import { openModal, toast, confirmDialog } from './ui.js';
+import { openModal, toast, confirmDialog, tryAct } from './ui.js';
 import { sfx } from './audio.js';
 
 export function openStickerEditor(item, { onDone } = {}) {
@@ -216,22 +216,16 @@ export function openStickerEditor(item, { onDone } = {}) {
     const s = item.stk[i];
     const next = Math.round(((s.wr || 0) + 0.25) * 100) / 100;
     if (next >= 1 && !(await confirmDialog('Scraping again will <b>remove and destroy</b> this sticker. Continue?', { ok: 'Scrape off', danger: true }))) return;
+    if (!(await tryAct('stickers.scrape', { uid: item.uid, i }))) return;
     sfx.scrape();
-    const stk = [...item.stk];
-    if (next >= 1) stk.splice(i, 1);
-    else stk[i] = { ...s, wr: next };
-    item.stk = stk;
-    save();
-    emit('inv');
     if (mode === 'model') { loadingText('Updating…'); await renderModelSide(); }
     update();
   }
 
-  el.querySelector('[data-apply]').addEventListener('click', () => {
+  el.querySelector('[data-apply]').addEventListener('click', async () => {
     if (!pending.length) return;
-    item.stk = [...(item.stk || []), ...pending.map(placed)];
-    S.stats.stickersApplied += pending.length;
-    removeItems(pending.map((p) => p.srcUid)); // consumes the sticker items (also saves + emits)
+    // Consumes the sticker items and applies them (on the server when online).
+    if (!(await tryAct('stickers.apply', { uid: item.uid, stickers: pending.map((p) => ({ ...placed(p), srcUid: p.srcUid })) }))) return;
     sfx.sticker();
     toast(`Applied ${pending.length} sticker${pending.length > 1 ? 's' : ''}. New value <b class="green">${money(I.itemValue(item))}</b>`, 'good');
     pending = [];
