@@ -17,44 +17,7 @@ export function moneyShort(v) {
   if (a >= 1e4) return '$' + (v / 1e3).toFixed(1) + 'K';
   return money(v);
 }
-export const round2 = (v) => Math.round(v * 100) / 100;
-export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-export const lerp = (a, b, t) => a + (b - a) * t;
-export const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-
-// Cryptographically random [0,1) for drops, so outcomes can't be predicted.
-const buf = new Uint32Array(1);
-export function rand() {
-  crypto.getRandomValues(buf);
-  return buf[0] / 4294967296;
-}
-export const randInt = (n) => Math.floor(rand() * n);
-export const pick = (arr, r = rand) => arr[Math.floor(r() * arr.length)];
-export function pickWeighted(entries, r = rand) {
-  const total = entries.reduce((s, e) => s + e[1], 0);
-  let x = r() * total;
-  for (const e of entries) { if ((x -= e[1]) < 0) return e[0]; }
-  return entries[entries.length - 1][0];
-}
-
-export function hashStr(s) {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return h >>> 0;
-}
-export function mulberry32(a) {
-  return function () {
-    a |= 0; a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-// Deterministic 0..1 from a seed and a salt (pattern seed -> same look/stats every time).
-export const seeded = (seed, salt = '') => mulberry32(hashStr(salt + ':' + seed))();
-
-let uidCounter = 0;
-export const uid = () => Date.now().toString(36) + (uidCounter++).toString(36) + randInt(1e6).toString(36);
+export { round2, clamp, lerp, smoothstep, rand, randInt, pick, pickWeighted, shuffle, hashStr, mulberry32, seeded, seededRng, uid } from './engine/util.js';
 
 export function debounce(fn, ms) {
   let t;

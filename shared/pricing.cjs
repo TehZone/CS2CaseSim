@@ -97,21 +97,22 @@ function wearsFor(mn, mx) {
   return WEARS.filter((w) => mx > w.min && mn < w.max).map((w) => w.k);
 }
 
-function mhn(skin, wearKey, st) {
+function mhn(skin, wearKey, st, sv) {
   const isStar = skin.n.startsWith('★');
   const base = isStar ? skin.n.slice(2) : skin.n;
-  const prefix = st ? (isStar ? '★ StatTrak™ ' : 'StatTrak™ ') : (isStar ? '★ ' : '');
+  const prefix = sv ? 'Souvenir ' : st ? (isStar ? '★ StatTrak™ ' : 'StatTrak™ ') : (isStar ? '★ ' : '');
   if (!wearKey) return prefix + base;
   return `${prefix}${base} (${WEARS.find((w) => w.k === wearKey).name})`;
 }
 
 const RARITY_FALLBACK = [0.03, 0.05, 0.1, 0.6, 3, 15, 180, 2000];
 
-// Returns { FN: [normal, stattrak], MW: [...], ... } or { V: [normal, stattrak] } for vanilla knives.
+// Returns { FN: [normal, stattrak, souvenir], MW: [...], ... } or { V: [normal, stattrak] } for vanilla knives.
+// The souvenir entry is only present for skins that come in souvenir packages (skin.svp).
 function priceSkin(idx, skin) {
   const phase = skin.ph || null;
-  const lookup = (wk, st) => {
-    let p = priceOf(idx, mhn(skin, wk, st), phase);
+  const lookup = (wk, st, sv) => {
+    let p = priceOf(idx, mhn(skin, wk, st, sv), phase);
     if (phase) {
       const base = priceOf(idx, mhn(skin, wk, st), null);
       const ratio = PHASE_RATIO[phase] || 1;
@@ -130,7 +131,10 @@ function priceSkin(idx, skin) {
   }
   const wears = wearsFor(skin.mn, skin.mx);
   const p = {};
-  for (const wk of wears) p[wk] = [lookup(wk, false), skin.stt ? lookup(wk, true) : null];
+  for (const wk of wears) {
+    p[wk] = [lookup(wk, false), skin.stt ? lookup(wk, true) : null];
+    if (skin.svp) p[wk][2] = lookup(wk, false, true);
+  }
   // Fill gaps from the nearest known wear using typical ratios.
   const known = wears.filter((w) => p[w][0] != null);
   for (const wk of wears) {
@@ -143,6 +147,17 @@ function priceSkin(idx, skin) {
       }
     }
     if (skin.stt && p[wk][1] == null) p[wk][1] = Math.round(p[wk][0] * (skin.star ? 1.15 : 1.7) * 100) / 100;
+  }
+  if (skin.svp) {
+    // Souvenirs with no listing in a wear: scale from another souvenir wear, else from the normal price.
+    const knownSv = wears.filter((w) => p[w][2] != null);
+    for (const wk of wears) {
+      if (p[wk][2] != null) continue;
+      if (knownSv.length) {
+        const ref = knownSv.reduce((a, b) => (Math.abs(wears.indexOf(b) - wears.indexOf(wk)) < Math.abs(wears.indexOf(a) - wears.indexOf(wk)) ? b : a));
+        p[wk][2] = Math.round(p[ref][2] * (WEAR_RATIO[wk] / WEAR_RATIO[ref]) * 100) / 100;
+      } else p[wk][2] = Math.round(p[wk][0] * 1.6 * 100) / 100;
+    }
   }
   return p;
 }
