@@ -1,0 +1,68 @@
+{
+  "name": "cs2-case-sim",
+  "productName": "CS2 Case Simulator",
+  "version": "1.0.0",
+  "description": "CS2 case opening simulator with clicker economy, floats, patterns, stickers, agents, chickens and 3D inspect.",
+  "main": "main.js",
+  "author": "dawso",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "data": "node scripts/build-data.mjs",
+    "data:refresh": "node scripts/build-data.mjs --refresh",
+    "vendor": "node scripts/copy-vendor.mjs",
+    "dev": "node scripts/dev-server.mjs",
+    "start": "electron .",
+    "dist": "node scripts/build-exe.mjs",
+    "dist:dir": "electron-builder --win dir"
+  },
+  "build": {
+    "appId": "com.dawso.cs2casesim",
+    "productName": "CS2 Case Simulator",
+    "files": [
+      "main.js",
+      "preload.js",
+      "shared/**/*",
+      "cs2/**/*",
+      "src/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.png"
+    },
+    "portable": {
+      "artifactName": "CS2-Case-Simulator.exe"
+    },
+    "extraResources": [
+      {
+        "from": "tools/s2v",
+        "to": "s2v",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "CS2-Case-Simulator-Setup.exe",
+      "shortcutName": "CS2 Case Simulator"
+    }
+  },
+  "devDependencies": {
+    "electron": "^44.9.1",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  }
+}

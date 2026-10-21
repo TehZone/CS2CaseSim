@@ -1,0 +1,70 @@
+diff --git a/ValveResourceFormat/CompiledShader/Blocks/ShaderFile/VfxShaderFileVulkan.cs b/ValveResourceFormat/CompiledShader/Blocks/ShaderFile/VfxShaderFileVulkan.cs
+index d9a40b2..f6c529e 100644
+--- a/ValveResourceFormat/CompiledShader/Blocks/ShaderFile/VfxShaderFileVulkan.cs
++++ b/ValveResourceFormat/CompiledShader/Blocks/ShaderFile/VfxShaderFileVulkan.cs
+@@ -345,7 +345,9 @@ public bool TryGetDecompiledFile(out string code)
+     {
+         using var buffer = new StringWriter(CultureInfo.InvariantCulture);
+ 
+-        var backendsToTry = new[] { Backend.HLSL, Backend.GLSL, /* Backend.MSL, */ };
++        var backendsToTry = Environment.GetEnvironmentVariable("VRF_GLSL_ES") == "1"
++            ? new[] { Backend.GLSL }
++            : new[] { Backend.HLSL, Backend.GLSL, /* Backend.MSL, */ };
+         for (var i = 0; i < backendsToTry.Length; i++)
+         {
+             var backend = backendsToTry[i];
+diff --git a/ValveResourceFormat/CompiledShader/ShaderSpirvReflection.cs b/ValveResourceFormat/CompiledShader/ShaderSpirvReflection.cs
+index 513af6a..be74005 100644
+--- a/ValveResourceFormat/CompiledShader/ShaderSpirvReflection.cs
++++ b/ValveResourceFormat/CompiledShader/ShaderSpirvReflection.cs
+@@ -239,10 +239,11 @@ static bool Error(out string code, spvc_context context)
+ 
+             if (backend == Backend.GLSL)
+             {
+-                SpirvCrossApi.spvc_compiler_options_set_uint(options, CompilerOption.GLSLVersion, 460);
+-                SpirvCrossApi.spvc_compiler_options_set_bool(options, CompilerOption.GLSLES, SpirvCrossApi.SPVC_FALSE);
++                var glslEs = Environment.GetEnvironmentVariable("VRF_GLSL_ES") == "1";
++                SpirvCrossApi.spvc_compiler_options_set_uint(options, CompilerOption.GLSLVersion, glslEs ? 300u : 460u);
++                SpirvCrossApi.spvc_compiler_options_set_bool(options, CompilerOption.GLSLES, glslEs ? SpirvCrossApi.SPVC_TRUE : SpirvCrossApi.SPVC_FALSE);
+                 SpirvCrossApi.spvc_compiler_options_set_bool(options, CompilerOption.GLSLVulkanSemantics,
+-                    SpirvCrossApi.SPVC_TRUE);
++                    glslEs ? SpirvCrossApi.SPVC_FALSE : SpirvCrossApi.SPVC_TRUE);
+                 SpirvCrossApi.spvc_compiler_options_set_bool(options,
+                     CompilerOption.GLSLEmitUniformBufferAsPlainUniforms, SpirvCrossApi.SPVC_TRUE);
+             }
+@@ -288,6 +289,11 @@ static bool Error(out string code, spvc_context context)
+                 }
+             }
+ 
++            if (backend == Backend.GLSL && Environment.GetEnvironmentVariable("VRF_GLSL_ES") == "1")
++            {
++                CombineImageSamplers(compiler);
++            }
++
+             result = SpirvCrossApi.spvc_compiler_compile(compiler, out var compiledCode);
+ 
+             if (result != Result.Success)
+@@ -366,6 +372,23 @@ private static void BuildComboComment(VfxShaderFile shaderFile, StringWriter buf
+         }
+     }
+ 
++    // WebGL has no separate textures/samplers: merge them and name each pair "<texture>__<sampler>".
++    private static unsafe void CombineImageSamplers(spvc_compiler compiler)
++    {
++        uint dummySampler;
++        SpirvCrossApi.spvc_compiler_build_dummy_sampler_for_combined_images(compiler, &dummySampler);
++        SpirvCrossApi.spvc_compiler_build_combined_image_samplers(compiler);
++        spvc_combined_image_sampler* samplers;
++        nuint count;
++        SpirvCrossApi.spvc_compiler_get_combined_image_samplers(compiler, &samplers, &count);
++        for (nuint i = 0; i < count; i++)
++        {
++            var c = samplers[i];
++            var name = SpirvCrossApi.spvc_compiler_get_name(compiler, c.image_id) + "__" + SpirvCrossApi.spvc_compiler_get_name(compiler, c.sampler_id);
++            SpirvCrossApi.spvc_compiler_set_name(compiler, c.combined_id, name);
++        }
++    }
++
+     private static unsafe void RenameSpecializationConstants(spvc_compiler compiler, VfxShaderFile shaderFile)
+     {
+         var program = shaderFile.ParentCombo?.ParentProgramData;

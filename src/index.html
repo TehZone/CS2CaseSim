@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'">
+  <title>CS2 Case Simulator</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/addons/" } }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <div class="brand">
+        <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><path d="M4 10l12-6 12 6v12l-12 6-12-6z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><path d="M16 10l1.8 3.9 4.2.4-3.2 2.8 1 4.1-3.8-2.2-3.8 2.2 1-4.1-3.2-2.8 4.2-.4z" fill="currentColor"/></svg>
+        <span>CASE<b>SIM</b><i>2</i></span>
+      </div>
+      <nav id="nav">
+        <button data-page="cases">Cases</button>
+        <button data-page="inventory">Inventory <span class="pill" id="inv-count">0</span></button>
+        <button data-page="clicker">Earn</button>
+        <button data-page="market">Market</button>
+        <button data-page="coop">Chicken Coop</button>
+        <button data-page="stats">Stats &amp; Settings</button>
+      </nav>
+      <div class="wallet">
+        <div class="wallet-sub"><span id="idle-rate">+$0.00/s</span><span id="net-worth">Inventory $0.00</span></div>
+        <div class="balance" id="balance">$0.00</div>
+      </div>
+    </header>
+    <main id="page"><div class="boot">Loading CS2 item database…</div></main>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toasts"></div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
