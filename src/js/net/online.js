@@ -19,6 +19,9 @@ let ws = null, user = null, status = 'offline', seq = 0, retry = 0, retryTimer =
 const pending = new Map();
 let lobbies = { battles: [], flips: [], jackpot: null };
 let players = [], trades = [];
+// Free hosts (Render) put a server to sleep after 15 minutes without incoming requests; ping it while playing.
+let keepAlive = null;
+const startKeepAlive = () => { clearInterval(keepAlive); keepAlive = setInterval(() => { if (status === 'online') fetch(net.serverUrl() + '/health').catch(() => {}); }, 5 * 60 * 1000); };
 
 const saved = () => { try { return JSON.parse(localStorage.getItem(LS) || '{}'); } catch { return {}; } };
 const store = (v) => { try { localStorage.setItem(LS, JSON.stringify({ ...saved(), ...v })); } catch {} };
@@ -134,6 +137,7 @@ function disconnect() {
   try { ws?.close(); } catch {}
   ws = null;
   user = null;
+  clearInterval(keepAlive);
   setRemote(null);
   document.body.classList.remove('is-online');
   leaveOnline();
@@ -150,6 +154,7 @@ async function onWelcome(msg) {
   enterOnline(msg.state);
   document.body.classList.add('is-online');
   setStatus('online');
+  startKeepAlive();
   emit('players', players);
   emit('trades', trades);
   emit('lobbies', lobbies);

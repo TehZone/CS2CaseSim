@@ -210,3 +210,7 @@ body:not(.is-online) .online-only { display: none !important; }
 .auth { display: grid; gap: 12px; max-width: 420px; }
 .auth label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
 .auth .err { color: var(--red); font-size: 13px; min-height: 18px; }
+
+/* souvenir items (yellow like in CS2) */
+.card .sv { color: #ffd700; }
+.tag.sv { color: #1a1306; background: #ffd700; border-color: #ffd700; }

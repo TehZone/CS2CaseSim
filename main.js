@@ -216,6 +216,22 @@ async function runFeatureSmoke(win) {
     return out.join('\\n');
   })()`);
   console.log('SMOKE features\n' + log);
+  // CS2SIM_SMOKE_SERVER=http://localhost:8787 also checks online play: create an account, connect, open a case.
+  if (process.env.CS2SIM_SMOKE_SERVER) {
+    const online = await js(`(async () => {
+      const { net } = await import('./js/net/online.js'); const { act } = await import('./js/backend.js'); const { D } = await import('./js/data.js');
+      net.setServerUrl(${JSON.stringify(process.env.CS2SIM_SMOKE_SERVER)});
+      try {
+        await net.login('smoke' + Math.floor(Math.random() * 1e6), 'smoke-pass-1', { register: true });
+        const box = D.cases.filter((c) => c.kind === 'case').sort((a, b) => a.price - b.price)[0];
+        const r = await act('case.open', { id: box.id, n: 1 });
+        const out = 'online as ' + net.me().name + ', opened ' + r.items.length + ' item(s) on the server';
+        net.logout();
+        return out;
+      } catch (e) { return 'online FAILED: ' + e.message; }
+    })()`);
+    console.log('SMOKE', online);
+  }
   for (const page of ['cases', 'inventory', 'tradeup', 'armory', 'gamble', 'team', 'stats']) {
     await js(`document.querySelector('#nav [data-page=${page}]').click()`);
     await wait(page === 'team' ? 600 : 1500);

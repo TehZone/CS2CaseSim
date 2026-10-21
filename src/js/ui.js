@@ -90,12 +90,12 @@ export function itemCard(item, { selectable = false, selected = false, extra = '
   const stk = item.stk?.length ? `<div class="stickers">${item.stk.map((s) => `<img src="${imgUrl(D.stickers[s.id]?.img, 's')}">`).join('')}</div>` : '';
   return `<div class="card ${selected ? 'selected' : ''} ${extra}" data-uid="${item.uid}" style="--rc:${r.c}">
     ${selectable ? '<div class="sel"></div>' : ''}
-    <div class="tags">${item.nw ? '<span class="tag new">New</span>' : ''}${item.stt ? '<span class="tag st">ST™</span>' : ''}${patternTag(pat)}${item.lk ? '<span class="tag lock">🔒</span>' : ''}</div>
+    <div class="tags">${item.nw ? '<span class="tag new">New</span>' : ''}${item.stt ? '<span class="tag st">ST™</span>' : ''}${item.sv ? '<span class="tag sv">Souvenir</span>' : ''}${patternTag(pat)}${item.lk ? '<span class="tag lock">🔒</span>' : ''}</div>
     <div class="img"><img loading="lazy" src="${I.itemImage(item, 'm')}" alt="">${stk}</div>
     <div class="rbar"></div>
     ${item.t === 'skin' && item.fl != null ? `<div class="floatline"><i style="left:${item.fl * 100}%"></i></div>` : ''}
     <div class="meta">
-      <div class="n1 ${item.stt ? 'stt' : ''}">${esc(np.top)}</div>
+      <div class="n1 ${item.stt ? 'stt' : item.sv ? 'sv' : ''}">${esc(np.top)}</div>
       <div class="n2">${esc(np.bottom)}</div>
       <div class="row"><span class="wear">${esc(wear)}</span><span class="val">${money(I.itemValue(item))}</span></div>
       ${item.t === 'chicken' ? `<div class="income">🥚 ${money(chickenIncome(item))}/s egg rate</div>` : ''}
