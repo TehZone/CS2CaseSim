@@ -5,7 +5,7 @@ import { itemValue } from './items.js';
 import { toast, topModal, openModal } from './ui.js';
 import { loadGameSounds } from './audio.js';
 import { net, normalizeUrl } from './net/online.js';
-import { offlineEarnings as offlineFor } from './engine/economy.js';
+import { offlineEarnings as offlineFor, OFFLINE_CAP_S } from './engine/economy.js';
 import * as cases from './pages/cases.js';
 import * as inventory from './pages/inventory.js';
 import * as tradeup from './pages/tradeup.js';
@@ -71,7 +71,7 @@ function offlineEarnings() {
   if (earned <= 0) return;
   S.stats.passiveEarned += earned;
   addMoney(earned);
-  const away = Math.min(8 * 3600, awayS);
+  const away = Math.min(OFFLINE_CAP_S, awayS);
   const h = Math.floor(away / 3600), m = Math.floor((away % 3600) / 60);
   toast(`Welcome back! Your bots and chickens earned <b class="green">${money(earned)}</b> while you were away (${h ? h + 'h ' : ''}${m}m).`, 'gold');
 }

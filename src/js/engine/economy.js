@@ -51,22 +51,25 @@ export const RANKS = [
   'Legendary Eagle', 'Legendary Eagle Master', 'Supreme Master First Class', 'The Global Elite',
 ];
 
+// Earning is deliberately slow: clicks, upgrades and passive income were nerfed so cases, the market and the
+// armory stay worth working towards.
+export const CRIT_MULT = 5; // headshots pay 5x a normal click
 export const UPGRADES = [
-  { id: 'mouse', n: 'Gaming Mouse', d: '+$0.05 per click', base: 5, g: 1.17, kind: 'click' },
-  { id: 'rank', n: 'Rank Up', d: 'x1.25 click value per rank', base: 60, g: 2.4, max: RANKS.length - 1, kind: 'click' },
-  { id: 'crosshair', n: 'Crosshair Code', d: '+1% headshot chance (x10 click)', base: 25, g: 1.45, max: 30, kind: 'click' },
-  { id: 'bots', n: 'Deathmatch Bots', d: '+$0.10 / second', base: 15, g: 1.15, kind: 'idle', rate: 0.1 },
-  { id: 'pugs', n: 'PUG Grinder', d: '+$1 / second', base: 140, g: 1.15, kind: 'idle', rate: 1 },
-  { id: 'tradebot', n: 'Trade Bot', d: '+$8 / second', base: 1400, g: 1.15, kind: 'idle', rate: 8 },
-  { id: 'major', n: 'Major Run', d: '+$60 / second', base: 15000, g: 1.15, kind: 'idle', rate: 60 },
-  { id: 'prime', n: 'Prime Status', d: '+25% to all income', base: 400, g: 3.2, max: 20, kind: 'global' },
+  { id: 'mouse', n: 'Gaming Mouse', d: '+$0.02 per click', base: 8, g: 1.2, kind: 'click' },
+  { id: 'rank', n: 'Rank Up', d: 'x1.15 click value per rank', base: 80, g: 2.6, max: RANKS.length - 1, kind: 'click' },
+  { id: 'crosshair', n: 'Crosshair Code', d: '+0.5% headshot chance (x5 click)', base: 30, g: 1.5, max: 30, kind: 'click' },
+  { id: 'bots', n: 'Deathmatch Bots', d: '+$0.04 / second', base: 20, g: 1.18, kind: 'idle', rate: 0.04 },
+  { id: 'pugs', n: 'PUG Grinder', d: '+$0.40 / second', base: 200, g: 1.18, kind: 'idle', rate: 0.4 },
+  { id: 'tradebot', n: 'Trade Bot', d: '+$3 / second', base: 2500, g: 1.18, kind: 'idle', rate: 3 },
+  { id: 'major', n: 'Major Run', d: '+$20 / second', base: 30000, g: 1.18, kind: 'idle', rate: 20 },
+  { id: 'prime', n: 'Prime Status', d: '+10% to all income', base: 500, g: 3.5, max: 10, kind: 'global' },
 ];
 export const lvl = (st, id) => st.upg[id] || 0;
 export const upgradeCost = (st, u) => round2(u.base * Math.pow(u.g, lvl(st, u.id)));
 
-export const globalMult = (st) => 1 + 0.25 * lvl(st, 'prime');
-export const clickValue = (st) => round2((0.1 + 0.05 * lvl(st, 'mouse')) * Math.pow(1.25, lvl(st, 'rank')) * globalMult(st));
-export const critChance = (st) => 0.02 + 0.01 * lvl(st, 'crosshair');
+export const globalMult = (st) => 1 + 0.1 * Math.min(lvl(st, 'prime'), 10);
+export const clickValue = (st) => round2((0.05 + 0.02 * lvl(st, 'mouse')) * Math.pow(1.15, lvl(st, 'rank')) * globalMult(st));
+export const critChance = (st) => 0.02 + 0.005 * Math.min(lvl(st, 'crosshair'), 30);
 export const rankName = (st) => RANKS[lvl(st, 'rank')];
 
 export function coopChickens(st) {
@@ -80,10 +83,11 @@ export const idleRate = (st) =>
   UPGRADES.filter((u) => u.kind === 'idle').reduce((s, u) => s + lvl(st, u.id) * u.rate, 0) * globalMult(st) + chickenRate(st);
 export const coopSlotCost = (st) => round2(50 * Math.pow(2.2, st.coopSlots - 3));
 
-// Offline earnings: half rate, at most 8 hours.
-export const OFFLINE_CAP_S = 8 * 3600;
+// Offline earnings: a quarter of the rate, at most 4 hours.
+export const OFFLINE_CAP_S = 4 * 3600;
+export const OFFLINE_RATE = 0.25;
 export function offlineEarnings(st, awaySeconds) {
   const away = Math.min(OFFLINE_CAP_S, awaySeconds);
   if (away < 60) return 0;
-  return Math.floor(idleRate(st) * away * 0.5 * 100) / 100;
+  return Math.floor(idleRate(st) * away * OFFLINE_RATE * 100) / 100;
 }

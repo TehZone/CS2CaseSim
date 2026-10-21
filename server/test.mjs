@@ -89,6 +89,18 @@ try {
   const m1 = (await serverState(A.user.id)).money;
   check('click spam is capped by the server', m1 - m0 < 0.1 * 400 * 0.5, `earned ${(m1 - m0).toFixed(2)}`);
 
+  // ---- market: one shared stock ------------------------------------------------------------------------
+  {
+    const MK = await import('../src/js/engine/market.js');
+    const w = MK.marketWindow();
+    const skin = Object.values(D.skins).find((s) => !s.star && MK.skinListings(s, w).length && MK.skinListings(s, w)[0].p < 50);
+    const bought = await A.act('market.buy', { kind: 'skin', id: skin.id, n: 0, window: w });
+    let e = null; try { await B.act('market.buy', { kind: 'skin', id: skin.id, n: 0, window: w }); } catch (x) { e = x; }
+    check('market stock is shared: a listing sells once for everyone', bought.item && e?.code === 'sold');
+    const ev = await B.waitFor((m) => m.t === 'market' && m.lid === MK.skinListings(skin, w)[0].lid);
+    check('other players are told when a listing sells', !!ev);
+  }
+
   // ---- trading --------------------------------------------------------------------------------------
   await B.act('case.open', { id: box.id, n: 2 });
   const x = A.st.inv[0], y = B.st.inv[0];

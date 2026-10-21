@@ -1,6 +1,7 @@
 import { money, moneyShort, rand } from '../util.js';
 import { S, on, UPGRADES, RANKS, lvl, upgradeCost, clickValue, critChance, idleRate, rankName, globalMult, chickenRate } from '../state.js';
 import { act } from '../backend.js';
+import { CRIT_MULT } from '../engine/economy.js';
 import { tryAct } from '../ui.js';
 import { sfx } from '../audio.js';
 
@@ -25,7 +26,7 @@ const TARGET_SVG = `<svg viewBox="0 0 200 200">
 export function render(r) {
   root = r;
   root.innerHTML = `<div class="page">
-    <div class="page-head"><h1>Earn</h1><span class="sub">Click the target to earn money. Headshots pay ×10. Upgrades boost clicks and add passive income.</span></div>
+    <div class="page-head"><h1>Earn</h1><span class="sub">Click the target to earn money. Headshots pay ×5. Upgrades boost clicks and add passive income.</span></div>
     <div class="clicker">
       <div class="click-zone">
         <span class="rank-badge" data-rank></span>
@@ -48,7 +49,7 @@ export function render(r) {
   root.querySelector('.target').addEventListener('pointerdown', (e) => {
     e.preventDefault();
     const hs = rand() < critChance();
-    const v = clickValue() * (hs ? 10 : 1);
+    const v = clickValue() * (hs ? CRIT_MULT : 1);
     act('click', { n: 1, crits: hs ? 1 : 0 }).catch(() => {});
     hs ? sfx.headshot() : sfx.click();
     const z = zone.getBoundingClientRect();

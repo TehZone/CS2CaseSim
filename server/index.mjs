@@ -18,6 +18,7 @@ import * as A from './accounts.mjs';
 import { D, initData } from '../src/js/engine/data.js';
 import { makeCtx, runAction, delta, credit, GameError } from '../src/js/engine/actions.js';
 import * as M from '../src/js/engine/manager.js';
+import { marketWindow } from '../src/js/engine/market.js';
 import { itemValue } from '../src/js/engine/items.js';
 
 const require = createRequire(import.meta.url);
@@ -105,6 +106,28 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
     priceTimer = setInterval(refreshPrices, DAY);
     priceTimer.unref?.();
   }
+
+  // ---- market stock: listings bought by anyone on the server, per 10-minute window ---------------------------
+  const marketSold = new Map(); // window -> Set of listing ids
+  let marketDirty = false;
+  try {
+    const { rows } = await db.query("SELECT v FROM kv WHERE k = 'market'");
+    const saved = rows[0] && (typeof rows[0].v === 'string' ? JSON.parse(rows[0].v) : rows[0].v);
+    const cur = marketWindow();
+    for (const [w, ids] of Object.entries(saved || {})) if (+w >= cur - 1) marketSold.set(+w, new Set(ids));
+  } catch (e) { log('[market] could not load sold listings', e.message); }
+  const soldSet = (w) => { if (!marketSold.has(w)) marketSold.set(w, new Set()); return marketSold.get(w); };
+  const marketSnapshot = () => {
+    const cur = marketWindow();
+    for (const w of [...marketSold.keys()]) if (w < cur - 1) marketSold.delete(w);
+    return Object.fromEntries([...marketSold].map(([w, set]) => [w, [...set]]));
+  };
+  const saveMarket = setInterval(() => {
+    if (!marketDirty) return;
+    marketDirty = false;
+    db.query("INSERT INTO kv (k, v) VALUES ('market', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(marketSnapshot())])
+      .catch((e) => { marketDirty = true; log('[market] save failed', e.message); });
+  }, 3000);
 
   // ---- HTTP ----------------------------------------------------------------------------------------------
   const ipLimit = A.limiter(20, 60000);
@@ -240,7 +263,7 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
         });
         send({
           t: 'welcome', user: { id: u.id, name: u.name }, state, offline, pricedAt: D.pricedAt, serverTime: Date.now(),
-          players: playersList(), trades: await trades.list(u.id), lobbies: live.snapshot(u.id),
+          players: playersList(), trades: await trades.list(u.id), lobbies: live.snapshot(u.id), market: marketSnapshot(),
         });
         broadcastPlayers();
         return;
@@ -251,21 +274,25 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
         if (msg.ns === 'act') {
           let args = msg.args || {};
           if (msg.m === 'click') {
-            // At most 20 clicks per second since the last batch (plus a small burst allowance).
-            const allowed = Math.floor(((Date.now() - lastClick) / 1000) * 20 + 20);
+            // At most 12 clicks per second since the last batch (plus a small burst allowance).
+            const allowed = Math.floor(((Date.now() - lastClick) / 1000) * 12 + 12);
             lastClick = Date.now();
             const n = Math.min(Number(args.n) || 0, allowed, 400);
             args = { n, crits: Math.min(Number(args.crits) || 0, n) };
           }
+          const boughtNow = [];
           const out = await store.withUser(user.id, async (e) => {
             tickIdle(e.st, Date.now());
             const ctx = makeCtx(e.st, { online: true, invCap: INV_CAP, reserved: trades.reserved(user.id) });
+            // The market's stock is shared by everyone on the server.
+            ctx.market = (w) => ({ has: (lid) => soldSet(w).has(lid), add: (lid) => { soldSet(w).add(lid); marketDirty = true; boughtNow.push([w, lid]); } });
             ctx.dirty.add('money');
             const r = runAction(ctx, String(msg.m), args);
             store.markDirty(e);
             return { r, d: delta(ctx) };
           });
           reply(true, { r: out.r, d: out.d });
+          for (const [w, lid] of boughtNow) for (const id of sockets.keys()) srv.sendTo(id, { t: 'market', w, lid });
           srv.sendTo(user.id, { t: 'delta', d: out.d }, ws); // other tabs of the same player
           return;
         }
@@ -321,7 +348,8 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
   log(`[server] listening on :${actualPort}`);
 
   async function close() {
-    clearInterval(ping); clearInterval(idle); clearInterval(priceTimer);
+    clearInterval(ping); clearInterval(idle); clearInterval(priceTimer); clearInterval(saveMarket);
+    if (marketDirty) await db.query("INSERT INTO kv (k, v) VALUES ('market', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(marketSnapshot())]).catch(() => {});
     live.close();
     for (const ws of wss.clients) ws.terminate();
     await new Promise((r) => server.close(() => r()));

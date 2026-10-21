@@ -101,6 +101,48 @@ function tierFreq(box, n) {
   check('the Dragon Lore collection shows up in the armory', found);
 }
 
+// ---- market stock -------------------------------------------------------------------------------
+{
+  const MK = await import(new URL('../src/js/engine/market.js', import.meta.url));
+  const W0 = MK.marketWindow(Date.UTC(2026, 9, 21));
+  const listedShare = (skin, n = 1500) => { let k = 0, most = 0; for (let w = W0; w < W0 + n; w++) { const l = MK.skinListings(skin, w).length; if (l) k++; most = Math.max(most, l); } return { share: k / n, most }; };
+  const cheap = Object.values(D.skins).filter((s) => !s.star && MK.lowestPrice(s) < 1)[0];
+  const dl = Object.values(D.skins).find((s) => s.n === 'AWP | Dragon Lore');
+  const ruby = Object.values(D.skins).find((s) => s.star && s.ph === 'Ruby' && MK.lowestPrice(s) > 2000);
+  const c1 = listedShare(cheap), c2 = listedShare(dl), c3 = listedShare(ruby);
+  check('cheap skins are almost always for sale', c1.share > 0.95 && c1.most > 1, `${(c1.share * 100).toFixed(0)}% of restocks`);
+  check('a Dragon Lore is listed rarely, one at a time', c2.share > 0 && c2.share < 0.12 && c2.most === 1, `${(c2.share * 100).toFixed(1)}% of restocks`);
+  check('a Ruby knife is listed very rarely', c3.share < 0.05 && c3.most <= 1, `${ruby.n}: ${(c3.share * 100).toFixed(1)}% of restocks`);
+  // Premium patterns (blue gems etc.) are kept on only ~10% of listings that roll one.
+  const ch = Object.values(D.skins).find((s) => s.n === 'AK-47 | Case Hardened');
+  let listings = 0, premium = 0;
+  for (let w = W0; w < W0 + 3000; w++) for (const l of MK.skinListings(ch, w)) { listings++; if (['t0', 't1', 't2'].includes(I.patternInfo(l.item).tier)) premium++; }
+  check('blue gems rarely reach the market', premium / 3000 < 0.006, `${premium} blue-gem-tier AK Case Hardened listings in 3000 restocks (${listings} listings)`);
+  const kato = Object.values(D.stickers).filter((s) => /Katowice/.test(s.t) && /2014/.test(s.t) && s.fx === 'Holo').sort((a, b) => b.p - a.p)[0];
+  let kl = 0; for (let w = W0; w < W0 + 2000; w++) if (MK.unitStock('sticker', kato, w)) kl++;
+  check('rare stickers are listed rarely', kl / 2000 < 0.06, `${kato.n} ($${kato.p}): ${(kl / 20).toFixed(1)}% of restocks`);
+
+  // Buying: each listing once, stock runs out, old windows expire.
+  const st = freshState();
+  st.money = 1e6;
+  const now = (MK.marketWindow() + 0.5) * MK.MARKET_WINDOW_MS;
+  const run = (args) => { const ctx = ACT.makeCtx(st, { rng, now }); return ACT.runAction(ctx, 'market.buy', args); };
+  const w = MK.marketWindow(now);
+  let skin = null; for (const s of Object.values(D.skins)) if (!s.star && MK.skinListings(s, w).length >= 2) { skin = s; break; }
+  const l0 = MK.skinListings(skin, w)[0];
+  const b1 = run({ kind: 'skin', id: skin.id, n: 0, window: w });
+  check('buying a listing gives exactly that item', b1.item.fl === l0.item.fl && b1.item.sd === l0.item.sd && Math.abs(b1.price - l0.p) < 1e-9);
+  let e1 = null; try { run({ kind: 'skin', id: skin.id, n: 0, window: w }); } catch (e) { e1 = e; }
+  check('the same listing cannot be bought twice', e1?.code === 'sold');
+  const stk = Object.values(D.stickers).find((s) => !s.so && MK.unitStock('sticker', s, w) >= 2);
+  const units = MK.unitStock('sticker', stk, w);
+  for (let k = 0; k < units; k++) run({ kind: 'sticker', id: stk.id, window: w });
+  let e2 = null; try { run({ kind: 'sticker', id: stk.id, window: w }); } catch (e) { e2 = e; }
+  check('sticker stock runs out', e2?.code === 'sold', `${units} copies`);
+  let e3 = null; try { run({ kind: 'skin', id: skin.id, n: 1, window: w - 5 }); } catch (e) { e3 = e; }
+  check('listings from old restocks are refused', e3?.code === 'expired');
+}
+
 // ---- trade-ups ----------------------------------------------------------------------------------
 {
   const col = D.collections.find((c) => c.n === 'The Cobblestone Collection');

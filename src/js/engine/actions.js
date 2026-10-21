@@ -3,14 +3,15 @@
 //
 // An action gets a context (ctx) wrapping the state, the RNG and the clock, and records what it changed:
 // added/removed/updated items and the other top-level fields it touched (money, stars, stats...).
-import { D, casePrice, WEAR_BY_KEY } from './data.js';
+import { D, casePrice } from './data.js';
 import * as I from './items.js';
 import * as E from './economy.js';
 import { tradeupContract, rollTradeup } from './tradeup.js';
 import { PASS_PRICE, PASS_STARS, findLiveOffer, offerBox, starsFromSpend } from './armory.js';
 import * as M from './manager.js';
 import * as G from './gamble.js';
-import { rand, round2, seededRng } from './util.js';
+import * as MK from './market.js';
+import { rand, round2 } from './util.js';
 
 export class GameError extends Error {
   constructor(message, code = 'bad') { super(message); this.code = code; }
@@ -128,24 +129,6 @@ export function takeStake(ctx, { money: m = 0, uids = [] } = {}) {
   return { cash, items, value };
 }
 
-// ---- market listings (deterministic, so the server agrees on each listing's float and pattern) ----------
-export const MARKET_BUCKET_MS = 10 * 60 * 1000;
-export const marketBucket = (now = Date.now()) => Math.floor(now / MARKET_BUCKET_MS);
-export const MARKET_PAGES = 10;
-export function marketListings(skin, bucket, page = 0) {
-  const r = seededRng(`market:${skin.id}:${bucket}:${page}`);
-  const variants = skin.v ? [[null, false], ...(skin.stt ? [[null, true]] : [])]
-    : Object.keys(WEAR_BY_KEY).filter((k) => skin.p[k]).flatMap((k) => [[k, false], ...(skin.stt && skin.cat !== 'gloves' ? [[k, true]] : [])]);
-  const out = [];
-  for (const [wk, st] of variants) {
-    for (let n = 0; n < 2; n++) {
-      const item = I.makeSkinItem(skin, { stt: st, r, ...(wk ? { fl: I.rollFloatInWear(skin, wk, r) } : {}) });
-      out.push({ n: out.length, item, p: I.itemValue(item) });
-    }
-  }
-  return out;
-}
-
 // ---- the actions -----------------------------------------------------------------------------------
 export const ACTIONS = {
   'case.open'(ctx, { id, n = 1, autoSell }) {
@@ -185,28 +168,39 @@ export const ACTIONS = {
     }
   },
 
-  'market.buy'(ctx, { kind, id, n, bucket, page = 0 }) {
-    let item, price;
+  // Buys one listing from the market's limited stock (see engine/market.js). ctx.market(w) can supply the
+  // server-wide sold listings; offline they are kept in the save.
+  'market.buy'(ctx, { kind, id, n, window: win }) {
+    const cur = MK.marketWindow(ctx.now);
+    const w = win == null ? cur : int(win, 0, 1e9, 'listing');
+    if (w !== cur && !(w === cur - 1 && ctx.now - cur * MK.MARKET_WINDOW_MS < MK.MARKET_GRACE_MS)) fail('The market has restocked. Have a look at the new listings.', 'expired');
+    const sold = ctx.market ? ctx.market(w) : MK.localSold(ctx.st, w);
+    let item, price, lid;
     if (kind === 'sticker' || kind === 'agent') {
       const d = kind === 'sticker' ? D.stickers[id] : D.agents[id];
       if (!d) fail('Unknown item');
+      const count = MK.unitStock(kind, d, w);
+      let k = 0;
+      while (k < count && sold.has(MK.unitLid(kind, d.id, w, k))) k++;
+      if (k >= count) fail(count ? 'Sold out until the next restock' : 'Not for sale right now. Check back after a restock.', 'sold');
+      lid = MK.unitLid(kind, d.id, w, k);
       price = d.p;
-      item = kind === 'sticker' ? I.makeStickerItem(d) : I.makeAgentItem(d);
+      item = kind === 'sticker' ? I.makeStickerItem(d, 'Market') : I.makeAgentItem(d, 'Market');
     } else {
       const skin = D.skins[id];
       if (!skin) fail('Unknown item');
-      const b = int(bucket, 0, 1e9, 'listing');
-      const cur = marketBucket(ctx.now);
-      if (b !== cur && b !== cur - 1) fail('That listing has expired. Refresh the market.', 'expired');
-      const listing = marketListings(skin, b, int(page, 0, MARKET_PAGES - 1, 'page'))[int(n, 0, 99, 'listing')];
-      if (!listing) fail('Unknown listing');
-      ({ item, p: price } = listing);
+      const listing = MK.skinListings(skin, w)[int(n, 0, 99, 'listing')];
+      if (!listing) fail('That listing is gone');
+      if (sold.has(listing.lid)) fail('Someone already bought that listing', 'sold');
+      ({ lid, p: price } = listing);
+      item = MK.fromListing(listing);
     }
     spend(ctx, price);
     item.nw = true;
-    item.src = 'Market';
     give(ctx, [item]);
-    return { item, price };
+    sold.add(lid); // last, so nothing can fail after a listing is taken
+    if (!ctx.market) ctx.dirty.add('market');
+    return { item, price, lid, window: w };
   },
 
   click(ctx, { n, crits = 0 }) {
@@ -214,7 +208,7 @@ export const ACTIONS = {
     crits = int(crits, 0, n, 'headshots');
     if (ctx.online && n && crits > Math.ceil(n * E.critChance(ctx.st) * 3) + 3) fail('Suspicious headshot rate');
     const v = E.clickValue(ctx.st);
-    const earned = round2(v * (n - crits) + v * 10 * crits);
+    const earned = round2(v * (n - crits) + v * E.CRIT_MULT * crits);
     credit(ctx, earned);
     const s = stats(ctx);
     s.clicks += n;

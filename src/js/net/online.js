@@ -11,6 +11,7 @@
 import { D } from '../data.js';
 import { S, applyDelta, enterOnline, leaveOnline, emit as emitState, clickValue } from '../state.js';
 import { setRemote } from '../backend.js';
+import { CRIT_MULT } from '../engine/economy.js';
 
 const LS = 'cs2sim-online';
 const PROTOCOL = 1;
@@ -19,6 +20,9 @@ let ws = null, user = null, status = 'offline', seq = 0, retry = 0, retryTimer =
 const pending = new Map();
 let lobbies = { battles: [], flips: [], jackpot: null };
 let players = [], trades = [];
+// Server clock offset and the market listings already bought on the server (per 10-minute window).
+let clockOffset = 0;
+const marketSold = new Map(); // window -> Set of listing ids
 // Free hosts (Render) put a server to sleep after 15 minutes without incoming requests; ping it while playing.
 let keepAlive = null;
 const startKeepAlive = () => { clearInterval(keepAlive); keepAlive = setInterval(() => { if (status === 'online') fetch(net.serverUrl() + '/health').catch(() => {}); }, 5 * 60 * 1000); };
@@ -40,6 +44,8 @@ export const net = {
   players: () => players,
   trades: () => trades,
   serverUrl: () => saved().url || '',
+  serverNow: () => Date.now() + clockOffset,
+  marketSold: (w) => { if (!marketSold.has(w)) marketSold.set(w, new Set()); return marketSold.get(w); },
   setServerUrl: (url) => store({ url: normalizeUrl(url) }),
   gamble: (m, args) => rpc('gamble', m, args),
   trade: (m, args) => rpc('trade', m, args),
@@ -146,6 +152,9 @@ function disconnect() {
 
 async function onWelcome(msg) {
   user = msg.user;
+  if (msg.serverTime) clockOffset = msg.serverTime - Date.now();
+  marketSold.clear();
+  for (const [w, ids] of Object.entries(msg.market || {})) marketSold.set(+w, new Set(ids));
   players = msg.players || [];
   trades = msg.trades || [];
   lobbies = msg.lobbies || lobbies;
@@ -188,6 +197,7 @@ function handle(msg) {
     case 'trades': trades = msg.trades; emit('trades', trades); return;
     case 'gamble.result': emit('gamble.result', msg.ev); return;
     case 'notice': emit('notice', { msg: msg.msg, type: msg.type }); return;
+    case 'market': net.marketSold(msg.w).add(msg.lid); emit('market', msg); return;
   }
 }
 
@@ -228,7 +238,7 @@ function flushClicks() {
 const remoteBackend = {
   act(name, args) {
     if (name === 'click') {
-      const v = clickValue() * (args.crits ? 10 : 1);
+      const v = clickValue() * (args.crits ? CRIT_MULT : 1);
       S.money = Math.round((S.money + v) * 100) / 100;
       emitState('money');
       clickBatch.n += args.n || 1;
