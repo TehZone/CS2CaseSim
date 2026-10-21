@@ -4,6 +4,7 @@ import { D, casePrice } from '../data.js';
 import { S, on } from '../state.js';
 import { sfx } from '../audio.js';
 import { tryAct, toast } from '../ui.js';
+import { autoSellRules } from '../autosell.js';
 import { armoryWindow, armoryOffers, offerBox, PASS_PRICE, PASS_STARS, SPEND_PER_STAR } from '../engine/armory.js';
 import { playRoulette, showResults, openCollectionView, caseImage } from './cases.js';
 
@@ -108,7 +109,7 @@ async function redeem(offerId) {
   if (busy) return;
   busy = true;
   const o = armoryOffers(armoryWindow().i).offers.find((x) => x.id === offerId);
-  const r = await tryAct('armory.redeem', { offer: offerId });
+  const r = await tryAct('armory.redeem', { offer: offerId, autoSell: autoSellRules() });
   if (!r) { busy = false; return; }
   sfx.open();
   const box = offerBox(r.offer || o);

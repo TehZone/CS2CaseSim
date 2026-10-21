@@ -2,6 +2,7 @@ import { esc, money, imgUrl, round2 } from '../util.js';
 import { D, WEARS, casePrice, caseTiers, rarityColor, DOPPLER_PHASE_WEIGHT, collectionBox, eventShort, CASE_KINDS } from '../data.js';
 import * as I from '../items.js';
 import { S, save, emit } from '../state.js';
+import { autoSellLabel, autoSellModal, autoSellRules } from '../autosell.js';
 import { act } from '../backend.js';
 import { sfx } from '../audio.js';
 import { toast, openModal, itemCard, patternTag, sellItems, openInspect, showItemDetail, rarityOddsHTML } from '../ui.js';
@@ -304,7 +305,9 @@ function renderCase(root, c) {
         <div class="open-row">
           <div class="seg" data-k="qty">${[1, 2, 3, 4, 5].map((n) => `<button data-v="${n}" class="${view.qty === n ? 'active' : ''}">×${n}</button>`).join('')}</div>
           <button class="btn gold big" data-open>Open for ${money(price * view.qty)}</button>
+          <button class="btn big" data-autoopen title="Keep opening this case automatically">Auto open…</button>
           <label class="check"><input type="checkbox" data-fast ${S.settings.fast ? 'checked' : ''}> Fast open</label>
+          <button class="btn sm ${autoSellRules().on ? 'primary' : ''}" data-autosell title="Sell new drops automatically by amount or rarity">${esc(autoSellLabel())}</button>
         </div>
         <div class="odds">${c.kind === 'chickens'
           ? tiers.map(([k, w]) => `<span style="--rc:${rarityColor(+k)}">${['', '', 'Barnyard', 'Free-Range', 'Prize', 'Legendary', '★ Mythic'][k]}: ${(w * 100).toFixed(2)}%</span>`).join('')
@@ -321,7 +324,9 @@ function renderCase(root, c) {
   root.querySelectorAll('[data-col]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); openCollectionView(a.dataset.col); }));
   root.querySelectorAll('[data-k=qty] button').forEach((b) => b.addEventListener('click', () => { view.qty = +b.dataset.v; renderCase(root, c); }));
   root.querySelector('[data-fast]').addEventListener('change', (e) => { S.settings.fast = e.target.checked; save(); });
+  root.querySelector('[data-autosell]').addEventListener('click', () => autoSellModal(() => renderCase(root, c)));
   root.querySelector('[data-open]').addEventListener('click', () => openCase(c, view.qty));
+  root.querySelector('[data-autoopen]').addEventListener('click', () => autoOpenModal(c));
   root.querySelector('[data-scroll-rare]')?.addEventListener('click', () => root.querySelector('#rare-list').scrollIntoView({ behavior: 'smooth' }));
   root.querySelectorAll('[data-prev]').forEach((t) => t.addEventListener('click', () => {
     const [kind, ids, odds] = t.dataset.prev.split('|');
@@ -436,6 +441,103 @@ function skinPreview(c, ids, odds) {
 
 // ---- opening -------------------------------------------------------------------------------
 let opening = false;
+
+// ---- auto open: keep opening a case until a limit or a stop condition ------------------------------
+const AUTO_COUNTS = [10, 25, 50, 100, 250, 1000, 0]; // 0 = until stopped
+const autoPrefs = { count: 25, stopAt: 0, stopGold: true, minBalance: 0, anim: false };
+let autoRun = null;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function autoOpenModal(c) {
+  if (autoRun) return toast('Auto open is already running.', 'bad');
+  const n = view.qty, each = round2(casePrice(c) * n);
+  const m = openModal({
+    title: 'Auto open',
+    body: `<div style="display:grid;gap:12px;max-width:560px">
+      <div><b>${esc(c.n)}</b> · ×${n} per opening · <span class="green">${money(each)}</span> each</div>
+      <label class="check" style="color:var(--text)">Openings <select class="input" data-count>${AUTO_COUNTS.map((k) => `<option value="${k}" ${autoPrefs.count === k ? 'selected' : ''}>${k ? k + ' (' + money(each * k) + ')' : 'Until I stop it'}</option>`).join('')}</select></label>
+      <div class="panel" style="padding:12px 14px;display:grid;gap:8px">
+        <h3 style="margin:0">Stop when</h3>
+        <label class="check"><input type="checkbox" data-gold ${autoPrefs.stopGold ? 'checked' : ''}> I unbox a knife, gloves or another ★ item</label>
+        <label class="check">I unbox something worth at least $ <input class="input" type="number" min="0" step="1" value="${autoPrefs.stopAt}" style="width:100px" data-stopat> <span class="dim">(0 = off)</span></label>
+        <label class="check">My balance would drop below $ <input class="input" type="number" min="0" step="1" value="${autoPrefs.minBalance}" style="width:100px" data-minbal></label>
+        <div class="muted" style="font-size:12px">It always stops when you can't afford the next opening.</div>
+      </div>
+      <label class="check"><input type="checkbox" data-anim ${autoPrefs.anim ? 'checked' : ''}> Show the case animation (fast)</label>
+      <div class="open-row"><span class="muted">${esc(autoSellLabel())}</span><button class="btn sm" data-as>Auto-sell settings…</button></div>
+      <div class="muted" style="font-size:12px">You can keep playing on other pages while it runs. Drops that aren't auto-sold go to your inventory.</div>
+    </div>`,
+    foot: '<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-start>Start</button>',
+  });
+  m.el.querySelector('[data-as]').addEventListener('click', () => autoSellModal(() => { m.close(); autoOpenModal(c); }));
+  m.el.querySelector('[data-start]').addEventListener('click', () => {
+    const q = (sel) => m.el.querySelector(sel);
+    Object.assign(autoPrefs, {
+      count: +q('[data-count]').value, stopGold: q('[data-gold]').checked, anim: q('[data-anim]').checked,
+      stopAt: Math.max(0, +q('[data-stopat]').value || 0), minBalance: Math.max(0, +q('[data-minbal]').value || 0),
+    });
+    m.close();
+    runAutoOpen(c, n, { ...autoPrefs });
+  });
+}
+
+async function runAutoOpen(c, n, p) {
+  if (opening || autoRun) return;
+  opening = true;
+  const run = (autoRun = { stop: false, done: 0, spent: 0, sold: 0, kept: [], best: null });
+  const panel = document.createElement('div');
+  panel.className = 'auto-panel';
+  document.body.appendChild(panel);
+  const draw = () => {
+    const keptValue = run.kept.reduce((s, i) => s + I.itemValue(i), 0);
+    panel.innerHTML = `<div style="display:flex;align-items:center;gap:10px"><b>Auto open</b><span class="muted" style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.n)}</span><span class="spacer"></span><button class="btn sm danger" data-stop>${run.stop ? 'Stopping…' : 'Stop'}</button></div>
+      <div class="auto-stats"><div>Openings<b>${run.done}${p.count ? ' / ' + p.count : ''}</b></div><div>Spent<b>${money(run.spent)}</b></div>
+      <div>Kept<b class="green">${money(keptValue)}</b></div><div>Auto-sold<b class="green">${money(run.sold)}</b></div></div>
+      ${run.best ? `<div class="muted" style="font-size:12px">Best: <span style="color:${I.rarityInfo(run.best).c}">${esc(I.itemName(run.best))}</span> · ${money(I.itemValue(run.best))}</div>` : ''}`;
+    panel.querySelector('[data-stop]').addEventListener('click', () => { run.stop = true; draw(); });
+  };
+  draw();
+  let reason = p.count ? `Finished ${p.count} openings` : 'Stopped';
+  const cost = round2(casePrice(c) * n);
+  try {
+    while (!run.stop && (!p.count || run.done < p.count)) {
+      if (S.money + 1e-9 < cost) { reason = 'Not enough money for the next opening'; break; }
+      if (S.money - cost < p.minBalance) { reason = `Your balance would drop below ${money(p.minBalance)}`; break; }
+      let r;
+      try { r = await act('case.open', { id: c.id, n, autoSell: autoSellRules() }); } catch (e) { reason = e.message; break; }
+      run.done++;
+      run.spent = round2(run.spent + r.cost);
+      run.sold = round2(run.sold + (r.autoSold || 0));
+      for (const it of r.items) {
+        if (!it.as) run.kept.push(it);
+        if (!run.best || I.itemValue(it) > I.itemValue(run.best)) run.best = it;
+      }
+      const top = Math.max(...r.items.map((i) => I.rarityRank(i)));
+      if (p.anim) { sfx.open(); await playRoulette(c, r.items); } else { if (top >= 5) sfx.reveal(top); await wait(220); }
+      if (top >= 6) sfx.gold();
+      draw();
+      const hit = r.items.find((i) => (p.stopGold && I.rarityRank(i) >= 6) || (p.stopAt > 0 && I.itemValue(i) >= p.stopAt));
+      if (hit) { reason = `You unboxed ${I.itemName(hit)} (${money(I.itemValue(hit))})`; break; }
+    }
+    if (run.stop) reason = 'Stopped by you';
+  } finally {
+    panel.remove();
+    opening = false;
+    autoRun = null;
+  }
+  const keptValue = run.kept.reduce((s, i) => s + I.itemValue(i), 0);
+  const net = keptValue + run.sold - run.spent;
+  const top = [...run.kept].sort((a, b) => I.itemValue(b) - I.itemValue(a)).slice(0, 12);
+  showResults(c, top, n, {
+    cost: 0, again: () => autoOpenModal(c), againLabel: 'Auto open again',
+    title: `Auto open: ${run.done} opening${run.done === 1 ? '' : 's'}`,
+    summary: `<div class="summary" style="margin-bottom:14px"><div>Result<b>${esc(reason)}</b></div><div>Cases opened<b>${run.done * n}</b></div>
+      <div>Spent<b>${money(run.spent)}</b></div><div>Kept<b class="green">${run.kept.length} · ${money(keptValue)}</b></div>
+      <div>Auto-sold<b class="green">${money(run.sold)}</b></div><div>Net<b class="${net >= 0 ? 'green' : 'red'}">${money(net)}</b></div></div>
+      ${top.length ? `<div class="muted" style="font-size:12px;margin-bottom:8px">Your best kept drops${run.kept.length > top.length ? ` (top ${top.length} of ${run.kept.length})` : ''}:</div>` : '<div class="muted">Every drop was auto-sold.</div>'}`,
+  });
+}
+
 export async function openCase(c, n) {
   if (opening) return;
   const cost = round2(casePrice(c) * n);
@@ -448,7 +550,7 @@ export async function openCase(c, n) {
   let r;
   try {
     // Rolled and saved (or rolled on the server) before the animation, so nothing is lost if the app closes.
-    r = await act('case.open', { id: c.id, n });
+    r = await act('case.open', { id: c.id, n, autoSell: autoSellRules() });
   } catch (e) {
     opening = false;
     sfx.error();
@@ -457,6 +559,7 @@ export async function openCase(c, n) {
   }
   sfx.open();
   if (r.stars) toast(`+${r.stars} Armory Star${r.stars > 1 ? 's' : ''} for opening cases`, 'gold');
+  if (r.autoSold) setTimeout(() => toast(`Auto-sold ${r.items.filter((i) => i.as).length} item${r.items.filter((i) => i.as).length === 1 ? '' : 's'} for <b class="green">${money(r.autoSold)}</b>`, 'good'), S.settings.fast ? 2600 : 6500);
   try {
     await playRoulette(c, r.items);
   } finally {
@@ -542,33 +645,34 @@ function resultCard(it) {
   const r = I.rarityInfo(it);
   const pat = I.patternInfo(it);
   const sub = it.t === 'skin' && it.fl != null ? `${I.wearName(it)} · ${it.fl.toFixed(6)} · Seed ${it.sd}` : it.t === 'chicken' ? `${HAT[it.hat].n} · Feather ${it.fl.toFixed(4)}` : r.n;
-  return `<div class="result ${r.rank >= 6 ? 'gold' : ''}" style="--rc:${r.c}" data-uid="${it.uid}">
+  return `<div class="result ${r.rank >= 6 ? 'gold' : ''} ${it.as ? 'autosold' : ''}" style="--rc:${r.c}" data-uid="${it.uid}">
     <img src="${I.itemImage(it, 'm')}"><div class="rbar"></div>
     <div class="rn">${esc(r.n)}</div>
     <div class="nm">${esc(I.itemName(it))}</div>
     <div class="sub">${esc(sub)}</div>
     ${pat.label ? `<div style="margin-top:6px">${patternTag(pat)}</div>` : ''}
     <div class="val">${money(I.itemValue(it))}</div>
-    <div class="btns"><button class="btn sm gold" data-a="inspect">Inspect</button><button class="btn sm" data-a="detail">Details</button><button class="btn sm primary" data-a="sell">Sell</button></div>
+    <div class="btns">${it.as ? '<span class="chip green">Auto-sold</span><button class="btn sm" data-a="inspect">Inspect</button>' : '<button class="btn sm gold" data-a="inspect">Inspect</button><button class="btn sm" data-a="detail">Details</button><button class="btn sm primary" data-a="sell">Sell</button>'}</div>
   </div>`;
 }
 
-export function showResults(c, items, n, { cost = casePrice(c) * n, again = () => openCase(c, n), againLabel = `Open again (${money(cost)})` } = {}) {
+export function showResults(c, items, n, { cost = casePrice(c) * n, again = () => openCase(c, n), againLabel = `Open again (${money(cost)})`, title = null, summary = '' } = {}) {
   const total = items.reduce((s, i) => s + I.itemValue(i), 0);
+  const sold = items.filter((i) => i.as), soldValue = sold.reduce((s, i) => s + I.itemValue(i), 0);
   if (items.some((i) => I.rarityRank(i) >= 6)) setTimeout(() => sfx.gold(), 250);
   const m = openModal({
-    title: items.length > 1 ? `You unboxed ${items.length} items` : 'You unboxed',
+    title: title || (items.length > 1 ? `You unboxed ${items.length} items` : 'You unboxed'),
     cls: items.length > 2 ? 'xwide' : 'wide',
-    body: `<div class="results">${items.map(resultCard).join('')}</div>
-      <p class="muted" style="text-align:center;margin:16px 0 0">Total value <b class="${total >= cost ? 'green' : 'red'}">${money(total)}</b>${cost ? ` for ${money(cost)} spent` : ''}</p>`,
-    foot: `<button class="btn" data-a="sellall">Sell all</button><span class="spacer"></span><button class="btn ghost" data-close>Keep</button>${again ? `<button class="btn gold" data-a="again">${againLabel}</button>` : ''}`,
+    body: `${summary}<div class="results">${items.map(resultCard).join('')}</div>
+      <p class="muted" style="text-align:center;margin:16px 0 0">Total value <b class="${total >= cost ? 'green' : 'red'}">${money(total)}</b>${cost ? ` for ${money(cost)} spent` : ''}${sold.length ? ` · auto-sold ${sold.length} for <b class="green">${money(soldValue)}</b>` : ''}</p>`,
+    foot: `<button class="btn" data-a="sellall" ${sold.length === items.length ? 'disabled' : ''}>Sell all</button><span class="spacer"></span><button class="btn ghost" data-close>Keep</button>${again ? `<button class="btn gold" data-a="again">${againLabel}</button>` : ''}`,
   });
   const live = () => items.filter((i) => S.inv.some((x) => x.uid === i.uid));
   m.el.querySelectorAll('.result').forEach((el) => {
     const it = items.find((i) => i.uid === el.dataset.uid);
     el.querySelector('[data-a=inspect]').addEventListener('click', () => openInspect(it));
-    el.querySelector('[data-a=detail]').addEventListener('click', () => showItemDetail(it));
-    el.querySelector('[data-a=sell]').addEventListener('click', async () => {
+    el.querySelector('[data-a=detail]')?.addEventListener('click', () => showItemDetail(it));
+    el.querySelector('[data-a=sell]')?.addEventListener('click', async () => {
       if (!S.inv.some((x) => x.uid === it.uid)) return;
       if (await sellItems([it])) { el.style.opacity = 0.35; el.querySelector('.btns').innerHTML = '<span class="muted">Sold</span>'; }
     });

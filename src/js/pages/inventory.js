@@ -3,6 +3,8 @@ import * as I from '../items.js';
 import { S, on } from '../state.js';
 import { act } from '../backend.js';
 import { itemCard, showItemDetail, sellItems, openModal, toast } from '../ui.js';
+import { rarityColor } from '../data.js';
+import { SELL_RANKS } from '../autosell.js';
 
 const view = { type: 'all', sort: 'new', q: '', select: false, selected: new Set(), limit: 150 };
 const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['pro', 'Players'], ['chicken', 'Chickens']];
@@ -114,25 +116,30 @@ async function action(a, items) {
 function bulkSell() {
   const m = openModal({
     title: 'Bulk sell',
-    body: `<p class="muted" style="margin-top:0">Sell every unlocked item worth less than a threshold. Locked items are never sold.</p>
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <label>Below $ <input class="input" type="number" min="0" step="0.5" value="1" style="width:110px" data-th></label>
+    body: `<p class="muted" style="margin-top:0">Sell every unlocked item that is worth less than an amount <b>or</b> has one of the ticked rarities.
+      Locked items, knives, gloves and other ★ items are never sold here, and neither are players in your team.</p>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+        <label class="check">Worth less than $ <input class="input" type="number" min="0" step="0.5" value="1" style="width:110px" data-th></label>
         <select class="input" data-ty>${TYPES.map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select>
       </div>
+      <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:6px">${SELL_RANKS.map(([k, n]) => `<label class="check" style="color:var(--text)"><input type="checkbox" data-rank="${k}">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${rarityColor(k)}"></span>${esc(n)}</label>`).join('')}</div>
       <p data-preview style="margin-bottom:0"></p>`,
     foot: `<button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>Sell</button>`,
   });
   const th = m.el.querySelector('[data-th]'), ty = m.el.querySelector('[data-ty]'), pv = m.el.querySelector('[data-preview]');
+  const teamUids = new Set([...Object.values(S.team?.slots || {}), ...(S.team?.bench || [])].filter(Boolean));
+  const matchesType = (i) => { const prevT = view.type, prevQ = view.q; view.type = ty.value; view.q = ''; const r = matches(i); view.type = prevT; view.q = prevQ; return r; };
   const pick = () => {
-    const prev = view.type;
-    view.type = ty.value;
-    const list = S.inv.filter((i) => !i.lk && matchesType(i) && I.itemValue(i) < +th.value);
-    view.type = prev;
-    return list;
+    const below = +th.value || 0;
+    const ranks = new Set([...m.el.querySelectorAll('[data-rank]:checked')].map((x) => +x.dataset.rank));
+    return S.inv.filter((i) => !i.lk && !teamUids.has(i.uid) && I.rarityRank(i) < 6 && matchesType(i)
+      && ((below > 0 && I.itemValue(i) < below) || (i.t !== 'pro' && ranks.has(I.rarityRank(i)))));
   };
-  const matchesType = (i) => { const q = view.q; view.q = ''; const r = matches(i); view.q = q; return r; };
   const upd = () => { const l = pick(); pv.innerHTML = `${l.length} items · <b class="green">${money(l.reduce((s, i) => s + I.itemValue(i), 0))}</b>`; };
-  th.addEventListener('input', upd); ty.addEventListener('change', upd); upd();
+  th.addEventListener('input', upd); ty.addEventListener('change', upd);
+  m.el.querySelectorAll('[data-rank]').forEach((x) => x.addEventListener('change', upd));
+  upd();
   m.el.querySelector('[data-go]').addEventListener('click', async () => {
     const l = pick();
     if (!l.length) return toast('Nothing to sell.', 'bad');

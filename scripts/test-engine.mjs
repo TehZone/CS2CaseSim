@@ -195,6 +195,21 @@ function tierFreq(box, n) {
   threw = false; try { run('item.sell', { uids: [r.items[0].uid] }); } catch { threw = true; }
   check('cannot sell the same item twice', threw);
   {
+    // Auto-sell: by amount, by rarity, never ★, keeps StatTrak when asked.
+    const before = st.money, n0 = st.inv.length;
+    const all = run('case.open', { id: box.id, n: 10, autoSell: { on: true, below: 1e6, ranks: [], keepStt: false, keepRare: false } });
+    const sold = all.r.items.filter((i) => i.as), kept = all.r.items.filter((i) => !i.as);
+    const soldValue = sold.reduce((s, i) => s + I.itemValue(i), 0);
+    check('auto-sell by amount sells every non-★ drop and pays for it', kept.every((i) => I.rarityRank(i) >= 6) && st.inv.length === n0 + kept.length
+      && Math.abs(st.money - (before - all.r.cost + soldValue)) < 0.011 && Math.abs(all.r.autoSold - soldValue) < 0.011);
+    const byRank = run('case.open', { id: box.id, n: 10, autoSell: { on: true, below: 0, ranks: [2], keepStt: true, keepRare: false } });
+    check('auto-sell by rarity only sells that rarity (and keeps StatTrak)', byRank.r.items.every((i) => !!i.as === (I.rarityRank(i) === 2 && !i.stt)));
+    const off = run('case.open', { id: box.id, n: 3, autoSell: { on: false, below: 1e6, ranks: [2] } });
+    check('auto-sell off keeps everything', off.r.items.every((i) => !i.as) && !off.r.autoSold);
+    const knife = { uid: 'k', t: 'skin', id: box.rare[0][0], fl: 0.3, sd: 1, stt: false, stk: [] };
+    check('knives and gloves are never auto-sold', !I.autoSellMatch(knife, { on: true, below: 1e9, ranks: [0, 1, 2, 3, 4, 5] }));
+  }
+  {
     // A failure part-way (inventory full after paying) leaves the state untouched.
     const m = st.money, n = st.inv.length, opened = st.stats.opened;
     const ctx = ACT.makeCtx(st, { rng, invCap: st.inv.length + 1 });

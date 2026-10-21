@@ -3,6 +3,10 @@
 import { round2 } from './util.js';
 import { chickenIncome } from './chickens.js';
 
+// Auto-sell rules for new drops: sell anything worth less than `below` dollars and/or of the rarity ranks in
+// `ranks` (0 Consumer ... 5 Covert). Knives, gloves and other ★ items are never auto-sold.
+export const AUTO_SELL_DEFAULT = { on: false, below: 0, ranks: [], keepStt: true, keepRare: true };
+
 export function freshState() {
   return {
     v: 2,
@@ -18,7 +22,7 @@ export function freshState() {
       bestValue: 0, bestName: '', drops: {}, knives: 0, stickersApplied: 0,
       tradeups: 0, armory: 0, packs: 0, gambleWagered: 0, gambleWon: 0, battles: 0, matches: 0,
     },
-    settings: { volume: 0.5, fast: false, confirmSellAbove: 25, showOdds: true },
+    settings: { volume: 0.5, fast: false, confirmSellAbove: 25, showOdds: true, autoSell: { ...AUTO_SELL_DEFAULT } },
     created: Date.now(),
     lastSeen: Date.now(),
   };
@@ -32,6 +36,7 @@ export function freshTeam() {
 export function upgradeState(saved) {
   const base = freshState();
   const st = { ...base, ...saved, stats: { ...base.stats, ...saved.stats }, settings: { ...base.settings, ...saved.settings } };
+  st.settings.autoSell = { ...AUTO_SELL_DEFAULT, ...(saved.settings?.autoSell || {}) };
   st.team = { ...freshTeam(), ...(saved.team || {}) };
   st.team.slots = { ...freshTeam().slots, ...(st.team.slots || {}) };
   st.v = base.v;

@@ -258,6 +258,26 @@ export function itemValue(item) {
   return v;
 }
 
+// Auto-sell: does a new drop match the player's rules? (see AUTO_SELL_DEFAULT in economy.js)
+export function autoSellMatch(item, rules) {
+  if (!rules?.on || item.t === 'pro') return false;
+  const rank = rarityRank(item);
+  if (rank >= 6) return false; // knives, gloves, ★ chickens: never
+  if (rules.keepStt && item.stt) return false;
+  if (rules.keepRare && item.t === 'skin' && (patternInfo(item).mult > 1 || floatMultiplier(item) > 1)) return false;
+  const byValue = rules.below > 0 && itemValue(item) < rules.below;
+  const byRank = Array.isArray(rules.ranks) && rules.ranks.includes(rank);
+  return byValue || byRank;
+}
+// Cleans auto-sell rules coming from a client.
+export function cleanAutoSell(r) {
+  if (!r || typeof r !== 'object' || !r.on) return null;
+  const below = Math.max(0, Math.min(1e6, Number(r.below) || 0));
+  const ranks = Array.isArray(r.ranks) ? [...new Set(r.ranks.map(Number).filter((x) => Number.isInteger(x) && x >= 0 && x <= 5))] : [];
+  if (!below && !ranks.length) return null;
+  return { on: true, below, ranks, keepStt: !!r.keepStt, keepRare: !!r.keepRare };
+}
+
 export function floatString(f) {
   return f == null ? '—' : String(Math.fround(f));
 }

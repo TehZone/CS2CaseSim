@@ -214,3 +214,13 @@ body:not(.is-online) .online-only { display: none !important; }
 /* souvenir items (yellow like in CS2) */
 .card .sv { color: #ffd700; }
 .tag.sv { color: #1a1306; background: #ffd700; border-color: #ffd700; }
+
+/* auto-sold drops in the results */
+.result.autosold { opacity: .6; }
+.result.autosold .val { text-decoration: line-through; text-decoration-color: rgba(255,255,255,.35); }
+
+/* auto open progress panel (stays visible on every page) */
+.auto-panel { position: fixed; left: 20px; bottom: 20px; z-index: 55; width: 380px; background: #18212c; border: 1px solid var(--gold); border-radius: 10px; padding: 12px 14px; box-shadow: 0 12px 40px rgba(0,0,0,.6); display: grid; gap: 8px; }
+.auto-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.auto-stats div { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+.auto-stats b { display: block; font-size: 14px; color: var(--text); text-transform: none; letter-spacing: 0; }

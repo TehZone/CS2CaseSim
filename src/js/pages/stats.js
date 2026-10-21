@@ -4,6 +4,7 @@ import * as I from '../items.js';
 import { S, save, resetSave, idleRate, clickValue, rankName } from '../state.js';
 import { toast, confirmDialog } from '../ui.js';
 import { online } from '../backend.js';
+import { autoSellLabel, autoSellModal } from '../autosell.js';
 import { sfx } from '../audio.js';
 import { cs2Status } from '../cs2/api.js';
 
@@ -43,6 +44,7 @@ function draw() {
     <div class="settings">
       <div class="setting"><div>Sound volume<p>Roulette ticks, reveals and clicks.</p></div><input type="range" min="0" max="1" step="0.05" value="${S.settings.volume}" data-s="volume"></div>
       <div class="setting"><div>Fast open by default<p>Shorter roulette animation.</p></div><input type="checkbox" ${S.settings.fast ? 'checked' : ''} data-s="fast"></div>
+      <div class="setting"><div>Auto-sell<p>Sell new drops automatically when they are worth less than an amount or have chosen rarities. <span data-aslabel>${esc(autoSellLabel())}</span></p></div><button class="btn" data-a="autosell">Set up…</button></div>
       <div class="setting"><div>Confirm sales above<p>Ask before selling items worth at least this much.</p></div><input class="input" type="number" min="0" step="1" value="${S.settings.confirmSellAbove}" style="width:110px" data-s="confirmSellAbove"></div>
       <div class="setting"><div>Market prices<p>Prices from ${D.pricedAt ? new Date(D.pricedAt).toLocaleString() : 'the bundled snapshot'}. Refreshing downloads the latest Skinport, CSFloat, Buff163, YouPin and Steam prices.</p>
         <div class="log" data-log></div></div>
@@ -82,6 +84,7 @@ function draw() {
 }
 
 async function action(a, btn) {
+  if (a === 'autosell') return autoSellModal(() => { const el = root?.querySelector('[data-aslabel]'); if (el) el.textContent = autoSellLabel(); });
   if (a === 'reset') {
     if (!(await confirmDialog('Delete <b>all</b> progress? This cannot be undone.', { ok: 'Reset everything', danger: true }))) return;
     await resetSave();

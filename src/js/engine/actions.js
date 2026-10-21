@@ -106,6 +106,17 @@ function earnStars(ctx, spent) {
   if (add) { ctx.st.stars += add; ctx.dirty.add('stars'); }
   return add;
 }
+// Sells new drops that match the auto-sell rules straight away (marked `as`, never added to the inventory).
+function autoSellDrops(ctx, items, rules) {
+  const r = I.cleanAutoSell(rules);
+  if (!r) return 0;
+  let total = 0;
+  for (const it of items) if (I.autoSellMatch(it, r)) { it.as = true; delete it.nw; total += I.itemValue(it); }
+  total = round2(total);
+  if (total > 0) { credit(ctx, total); stats(ctx).sold = round2(ctx.st.stats.sold + total); }
+  return total;
+}
+
 // A gambling stake: money plus items, removed from the player. Returns its total value.
 export function takeStake(ctx, { money: m = 0, uids = [] } = {}) {
   const cash = money(m);
@@ -137,7 +148,7 @@ export function marketListings(skin, bucket, page = 0) {
 
 // ---- the actions -----------------------------------------------------------------------------------
 export const ACTIONS = {
-  'case.open'(ctx, { id, n = 1 }) {
+  'case.open'(ctx, { id, n = 1, autoSell }) {
     n = int(n, 1, 10, 'count');
     const c = D.caseById[id];
     if (!c || c.price == null) fail('Unknown case');
@@ -150,8 +161,9 @@ export const ACTIONS = {
     s.opened += n;
     s.spent = round2(s.spent + cost);
     const stars = earnStars(ctx, cost);
-    give(ctx, items);
-    return { items, cost, stars };
+    const autoSold = autoSellDrops(ctx, items, autoSell);
+    give(ctx, items.filter((it) => !it.as));
+    return { items, cost, stars, autoSold };
   },
 
   'item.sell'(ctx, { uids }) {
@@ -272,7 +284,7 @@ export const ACTIONS = {
     ctx.dirty.add('stars');
     return { stars: PASS_STARS };
   },
-  'armory.redeem'(ctx, { offer }) {
+  'armory.redeem'(ctx, { offer, autoSell }) {
     const o = findLiveOffer(String(offer), ctx.now);
     if (!o) fail('That offer has rotated out of the armory', 'expired');
     if (ctx.st.stars < o.stars) fail('Not enough Armory Stars', 'funds');
@@ -282,10 +294,11 @@ export const ACTIONS = {
     const item = I.rollFromCase(box, ctx.rng);
     item.src = 'Armory · ' + box.n;
     item.nw = true;
-    give(ctx, [item]);
     noteDrops(ctx, [item]);
+    const autoSold = autoSellDrops(ctx, [item], autoSell);
+    if (!item.as) give(ctx, [item]);
     stats(ctx).armory++;
-    return { item, offer: o };
+    return { item, offer: o, autoSold };
   },
 
   'team.pack'(ctx, { pack, token = false }) {
