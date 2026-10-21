@@ -47,12 +47,16 @@ function typicalPrice(s) {
 const starsFor = (value, lo, hi) => clamp(Math.round((value * 1.15) / STAR_VALUE), lo, hi);
 
 const offersCache = new Map();
-// The offers of rotation window i: a collection drop per featured collection, one of its souvenir packages when
-// one is cheap enough, and a featured weapon case.
+// Collections the Armory can feature: only ones you can't get from a weapon case (map, operation, Armory and
+// package collections such as Cobblestone, Gods and Monsters or Limited Edition Item).
+export const armoryCollections = () => D.collections.filter((c) => !c.caseId);
+
+// The offers of rotation window i: a collection drop per featured collection, plus one of its souvenir packages
+// when one is cheap enough.
 export function armoryOffers(i) {
   if (offersCache.has(i)) return offersCache.get(i);
   const r = seededRng('armory-offers:' + i);
-  const pool = D.collections.filter((c) => Object.keys(c.tiers).length >= 2);
+  const pool = armoryCollections();
   const chosen = [];
   const iconic = pool.filter((c) => ICONIC.includes(c.n));
   if (iconic.length && r() < 0.4) chosen.push(iconic[Math.floor(r() * iconic.length)]);
@@ -68,11 +72,6 @@ export function armoryOffers(i) {
       const pkg = pkgs[Math.floor(r() * pkgs.length)];
       offers.push({ id: `${i}:pkg:${pkg.id}`, type: 'case', box: pkg.id, col: col.id, stars: starsFor(casePrice(pkg), 1, 40) });
     }
-  }
-  const cases = D.cases.filter((c) => c.kind === 'case' && c.price != null);
-  if (cases.length) {
-    const c = cases[Math.floor(r() * cases.length)];
-    offers.push({ id: `${i}:case:${c.id}`, type: 'case', box: c.id, stars: starsFor(casePrice(c), 1, 40), featured: true });
   }
   const out = { i, collections: chosen.map((c) => c.id), offers };
   offersCache.set(i, out);

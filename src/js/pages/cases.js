@@ -211,11 +211,11 @@ function renderCollection(root, col) {
       <div>
         <div class="muted" style="text-transform:uppercase;letter-spacing:1.5px;font-size:12px">Collection${col.rel ? ' · ' + col.rel.slice(0, 4) : ''}</div>
         <h2>${esc(col.n)}</h2>
-        <div class="muted" style="line-height:1.6;max-width:720px">Odds below are for souvenir packages and Armory collection drops (each rarity is 5× rarer than the one below).
+        <div class="muted" style="line-height:1.6;max-width:720px">${caseBox ? 'Drops from the ' + esc(caseBox.n) + ' (case odds there). Odds below are for souvenir packages' : 'Not in any weapon case: get it from the Armory when it’s featured, souvenir packages or trade-ups. Odds below are for Armory drops and souvenir packages'} (each rarity is 5× rarer than the one below).
           Trade up ten skins of one rarity from this collection to get the next rarity.${caseBox ? ' Five Covert skins from it can be traded up into a knife or gloves from the ' + esc(caseBox.n) + '.' : ''}</div>
         <div class="open-row">
           ${caseBox ? `<button class="btn gold" data-case="${caseBox.id}">Open ${esc(caseBox.n)}</button>` : ''}
-          <button class="btn" data-go="armory">Armory</button>
+          ${caseBox ? '' : '<button class="btn" data-go="armory">Armory</button>'}
           <button class="btn" data-go="tradeup">Trade Up</button>
         </div>
         <div class="odds">${rarityOddsHTML(box, tiers)}</div>

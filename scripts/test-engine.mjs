@@ -79,6 +79,16 @@ function tierFreq(box, n) {
   check('armory rotates every 10-15 minutes (300 windows)', ok);
   const offers = A.armoryOffers(w.i);
   check('armory features 4 collections with offers', offers.collections.length === 4 && offers.offers.every((o) => o.stars >= 1), offers.collections.map((id) => D.colById[id].n).join(', '));
+  {
+    // Over a day of rotations: only collections you can't get from cases, and no weapon cases on offer.
+    let ok = true, seen = new Set();
+    for (let i = w.i; i < w.i + 120; i++) {
+      const o = A.armoryOffers(i);
+      for (const id of o.collections) { seen.add(id); if (D.colById[id].caseId) ok = false; }
+      for (const x of o.offers) if (x.type === 'case' && D.caseById[x.box].kind !== 'souvenir') ok = false;
+    }
+    check('armory only features collections that are not in weapon cases', ok, `${seen.size} different collections in 120 rotations`);
+  }
   check('armory offers change between rotations', JSON.stringify(A.armoryOffers(w.i + 1).collections) !== JSON.stringify(offers.collections));
   const cob = D.collections.find((c) => c.n === 'The Cobblestone Collection');
   let found = false;

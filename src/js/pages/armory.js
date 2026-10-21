@@ -65,11 +65,10 @@ function draw() {
   const w = armoryWindow();
   shownWindow = w.i;
   const cur = armoryOffers(w.i), next = armoryOffers(w.i + 1);
-  const featured = cur.offers.find((o) => o.featured);
   const spend = S.starSpend || 0;
   const toNext = SPEND_PER_STAR - (spend % SPEND_PER_STAR);
   root.innerHTML = `<div class="page">
-    <div class="page-head"><h1>Armory</h1><span class="sub">Redeem Armory Stars for items from the featured collections. The selection rotates every 10-15 minutes${document.body.classList.contains('is-online') ? ' for everyone on the server' : ''}.</span></div>
+    <div class="page-head"><h1>Armory</h1><span class="sub">Redeem Armory Stars for items from collections you can’t get from cases. The selection rotates every 10-15 minutes${document.body.classList.contains('is-online') ? ' for everyone on the server' : ''}.</span></div>
     <div class="armory-head">
       <div style="display:flex;gap:34px;align-items:center;flex-wrap:wrap">
         <div><div class="muted" style="font-size:11px;letter-spacing:1px;text-transform:uppercase">Your stars</div><div class="stars">${S.stars}</div></div>
@@ -81,8 +80,6 @@ function draw() {
     </div>
     <div class="section-title">Featured now</div>
     <div class="armory-grid">${cur.collections.map((id) => colCard(id, cur.offers, true)).join('')}
-      ${featured ? `<div class="arm-col"><div class="top" style="grid-template-columns:1fr"><img src="${caseImage(D.caseById[featured.box])}" style="aspect-ratio:2"></div>
-        <div class="body"><h4>Featured case</h4><div class="muted" style="font-size:12px">A different weapon case every rotation.</div>${offerRow(featured, true)}</div></div>` : ''}
     </div>
     <div class="section-title">Up next</div>
     <div class="armory-grid">${next.collections.map((id) => colCard(id, next.offers, false)).join('')}</div>
