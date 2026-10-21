@@ -196,7 +196,13 @@ if (SMOKE) app.setPath('userData', path.join(app.getPath('temp'), 'cs2sim-smoke'
 async function runFeatureSmoke(win) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const js = (code) => win.webContents.executeJavaScript(code);
-  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `smoke-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  // Wait for a fresh frame before capturing (capturePage can return the previous one).
+  const shot = async (name) => {
+    win.webContents.invalidate();
+    await js('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
+    await wait(400);
+    fs.writeFileSync(path.join(app.getPath('userData'), `smoke-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  };
   await wait(3500);
   const log = await js(`(async () => {
     const out = [];
