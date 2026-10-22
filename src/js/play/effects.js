@@ -98,6 +98,39 @@ export class Effects {
     this.tracers.push({ l, age: 0 });
   }
 
+  // A bot's muzzle flash in the world (game units).
+  worldFlash(pos) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.flash.material.map, color: 0xffd9a0, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }));
+    s.position.copy(toGl(pos));
+    s.material.rotation = Math.random() * Math.PI * 2;
+    s.scale.setScalar(0.35);
+    this.group.add(s);
+    this.particles.push({ s, v: new THREE.Vector3(), life: 0.05, age: 0, size: 0.35, grow: 0, gravity: 0, keepMap: true });
+  }
+
+  // The bomb going off: a big flash and smoke.
+  explosion(pos) {
+    const p = toGl(pos);
+    for (let i = 0; i < 26; i++) {
+      const fire = i < 10;
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.puffTex, color: fire ? 0xffb050 : 0x6a625a, transparent: true, depthWrite: false, blending: fire ? THREE.AdditiveBlending : THREE.NormalBlending }));
+      s.position.copy(p).add(new THREE.Vector3((Math.random() - 0.5) * 2, Math.random() * 1.5, (Math.random() - 0.5) * 2));
+      const size = fire ? 4 + Math.random() * 4 : 3 + Math.random() * 3;
+      s.scale.setScalar(size);
+      this.group.add(s);
+      const v = new THREE.Vector3((Math.random() - 0.5) * 8, 2 + Math.random() * 6, (Math.random() - 0.5) * 8);
+      this.particles.push({ s, v, life: fire ? 0.8 : 3.5, age: 0, size, grow: fire ? 0.4 : 0.5, gravity: -0.5 });
+    }
+  }
+
+  // Bullet holes and particles go away when a round restarts.
+  clear() {
+    for (const h of this.holes) this.group.remove(h);
+    this.holes = [];
+    for (const p of this.particles) { this.group.remove(p.s); p.s.material.dispose(); }
+    this.particles = [];
+  }
+
   muzzleFlash(pos) {
     this.flash.position.copy(pos);
     this.flash.material.rotation = Math.random() * Math.PI * 2;

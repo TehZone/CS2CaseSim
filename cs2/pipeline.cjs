@@ -194,6 +194,18 @@ class CS2 {
     return out;
   }
 
+  // Exports many models/animation clips to .glb in one CLI run (each run reloads the VPK), keeping their VPK paths
+  // under cacheDir/rel. Returns { vpkFile: localPath | null }.
+  async exportGlbBatch(files, rel) {
+    const root = path.join(this.cacheDir, rel);
+    const out = (f) => path.join(root, f.replace(/_c$/, '').replace(/.[^./]+$/, '.glb'));
+    const missing = [...new Set(files)].filter((f) => !fs.existsSync(out(f)));
+    for (let i = 0; i < missing.length; i += 40) {
+      await this.run(['-i', this.vpk, '-f', missing.slice(i, i + 40).join(','), '-o', root, '--gltf_export_format', 'glb']);
+    }
+    return Object.fromEntries(files.map((f) => [f, fs.existsSync(out(f)) ? out(f) : null]));
+  }
+
   // The inspect/menu backdrops in this install (maps/<id>_vanity.vpk).
   vanityMaps() {
     return listVanity(path.join(this.gameDir, 'maps'));

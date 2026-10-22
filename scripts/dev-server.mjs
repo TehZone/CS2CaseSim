@@ -75,7 +75,7 @@ http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/cs2/play') {
       const calls = { maps: () => cs2.playMaps(), map: (a) => cs2.playMap(a), progress: (a) => cs2.playProgress(a), weapon: (a) => cs2.playWeapon(a),
-        agent: (a) => cs2.playAgent(a), anims: (a) => cs2.playAnims(a), sounds: (a) => cs2.playSounds(a), agentModel: (a) => cs2.agentModel(a) };
+        agent: (a) => cs2.playAgent(a), anims: (a) => cs2.playAnims(a), sounds: (a) => cs2.playSounds(a), agentModel: (a) => cs2.agentModel(a), stats: () => cs2.playStats() };
       const fn = url.searchParams.get('fn');
       if (!Object.hasOwn(calls, fn)) return res.writeHead(400).end('Unknown play call');
       try { return json(res, 200, await calls[fn](JSON.parse(url.searchParams.get('arg') || 'null'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }

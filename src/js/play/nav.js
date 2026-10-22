@@ -43,6 +43,28 @@ export class NavMesh {
     return best;
   }
 
+  // Ground height under (x, y) near z, from the nav mesh (null off the mesh).
+  heightAt(x, y, z) {
+    const a = this.findArea([x, y, z], 80);
+    return a ? heightIn(a.corners, x, y) : null;
+  }
+
+  // A random spot inside a box (e.g. a bomb site) on walkable ground.
+  randomPointIn(min, max, accept = () => true, tries = 80) {
+    const list = this.areas.filter((a) => a.max[0] >= min[0] && a.min[0] <= max[0] && a.max[1] >= min[1] && a.min[1] <= max[1]
+      && a.max[2] >= min[2] - 40 && a.min[2] <= max[2] + 40 && !(a.flags & (FLAG_CROUCH | FLAG_JUMP)) && a.size > 400);
+    if (!list.length) return null;
+    const total = list.reduce((s, a) => s + a.size, 0);
+    for (let t = 0; t < tries; t++) {
+      let r = Math.random() * total, a = list[0];
+      for (const x of list) { r -= x.size; if (r <= 0) { a = x; break; } }
+      const p = pointIn(a.corners);
+      if (p[0] < min[0] - 40 || p[0] > max[0] + 40 || p[1] < min[1] - 40 || p[1] > max[1] + 40) continue;
+      if (accept(a, p)) return { area: a, point: p };
+    }
+    return null;
+  }
+
   // The nearest area to a position (falls back to the closest centre).
   nearestArea(p) {
     const a = this.findArea(p, 200);

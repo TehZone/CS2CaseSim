@@ -3,6 +3,7 @@
 //   node scripts/test-play.mjs
 import { CollisionWorld, FLAG_PLAYER, FLAG_BULLET } from '../src/js/play/collision.js';
 import { PlayerMovement, MOVE } from '../src/js/play/movement.js';
+import { Match, Combatant, SHORT_RULES } from '../src/js/play/match.js';
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) pass++; else { fail++; console.log('FAIL', msg); } };
@@ -100,6 +101,67 @@ run(p, 10, { forward: 0 });
 p.tick(1 / 64, { forward: 0, side: 0, yaw: 0, maxSpeed: 250 });
 run(p, 30, {});
 ok(!p.ducked, 'stands up again');
+
+// ---- match rules (economy, rounds, bomb) with a stand-in game ----
+function fakeGame() {
+  const g = { now: 0, team: 'CT', enemyTeam: 'T', map: { info: { bombsites: [{ site: 'A', min: [0, 0, 0], max: [100, 100, 100] }] } } };
+  g.me = new Combatant({ name: 'You', team: 'CT', squad: 'A', bot: false });
+  g.combatants = [g.me, new Combatant({ name: 'ct2', team: 'CT', squad: 'A' }), new Combatant({ name: 't1', team: 'T', squad: 'B' }), new Combatant({ name: 't2', team: 'T', squad: 'B' })];
+  for (const k of ['onRoundStart', 'onLive', 'onHalftime', 'onPlanted', 'onDefuseStart', 'onDefuseAbort', 'onDefused', 'onExploded', 'onBombDropped', 'onBombPickedUp', 'onRoundEnd', 'onMatchOver']) g[k] = () => {};
+  g.positionOf = () => [50, 50, 10];
+  g.isDefusing = () => true;
+  return g;
+}
+{
+  const g = fakeGame(), m = new Match(g, SHORT_RULES);
+  m.startRound();
+  ok(m.phase === 'freeze' && g.combatants.filter((c) => c.hasC4).length === 1 && g.combatants.find((c) => c.hasC4).team === 'T', 'one terrorist gets the bomb');
+  m.tick(SHORT_RULES.freeze + 0.01);
+  ok(m.phase === 'live', 'freeze time ends');
+  const [me, ct2, t1, t2] = g.combatants;
+  t1.alive = false; m.onKill(t1, me, { killAward: 300 });
+  ok(me.money === 1100 && me.kills === 1 && t1.deaths === 1, 'kill reward: ' + me.money);
+  t2.alive = false; m.onKill(t2, ct2, { killAward: 600 });
+  m.tick(0.01);
+  ok(m.phase === 'end' && m.score.A === 1 && m.history[0].reason === 'elimination', 'CT win by elimination');
+  ok(me.money === 1100 + 3250 && t1.money === 800 + 1400, 'round reward and loss bonus: ' + me.money + ' / ' + t1.money);
+  m.tick(SHORT_RULES.endDelay + 0.01);
+  ok(m.round === 2 && m.phase === 'freeze', 'next round');
+  // CT loses on the bomb: T reward, CT loss bonus (CT had no losses), planter bonus
+  m.tick(SHORT_RULES.freeze + 0.01);
+  const carrier = g.combatants.find((c) => c.hasC4);
+  carrier.alive = true;
+  const before = carrier.money;
+  m.planted(carrier, [50, 50, 10]);
+  ok(m.phase === 'planted' && carrier.money === before + 300, 'plant bonus');
+  g.now = SHORT_RULES.bombTime + 1;
+  m.tick(0.01);
+  ok(m.history[1].winner === 'T' && m.history[1].reason === 'bomb', 'bomb explodes: T win');
+  ok(me.money === Math.min(16000, 4350 + 1400), 'CT first loss bonus $1400: ' + me.money);
+  ok(m.lossStreak.T === 0 && m.lossStreak.CT === 1, 'loss streaks: ' + JSON.stringify(m.lossStreak));
+  // time runs out: terrorists still alive get no loss bonus
+  m.tick(SHORT_RULES.endDelay + 0.01); g.now = 0;
+  m.tick(SHORT_RULES.freeze + 0.01);
+  for (const c of g.combatants) c.alive = true; // the game revives everyone at round start
+  const tMoney = t1.money, t2Dead = t2;
+  t2Dead.alive = false;
+  m.tick(SHORT_RULES.roundTime + 0.01);
+  ok(m.history[2].reason === 'time' && t1.money === tMoney, 'living terrorists get nothing when time runs out');
+  ok(t2Dead.money > 0 && m.lossStreak.T === 1, 'dead terrorists get the loss bonus');
+  // buying
+  ok(m.canBuy(me, 'vesthelm', {}) === false || m.phase !== 'freeze', 'buying only in buy time');
+  m.tick(SHORT_RULES.endDelay + 0.01);
+  me.money = 1000;
+  ok(m.canBuy(me, 'vesthelm', {}) && !m.canBuy(me, 'weapon_ak47', { weapon_ak47: { price: 2700 } }), 'team-only weapons and money');
+  m.pay(me, 'vest', {}); ok(me.armor === 100 && me.money === 350, 'kevlar');
+  ok(m.costFor(me, 'vesthelm', {}) === 350, 'helmet upgrade costs $350');
+  // halftime: sides swap and money resets
+  while (m.round < SHORT_RULES.halftime) { m.endRound('CT', 'time'); m.tick(SHORT_RULES.endDelay + 0.01); }
+  m.endRound('CT', 'time'); m.tick(SHORT_RULES.endDelay + 0.01);
+  ok(m.round === SHORT_RULES.halftime + 1 && me.team === 'T' && t1.team === 'CT' && me.money === 800, `halftime swap: ${me.team} money ${me.money}`);
+  while (m.phase !== 'over') { m.endRound('T', 'time'); m.tick(SHORT_RULES.endDelay + 0.01); }
+  ok(m.winnerSquad() === 'A' && m.score.A >= SHORT_RULES.winsNeeded, 'match ends at ' + SHORT_RULES.winsNeeded + ' wins: ' + JSON.stringify(m.score));
+}
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

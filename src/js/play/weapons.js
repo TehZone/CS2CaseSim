@@ -67,6 +67,26 @@ export class Arsenal {
 
   get gun() { return this.current; }
 
+  // Puts a gun in a slot (replacing what was there) / takes one away.
+  give(slot, gun, t, select = true) {
+    const old = this.guns[slot];
+    if (old && old !== gun) { old.vm.rig.visible = false; if (this.current === old) this.current = null; if (this.last === old) this.last = null; }
+    this.guns[slot] = gun;
+    gun.slot = slot;
+    if (select || !this.current) this.select(slot, t);
+  }
+  remove(slot, t) {
+    const g = this.guns[slot];
+    if (!g) return;
+    g.vm.rig.visible = false;
+    delete this.guns[slot];
+    if (this.last === g) this.last = null;
+    if (this.current === g) { this.current = null; this.selectBest(t); }
+  }
+  selectBest(t) {
+    for (const s of ['primary', 'secondary', 'knife', 'c4']) if (this.guns[s]) { this.select(s, t); return; }
+  }
+
   select(slot, t) {
     const g = this.guns[slot];
     if (!g || g === this.current) return;
@@ -113,13 +133,24 @@ export class Arsenal {
     if (!g) return;
     const pressed = input.takePressed();
     const clicked = input.takeClicked();
-    for (const [a, slot] of [['slot1', 'primary'], ['slot2', 'secondary'], ['slot3', 'knife']]) if (pressed.has(a) && this.guns[slot]) this.select(slot, t);
-    if (pressed.has('lastWeapon') && this.last) this.select(this.last.slot, t);
+    const wheel = input.takeWheel();
+    this.pressed = pressed;
+    if (!this.game.me.alive) return;
+    for (const [a, slot] of [['slot1', 'primary'], ['slot2', 'secondary'], ['slot3', 'knife'], ['slot5', 'c4']]) if (pressed.has(a) && this.guns[slot]) this.select(slot, t);
+    if (pressed.has('lastWeapon') && this.last && this.guns[this.last.slot] === this.last) this.select(this.last.slot, t);
+    if (wheel) {
+      const order = ['primary', 'secondary', 'knife', 'c4'].filter((s) => this.guns[s]);
+      const i = order.indexOf(this.current?.slot);
+      if (order.length) this.select(order[(i + (wheel > 0 ? 1 : -1) + order.length) % order.length], t);
+    }
     const cur = this.current;
     this.recover(cur, dt, t);
     if (cur.reloading && t >= cur.reloadEnd) this.finishReload(cur, t);
     if (!cur.reloading && cur.vm.role !== 'idle' && t >= cur.animEnd && cur.vm.has('idle')) cur.vm.play('idle', { loop: true, fade: 0.12 });
     if (cur.resumeZoom && t >= cur.nextAttack) { cur.zoom = cur.resumeZoom; cur.resumeZoom = 0; }
+    // The bomb: hold fire in a bomb site to plant (the game runs the planting).
+    if (cur.id === 'weapon_c4') { this.game.playerPlant(!!(input.buttons & 1), t); return; }
+    if (!this.game.canAttack()) { if (pressed.has('reload')) this.reload(cur, t); return; }
     if (pressed.has('reload')) this.reload(cur, t);
     if (pressed.has('inspect') && !cur.reloading && t >= cur.nextAttack && cur.vm.has('inspect')) { cur.zoom = 0; cur.animEnd = t + cur.vm.play('inspect'); }
     const held = !!(input.buttons & 1), alt = !!(input.buttons & 4);
@@ -185,7 +216,7 @@ export class Arsenal {
       const y = Math.sin(t0) * r0 * inacc + Math.sin(t1) * r1 * spread;
       const d = [fwd[0] + right[0] * x + up[0] * y, fwd[1] + right[1] * x + up[1] * y, fwd[2] + right[2] * x + up[2] * y];
       const l = Math.hypot(d[0], d[1], d[2]);
-      game.fireBullet(eye, [d[0] / l, d[1] / l, d[2] / l], g, { tracer: st.tracerFrequency > 0 && g.shots % st.tracerFrequency === 0 });
+      game.fireBullet(game.me, eye, [d[0] / l, d[1] / l, d[2] / l], g, { tracer: st.tracerFrequency > 0 && g.shots % st.tracerFrequency === 0 });
     }
     this.kick(g, m);
     g.penalty += st.inaccFire[m];
@@ -198,6 +229,7 @@ export class Arsenal {
     g.animEnd = t + g.vm.play(role, { fade: 0.02 });
     if (st.unzoomsAfterShot && g.zoom) { g.resumeZoom = g.zoom; g.zoom = 0; }
     game.emit('shot', g);
+    game.noise(eye, g.silenced ? 900 : 2600, game.me);
     if (g.clip === 0 && g.reserve > 0 && /SNIPER|PISTOL/.test(st.type) === false) { /* CS2 doesn't auto-reload rifles until you try to fire */ }
   }
 
@@ -249,7 +281,7 @@ export class Arsenal {
     if (hit.bot) {
       const backstab = hit.backstab;
       const dmg = backstab ? k.backstab : again && k.again ? k.again : k.damage;
-      this.game.damageBot(hit.bot, dmg, { group: 'chest', armorRatio: 1.7, knife: true, point: hit.point, dir: hit.dir, weapon: g });
+      this.game.damage(hit.bot.c, dmg, { attacker: this.game.me, group: 'chest', armorRatio: 1.7, point: hit.point, dir: hit.dir, weapon: g });
       this.sound(kind === 'light' ? 'Weapon_Knife.Hit' : 'Weapon_Knife.Stab');
     } else this.sound('Weapon_Knife.HitWall');
   }

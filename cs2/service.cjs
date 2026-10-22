@@ -13,6 +13,8 @@ const STATIC_COMBOS = ['S_PAINT_STYLE', 'S_OVERRIDE_NORMAL', 'S_USE_ALL_MASKS', 
 
 const toPosix = (p) => p.replace(/\\/g, '/');
 const PISTOL_RE = /PISTOL/;
+// Models for items without paint kits (not in the skin index).
+const EXTRA_MODELS = { weapon_c4: 'weapons/models/c4/weapon_c4.vmdl', defuser: 'weapons/models/defuser/defuser.vmdl' };
 
 // Textures of a csgo_weapon_sticker material the renderer uses. Normal maps are kept raw (hemi-octahedral
 // normal in RG, roughness in B, self-illum mask in A), exactly as CS2's sticker shader samples them.
@@ -315,7 +317,7 @@ class CS2Service {
 
   async prepare({ weapon, paint }) {
     const index = await this.ensureIndex();
-    const w = index.weapons[weapon];
+    const w = index.weapons[weapon] || (EXTRA_MODELS[weapon] && { model: EXTRA_MODELS[weapon] });
     if (!w) throw new Error('Unknown weapon ' + weapon);
     const kit = paint ? index.paints[paint] : null;
     if (paint && !kit) throw new Error('Paint kit not found: ' + paint);
@@ -384,7 +386,7 @@ class CS2Service {
       const dir = path.join(this.cacheDir, 'play', id);
       const metaFile = path.join(dir, 'map.json');
       const result = async (meta) => ({
-        id, name: meta.name, info: meta, nav: await this.playNav(id, vpk, dir),
+        id, name: meta.name, info: meta, nav: await this.playNav(id, vpk, dir), radar: await this.playRadar(id, dir),
         world: this.url(path.join(dir, 'world.glb')), collision: this.url(path.join(dir, 'collision.bin')),
         lightmap: meta.lightmap ? this.url(path.join(dir, 'lightmap.bin')) : null, sky: meta.sky ? this.url(path.join(dir, 'sky.png')) : null,
       });
@@ -480,7 +482,8 @@ class CS2Service {
       try { const c = JSON.parse(fs.readFileSync(file, 'utf8')); if (c.stamp === stamp && c.version === play.DATA_VERSION) return c; } catch {}
       const tmp = path.join(this.cacheDir, 'play', 'tmp-data');
       const files = ['scripts/weapons.vdata_c', 'soundevents/game_sounds_weapons.vsndevts_c', 'soundevents/game_sounds_player.vsndevts_c',
-        'soundevents/game_sounds_physics.vsndevts_c', 'soundevents/game_sounds_footsteps.vsndevts_c'];
+        'soundevents/game_sounds_physics.vsndevts_c', 'soundevents/game_sounds_footsteps.vsndevts_c', 'soundevents/game_sounds_ui.vsndevts_c',
+        'soundevents/vo/announcer/game_sounds_cs2_classic.vsndevts_c', 'soundevents/music/valve_cs2_01/game_sounds_music.vsndevts_c'];
       await cs2.run(['-i', cs2.vpk, '-f', files.join(','), '-d', '-o', tmp]);
       const read = (f) => fs.readFileSync(path.join(tmp, f.replace(/_c$/, '')), 'utf8');
       const weapons = play.weaponStats(read(files[0]));
@@ -514,12 +517,10 @@ class CS2Service {
       const stats = data.weapons[weapon] || null;
       const found = playClips(weapon, await this.viewmodelClips());
       if (!found.idle && !found.draw) throw new Error('No first-person animations for ' + weapon);
-      const exp = async (c) => {
-        const name = c.split('/').slice(-2).join('_').replace(/\.vnmclip_c$/, '');
-        return this.url(await cs2.exportGltf(c, `fp/clips/${name}.glb`, { glb: true }));
-      };
+      const files = await cs2.exportGlbBatch(Object.values(found).flat(), 'fp/batch');
+      const url = (c) => (files[c] ? this.url(files[c]) : null);
       const clips = {};
-      for (const [role, c] of Object.entries(found)) clips[role] = Array.isArray(c) ? await Promise.all(c.map(exp)) : await exp(c);
+      for (const [role, c] of Object.entries(found)) clips[role] = Array.isArray(c) ? c.map(url).filter(Boolean) : url(c);
       const arms = this.url(await cs2.exportGltf('weapons/models/shared/arms/weapon_arms.vmdl', 'fp/arms/weapon_arms.gltf', { materials: true }));
       const prefix = (stats?.shootSound || '').replace(/\.[^.]*$/, '.');
       const events = prefix.length > 1 ? Object.keys(data.sounds).filter((e) => e.startsWith(prefix) && !/Distant|_Q$|Inspect|LookAt/i.test(e)) : [];
@@ -549,14 +550,34 @@ class CS2Service {
   // Third-person animation clips by path under animation/anims/world/ (e.g. "rifle/_default_rifle/idle_rifle"):
   // { path: url }.
   async playAnims(list) {
-    const cs2 = this.ensureCS2();
+    const ok = [...new Set(list)].filter((p) => /^[a-z0-9_/+.]+$/i.test(p) && !p.includes('..'));
+    const vpk = (p) => `animation/anims/world/${p}.vnmclip_c`;
+    const files = await this.ensureCS2().exportGlbBatch(ok.map(vpk), 'play/clips');
     const out = {};
-    for (const p of [...new Set(list)]) {
-      if (!/^[a-z0-9_/+.]+$/i.test(p) || p.includes('..')) continue;
-      const name = p.replace(/[/+.]/g, '_');
-      out[p] = this.url(await cs2.exportGltf(`animation/anims/world/${p}.vnmclip_c`, `play/anims/${name}.glb`, { glb: true }));
-    }
+    for (const p of ok) if (files[vpk(p)]) out[p] = this.url(files[vpk(p)]);
     return out;
+  }
+
+  // Weapon stats from weapons.vdata: { weapon_id: stats }.
+  async playStats() { return (await this.playData()).weapons; }
+
+  // The map's radar (CS2's overview image and its placement): { image, x, y, scale } or null.
+  async playRadar(id, dir) {
+    const meta = path.join(dir, 'radar.json'), img = path.join(dir, 'radar.png');
+    if (!fs.existsSync(meta)) {
+      try {
+        const cs2 = this.ensureCS2();
+        const txt = `resource/overviews/${id}.txt`, tex = `panorama/images/overheadmaps/${id}_radar_psd.vtex`;
+        const files = await cs2.extract([txt, tex]);
+        const local = files[tex + '_c'], ovr = files[txt];
+        if (!local || !ovr) return null;
+        const kv = parseKV1(fs.readFileSync(ovr, 'utf8'));
+        const o = kv[id] || Object.values(kv)[0] || {};
+        fs.copyFileSync(local, img);
+        fs.writeFileSync(meta, JSON.stringify({ x: +o.pos_x || 0, y: +o.pos_y || 0, scale: +o.scale || 1 }));
+      } catch (e) { this.log('radar: ' + e.message); return null; }
+    }
+    return { image: this.url(img), ...JSON.parse(fs.readFileSync(meta, 'utf8')) };
   }
 
   // Default agent models per team (their item ids come from the agents in items_game).

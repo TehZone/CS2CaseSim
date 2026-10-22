@@ -10,7 +10,7 @@ const { decodePNG, encodePNG } = require('./png.cjs');
 
 const IN = 0.0254; // the exporter writes game inches as metres
 const PLAY_VERSION = 1; // map exports
-const DATA_VERSION = 2; // weapon stats + sound events
+const DATA_VERSION = 3; // weapon stats + sound events
 // Collision flags per triangle: what it stops.
 const F_PLAYER = 1, F_BULLET = 2, F_GRENADE = 4;
 // The irradiance lightmap is stored as 8-bit sRGB of value / IRR_MAX.

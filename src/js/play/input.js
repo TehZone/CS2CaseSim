@@ -3,7 +3,7 @@
 export const BINDS = {
   forward: ['KeyW'], back: ['KeyS'], left: ['KeyA'], right: ['KeyD'], jump: ['Space'], duck: ['ControlLeft', 'ControlRight', 'KeyC'],
   walk: ['ShiftLeft', 'ShiftRight'], reload: ['KeyR'], inspect: ['KeyF'], slot1: ['Digit1'], slot2: ['Digit2'], slot3: ['Digit3'],
-  lastWeapon: ['KeyQ'], scores: ['Tab'], use: ['KeyE'], drop: ['KeyG'], buy: ['KeyB'],
+  slot4: ['Digit4'], slot5: ['Digit5'], lastWeapon: ['KeyQ'], scores: ['Tab'], use: ['KeyE'], drop: ['KeyG'], buy: ['KeyB'],
 };
 const GAME_KEYS = new Set(Object.values(BINDS).flat());
 
@@ -18,6 +18,8 @@ export class Input {
     this.yaw = 0; this.pitch = 0;
     this.wheel = 0;
     this.locked = false;
+    this.menu = false; // a menu (buy menu) shows the cursor: keys still move you
+    this.onKey = null; // (code, down) for menus
     this.onLockChange = onLockChange;
     this.handlers = [
       [document, 'keydown', (e) => this.key(e, true)],
@@ -42,12 +44,13 @@ export class Input {
 
   lockChanged() {
     this.locked = document.pointerLockElement === this.el;
-    if (!this.locked) { this.keys.clear(); this.buttons = 0; }
+    if (!this.locked && !this.menu) { this.keys.clear(); this.buttons = 0; }
     this.onLockChange(this.locked);
   }
 
   key(e, down) {
-    if (!this.locked) return;
+    if (!this.locked && !this.menu) return;
+    if (this.onKey?.(e.code, down, e)) { e.preventDefault(); return; }
     if (GAME_KEYS.has(e.code) || e.ctrlKey) e.preventDefault();
     if (down) {
       if (!this.keys.has(e.code)) for (const [a, codes] of Object.entries(BINDS)) if (codes.includes(e.code)) this.pressed.add(a);

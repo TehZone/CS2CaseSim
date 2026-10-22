@@ -39,7 +39,7 @@ function initPaths() {
 const PLAY_CALLS = {
   maps: () => cs2.playMaps(), map: (id) => cs2.playMap(id), progress: (key) => cs2.playProgress(key), weapon: (id) => cs2.playWeapon(id),
   agent: (vmdl) => cs2.playAgent(vmdl), anims: (list) => cs2.playAnims(list), sounds: (events) => cs2.playSounds(events),
-  agentModel: (id) => cs2.agentModel(id),
+  agentModel: (id) => cs2.agentModel(id), stats: () => cs2.playStats(),
 };
 function playCall(fn, arg) {
   if (!Object.hasOwn(PLAY_CALLS, fn)) throw new Error('Unknown play call ' + fn);
@@ -329,39 +329,25 @@ async function runPlaySmoke(win) {
     if (r.started || !r.root) { if (!r.started) console.log('SMOKE play failed', r.toast); break; }
   }
   console.log('SMOKE play loaded in', ((Date.now() - t0) / 1000).toFixed(1) + 's');
-  const look = await js(`(async () => {
-    const g = window.__playGame; if (!g) return 'no game';
-    document.querySelector('.play-pause').classList.add('hidden'); g.paused = false; g.input.locked = true;
-    // Stand somewhere with a clear view of a bot.
-    const b = g.bots[0];
-    const chest = [b.pos[0], b.pos[1], b.pos[2] + 50];
-    let spot = null;
-    for (let i = 0; i < 24 && !spot; i++) {
-      const a = (i / 24) * Math.PI * 2, r = 220 + (i % 3) * 80;
-      const o = [b.pos[0] + Math.cos(a) * r, b.pos[1] + Math.sin(a) * r, b.pos[2] + 2];
-      const tr = g.collision.traceBox(o, o, [-16, -16, 0], [16, 16, 72], 1);
-      if (tr.startsolid || tr.normal) continue;
-      const e = [o[0], o[1], o[2] + 64], d = [chest[0] - e[0], chest[1] - e[1], chest[2] - e[2]], l = Math.hypot(...d);
-      if (!g.collision.raycast(e, d.map((x) => x / l), l, 2)) spot = o;
-    }
-    g.player.teleport(spot || [b.pos[0] + 260, b.pos[1], b.pos[2] + 8]);
-    await new Promise((r) => setTimeout(r, 300));
-    const e = g.player.eye(), d = [b.pos[0] - e[0], b.pos[1] - e[1], b.pos[2] + 50 - e[2]];
-    g.input.yaw = Math.atan2(d[1], d[0]) * 180 / Math.PI; g.input.pitch = -Math.atan2(d[2], Math.hypot(d[0], d[1])) * 180 / Math.PI;
-    await new Promise((r) => setTimeout(r, 3000));
-    const mem = g.renderer.info.memory;
-    return JSON.stringify({ fps: Math.round(g.fps), meshes: g.world.drawCalls, geometries: mem.geometries, textures: mem.textures, gun: g.arsenal.gun?.name, place: g.place(),
-      heapMB: Math.round((performance.memory?.usedJSHeapSize || 0) / 1e6) });
-  })()`);
-  console.log('SMOKE play view', look);
-  await shot('view');
-  const fired = await js(`(async () => {
-    const g = window.__playGame; g.input.buttons = 1; await new Promise((r) => setTimeout(r, 700)); g.input.buttons = 0;
-    await new Promise((r) => setTimeout(r, 300));
-    return JSON.stringify({ stats: g.stats, clip: g.arsenal.gun.clip, bot: { alive: g.bots[0].alive, hp: g.bots[0].health } });
-  })()`);
-  console.log('SMOKE play fire', fired);
-  await shot('fire');
+  // Skip the freeze time and let the round play for a while in real time.
+  const state = () => js(`(() => { const g = window.__playGame; if (!g) return 'no game'; const m = g.match;
+    return JSON.stringify({ round: m.round, phase: m.phase, time: Math.round(m.time), score: m.score, fps: Math.round(g.fps || 0), bomb: m.bomb?.state,
+      alive: g.combatants.filter((c) => c.alive).map((c) => c.team[0]).join(''), feed: document.querySelector('.feed')?.innerText.split(String.fromCharCode(10)).join(' | ') }); })()`);
+  await js(`(() => { const g = window.__playGame; document.querySelector('.play-pause').classList.add('hidden'); g.paused = false; g.input.locked = true; g.match.time = 0.01; })()`);
+  for (const s of [4, 8, 12]) { await wait(4000); console.log('SMOKE play t+' + s + 's', await state()); }
+  await shot('live');
+  // Fast-forward: follow a teammate (you stand still) until the round ends.
+  await js(`(() => { const g = window.__playGame; g.kill(g.me, null, { name: 'World' }, false); })()`);
+  await wait(4000);
+  await shot('spectate');
+  console.log('SMOKE play spectate', await state());
+  const ff = await js(`(() => { const g = window.__playGame, m = g.match; const r = m.round; let n = 0;
+    while (m.round === r && n < 64 * 200) { g.tick(); n++; if (n % 2 === 0) for (const b of g.bots) if (b.root.visible) { b.sync(); b.animate(2 / 64); } }
+    return JSON.stringify({ simSeconds: Math.round(n / 64), round: m.round, score: m.score, last: m.history[m.history.length - 1] }); })()`);
+  console.log('SMOKE play round 1 result', ff);
+  await wait(1500);
+  await shot('round2');
+  console.log('SMOKE play round 2', await state());
   console.log('SMOKE screenshots saved to', app.getPath('userData'));
   app.quit();
 }
