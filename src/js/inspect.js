@@ -649,6 +649,7 @@ class InspectView {
       this.camera.lookAt(0, -lift, 0);
     }
     this.model?.userData.tick?.(dt); // animated models (gloves on CS2's inspect pose)
+    this.renderer.setRenderTarget(null); // always the screen, whatever a bake in progress left bound
     let cam = this.camera;
     if (this.fp) {
       this.fp.update(dt);

@@ -363,11 +363,18 @@ async function layerArray(renderer, urls, srgb, maxSize) {
   const mat = new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: COPY_VS, fragmentShader: COPY_FS, uniforms: { src: { value: null } }, depthTest: false, depthWrite: false });
   const q = bakeQuad();
   q.mesh.material = mat;
-  texs.forEach((t, i) => {
-    mat.uniforms.src.value = t || whiteTex();
-    renderer.setRenderTarget(rt, i);
-    renderer.render(q.scene, q.camera);
-  });
+  // Put the render target back before anything else can render (the caller awaits next): a frame drawn meanwhile
+  // would otherwise land in this texture.
+  const prev = renderer.getRenderTarget();
+  try {
+    texs.forEach((t, i) => {
+      mat.uniforms.src.value = t || whiteTex();
+      renderer.setRenderTarget(rt, i);
+      renderer.render(q.scene, q.camera);
+    });
+  } finally {
+    renderer.setRenderTarget(prev);
+  }
   mat.dispose();
   for (const t of texs) t?.dispose();
   return rt;
@@ -381,8 +388,10 @@ function layerAverages(renderer, arrayTex, n) {
   const mat = new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: COPY_VS, fragmentShader: AVG_FS, uniforms: { src: { value: arrayTex } }, depthTest: false, depthWrite: false });
   const q = bakeQuad();
   q.mesh.material = mat;
+  const prev = renderer.getRenderTarget();
   renderer.setRenderTarget(rt);
   renderer.render(q.scene, q.camera);
+  renderer.setRenderTarget(prev);
   const px = new Uint8Array(n * 4);
   renderer.readRenderTargetPixels(rt, 0, 0, n, 1, px);
   mat.dispose();
