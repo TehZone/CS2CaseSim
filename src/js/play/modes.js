@@ -102,6 +102,7 @@ export class Deathmatch {
       return;
     }
     attacker.kills++; attacker.roundKills++;
+    if (headshot) attacker.hsKills = (attacker.hsKills || 0) + 1;
     const id = weapon?.id || '';
     const knife = /knife|bayonet/.test(id);
     attacker.points = (attacker.points || 0) + POINTS.base + (headshot ? POINTS.headshot : 0) + (PISTOLS.has(id) ? POINTS.pistol : 0) + (knife ? POINTS.knife : 0);

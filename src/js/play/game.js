@@ -28,13 +28,14 @@ import { Drops } from './drops.js';
 import { Post } from './post.js';
 import { Radio } from './radio.js';
 import { MODES, WINGMAN_RULES, Deathmatch, ARMS_RACE, PROTECT } from './modes.js';
+import { act, online } from '../backend.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
 export const TICK = 1 / 64;
 // A CS2 field of view (horizontal degrees at 4:3) as three.js's vertical FOV; wider screens see more, like CS2.
 const vfov = (fov43) => (2 * Math.atan(Math.tan((fov43 * Math.PI) / 360) * 0.75) * 180) / Math.PI;
-const FOV = 90, VIEWMODEL_FOV = 68;
-const VIEWMODEL_OFFSET = [1, 1, -1]; // CS2 viewmodel_offset_x/y/z (inches)
+const FOV = 90;
+const VIEWMODEL = { fov: 68, x: 1, y: 1, z: -1 }; // CS2's viewmodel_fov and viewmodel_offset_x/y/z (inches)
 const IN = 0.0254;
 
 const SURFACE_STEP = { concrete: 'Concrete', rock: 'Concrete', tile: 'Tile', sand: 'Sand', dirt: 'Dirt', wood: 'Wood', wood_solid: 'Wood_Solid',
@@ -62,7 +63,7 @@ const MUSIC = 'valve_cs2_01';
 
 export class Game {
   constructor(root, { map = 'de_dust2', mode = 'competitive', team = 'CT', teamSize = 5, difficulty = 'normal', length = 'short', overtime = true, friendlyFire = false,
-    site = 'A', minutes = 10, ffa = true, sensitivity = 1.25, quality = 'balanced', onStatus = () => {} } = {}) {
+    site = 'A', minutes = 10, ffa = true, sensitivity = 1.25, quality = 'balanced', settings = {}, onStatus = () => {} } = {}) {
     Object.assign(this, { root, mapId: map, team, onStatus });
     this.enemyTeam = team === 'T' ? 'CT' : 'T';
     this.mode = MODES[mode] ? mode : 'competitive';
@@ -95,15 +96,21 @@ export class Game {
     this.camera = new THREE.PerspectiveCamera(vfov(FOV), 1, 0.05, 400);
     this.camera.rotation.order = 'YXZ';
     this.vmScene = new THREE.Scene();
-    this.vmCamera = new THREE.PerspectiveCamera(vfov(VIEWMODEL_FOV), 1, 0.005, 10);
+    // Your settings: viewmodel position, crosshair, binds, volumes, the fps counter.
+    this.settings = settings;
+    this.vm = { ...VIEWMODEL, ...(settings.viewmodel || {}) };
+    this.musicVolume = settings.musicVolume ?? 1;
+    this.voiceVolume = settings.voiceVolume ?? 1;
+    this.vmCamera = new THREE.PerspectiveCamera(vfov(this.vm.fov), 1, 0.005, 10);
     this.vmCamera.rotation.order = 'YXZ';
     this.vmRoot = new THREE.Group();
     this.vmRoot.rotation.order = 'YXZ';
     this.vmScene.add(this.vmRoot);
-    this.input = new Input(this.canvas, { sensitivity, onLockChange: (locked) => this.lockChanged(locked) });
+    this.input = new Input(this.canvas, { sensitivity, binds: settings.binds, onLockChange: (locked) => this.lockChanged(locked) });
     this.input.onKey = (code, down) => this.menuKey(code, down);
     this.baseSensitivity = sensitivity;
     this.hud = new Hud(root);
+    this.hud.setCrosshairStyle(settings.crosshair);
     this.buyMenu = new BuyMenu(root, this);
     this.vmCache = new Map();
     this.resize = this.resize.bind(this);
@@ -396,13 +403,14 @@ export class Game {
   menuKey(code, down) {
     if (!down) return false;
     // Radio: Z commands, X reports, V responses; a number picks a line.
-    if (/^Key[ZXV]$/.test(code) && this.radio && this.me?.alive && !this.buyMenu.isOpen && !this.ffa) { this.radio.open(code); return true; }
+    const radioMenu = ['radio1', 'radio2', 'radio3'].findIndex((a) => this.input.is(a, code));
+    if (radioMenu >= 0 && this.radio && this.me?.alive && !this.buyMenu.isOpen && !this.ffa) { this.radio.open(['KeyZ', 'KeyX', 'KeyV'][radioMenu]); return true; }
     if (this.radio?.menu) {
       const n = /^Digit(\d)$/.exec(code)?.[1];
       if (n != null) { if (n === '0') this.radio.close(); else this.radio.choose(Number(n)); return true; }
       if (code === 'Escape') { this.radio.close(); return true; }
     }
-    if (code === 'KeyB' && this.me?.alive && this.match) { if (this.buyMenu.isOpen) this.closeBuyMenu(); else this.openBuyMenu(); return true; }
+    if (this.input.is('buy', code) && this.me?.alive && this.match) { if (this.buyMenu.isOpen) this.closeBuyMenu(); else this.openBuyMenu(); return true; }
     if (this.buyMenu.isOpen) {
       if (code === 'Escape') { this.closeBuyMenu(); return true; }
       return this.buyMenu.key(code);
@@ -439,7 +447,7 @@ export class Game {
     for (const b of this.bots) { b.brain.roundStart(this.plans[b.c.team]); b.brain.buy(pistol); }
     this.liveAt = Infinity;
     this.hud.message(overtime ? `Overtime ${overtime} · $12,500 each` : halftime ? 'Switching sides' : round === 1 ? 'Match start · Round 1' : `Round ${round}`, 2500);
-    this.sounds.play(`Music.StartRound.${MUSIC}`, { volume: 0.35 });
+    this.sounds.play(`Music.StartRound.${MUSIC}`, { volume: 0.35 * this.musicVolume });
     this.emit('round', round);
   }
   // ---- Deathmatch / Arms Race: everyone respawns where no enemy is close ------------------------------------------------
@@ -449,7 +457,7 @@ export class Game {
     this.plans = { T: {}, CT: {} };
     for (const c of this.combatants) { c.alive = false; c.resetWeapons = true; this.respawn(c); }
     this.hud.message(this.armsRace ? 'Arms Race · a new weapon every kill, the knife last' : `Deathmatch${this.ffa ? ' · free for all' : ''} · ${this.minutes} minutes`, 3500);
-    this.sounds.play(`Music.StartRound.${MUSIC}`, { volume: 0.35 });
+    this.sounds.play(`Music.StartRound.${MUSIC}`, { volume: 0.35 * this.musicVolume });
     this.emit('round', 1);
   }
   // A spawn point away from enemies: the map's spawns and random spots on the nav mesh, the one furthest from (and
@@ -603,22 +611,39 @@ export class Game {
     const why = { elimination: '', bomb: 'The bomb has exploded', defuse: 'The bomb has been defused', time: 'Time ran out' }[reason];
     this.hud.message(`<b class="${winner === 'CT' ? 'ct' : 't'}">${sideName} win</b>${why ? `<small>${why}</small>` : ''}${mvp ? `<small>MVP: ${mvp.name}</small>` : ''}`, 6500, 'banner');
     this.sounds.play(winner === 'CT' ? 'Event.CTWin' : 'Event.TERWin', { volume: 0.9 });
-    this.sounds.play(winner === this.me.team ? `Music.WonRound.${MUSIC}` : `Music.LostRound.${MUSIC}`, { volume: 0.4 });
+    this.sounds.play(winner === this.me.team ? `Music.WonRound.${MUSIC}` : `Music.LostRound.${MUSIC}`, { volume: 0.4 * this.musicVolume });
     this.planting = null;
     this.emit('roundEnd', { winner, reason });
   }
   onMatchOver(squad) {
     const won = squad === 'A', draw = squad == null;
-    this.sounds.play(`Music.MatchEnd.${MUSIC}`, { volume: 0.4 });
+    this.sounds.play(`Music.MatchEnd.${MUSIC}`, { volume: 0.4 * this.musicVolume });
     this.matchOver = true;
     const lead = this.match.leader;
     const final = this.ffa ? (won ? 'You win' : `${lead?.name || '?'} wins`) + (this.armsRace ? '' : ` · ${lead?.points || 0} points`) : `${this.match.score.A} : ${this.match.score.B}`;
+    const me = this.me, rounds = Math.max(1, this.match.round);
+    const hs = me.kills ? Math.round(((me.hsKills || 0) / me.kills) * 100) : 0;
+    const multi = [3, 4, 5].map((k) => (me.multi?.[k] ? `${me.multi[k]}× ${k === 5 ? 'ACE' : k + 'K'}` : '')).filter(Boolean).join(' · ');
+    const stats = [`${me.kills} / ${me.deaths} / ${me.assists} K/D/A`, this.respawnMode ? `${me.points || 0} points` : `${Math.round(me.damage / rounds)} ADR`, `${hs}% headshots`,
+      me.shots ? `${Math.round(((me.hits || 0) / me.shots) * 100)}% accuracy` : '', this.respawnMode ? '' : `${me.mvps} MVPs`, multi].filter(Boolean).join(' · ');
+    this.reward = this.payReward(won);
     this.hud.endScreen(`<h1 class="${draw ? '' : won ? 'win' : 'loss'}">${draw ? 'Draw' : won ? 'Victory' : 'Defeat'}</h1>
-      <div class="final">${final}</div>
-      <div class="sub">You: ${this.me.kills} kills, ${this.me.deaths} deaths, ${this.me.assists} assists, ${this.me.mvps} MVPs</div>`);
+      <div class="final">${final}</div><div class="sub">${stats}</div><div class="reward" data-reward>${online() ? 'Rewards are paid for offline play' : 'Adding up your reward…'}</div>`);
+    this.reward.then((r) => { const el = this.hud.q('[data-reward]'); if (el && r) el.innerHTML = `Reward: <b>+$${r.earned.toFixed(2)}</b> to your wallet`; });
     this.hud.scoreboard(true, this.scoreData());
     this.input.unlock();
     this.emit('over', { won, draw });
+  }
+
+  // A finished match pays into your case-opening money (offline only): kills, assists, MVPs, rounds won and the win,
+  // more against harder bots.
+  async payReward(won) {
+    if (online()) return null;
+    const me = this.me, m = this.match;
+    try {
+      return await act('play.reward', { won: !!won, kills: Math.max(0, me.kills), assists: me.assists, mvps: Math.min(60, me.mvps),
+        rounds: this.respawnMode ? 0 : Math.min(60, m.score.A), difficulty: this.difficulty });
+    } catch (e) { console.warn('match reward', e); return null; }
   }
 
   // ---- the bomb ---------------------------------------------------------------------------------------------------
@@ -679,7 +704,7 @@ export class Game {
     this.placeBomb(bomb.pos, c === this.me ? this.input.yaw : this.botOf(c)?.yaw || 0);
     this.sounds.play('c4.plant', { pos: bomb.pos, listener: this, volume: 0.8 });
     this.sounds.play('Event.BombPlanted', { volume: 0.9 });
-    this.sounds.play(`Music.BombPlanted.${MUSIC}`, { volume: 0.35 });
+    this.sounds.play(`Music.BombPlanted.${MUSIC}`, { volume: 0.35 * this.musicVolume });
     this.hud.message('The bomb has been planted', 3000, 'bomb');
     bomb.beepAt = this.now + 1;
     for (const b of this.bots) b.brain.nextThink = this.now; // everyone knows where the bomb is
@@ -1333,7 +1358,7 @@ export class Game {
       gun.vm.update(this.paused ? 0 : dt);
       const sp = this.player.onGround ? Math.min(1, this.player.speed2d() / 250) : 0;
       this.bob = (this.bob || 0) + dt * (6 + 4 * sp) * (sp > 0.05 ? 1 : 0);
-      gun.vm.rig.position.set((VIEWMODEL_OFFSET[0] + Math.cos(this.bob) * 0.25 * sp) * IN, (VIEWMODEL_OFFSET[2] - Math.abs(Math.sin(this.bob)) * 0.35 * sp) * IN, -VIEWMODEL_OFFSET[1] * IN);
+      gun.vm.rig.position.set((this.vm.x + Math.cos(this.bob) * 0.25 * sp) * IN, (this.vm.z - Math.abs(Math.sin(this.bob)) * 0.35 * sp) * IN, -this.vm.y * IN);
     }
     this.vmRoot.quaternion.copy(this.camera.quaternion);
     this.vmCamera.quaternion.copy(this.camera.quaternion);
@@ -1406,7 +1431,7 @@ export class Game {
     this.hudTimer = (this.hudTimer || 0) - dt;
     if (this.hudTimer <= 0) {
       this.hudTimer = 0.1;
-      hud.fps(this.fps);
+      hud.fps(this.settings.showFps === false ? null : this.fps);
       hud.place(me.alive ? this.place() : null);
       if (this.buyMenu.isOpen) { if (!m.buyOpen || !this.inBuyZone()) this.closeBuyMenu(); else this.buyMenu.render(); }
       if (!this.matchOver) hud.scoreboard(this.input.held('scores'), this.scoreData());

@@ -17,6 +17,7 @@ export class GameError extends Error {
   constructor(message, code = 'bad') { super(message); this.code = code; }
 }
 const fail = (m, code) => { throw new GameError(m, code); };
+const PLAY_DIFFICULTY = { easy: 0.5, normal: 1, hard: 1.6, expert: 2.5 };
 
 export function makeCtx(st, opts = {}) {
   return {
@@ -234,6 +235,21 @@ export const ACTIONS = {
     const s = stats(ctx);
     s.clicks += n;
     s.clickEarned = round2(s.clickEarned + earned);
+    return { earned };
+  },
+  // Play mode: a finished offline match against bots pays out by how you played and how hard the bots were. Offline
+  // only: the server can't see a match played on your PC.
+  'play.reward'(ctx, { won = false, kills = 0, assists = 0, mvps = 0, rounds = 0, difficulty = 'normal' }) {
+    if (ctx.online) fail('Match rewards are for offline play');
+    kills = int(kills, 0, 400, 'kills'); assists = int(assists, 0, 400, 'assists'); mvps = int(mvps, 0, 60, 'MVPs'); rounds = int(rounds, 0, 60, 'rounds');
+    const diff = PLAY_DIFFICULTY[difficulty] ?? 1;
+    const earned = round2((kills * 0.15 + assists * 0.05 + mvps * 0.25 + rounds * 0.1 + (won ? 2 : 0)) * diff);
+    credit(ctx, earned);
+    const s = stats(ctx);
+    s.playMatches = (s.playMatches || 0) + 1;
+    s.playWins = (s.playWins || 0) + (won ? 1 : 0);
+    s.playKills = (s.playKills || 0) + kills;
+    s.playEarned = round2((s.playEarned || 0) + earned);
     return { earned };
   },
   'upgrade.buy'(ctx, { id }) {

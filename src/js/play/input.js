@@ -6,11 +6,19 @@ export const BINDS = {
   slot4: ['Digit4'], slot5: ['Digit5'], lastWeapon: ['KeyQ'], scores: ['Tab'], use: ['KeyE'], drop: ['KeyG'], buy: ['KeyB'],
   radio1: ['KeyZ'], radio2: ['KeyX'], radio3: ['KeyV'],
 };
-const GAME_KEYS = new Set(Object.values(BINDS).flat());
+// Names for the settings screen.
+export const ACTION_NAMES = { forward: 'Forward', back: 'Back', left: 'Left', right: 'Right', jump: 'Jump', duck: 'Crouch', walk: 'Walk',
+  reload: 'Reload', inspect: 'Inspect', slot1: 'Primary', slot2: 'Pistol', slot3: 'Knife / Zeus', slot4: 'Grenades', slot5: 'Bomb',
+  lastWeapon: 'Last weapon', scores: 'Scoreboard', use: 'Use / defuse', drop: 'Drop weapon', buy: 'Buy menu', radio1: 'Radio: commands',
+  radio2: 'Radio: reports', radio3: 'Radio: responses' };
+// Your binds over the defaults: { action: code } replaces that action's keys.
+export const bindsWith = (custom = {}) => Object.fromEntries(Object.entries(BINDS).map(([a, codes]) => [a, custom[a] ? [custom[a]] : codes]));
 
 export class Input {
-  constructor(el, { sensitivity = 1.25, onLockChange = () => {} } = {}) {
+  constructor(el, { sensitivity = 1.25, binds = {}, onLockChange = () => {} } = {}) {
     this.el = el;
+    this.binds = bindsWith(binds);
+    this.gameKeys = new Set(Object.values(this.binds).flat());
     this.sensitivity = sensitivity;
     this.keys = new Set();
     this.pressed = new Set(); // actions pressed since the last poll
@@ -52,9 +60,9 @@ export class Input {
   key(e, down) {
     if (!this.locked && !this.menu) return;
     if (this.onKey?.(e.code, down, e)) { e.preventDefault(); return; }
-    if (GAME_KEYS.has(e.code) || e.ctrlKey) e.preventDefault();
+    if (this.gameKeys.has(e.code) || e.ctrlKey) e.preventDefault();
     if (down) {
-      if (!this.keys.has(e.code)) for (const [a, codes] of Object.entries(BINDS)) if (codes.includes(e.code)) this.pressed.add(a);
+      if (!this.keys.has(e.code)) for (const [a, codes] of Object.entries(this.binds)) if (codes.includes(e.code)) this.pressed.add(a);
       this.keys.add(e.code);
     } else this.keys.delete(e.code);
   }
@@ -66,7 +74,9 @@ export class Input {
     this.pitch = Math.max(-89, Math.min(89, this.pitch + e.movementY * k));
   }
 
-  held(action) { return BINDS[action].some((c) => this.keys.has(c)); }
+  held(action) { return this.binds[action].some((c) => this.keys.has(c)); }
+  // The key bound to an action (for menus that listen to raw keys).
+  is(action, code) { return this.binds[action]?.includes(code); }
   // Actions pressed since the last call (each reported once).
   takePressed() { const p = this.pressed; this.pressed = new Set(); return p; }
   takeClicked() { const c = this.clicked; this.clicked = 0; return c; }

@@ -155,3 +155,23 @@
 .play-modes button b { display: block; font-size: 14px; }
 .play-modes button small { opacity: .7; font-size: 11px; }
 .play-modes button.active { border-color: var(--accent, #f0c76a); background: rgba(240,199,106,.08); }
+/* Lobby: your record and the settings panel */
+.play-record { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; }
+.play-record b { font-size: 15px; }
+.play-settings { margin-top: 14px; }
+.play-settings summary { cursor: pointer; font-weight: 600; }
+.ps-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; margin-top: 12px; }
+.ps-grid section { display: flex; flex-direction: column; gap: 8px; }
+.ps-grid h4 { margin: 4px 0 0; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; justify-content: space-between; }
+.ps-range { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.ps-range b { font-weight: 600; }
+.ps-check { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.ps-presets { display: flex; gap: 6px; }
+.ps-xhair-preview { height: 110px; border-radius: 6px; background: linear-gradient(180deg, #9bb3c9 0%, #c9b79a 55%, #8a7458 100%); position: relative; }
+.ps-xhair { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+.ps-xhair i { position: absolute; }
+.ps-bind { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
+.ps-bind .btn { min-width: 92px; }
+.play-hud .endscreen .reward { margin-top: 8px; font-size: 16px; }
+.play-hud .endscreen .reward b { color: #7ee08a; }
+.play-pause-box .hidden { display: none !important; }

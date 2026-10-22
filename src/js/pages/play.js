@@ -3,6 +3,8 @@ import { esc } from '../util.js';
 import { cs2Status, cs2Play } from '../cs2/api.js';
 import { toast } from '../ui.js';
 import { MODES } from '../play/modes.js';
+import { S } from '../state.js';
+import { settingsHtml, bindSettings, matchSettings, SETTINGS_DEFAULTS } from './play-settings.js';
 
 // Map art colours for the lobby cards (any other installed map gets a neutral card).
 const MAP_TINT = { de_dust2: '#c9a46a, #7b5a33', de_mirage: '#d8b98a, #8a6a45', de_inferno: '#c98a5a, #6b3f22', de_nuke: '#8fa5b5, #3e4b57',
@@ -11,7 +13,7 @@ const MAP_TINT = { de_dust2: '#c9a46a, #7b5a33', de_mirage: '#d8b98a, #8a6a45', 
 let mapList = null;
 
 const PREFS_KEY = 'cs2sim.play';
-const DEFAULTS = { map: 'de_dust2', mode: 'competitive', site: 'A', ffa: 'ffa', minutes: 10, team: 'CT', teamSize: 5, difficulty: 'normal', length: 'short', overtime: 'on', friendlyFire: 'off', sensitivity: 1.25, quality: 'balanced' };
+const DEFAULTS = { map: 'de_dust2', mode: 'competitive', site: 'A', ffa: 'ffa', minutes: 10, team: 'CT', teamSize: 5, difficulty: 'normal', length: 'short', overtime: 'on', friendlyFire: 'off', sensitivity: 1.25, quality: 'balanced', ...SETTINGS_DEFAULTS };
 function prefs() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULTS }; }
 }
@@ -50,10 +52,13 @@ export function render(r) {
         <label>Sensitivity (CS2)<input class="input" type="number" min="0.05" max="20" step="0.05" data-k="sensitivity" value="${p.sensitivity}"></label>
         <label>Graphics<select class="input" data-k="quality">${opts([['high', 'High (full resolution)'], ['balanced', 'Balanced'], ['performance', 'Performance']], p.quality)}</select></label>
         <button class="btn primary big" data-start>Play</button>
+        ${record()}
         <div class="muted play-keys">WASD move · Space jump · Ctrl crouch · Shift walk · W into a ladder climbs it · Mouse1 fire · Mouse2 scope / silencer / burst mode · R reload · F inspect · B buy · E defuse / pick up · G drop · 1/2/3 weapons (3 again for the Zeus) · 4 grenades (Mouse1 throw, Mouse2 lob) · 5 bomb (hold Mouse1 in a site) · Z / X / V radio (commands, reports, responses: your bots follow orders) · Tab scores · Esc pause</div>
       </div>
     </div>
+    ${settingsHtml(p)}
   </div>`;
+  bindSettings(r, prefs, savePrefs, () => render(r));
   r.querySelectorAll('[data-map]').forEach((b) => b.addEventListener('click', () => { const q = prefs(); q.map = b.dataset.map; savePrefs(q); render(r); }));
   r.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => { const q = prefs(); q.mode = b.dataset.mode; savePrefs(q); render(r); }));
   r.querySelectorAll('[data-k]').forEach((el) => el.addEventListener('change', () => {
@@ -66,6 +71,13 @@ export function render(r) {
 }
 
 export function destroy() { root = null; }
+
+// Your Play record (offline matches): played, won, kills and what they paid.
+function record() {
+  const st = S.stats || {};
+  if (!st.playMatches) return '<div class="muted play-record">Finished matches pay into your wallet (offline): kills, MVPs, rounds and wins, more on harder bots.</div>';
+  return `<div class="play-record"><span><b>${st.playMatches}</b> matches</span><span><b>${st.playWins || 0}</b> wins</span><span><b>${st.playKills || 0}</b> kills</span><span><b>$${(st.playEarned || 0).toFixed(2)}</b> earned</span></div>`;
+}
 
 async function start() {
   const st = await cs2Status();
@@ -89,7 +101,7 @@ async function start() {
   overlay.querySelector('[data-cancel]').addEventListener('click', leave);
   overlay.querySelector('[data-leave]').addEventListener('click', leave);
   overlay.querySelector('[data-resume]').addEventListener('click', () => session?.game.resume());
-  const game = new Game(overlay, { map: p.map, mode: p.mode, site: p.site, ffa: p.ffa !== 'team', minutes: p.minutes, team: p.team, teamSize: p.teamSize, difficulty: p.difficulty, length: p.length, overtime: p.overtime !== 'off', friendlyFire: p.friendlyFire === 'on', sensitivity: p.sensitivity, quality: p.quality, onStatus: (m) => { statusEl.textContent = m; } });
+  const game = new Game(overlay, { map: p.map, mode: p.mode, site: p.site, ffa: p.ffa !== 'team', minutes: p.minutes, team: p.team, teamSize: p.teamSize, difficulty: p.difficulty, length: p.length, overtime: p.overtime !== 'off', friendlyFire: p.friendlyFire === 'on', sensitivity: p.sensitivity, quality: p.quality, settings: matchSettings(p), onStatus: (m) => { statusEl.textContent = m; } });
   session = { game, overlay };
   const showStats = () => {
     const me = game.me, m = game.match;

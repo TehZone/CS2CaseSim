@@ -49,16 +49,15 @@ export class Hud {
   set(sel, text) { if (this.cache[sel] !== text) { this.cache[sel] = text; this.q(sel).textContent = text; } }
   toggle(sel, on) { const k = sel + '?'; if (this.cache[k] !== on) { this.cache[k] = on; this.q(sel).classList.toggle('hidden', !on); } }
 
-  // CS2's classic static crosshair, opening up slightly with inaccuracy.
+  // CS2's crosshair from your settings: classic (opens up with inaccuracy) or static, its length, gap, thickness,
+  // outline, centre dot and colour.
+  setCrosshairStyle(style = {}) { this.xh = { ...CROSSHAIR, ...style }; this.gap = null; this.setCrosshair(0); }
   setCrosshair(spread) {
-    const gap = Math.round(3 + spread * 600);
+    const x = this.xh || CROSSHAIR;
+    const gap = Math.round(x.gap + (x.style === 'classic' ? spread * 600 : 0));
     if (gap === this.gap) return;
     this.gap = gap;
-    const len = 6, th = 2;
-    this.q('.xhair').innerHTML = [
-      `left:${-th / 2}px;top:${-gap - len}px;width:${th}px;height:${len}px`, `left:${-th / 2}px;top:${gap}px;width:${th}px;height:${len}px`,
-      `top:${-th / 2}px;left:${-gap - len}px;height:${th}px;width:${len}px`, `top:${-th / 2}px;left:${gap}px;height:${th}px;width:${len}px`,
-    ].map((s) => `<i style="${s}"></i>`).join('');
+    this.q('.xhair').innerHTML = crosshairHtml(x, gap);
   }
   crosshair(on) { this.toggle('.xhair', on); }
 
@@ -92,7 +91,7 @@ export class Hud {
 
   mode(text) { this.set('[data-mode]', text || ''); }
   place(name) { this.set('.place', name ? name.replace(/([a-z])([A-Z])/g, '$1 $2') : ''); }
-  fps(v) { this.set('.fps', `${Math.round(v)} fps`); }
+  fps(v) { this.set('.fps', v == null ? '' : `${Math.round(v)} fps`); }
   scoped(on) { this.el.classList.toggle('scoped', !!on); }
 
   // Top bar: scores by side, alive players, the round clock (or the planted bomb).
@@ -192,6 +191,19 @@ export class Hud {
   }
 
   dispose() { this.el.remove(); }
+}
+
+export const CROSSHAIR = { style: 'classic', color: '#32fa32', size: 6, gap: 3, thickness: 2, outline: true, dot: false };
+// The crosshair's lines (and dot) as HTML around a zero-size centre; shared with the settings preview.
+export function crosshairHtml(x, gap = x.gap) {
+  const len = x.size, th = x.thickness;
+  const look = `background:${x.color};${x.outline ? 'box-shadow:0 0 0 1px rgba(0,0,0,.7)' : 'box-shadow:none'}`;
+  const lines = [
+    `left:${-th / 2}px;top:${-gap - len}px;width:${th}px;height:${len}px`, `left:${-th / 2}px;top:${gap}px;width:${th}px;height:${len}px`,
+    `top:${-th / 2}px;left:${-gap - len}px;height:${th}px;width:${len}px`, `top:${-th / 2}px;left:${gap}px;height:${th}px;width:${len}px`,
+  ];
+  if (x.dot) lines.push(`left:${-th / 2}px;top:${-th / 2}px;width:${th}px;height:${th}px`);
+  return lines.map((p) => `<i style="${p};${look}"></i>`).join('');
 }
 
 const pips = (alive, total) => Array.from({ length: total }, (_, i) => `<i class="${i < alive ? 'on' : ''}"></i>`).join('');

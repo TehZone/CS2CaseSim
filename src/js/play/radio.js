@@ -48,7 +48,7 @@ export class Radio {
     const list = this.voices[this.agentOf(c)]?.[line];
     if (list?.length) {
       const ev = list[Math.floor(Math.random() * list.length)];
-      g.sounds.load([ev]).then(() => { if (!g.disposed) g.sounds.play(ev, { volume: 0.5 }); });
+      g.sounds.load([ev]).then(() => { if (!g.disposed) g.sounds.play(ev, { volume: 0.5 * g.voiceVolume }); });
     }
     if (text) g.hud.chat(c === g.me ? 'You' : c.name, g.placeOf(c), text, c.team);
     return true;

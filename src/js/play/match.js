@@ -205,11 +205,12 @@ export class Match {
     victim.roundDamage.set(attacker.id, (victim.roundDamage.get(attacker.id) || 0) + amount);
     if (attacker.team !== victim.team) attacker.damage += amount;
   }
-  onKill(victim, attacker, weapon) {
+  onKill(victim, attacker, weapon, { headshot = false } = {}) {
     victim.deaths++;
     if (victim.hasC4) this.dropBomb(victim, this.game.positionOf(victim));
     if (attacker && attacker !== victim && attacker.team !== victim.team) {
       attacker.kills++; attacker.roundKills++; attacker.score += 2;
+      if (headshot) attacker.hsKills = (attacker.hsKills || 0) + 1;
       const award = weapon?.killAward ?? 300;
       attacker.money = Math.min(this.rules.maxMoney, attacker.money + award);
     } else if (attacker && attacker !== victim) {
@@ -245,6 +246,8 @@ export class Match {
       }
       c.money = Math.min(this.rules.maxMoney, c.money + add);
     }
+    // 3K, 4K and aces (5 kills in a round).
+    for (const c of this.game.combatants) if (c.roundKills >= 3) { c.multi ||= {}; const k = Math.min(5, c.roundKills); c.multi[k] = (c.multi[k] || 0) + 1; }
     this.lossStreak[loser] = Math.min(this.lossStreak[loser] + 1, LOSS_BONUS.length);
     this.lossStreak[winner] = Math.max(0, this.lossStreak[winner] - 1);
     // MVP: most kills on the winning side (the defuser or bomb planter on objective wins).

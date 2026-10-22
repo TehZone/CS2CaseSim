@@ -30,46 +30,72 @@ Opening a case also plays CS2's own crate: the case's 3D model drops in, lands a
 "open" animations and sounds before the roulette (weapon cases and recent souvenir packages; containers without a 3D
 crate, or without CS2 installed, drop in as their icon). Turn it off under Settings → Case drop animation.
 
-## Play (offline CS2 competitive against bots)
-With CS2 installed, **Play** is a competitive match on any bomb defusal map in your install (Dust II, Mirage, Inferno, Nuke,
-Ancient, Anubis, Overpass, Train, Vertigo...; each map is prepared the first time you play it), you and bot
-teammates against bots (1v1 up to 5v5, four bot difficulties, first to 9 or first to 13), with your equipped skins,
-gloves and knife:
-- CS2's rounds: freeze time and buy time, the 1:55 round clock, the bomb (one terrorist carries it; plant it in a bomb
-  site, 40 second fuse, defuse in 10 seconds or 5 with a kit), win by elimination, bomb, defuse or time, halftime
-  side swap, and the end of the match.
-- Grenades: HE (up to 99 damage over 350 units), flashbangs (blind by how directly you look and how close you are),
-  smokes (18 seconds, nobody sees through them; they put out fires), molotovs and incendiaries (7 seconds of fire, a smoke
-  puts them out), decoys (fake gunfire). Thrown like CS2: Mouse1 full throw, Mouse2 underhand, both a medium throw, plus your
-  movement; they bounce off the map. CS2's limits: four grenades, two flashbangs.
-- Weapons drop when players die (G drops yours); walk over a gun to pick it up into a free slot, E swaps. Bullets go through
-  thin walls (wood easily, metal less, concrete barely) with less damage.
+## Play (offline CS2 against bots)
+With CS2 installed, **Play** is a match against bots on any bomb defusal map in your install (Dust II, Mirage, Inferno,
+Nuke, Ancient, Anubis, Overpass, Train, Vertigo...; each map is prepared the first time you play it), with your equipped
+skins, gloves and knife. Four modes:
+- **Competitive**: you and bot teammates against bots (1v1 up to 5v5, four bot difficulties, first to 9 or first to
+  13), with CS2's rounds: freeze time and buy time, the 1:55 round clock, the bomb (one terrorist carries it; plant it
+  in a bomb site, 40 second fuse, defuse in 10 seconds or 5 with a kit), win by elimination, bomb, defuse or time,
+  halftime side swap and overtime (MR3 with $12,500, sides swapping after 3; or ties as draws).
+- **Wingman**: 2v2 on one bomb site, 90-second rounds, first to 9.
+- **Deathmatch**: free-for-all or teams for 5, 10 or 15 minutes. You respawn after two seconds away from enemies, every
+  gun is free from the buy menu anywhere (you respawn with what you picked), points for kills (more for headshots,
+  pistols and the knife).
+- **Arms Race**: free-for-all, a new weapon every kill down to the knife; a knife kill sets the victim back one weapon,
+  and the first knife kill on the last level wins.
+
+What's in a match:
+- Grenades: HE (up to 99 damage over 350 units), flashbangs (blind by how directly you look and how close you are, with
+  CS2's burned-in afterimage), molotovs and incendiaries (7 seconds of fire), decoys (fake gunfire), and CS2's
+  volumetric smoke: it floods the space it lands in (around corners, through doors, never through walls), bullets punch
+  tunnels through it and HE grenades blow holes that refill; sight lines (yours and the bots') go by how much smoke they
+  cross, and a smoke puts out fires. Thrown like CS2: Mouse1 full throw, Mouse2 underhand, both a medium throw, plus
+  your movement; they bounce off the map. CS2's limits: four grenades, two flashbangs.
+- Weapon modes: the M4A1-S and USP-S silencer screws off and on (Mouse2), the Glock-18 and FAMAS switch to burst fire
+  (Mouse2), the R8 Revolver cocks for an accurate shot (hold Mouse1) or fans (Mouse2), shotguns load shell by shell and
+  can fire mid-reload, and the Zeus x27 (Gear, $200) recharges 30 seconds after a shot.
+- Weapons drop when players die (G drops yours); walk over a gun to pick it up into a free slot, E swaps. Dead CTs drop
+  their defuse kit. Bullets go through thin walls (wood easily, metal less, concrete barely) with less damage.
 - CS2's economy: $800 start, round rewards, the loss bonus ($1400 rising by $500, dropping by one on a win), kill
   rewards by weapon, planting and defusing bonuses, the $16,000 cap. Buy menu (B) with CS2's prices and team-only guns,
-  Kevlar, helmet and defuse kits.
-- Bots walk the map's own navigation mesh: terrorists pick a site, take it and plant; counter-terrorists split up to
-  hold the sites, rotate when they see terrorists, retake and defuse; they flee a bomb they can't stop. In fights they
-  react after a human-like delay, aim with an error that shrinks as they track you, stop to shoot, control part of the
-  recoil and fire in bursts. They smoke off and flash sites before taking them, molotov or HE where they last saw you, flash
-  retakes, burn a defuser, get blinded by flashes, step out of fire and pick up guns. They hear gunshots and footsteps, buy by
-  their money (eco, force, AWP, grenades...) and are animated
-  with CS2's third-person clips (running, walking and crouching in every direction, each gun's hold pose, planting,
-  defusing, deaths).
+  Kevlar, helmet, defuse kits and the Zeus.
+- Ladders: walk into one to climb (CS2's climbing speed; look down to go down, jump to push off). Fall damage at CS2's
+  speeds.
+- Radio (Z commands, X reports, V responses): your bot teammates follow orders (go A, go B, go go go, follow me, hold
+  this position, regroup, fall back, cover me; "enemy spotted" points them where you aim) and answer. Bots talk on the
+  radio in their agent's CS2 voice (enemy spotted with the callout, enemy down, planting, flashbang out, enemies left...),
+  shown in a chat with where it came from. Optional friendly fire with CS2's damage reductions and team-kill penalty.
+- Bots walk the map's own navigation mesh, ladders included: terrorists pick a site, take it and plant;
+  counter-terrorists split up to hold the sites, rotate when they see terrorists, retake and defuse; they flee a bomb
+  they can't stop. In fights they react after a human-like delay, aim with an error that shrinks as they track you,
+  stop to shoot, control part of the recoil and fire in bursts. They smoke off and flash sites before taking them,
+  molotov or HE where they last saw you, flash retakes, burn a defuser, get blinded by flashes, step out of fire and pick
+  up guns and kits. They hear gunshots and footsteps, buy by their money (eco, force, AWP, grenades...) and are animated
+  with CS2's third-person clips: running, walking and crouching in every direction, each gun's hold pose, drawing and
+  reloading it, pulling a grenade's pin and throwing it, flinching when hit, covering their eyes when flashed, climbing
+  ladders, falling, planting, defusing, deaths.
 - Radar (CS2's overview of the map), kill feed, scoreboard (Tab), damage direction, death cam and spectating
-  teammates, CS2's announcer, round music and bomb sounds.
+  teammates, CS2's announcer, round music and bomb sounds, and an end screen with your K/D/A, ADR, headshots, accuracy,
+  MVPs and multi-kills.
+- Finished matches pay into your wallet when you play offline: kills, assists, MVPs, rounds won and the win, more
+  against harder bots. The lobby shows your record.
+- Settings in the lobby: your crosshair (classic or static, colour, length, gap, thickness, outline, dot; live preview),
+  the viewmodel (field of view, offsets, CS2's presets), every key, music and radio volume, the fps counter.
 - The map is exported from your install the first time (a couple of minutes, cached in `cs2cache/play`): CS2's render
   world lit with the map's baked lighting (its irradiance lightmap, plus the sun masked by CS2's baked sun shadows),
-  the map's sky, its collision mesh, spawns, bomb sites, buy zones and callout areas.
+  the map's sky, its collision mesh, nav mesh with ladders, spawns, bomb sites, buy zones and callout areas.
 - Movement ported from Source's: CS2's acceleration, friction, air strafing, 18-unit steps, jumping (no auto bunny
-  hop), crouching, crouch-jumps and walking, with the weapon's own speed; footsteps by surface.
+  hop), crouching, crouch-jumps, walking and ladders, with the weapon's own speed; footsteps by surface.
 - Weapons use CS2's data from `scripts/weapons.vdata` (damage, range falloff, armor penetration, fire rate,
-  magazine, inaccuracy, spread, recovery) with Source's recoil (each gun's recoil seed, aim punch and view punch),
-  CS2's viewmodel animations (draw, idle, shoot, reload, inspect, knife slashes and stabs) and CS2's sounds.
-  Scoped rifles zoom with CS2's zoom levels.
+  magazine, inaccuracy, spread, recovery, burst and reload timings) with Source's recoil (each gun's recoil seed, aim
+  punch and view punch), CS2's viewmodel animations (draw, idle, shoot, reload, inspect, silencer, knife slashes and
+  stabs) and CS2's sounds. Scoped rifles zoom with CS2's zoom levels.
 - Bots are CS2 agent models with per-bone hitboxes (head, chest, stomach, arms, legs) and armor.
-- Keys: WASD, Space, Ctrl (or C) crouch, Shift walk, Mouse1/Mouse2, R, F inspect, B buy, E defuse/pick up, G drop, 1/2/3,
-  4 (grenades), 5 (the bomb: hold Mouse1 in a site to plant), Q and the mouse wheel switch weapons, Tab scores, Esc pause.
-  Mouse sensitivity uses CS2's scale, so your CS2 sensitivity feels the same.
+- Keys (rebindable): WASD, Space, Ctrl (or C) crouch, Shift walk, Mouse1/Mouse2, R, F inspect, B buy, E defuse/pick up,
+  G drop, 1/2/3 (3 again for the Zeus), 4 (grenades), 5 (the bomb: hold Mouse1 in a site to plant), Q and the mouse
+  wheel switch weapons, Z/X/V radio, Tab scores, Esc pause. Mouse sensitivity uses CS2's scale, so your CS2 sensitivity
+  feels the same.
 
 ## Features
 - 42 real weapon cases, 150 souvenir packages (each Major's team stickers and gold MVP autographs), packages
@@ -101,7 +127,7 @@ npm start         # run the game
 npm run dev       # browser preview at http://localhost:5178
 npm run dist      # build dist/CS2-Case-Simulator-Setup.exe and dist/CS2-Case-Simulator.exe
 node scripts/test-engine.mjs            # game rule checks (odds, trade-ups, armory, gambling, team manager)
-node scripts/test-play.mjs              # Play mode physics checks (collision traces, movement)
+node scripts/test-play.mjs              # Play mode checks (traces, movement, ladders, rules, overtime, smoke, modes)
 cd server && npm install && cd ..       # multiplayer server dependencies
 PGLITE_DIR=server/.data node server/index.mjs   # run the server locally (port 8787)
 node server/test.mjs                    # server checks (accounts, trading, live gambling, restarts)
