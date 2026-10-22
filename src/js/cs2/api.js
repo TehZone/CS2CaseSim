@@ -92,6 +92,22 @@ export function cs2Crate(id) {
   return crates.get(id);
 }
 
+// Play mode: fn is one of maps, map, progress, weapon, agent, anims, sounds, agentModel (see CS2Service).
+// Results of everything but progress are cached per argument.
+const playCache = new Map();
+export function cs2Play(fn, arg = null) {
+  const call = () => (window.native?.cs2Play ? window.native.cs2Play(fn, arg)
+    : fetch(`api/cs2/play?fn=${fn}&arg=${encodeURIComponent(JSON.stringify(arg))}`).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); }));
+  if (fn === 'progress') return call();
+  const key = fn + '|' + JSON.stringify(arg);
+  if (!playCache.has(key)) {
+    const p = call();
+    playCache.set(key, p);
+    p.catch(() => playCache.delete(key));
+  }
+  return playCache.get(key);
+}
+
 const prepared = new Map();
 export function cs2Prepare(weapon, paint) {
   const key = weapon + '|' + (paint || '');

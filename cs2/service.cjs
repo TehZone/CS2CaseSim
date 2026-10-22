@@ -2,14 +2,17 @@
 const fs = require('fs');
 const path = require('path');
 const { CS2, findGameDir } = require('./pipeline.cjs');
-const { pickClip } = require('./firstperson.cjs');
+const { pickClip, playClips } = require('./firstperson.cjs');
 const { parseKV1 } = require('./kv.cjs');
+const play = require('./play.cjs');
+const { nameOf } = require('./vanity.cjs');
 
 // Pixel-shader static combos of csgo_customweapon (feature F_X drives combo S_X).
 const STATIC_COMBOS = ['S_PAINT_STYLE', 'S_OVERRIDE_NORMAL', 'S_USE_ALL_MASKS', 'S_ROUGHNESS_TEXTURE', 'S_PEARLESCENCE_MASK',
   'S_METALNESS_TEXTURE', 'S_SEPARATE_CHANNEL_INPUTS', 'S_OVERLAY_TEXTURE', 'S_CASE_HARDENING', 'S_CASE_HARDENING_TRILINEAR', 'S_PATINA_AGE'];
 
 const toPosix = (p) => p.replace(/\\/g, '/');
+const PISTOL_RE = /PISTOL/;
 
 // Textures of a csgo_weapon_sticker material the renderer uses. Normal maps are kept raw (hemi-octahedral
 // normal in RG, roughness in B, self-illum mask in A), exactly as CS2's sticker shader samples them.
@@ -48,6 +51,8 @@ class CS2Service {
     this.stickerJobs = new Map();
     this.stickerBatch = [];
     this.stickerTimer = null;
+    this.playJobs = new Map();
+    this.progress = new Map(); // job -> latest progress line (Play mode's first-time map export)
   }
 
   status() {
@@ -343,6 +348,227 @@ class CS2Service {
     }).filter(Boolean).join(',');
     result.shader = { combo, source: await this.cs2.shaderSource(kit.shader, combo || 'S_PAINT_STYLE=0') };
     return result;
+  }
+
+  // ---- Play mode ----------------------------------------------------------------------------------------
+  // Shared one-time jobs (by key), dropped again if they fail so a retry runs them anew.
+  playJob(key, fn) {
+    if (!this.playJobs.has(key)) {
+      const job = fn();
+      this.playJobs.set(key, job);
+      job.catch(() => this.playJobs.delete(key));
+    }
+    return this.playJobs.get(key);
+  }
+
+  // Maps in this install that can be played: [{ id, name }].
+  playMaps() {
+    if (!this.status().available) return [];
+    let files = [];
+    try { files = fs.readdirSync(path.join(this.gameDir, 'maps')); } catch {}
+    return files.filter((f) => /^(de|cs)_[a-z0-9_]+\.vpk$/i.test(f) && !/_vanity|_dir\.vpk$|_\d{3}\.vpk$/i.test(f))
+      .map((f) => { const id = f.replace(/\.vpk$/i, ''); return { id, name: nameOf(id) }; })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // A playable map, exported on first use into play/<id>/: { world, collision, lightmap, sky, info } (URLs + map data).
+  playMap(id) {
+    id = String(id);
+    if (!/^[a-z0-9_]+$/i.test(id)) return Promise.reject(new Error('Bad map id'));
+    return this.playJob('map:' + id, async () => {
+      const cs2 = this.ensureCS2();
+      const vpk = path.join(this.gameDir, 'maps', id + '.vpk');
+      if (!fs.existsSync(vpk)) throw new Error('Map not installed: ' + id);
+      const st = fs.statSync(vpk);
+      const stamp = `${st.size}-${Math.round(st.mtimeMs)}`;
+      const dir = path.join(this.cacheDir, 'play', id);
+      const metaFile = path.join(dir, 'map.json');
+      const result = async (meta) => ({
+        id, name: meta.name, info: meta, nav: await this.playNav(id, vpk, dir),
+        world: this.url(path.join(dir, 'world.glb')), collision: this.url(path.join(dir, 'collision.bin')),
+        lightmap: meta.lightmap ? this.url(path.join(dir, 'lightmap.bin')) : null, sky: meta.sky ? this.url(path.join(dir, 'sky.png')) : null,
+      });
+      try {
+        const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+        if (meta.version === play.PLAY_VERSION && meta.stamp === stamp) return result(meta);
+      } catch {}
+      const say = (m) => { this.progress.set('map:' + id, m); this.log(`[play ${id}] ${m}`); };
+      fs.rmSync(dir, { recursive: true, force: true });
+      const tmp = path.join(dir, 'tmp');
+      fs.mkdirSync(tmp, { recursive: true });
+
+      say('Exporting the map from your CS2 install…');
+      const glb = path.join(dir, 'world.glb');
+      await cs2.run(['-i', vpk, '-f', `maps/${id}/world.vwrld_c`, '-d', '-o', glb, '--gltf_export_format', 'glb', '--gltf_export_materials', '--gltf_textures_adapt']);
+      if (!fs.existsSync(glb)) throw new Error('Map export failed for ' + id);
+      say('Reading collision and gameplay areas…');
+      await cs2.run(['-i', vpk, '-f', `maps/${id}/world_physics.vmdl_c`, '-d', '-o', path.join(tmp, 'world_physics.glb'), '--gltf_export_format', 'glb']);
+      await cs2.run(['-i', vpk, '-f', [`maps/${id}/entities/default_ents.vents_c`, `maps/${id}/lightmaps/irradiance.vtex_c`,
+        `maps/${id}/lightmaps/direct_light_shadows.vtex_c`].join(','), '-d', '-o', tmp]);
+      const entFile = path.join(tmp, 'maps', id, 'entities', 'default_ents.vents');
+      const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
+      const physFile = [path.join(tmp, 'world_physics_physics.glb'), path.join(tmp, 'world_physics.glb')].find((f) => fs.existsSync(f));
+      if (!physFile) throw new Error('No collision mesh in ' + id);
+      const entPhysFile = path.join(dir, 'world_physics.glb'); // brush entities, exported along with the world
+      const entPhys = fs.existsSync(entPhysFile) ? play.readGlb(entPhysFile) : null;
+      const col = play.buildCollision(play.readGlb(physFile), entPhys);
+      fs.writeFileSync(path.join(dir, 'collision.bin'), col.buf);
+      const volumes = play.gameVolumes(entPhys, ents);
+      const info = play.mapInfo(ents);
+
+      say('Baking the map\'s lighting…');
+      let lightmap = null;
+      const irr = path.join(tmp, 'maps', id, 'lightmaps', 'irradiance.exr');
+      if (fs.existsSync(irr)) lightmap = play.bakeLightmap(irr, path.join(tmp, 'maps', id, 'lightmaps', 'direct_light_shadows.png'), path.join(dir, 'lightmap.bin'));
+      let sky = false;
+      if (info.sky) {
+        try {
+          const mat = (await cs2.materialParams([info.sky]))[info.sky];
+          const vtex = mat?.textures?.g_tSkyTexture;
+          const local = vtex && (await cs2.extract([vtex]))[vtex + '_c'];
+          if (local && /\.exr$/i.test(local)) { play.bakeSky(local, path.join(dir, 'sky.png')); sky = true; }
+        } catch (e) { this.log('sky: ' + e.message); }
+      }
+
+      say('Optimising textures…');
+      if (this.shrinkImages) {
+        const imgs = fs.readdirSync(dir).filter((f) => /\.png$/i.test(f) && f !== 'sky.png');
+        const group = (re) => imgs.filter((f) => re.test(f)).map((f) => path.join(dir, f));
+        await this.shrinkImages(group(/_orm_/i), 128);
+        await this.shrinkImages(group(/^(?!.*_orm_).*normal/i), 256);
+        await this.shrinkImages(group(/^(?!.*(_orm_|normal))/i), 512);
+      }
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(entPhysFile, { force: true });
+      const meta = {
+        version: play.PLAY_VERSION, stamp, id, name: nameOf(id), ...info, ...volumes, lightmap, sky,
+        collision: { tris: col.tris, surfaces: col.surfaces, flags: { player: play.F_PLAYER, bullet: play.F_BULLET, grenade: play.F_GRENADE } },
+      };
+      fs.writeFileSync(metaFile, JSON.stringify(meta));
+      this.progress.delete('map:' + id);
+      return result(meta);
+    });
+  }
+
+  // The map's nav mesh (bots walk on it) as play/<id>/nav.json; exported separately so older map exports gain it.
+  async playNav(id, vpk, dir) {
+    const file = path.join(dir, 'nav.json');
+    if (!fs.existsSync(file)) {
+      try {
+        const cs2 = this.ensureCS2();
+        const tmp = path.join(dir, 'tmp-nav');
+        await cs2.run(['-i', vpk, '-f', `maps/${id}.nav`, '-o', tmp]);
+        const raw = path.join(tmp, 'maps', id + '.nav');
+        if (!fs.existsSync(raw)) return null;
+        const text = await cs2.run(['-i', raw], { env: { VRF_NAV_JSON: '1' } });
+        fs.writeFileSync(file, JSON.stringify(play.compactNav(text)));
+        fs.rmSync(tmp, { recursive: true, force: true });
+      } catch (e) { this.log('nav: ' + e.message); return null; }
+    }
+    return this.url(file);
+  }
+
+  // Latest progress line of a running Play mode export (null when idle).
+  playProgress(key) { return this.progress.get(key) || null; }
+
+  // Weapon stats and sound events, read once per game build: { weapons, sounds }.
+  playData() {
+    return this.playJob('data', async () => {
+      const cs2 = this.ensureCS2();
+      const file = path.join(this.cacheDir, 'play', 'data.json');
+      const stamp = cs2.vpkStamp();
+      try { const c = JSON.parse(fs.readFileSync(file, 'utf8')); if (c.stamp === stamp && c.version === play.DATA_VERSION) return c; } catch {}
+      const tmp = path.join(this.cacheDir, 'play', 'tmp-data');
+      const files = ['scripts/weapons.vdata_c', 'soundevents/game_sounds_weapons.vsndevts_c', 'soundevents/game_sounds_player.vsndevts_c',
+        'soundevents/game_sounds_physics.vsndevts_c', 'soundevents/game_sounds_footsteps.vsndevts_c'];
+      await cs2.run(['-i', cs2.vpk, '-f', files.join(','), '-d', '-o', tmp]);
+      const read = (f) => fs.readFileSync(path.join(tmp, f.replace(/_c$/, '')), 'utf8');
+      const weapons = play.weaponStats(read(files[0]));
+      const sounds = {};
+      for (const f of files.slice(1)) { try { Object.assign(sounds, play.soundEventFiles(read(f))); } catch (e) { this.log(`${f}: ${e.message}`); } }
+      fs.rmSync(tmp, { recursive: true, force: true });
+      const data = { version: play.DATA_VERSION, stamp, weapons, sounds };
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(data));
+      return data;
+    });
+  }
+
+  // Sound events -> { event: [urls] } (each event's variations, extracted from the install).
+  async playSounds(events) {
+    const { sounds } = await this.playData();
+    const want = [...new Set(events)].filter((e) => sounds[e]);
+    const files = await this.ensureCS2().extract(want.flatMap((e) => sounds[e]));
+    const out = {};
+    for (const e of want) out[e] = sounds[e].map((f) => files[f + '_c']).filter(Boolean).map((f) => this.url(f));
+    return out;
+  }
+
+  // Everything to hold and fire a weapon in first person: { stats, clips: { role: url | [urls] }, arms, sounds }.
+  playWeapon(weapon) {
+    weapon = String(weapon);
+    if (!/^weapon_[a-z0-9_]+$/.test(weapon)) return Promise.reject(new Error('Bad weapon id'));
+    return this.playJob('weapon:' + weapon, async () => {
+      const cs2 = this.ensureCS2();
+      const data = await this.playData();
+      const stats = data.weapons[weapon] || null;
+      const found = playClips(weapon, await this.viewmodelClips());
+      if (!found.idle && !found.draw) throw new Error('No first-person animations for ' + weapon);
+      const exp = async (c) => {
+        const name = c.split('/').slice(-2).join('_').replace(/\.vnmclip_c$/, '');
+        return this.url(await cs2.exportGltf(c, `fp/clips/${name}.glb`, { glb: true }));
+      };
+      const clips = {};
+      for (const [role, c] of Object.entries(found)) clips[role] = Array.isArray(c) ? await Promise.all(c.map(exp)) : await exp(c);
+      const arms = this.url(await cs2.exportGltf('weapons/models/shared/arms/weapon_arms.vmdl', 'fp/arms/weapon_arms.gltf', { materials: true }));
+      const prefix = (stats?.shootSound || '').replace(/\.[^.]*$/, '.');
+      const events = prefix.length > 1 ? Object.keys(data.sounds).filter((e) => e.startsWith(prefix) && !/Distant|_Q$|Inspect|LookAt/i.test(e)) : [];
+      if (/knife|bayonet/.test(weapon)) events.push('Weapon_Knife.Deploy', 'Weapon_Knife.Hit', 'Weapon_Knife.HitWall', 'Weapon_Knife.Slash', 'Weapon_Knife.Stab');
+      if (stats?.silencer && stats.silencer !== 'WEAPONSILENCER_NONE') events.push(...Object.keys(data.sounds).filter((e) => e.startsWith(prefix) && /Silenced/i.test(e)));
+      events.push(PISTOL_RE.test(stats?.type || '') ? 'Default.ClipEmpty_Pistol' : 'Default.ClipEmpty_Rifle');
+      return { weapon, stats, clips, arms, sounds: await this.playSounds(events) };
+    });
+  }
+
+  // A character model for bots (agent .vmdl, e.g. "agents/models/tm_phoenix/tm_phoenix.vmdl"): { model } glTF URL.
+  playAgent(vmdl) {
+    vmdl = String(vmdl).replace(/\\/g, '/');
+    if (!/^agents\/models\/[a-z0-9_/]+\.vmdl$/i.test(vmdl)) return Promise.reject(new Error('Bad agent model'));
+    return this.playJob('agent:' + vmdl, async () => {
+      const name = vmdl.split('/').pop().replace(/\.vmdl$/, '');
+      const file = await this.ensureCS2().exportGltf(vmdl, `play/agents/${name}/${name}.gltf`, { materials: true });
+      const dir = path.dirname(file), stamp = path.join(dir, '.shrunk');
+      if (this.shrinkImages && !fs.existsSync(stamp)) {
+        await this.shrinkImages(fs.readdirSync(dir).filter((f) => /\.png$/i.test(f)).map((f) => path.join(dir, f)), 1024);
+        fs.writeFileSync(stamp, '');
+      }
+      return { model: this.url(file), name };
+    });
+  }
+
+  // Third-person animation clips by path under animation/anims/world/ (e.g. "rifle/_default_rifle/idle_rifle"):
+  // { path: url }.
+  async playAnims(list) {
+    const cs2 = this.ensureCS2();
+    const out = {};
+    for (const p of [...new Set(list)]) {
+      if (!/^[a-z0-9_/+.]+$/i.test(p) || p.includes('..')) continue;
+      const name = p.replace(/[/+.]/g, '_');
+      out[p] = this.url(await cs2.exportGltf(`animation/anims/world/${p}.vnmclip_c`, `play/anims/${name}.glb`, { glb: true }));
+    }
+    return out;
+  }
+
+  // Default agent models per team (their item ids come from the agents in items_game).
+  async agentModel(defIndex) {
+    await this.ensureIndex();
+    const ig = this.agentModels || (this.agentModels = (() => {
+      const items = parseKV1(fs.readFileSync(path.join(this.cacheDir, 'items_game.txt'), 'utf8')).items_game;
+      const out = {};
+      for (const group of [].concat(items.items || [])) for (const [id, it] of Object.entries(group)) if (/^agents\//.test(it?.model_player || '')) out[id] = it.model_player;
+      return out;
+    })());
+    return ig[String(defIndex)] || null;
   }
 
   // Glove kits use csgo_customglove, which CS2 runs once per hand (glove_*_left / glove_*_right materials of the

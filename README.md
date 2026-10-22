@@ -30,6 +30,23 @@ Opening a case also plays CS2's own crate: the case's 3D model drops in, lands a
 "open" animations and sounds before the roulette (weapon cases and recent souvenir packages; containers without a 3D
 crate, or without CS2 installed, drop in as their icon). Turn it off under Settings → Case drop animation.
 
+## Play (offline CS2 practice against bots)
+With CS2 installed, **Play** puts you on a real CS2 map from your install (Dust II for now) with your equipped skins,
+gloves and knife:
+- The map is exported from your install the first time (a couple of minutes, cached in `cs2cache/play`): CS2's render
+  world lit with the map's baked lighting (its irradiance lightmap, plus the sun masked by CS2's baked sun shadows),
+  the map's sky, its collision mesh, spawns, bomb sites, buy zones and callout areas.
+- Movement ported from Source's: CS2's acceleration, friction, air strafing, 18-unit steps, jumping (no auto bunny
+  hop), crouching, crouch-jumps and walking, with the weapon's own speed; footsteps by surface.
+- Weapons use CS2's data from `scripts/weapons.vdata` (damage, range falloff, armor penetration, fire rate,
+  magazine, inaccuracy, spread, recovery) with Source's recoil (each gun's recoil seed, aim punch and view punch),
+  CS2's viewmodel animations (draw, idle, shoot, reload, inspect, knife slashes and stabs) and CS2's sounds.
+  Scoped rifles zoom with CS2's zoom levels.
+- Bots are CS2 agent models with CS2's third-person animations and per-bone hitboxes (head, chest, stomach, arms,
+  legs) and armor; they stand still in this first version, die with CS2's death animations and respawn.
+- Keys: WASD, Space, Ctrl (or C) crouch, Shift walk, Mouse1/Mouse2, R, F inspect, 1/2/3 and Q weapons, Esc pause.
+  Mouse sensitivity uses CS2's scale, so your CS2 sensitivity feels the same.
+
 ## Features
 - 42 real weapon cases, 150 souvenir packages (each Major's team stickers and gold MVP autographs), packages
   (X-Ray, Anubis, Genesis/Dead Hand Terminals), 229 sticker/autograph capsules, an Agent Locker and a Chicken Coop Crate
@@ -60,6 +77,7 @@ npm start         # run the game
 npm run dev       # browser preview at http://localhost:5178
 npm run dist      # build dist/CS2-Case-Simulator-Setup.exe and dist/CS2-Case-Simulator.exe
 node scripts/test-engine.mjs            # game rule checks (odds, trade-ups, armory, gambling, team manager)
+node scripts/test-play.mjs              # Play mode physics checks (collision traces, movement)
 cd server && npm install && cd ..       # multiplayer server dependencies
 PGLITE_DIR=server/.data node server/index.mjs   # run the server locally (port 8787)
 node server/test.mjs                    # server checks (accounts, trading, live gambling, restarts)

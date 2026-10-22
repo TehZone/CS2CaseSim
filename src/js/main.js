@@ -17,8 +17,9 @@ import * as team from './pages/team.js';
 import * as trade from './pages/trade.js';
 import * as coop from './pages/coop.js';
 import * as stats from './pages/stats.js';
+import * as play from './pages/play.js';
 
-const PAGES = { cases, inventory, tradeup, armory, clicker, market, gamble, team, trade, coop, stats };
+const PAGES = { play, cases, inventory, tradeup, armory, clicker, market, gamble, team, trade, coop, stats };
 let current = null, currentName = 'cases';
 
 function go(name) {

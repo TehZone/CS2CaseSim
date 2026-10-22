@@ -35,6 +35,17 @@ function initPaths() {
   cs2 = new CS2Service({ cacheDir: cs2Cache, cliPath: cli, log: (m) => console.log('[cs2]', m), shrinkImages });
 }
 
+// Play mode calls from the renderer (one channel, whitelisted).
+const PLAY_CALLS = {
+  maps: () => cs2.playMaps(), map: (id) => cs2.playMap(id), progress: (key) => cs2.playProgress(key), weapon: (id) => cs2.playWeapon(id),
+  agent: (vmdl) => cs2.playAgent(vmdl), anims: (list) => cs2.playAnims(list), sounds: (events) => cs2.playSounds(events),
+  agentModel: (id) => cs2.agentModel(id),
+};
+function playCall(fn, arg) {
+  if (!Object.hasOwn(PLAY_CALLS, fn)) throw new Error('Unknown play call ' + fn);
+  return PLAY_CALLS[fn](arg);
+}
+
 // Shrinks images in place (inspect backdrop textures are drawn blurred, so 512px is plenty).
 async function shrinkImages(files, max) {
   for (const f of files) {
@@ -164,6 +175,7 @@ function registerIpc() {
   ipcMain.handle('cs2:gloveClip', () => cs2.gloveClip());
   ipcMain.handle('cs2:firstPerson', (_e, weapon) => cs2.firstPerson(weapon));
   ipcMain.handle('cs2:crate', (_e, id) => cs2.crate(id));
+  ipcMain.handle('cs2:play', (_e, fn, arg) => playCall(fn, arg));
   ipcMain.handle('cs2:clear', () => {
     fs.rmSync(cs2Cache, { recursive: true, force: true });
     cs2 = new CS2Service({ cacheDir: cs2Cache, cliPath: cs2.cliPath, log: (m) => console.log('[cs2]', m), shrinkImages });
@@ -300,9 +312,64 @@ async function runCrateSmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=play` starts a Play match on Dust II (exporting the map on first use), looks at a bot, shoots it and
+// screenshots the view into userData/play-*.png.
+async function runPlaySmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `play-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  await wait(4000);
+  const t0 = Date.now();
+  await js(`window.__cs2Debug = true; document.querySelector('#nav [data-page=play]').click(); setTimeout(() => document.querySelector('[data-start]').click(), 300); 1`);
+  let last = '';
+  for (let i = 0; i < 900; i++) {
+    await wait(1000);
+    const r = JSON.parse(await js(`JSON.stringify({ started: !!window.__playGame?.raf, status: document.querySelector('[data-status]')?.textContent || '', root: !!document.querySelector('.play-root'), toast: document.querySelector('#toasts')?.textContent || '' })`));
+    if (r.status !== last) { console.log('SMOKE play', ((Date.now() - t0) / 1000).toFixed(0) + 's', r.status); last = r.status; }
+    if (r.started || !r.root) { if (!r.started) console.log('SMOKE play failed', r.toast); break; }
+  }
+  console.log('SMOKE play loaded in', ((Date.now() - t0) / 1000).toFixed(1) + 's');
+  const look = await js(`(async () => {
+    const g = window.__playGame; if (!g) return 'no game';
+    document.querySelector('.play-pause').classList.add('hidden'); g.paused = false; g.input.locked = true;
+    // Stand somewhere with a clear view of a bot.
+    const b = g.bots[0];
+    const chest = [b.pos[0], b.pos[1], b.pos[2] + 50];
+    let spot = null;
+    for (let i = 0; i < 24 && !spot; i++) {
+      const a = (i / 24) * Math.PI * 2, r = 220 + (i % 3) * 80;
+      const o = [b.pos[0] + Math.cos(a) * r, b.pos[1] + Math.sin(a) * r, b.pos[2] + 2];
+      const tr = g.collision.traceBox(o, o, [-16, -16, 0], [16, 16, 72], 1);
+      if (tr.startsolid || tr.normal) continue;
+      const e = [o[0], o[1], o[2] + 64], d = [chest[0] - e[0], chest[1] - e[1], chest[2] - e[2]], l = Math.hypot(...d);
+      if (!g.collision.raycast(e, d.map((x) => x / l), l, 2)) spot = o;
+    }
+    g.player.teleport(spot || [b.pos[0] + 260, b.pos[1], b.pos[2] + 8]);
+    await new Promise((r) => setTimeout(r, 300));
+    const e = g.player.eye(), d = [b.pos[0] - e[0], b.pos[1] - e[1], b.pos[2] + 50 - e[2]];
+    g.input.yaw = Math.atan2(d[1], d[0]) * 180 / Math.PI; g.input.pitch = -Math.atan2(d[2], Math.hypot(d[0], d[1])) * 180 / Math.PI;
+    await new Promise((r) => setTimeout(r, 3000));
+    const mem = g.renderer.info.memory;
+    return JSON.stringify({ fps: Math.round(g.fps), meshes: g.world.drawCalls, geometries: mem.geometries, textures: mem.textures, gun: g.arsenal.gun?.name, place: g.place(),
+      heapMB: Math.round((performance.memory?.usedJSHeapSize || 0) / 1e6) });
+  })()`);
+  console.log('SMOKE play view', look);
+  await shot('view');
+  const fired = await js(`(async () => {
+    const g = window.__playGame; g.input.buttons = 1; await new Promise((r) => setTimeout(r, 700)); g.input.buttons = 0;
+    await new Promise((r) => setTimeout(r, 300));
+    return JSON.stringify({ stats: g.stats, clip: g.arsenal.gun.clip, bot: { alive: g.bots[0].alive, hp: g.bots[0].health } });
+  })()`);
+  console.log('SMOKE play fire', fired);
+  await shot('fire');
+  console.log('SMOKE screenshots saved to', app.getPath('userData'));
+  app.quit();
+}
+
 function runSmokeTest(win) {
   win.webContents.on('console-message', (e, level, message) => console.log('[renderer]', e.message ?? message));
   if (process.env.CS2SIM_SMOKE === 'features') { win.webContents.once('did-finish-load', () => runFeatureSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'play') { win.webContents.once('did-finish-load', () => runPlaySmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'crate') { win.webContents.once('did-finish-load', () => runCrateSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   win.webContents.once('did-finish-load', async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -25,4 +25,34 @@ function pickClip(weapon, clips) {
   return null;
 }
 
-module.exports = { pickClip };
+// Every viewmodel clip Play mode uses for a weapon, by role: { draw, idle, shoot: [], reload, ... } (paths).
+// The weapon's own folder wins over its class's default folder (knives share the default attacks, for example).
+const ROLES = [
+  ['draw', /^draw_/], ['idle', /^idle_(?!slide|empty)/], ['idleEmpty', /^idle_(slide_back|empty)/], ['shootEmpty', /^shoot_empty/],
+  ['shoot', /^shoot\d*_/, true], ['reloadEmpty', /^reload_empty/], ['reload', /^reload_(?!empty|start|loop|end)/],
+  ['reloadStart', /^reload_start/], ['reloadLoop', /^reload_loop/], ['reloadEnd', /^reload_end/], ['inspect', /^lookat01_(?!draw|transfix)/],
+  ['lightMiss', /^light_miss\d/, true], ['lightHit', /^light_hit\d/, true], ['heavyMiss', /^heavy_miss\d/, true], ['heavyHit', /^heavy_hit\d/, true],
+  ['lightBackstab', /^light_backstab/, true], ['heavyBackstab', /^heavy_backstab/, true],
+];
+function playClips(weapon, clips) {
+  const kind = /knife|bayonet/.test(weapon) ? 'knife' : PISTOLS.test(weapon) ? 'pistol' : 'rifle';
+  const short = weapon.replace(/^weapon_/, '');
+  const folders = [DEFAULT[kind], `${kind}/${short}`, `${kind}/${kind}_${short}`, FOLDER[weapon]].filter(Boolean);
+  const out = {};
+  for (const f of folders) {
+    const inFolder = clips.filter((c) => c.startsWith(`animation/anims/viewmodel/${f}/`) && c.split('/').length === 6).sort();
+    const own = {};
+    for (const c of inFolder) {
+      const file = c.split('/').pop();
+      if (/_lgcy|transfix/.test(file)) continue;
+      const role = ROLES.find(([, re]) => re.test(file));
+      if (!role) continue;
+      if (role[2]) (own[role[0]] ||= []).push(c);
+      else own[role[0]] ||= c;
+    }
+    Object.assign(out, own);
+  }
+  return out;
+}
+
+module.exports = { pickClip, playClips };

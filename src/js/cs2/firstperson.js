@@ -1,6 +1,7 @@
-// First-person inspect: CS2's own viewmodel inspect animation ("lookat01" clips) played on CS2's first-person arms
-// and on the real weapon model with your skin, seen from the player's eyes. The clip (exported from the player's
-// install) carries the viewmodel skeleton: arms, hands, fingers and the weapon's own bones (bolt, magazine...).
+// First-person viewmodels: CS2's viewmodel animations played on CS2's first-person arms (or your equipped gloves) and
+// on the real weapon model with your skin, seen from the player's eyes. Used by the first-person inspect and by Play
+// mode. Each clip (exported from the player's install) carries the viewmodel skeleton: arms, hands, fingers and the
+// weapon's own bones (bolt, magazine...).
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2FirstPerson } from './api.js';
@@ -8,14 +9,13 @@ import { loadGltf as load, rebind, bonesByName, forearmTwist } from './rig.js';
 import { buildGloveScene } from './skin.js';
 import { itemDef } from '../items.js';
 
-// Builds the first-person rig for an inspect model made by buildCS2Model. Returns { rig, mixer, action, duration }.
-// The rig is in game metres with the eye at the origin, looking down -Z. `gloves` (an inventory item) replaces
-// CS2's default arms with that glove model and its skin, like equipped gloves in game.
-export async function buildFirstPerson(model, { gloves = null, renderer = null } = {}) {
-  const weapon = model.userData.weapon;
-  if (!weapon || !model.userData.root) throw new Error('First person needs the real CS2 model');
-  const { clip, arms } = await cs2FirstPerson(weapon);
-  const [clipG, gloveArms] = await Promise.all([load(clip), gloves && renderer ? buildGloveScene(gloves, itemDef(gloves), renderer).catch((e) => {
+// Puts arms and weapon on a clip's skeleton (clipScene may be a promise). Returns { rig, skel, bones, pose, dispose }:
+// the rig is in game metres with the eye at the origin, looking down -Z; run pose() after each animation step (forearm
+// twist, weapon merge). `gloves` (an inventory item) replaces CS2's default arms with that glove model and its skin,
+// like equipped gloves in game.
+export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = null, renderer = null } = {}) {
+  let gloveArms;
+  [clipScene, gloveArms] = await Promise.all([clipScene, gloves && renderer ? buildGloveScene(gloves, itemDef(gloves), renderer).catch((e) => {
     console.warn('Equipped gloves unavailable in first person, using the default arms:', e);
     return null;
   }) : null]);
@@ -25,7 +25,7 @@ export async function buildFirstPerson(model, { gloves = null, renderer = null }
   view.rotation.y = Math.PI;
   rig.add(view);
 
-  const skel = cloneSkinned(clipG.scene);
+  const skel = cloneSkinned(clipScene);
   skel.traverse((o) => { if (o.isMesh) o.visible = false; }); // the clip's placeholder meshes
   view.add(skel);
   const bones = bonesByName(skel);
@@ -38,7 +38,7 @@ export async function buildFirstPerson(model, { gloves = null, renderer = null }
     weaponRoot.matrixAutoUpdate = false;
   }
 
-  const armsScene = gloveArms ? gloveArms.root : cloneSkinned((await load(arms)).scene);
+  const armsScene = gloveArms ? gloveArms.root : cloneSkinned((await load(armsUrl)).scene);
   armsScene.traverse((o) => {
     if (!o.isMesh) return;
     for (const m of [].concat(o.material || [])) { m.envMapIntensity = 0.7; if (m.transparent && m.map) { m.alphaTest = 0.4; m.transparent = false; } }
@@ -66,21 +66,14 @@ export async function buildFirstPerson(model, { gloves = null, renderer = null }
     });
   }
 
-  const anim = clipG.animations[0];
-  const mixer = new THREE.AnimationMixer(skel);
-  const action = mixer.clipAction(anim);
-  action.setLoop(THREE.LoopOnce, 1);
-  action.clampWhenFinished = true;
-  // Advances the animation and keeps the weapon merged onto the hands.
-  const update = (dt) => {
-    mixer.update(dt);
+  // Keeps the forearms twisting with the hands and the weapon merged onto them.
+  const pose = () => {
     twist();
     if (weaponRoot && bones.wpn) {
       weaponBone.updateMatrix();
       weaponRoot.matrix.copy(weaponBone.matrix).invert();
     }
   };
-  update(0);
   // Frees what this rig made itself (the equipped gloves' baked textures); the weapon's materials belong to the model.
   const dispose = () => {
     gloveArms?.root.traverse((o) => {
@@ -92,5 +85,22 @@ export async function buildFirstPerson(model, { gloves = null, renderer = null }
       }
     });
   };
-  return { rig, mixer, action, update, dispose, duration: anim.duration };
+  return { rig, skel, bones, pose, dispose };
+}
+
+// The first-person inspect for an inspect model made by buildCS2Model. Returns { rig, mixer, action, duration }.
+export async function buildFirstPerson(model, { gloves = null, renderer = null } = {}) {
+  const weapon = model.userData.weapon;
+  if (!weapon || !model.userData.root) throw new Error('First person needs the real CS2 model');
+  const { clip, arms } = await cs2FirstPerson(weapon);
+  const clipG = load(clip);
+  const vm = await assembleViewmodel(model, clipG.then((g) => g.scene), arms, { gloves, renderer });
+  const anim = (await clipG).animations[0];
+  const mixer = new THREE.AnimationMixer(vm.skel);
+  const action = mixer.clipAction(anim);
+  action.setLoop(THREE.LoopOnce, 1);
+  action.clampWhenFinished = true;
+  const update = (dt) => { mixer.update(dt); vm.pose(); };
+  update(0);
+  return { rig: vm.rig, mixer, action, update, dispose: vm.dispose, duration: anim.duration };
 }

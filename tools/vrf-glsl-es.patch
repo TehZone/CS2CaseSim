@@ -1,3 +1,83 @@
+diff --git a/CLI/Decompiler.cs b/CLI/Decompiler.cs
+index d37a4bc..8baecc1 100644
+--- a/CLI/Decompiler.cs
++++ b/CLI/Decompiler.cs
+@@ -1316,6 +1316,13 @@ private void ParseNAV(string path, Stream stream, string? originalPath)
+                     return;
+                 }
+ 
++                // VRF_NAV_JSON=1 prints the areas (corners, connections per edge, hiding spots) as JSON instead.
++                if (Environment.GetEnvironmentVariable("VRF_NAV_JSON") == "1")
++                {
++                    Console.WriteLine(NavMeshJson(navMeshFile));
++                    return;
++                }
++
+                 if (!CollectStats)
+                 {
+                     Console.WriteLine(navMeshFile.ToString());
+@@ -1333,6 +1340,61 @@ private void ParseNAV(string path, Stream stream, string? originalPath)
+             }
+         }
+ 
++        private static string NavMeshJson(NavMeshFile navMesh)
++        {
++            using var stream = new MemoryStream();
++            using (var w = new System.Text.Json.Utf8JsonWriter(stream))
++            {
++                w.WriteStartObject();
++                w.WriteNumber("version", navMesh.Version);
++                w.WriteStartArray("areas");
++                foreach (var area in navMesh.Areas.Values)
++                {
++                    w.WriteStartObject();
++                    w.WriteNumber("id", area.AreaId);
++                    w.WriteNumber("hull", area.HullIndex);
++                    w.WriteNumber("flags", (long)area.AttributeFlags);
++                    w.WriteStartArray("corners");
++                    foreach (var c in area.Corners)
++                    {
++                        w.WriteStartArray();
++                        w.WriteNumberValue(c.X);
++                        w.WriteNumberValue(c.Y);
++                        w.WriteNumberValue(c.Z);
++                        w.WriteEndArray();
++                    }
++                    w.WriteEndArray();
++                    w.WriteStartArray("connections");
++                    foreach (var edge in area.Connections)
++                    {
++                        w.WriteStartArray();
++                        foreach (var connection in edge)
++                        {
++                            w.WriteNumberValue(connection.AreaId);
++                        }
++                        w.WriteEndArray();
++                    }
++                    w.WriteEndArray();
++                    w.WriteStartArray("hiding");
++                    foreach (var spot in area.HidingSpots)
++                    {
++                        w.WriteStartArray();
++                        w.WriteNumberValue(spot.Position.X);
++                        w.WriteNumberValue(spot.Position.Y);
++                        w.WriteNumberValue(spot.Position.Z);
++                        w.WriteNumberValue((int)spot.Flags);
++                        w.WriteEndArray();
++                    }
++                    w.WriteEndArray();
++                    w.WriteEndObject();
++                }
++                w.WriteEndArray();
++                w.WriteEndObject();
++            }
++
++            return Encoding.UTF8.GetString(stream.ToArray());
++        }
++
+         private void ParseNavSpace(string path, Stream stream, string? originalPath)
+         {
+             try
 diff --git a/ValveResourceFormat/CompiledShader/Blocks/ShaderFile/VfxShaderFileVulkan.cs b/ValveResourceFormat/CompiledShader/Blocks/ShaderFile/VfxShaderFileVulkan.cs
 index d9a40b2..f6c529e 100644
 --- a/ValveResourceFormat/CompiledShader/Blocks/ShaderFile/VfxShaderFileVulkan.cs

@@ -21,4 +21,5 @@ contextBridge.exposeInMainWorld('native', {
   cs2GloveClip: () => ipcRenderer.invoke('cs2:gloveClip'),
   cs2FirstPerson: (weapon) => ipcRenderer.invoke('cs2:firstPerson', weapon),
   cs2Crate: (id) => ipcRenderer.invoke('cs2:crate', id),
+  cs2Play: (fn, arg) => ipcRenderer.invoke('cs2:play', fn, arg),
 });
