@@ -2,7 +2,8 @@
 // plant; counter-terrorists split up to hold the sites and rotate on contact; after the plant both teams play the bomb
 // (retake and defuse). In a fight a bot reacts after a human-like delay, turns towards the enemy with limited speed,
 // its aim error shrinking as it tracks, stops to shoot, controls part of the recoil and fires in bursts.
-// Bots buy by their money like CS2's bots (eco, force, full buy, an AWP now and then).
+// Bots buy by their money like CS2's bots (eco, force, full buy, an AWP now and then). Your teammates follow your
+// radio commands (radio.js): go to a site, rush, follow you, hold, regroup, fall back, cover you.
 import { FLAG_BULLET } from './collision.js';
 import { Gun } from './weapons.js';
 import { setOf } from './bots.js';
@@ -51,6 +52,51 @@ export class Brain {
     this.holdYaw = null;
     this.startDelay = rnd(0, 1.5);
     this.walkUntil = 0;
+    this.order = null;
+    this.calledSite = false;
+  }
+
+  // A radio command from you (your teammates only).
+  obey(kind, { pos, target, t }) {
+    const b = this.bot;
+    if (kind === 'spotted') { this.heard = { pos: target, t }; this.nextScan = t; return; }
+    this.path = null; this.goal = null; this.holdYaw = null; this.spots = {}; this.nextThink = t; this.startDelay = 0;
+    if (kind === 'siteA' || kind === 'siteB' || kind === 'rush') { this.order = null; return; }
+    this.order = { kind, pos: pos.slice(), until: kind === 'fallback' ? t + 25 : kind === 'cover' ? t + 20 : Infinity };
+    if (kind === 'hold') this.holdYaw = b.yaw;
+  }
+  // Following orders (before the bomb is down; then the bomb comes first). Returns true while an order decides.
+  followOrder(t) {
+    const g = this.game, b = this.bot, o = this.order;
+    if (!o || g.match.phase !== 'live') return false;
+    if (t > o.until) { this.order = null; return false; }
+    const me = g.me, mp = g.player.origin, d = dist2(mp, b.pos);
+    switch (o.kind) {
+      case 'follow': case 'cover':
+        if (!me.alive) { this.order = null; return false; }
+        if (d > (o.kind === 'cover' ? 220 : 150)) {
+          // A spot near you, a little behind and to the side.
+          const yr = (g.input.yaw * Math.PI) / 180, side = (b.index % 2 ? 1 : -1) * 50;
+          const spot = [mp[0] - Math.cos(yr) * 70 + Math.sin(yr) * side, mp[1] - Math.sin(yr) * 70 - Math.cos(yr) * side, mp[2]];
+          this.setTask('goto', g.nav.findArea(spot, 60) ? spot : mp);
+        } else { this.task = 'hold'; this.path = null; this.holdYaw = g.input.yaw + (b.index % 2 ? 35 : -35); }
+        return true;
+      case 'hold':
+        this.task = 'hold'; this.path = null;
+        if (this.holdYaw == null) this.holdYaw = b.yaw;
+        return true;
+      case 'regroup':
+        if (!me.alive || d < 180) { this.order = null; return false; }
+        this.setTask('goto', mp);
+        return true;
+      case 'fallback': {
+        const home = g.enemySpawnCenter(this.c.team === 'T' ? 'CT' : 'T');
+        if (dist2(home, b.pos) < 300) { this.task = 'hold'; this.path = null; return true; }
+        this.setTask('goto', this.spots.home ||= (g.nav.randomPointIn([home[0] - 300, home[1] - 300, home[2] - 150], [home[0] + 300, home[1] + 300, home[2] + 150])?.point || home));
+        return true;
+      }
+    }
+    return false;
   }
 
   // ---- buying -----------------------------------------------------------------------------------------------------
@@ -167,6 +213,7 @@ export class Brain {
         this.aimHead = Math.random() < this.d.head;
         this.crouchFight = Math.random() < 0.25 && bestD > 900;
       }
+      if (!this.target.visible && t - (this.target.calledAt ?? -99) > 6) { this.target.calledAt = t; g.radio.chatter(this.c, 'spotted', { where: g.placeOf(best.c) ? 'at ' + g.placeOf(best.c).replace(/([a-z])([A-Z])/g, '$1 $2') : '' }); }
       this.target.visible = true;
       this.target.dist = bestD;
       this.lastSeen = { pos: g.bodyOf(best.c).feet.slice(), t };
@@ -213,7 +260,7 @@ export class Brain {
     b.ducked = this.crouchFight;
     const tol = Math.max(0.6, Math.min(5, (Math.atan(10 / Math.max(1, tg.dist)) * 180) / Math.PI));
     const onTarget = Math.abs(wrap(b.yaw - y)) < tol + Math.abs(this.aimErr[1]) && Math.abs(b.pitch - p) < tol + Math.abs(this.aimErr[0]);
-    if (t >= tg.react && t >= tg.pauseUntil && onTarget && t >= gun.nextAttack && gun.clip > 0) {
+    if (t >= tg.react && t >= tg.pauseUntil && onTarget && t >= gun.nextAttack && gun.clip > 0 && !g.teammateInLine(b, aimAt)) {
       const auto = gun.stats.fullAuto;
       const burst = tg.dist < 600 ? this.d.burst * 3 : tg.dist < 1500 ? this.d.burst : Math.max(1, Math.round(this.d.burst / 2));
       g.botShoot(b, gun, t, this.d.control);
@@ -256,6 +303,7 @@ export class Brain {
     if (this.target?.visible && !this.target.c.alive) this.target = null;
     const siteBox = (s) => g.map.info.bombsites.find((x) => x.site === s);
     if (!this.target?.visible && t >= this.nadeAt) this.useNades(t, siteBox);
+    if (this.followOrder(t)) return;
     // No rifle? Grab one lying nearby.
     if (!b.weapons.primary && !this.target?.visible && (bomb.state !== 'planted' || c.team === 'T')) {
       const loot = g.drops.list.filter((it) => it.id !== 'defuser' && !/^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/.test(it.id) && !g.nades.inFire(it.pos))
@@ -276,6 +324,7 @@ export class Brain {
       }
       const site = siteBox(this.plan.site || 'A');
       if (c.hasC4 && site) {
+        if (!this.calledSite && Math.hypot(site.min[0] - b.pos[0], site.min[1] - b.pos[1]) < 2200) { this.calledSite = true; g.radio.chatter(c, 'goingToPlant', { site: site.site }); }
         if (m.siteAt(b.pos) && !this.recentlySawEnemy(t, 2.5)) { this.setTask('plant'); g.botPlant(b, t); return; }
         return this.setTask('goto', this.siteSpot(site, 'plant'));
       }
@@ -490,7 +539,7 @@ export class Brain {
     return true;
   }
 
-  walking(t) { return this.task === 'hold' || (this.lastSeen && t - this.lastSeen.t < 6 && !this.target?.visible); }
+  walking(t) { return !this.plan?.rush && (this.task === 'hold' || (this.lastSeen && t - this.lastSeen.t < 6 && !this.target?.visible)); }
 }
 
 // Team plans for a round: the T site and lurker, the CT split.

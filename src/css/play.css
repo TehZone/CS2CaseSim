@@ -135,3 +135,12 @@
 .play-hud .flashed { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
 .play-hud .nades { font-size: 11px; letter-spacing: 1px; opacity: .8; margin-bottom: 2px; }
 .play-hud .nades b { color: #ffd35c; font-weight: 600; }
+/* Radio chat (bottom left, above the money) and the radio menu (Z / X / V) */
+.play-hud .chat { position: absolute; left: 22px; bottom: 132px; display: flex; flex-direction: column; gap: 3px; max-width: 46%; }
+.play-hud .chat div { background: rgba(0,0,0,.42); padding: 3px 9px; border-radius: 3px; font-size: 13px; transition: opacity .8s; }
+.play-hud .chat div.old { opacity: 0; }
+.play-hud .chat small { opacity: .75; }
+.play-hud .chat .ct { color: #8fc1ff; } .play-hud .chat .t { color: #f0c76a; }
+.play-hud .radio { position: absolute; left: 22px; top: 40%; transform: translateY(-50%); background: rgba(0,0,0,.6); padding: 10px 14px; border-radius: 4px; font-size: 14px; display: flex; flex-direction: column; gap: 3px; min-width: 200px; }
+.play-hud .radio h4 { margin: 0 0 4px; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: #f0c76a; }
+.play-hud .radio kbd { display: inline-block; min-width: 18px; padding: 0 4px; margin-right: 6px; font-family: inherit; font-size: 11px; border: 1px solid rgba(255,255,255,.3); border-radius: 3px; text-align: center; }

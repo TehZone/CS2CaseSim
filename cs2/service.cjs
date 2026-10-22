@@ -591,6 +591,20 @@ class CS2Service {
   // Weapon stats from weapons.vdata: { weapon_id: stats }.
   async playStats() { return (await this.playData()).weapons; }
 
+  // The bots' voices (the agents' radio calls and chatter), by agent and line:
+  // { phoenix: { enemyspotted: ['phoenix.radio_enemyspotted01', ...], ... }, leet, sas, seal }.
+  async playVoices() {
+    const { sounds } = await this.playData();
+    const out = {};
+    for (const e of Object.keys(sounds)) {
+      const m = /^(phoenix|leet|sas|seal)\.(.+?)\d*$/i.exec(e);
+      if (!m) continue;
+      const key = m[2].toLowerCase().replace(/^radio[._]/, '').replace(/[^a-z]/g, '');
+      ((out[m[1].toLowerCase()] ||= {})[key] ||= []).push(e);
+    }
+    return out;
+  }
+
   // The map's radar (CS2's overview image and its placement): { image, x, y, scale } or null.
   async playRadar(id, dir) {
     const meta = path.join(dir, 'radar.json'), img = path.join(dir, 'radar.png');

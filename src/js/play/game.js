@@ -25,6 +25,7 @@ import { buildCS2Model } from '../cs2/skin.js';
 import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, aimThrow as aimThrowPitch } from './grenades.js';
 import { Drops } from './drops.js';
 import { Post } from './post.js';
+import { Radio } from './radio.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
 export const TICK = 1 / 64;
@@ -58,12 +59,13 @@ const PENETRATION = { wood: 1, wood_panel: 1, wood_plank: 1, wood_crate: 1.2, wo
 const MUSIC = 'valve_cs2_01';
 
 export class Game {
-  constructor(root, { map = 'de_dust2', team = 'CT', teamSize = 5, difficulty = 'normal', length = 'short', overtime = true, sensitivity = 1.25, quality = 'balanced', onStatus = () => {} } = {}) {
+  constructor(root, { map = 'de_dust2', team = 'CT', teamSize = 5, difficulty = 'normal', length = 'short', overtime = true, friendlyFire = false, sensitivity = 1.25, quality = 'balanced', onStatus = () => {} } = {}) {
     Object.assign(this, { root, mapId: map, team, onStatus });
     this.enemyTeam = team === 'T' ? 'CT' : 'T';
     this.teamSize = Math.max(1, Math.min(5, teamSize | 0));
     this.difficulty = difficulty;
     this.rules = { ...(length === 'long' ? RULES : SHORT_RULES), overtime: !!overtime };
+    this.ff = !!friendlyFire;
     this.disposed = false;
     this.paused = true;
     this.listeners = new Set();
@@ -159,6 +161,7 @@ export class Game {
     for (let i = 0; i < this.teamSize - 1; i++) addBot(this.team, 'A');
     for (let i = 0; i < this.teamSize; i++) addBot(this.enemyTeam, 'B');
     this.combatants = [this.me, ...this.bots.map((b) => b.c)];
+    this.radio = new Radio(this);
 
     status('Loading weapons and sounds…');
     this.arsenal = new Arsenal(this, {});
@@ -352,6 +355,7 @@ export class Game {
       const eye = b.eye(), { fwd } = basis(p.pitch, p.yaw);
       const tr = this.collision.traceBox(eye, eye.map((v, i) => v + fwd[i] * 16), [-2, -2, -2], [2, 2, 2], FLAG_PLAYER);
       this.nades.throw(b.c, p.id, tr.endpos, throwVelocity(p.pitch, p.yaw, p.strength, b.vel));
+      this.radio.chatter(b.c, { flash: 'flash', smoke: 'smoke', fire: 'fire', he: 'he' }[NADES[p.id].kind] || 'he');
       p.done = this.now + 0.45;
     } else if (p.released && this.now >= p.done) {
       b.pendingThrow = null;
@@ -371,6 +375,13 @@ export class Game {
   }
   menuKey(code, down) {
     if (!down) return false;
+    // Radio: Z commands, X reports, V responses; a number picks a line.
+    if (/^Key[ZXV]$/.test(code) && this.radio && this.me?.alive && !this.buyMenu.isOpen) { this.radio.open(code); return true; }
+    if (this.radio?.menu) {
+      const n = /^Digit(\d)$/.exec(code)?.[1];
+      if (n != null) { if (n === '0') this.radio.close(); else this.radio.choose(Number(n)); return true; }
+      if (code === 'Escape') { this.radio.close(); return true; }
+    }
     if (code === 'KeyB' && this.me?.alive && this.match) { if (this.buyMenu.isOpen) this.closeBuyMenu(); else this.openBuyMenu(); return true; }
     if (this.buyMenu.isOpen) {
       if (code === 'Escape') { this.closeBuyMenu(); return true; }
@@ -403,13 +414,18 @@ export class Game {
       });
     }
     this.plans = { T: teamPlan(this, 'T'), CT: teamPlan(this, 'CT') };
+    this.radio?.close();
     for (const b of this.bots) { b.brain.roundStart(this.plans[b.c.team]); b.brain.buy(pistol); }
     this.liveAt = Infinity;
     this.hud.message(overtime ? `Overtime ${overtime} · $12,500 each` : halftime ? 'Switching sides' : round === 1 ? 'Match start · Round 1' : `Round ${round}`, 2500);
     this.sounds.play(`Music.StartRound.${MUSIC}`, { volume: 0.35 });
     this.emit('round', round);
   }
-  onLive() { this.liveAt = this.now; }
+  onLive() {
+    this.liveAt = this.now;
+    const mate = this.bots.filter((b) => b.c.alive && b.c.team === this.me.team)[0];
+    if (mate && Math.random() < 0.6) this.radio.chatter(mate.c, 'roundStart', { force: true });
+  }
   onHalftime() { for (const b of this.bots) b.setModel(b.c.team); }
 
   respawnMe(sp, died) {
@@ -523,6 +539,7 @@ export class Game {
       return;
     }
     if (!this.match.canPlant(b.c, b.pos)) return;
+    this.radio.chatter(b.c, 'plant', { force: true });
     b.plantStart = t;
     b.vel = [0, 0, 0];
     this.botSwitch(b, 'c4', t);
@@ -531,7 +548,7 @@ export class Game {
   }
   botDefuse(b) {
     if (b.mode === 'defuse') return;
-    if (this.match.startDefuse(b.c)) { b.setMode('defuse'); b.vel = [0, 0, 0]; }
+    if (this.match.startDefuse(b.c)) { b.setMode('defuse'); b.vel = [0, 0, 0]; this.radio.chatter(b.c, 'defuse', { force: true }); }
   }
   botCancelObjective(b) { if (b.mode === 'plant' || b.mode === 'defuse') b.setMode('move'); }
 
@@ -882,6 +899,14 @@ export class Game {
     const plan = this.plans?.CT;
     if (site && plan && !plan.rotate) plan.rotate = site.site;
   }
+  // Would a bot's shot at this target go through a teammate first? (With friendly fire on, bots hold their fire.)
+  teammateInLine(b, to) {
+    if (!this.ff) return false;
+    const eye = b.eye(), d = [to[0] - eye[0], to[1] - eye[1], to[2] - eye[2]], l = Math.hypot(...d);
+    const dir = d.map((v) => v / l);
+    return this.combatants.some((c) => c.alive && c !== b.c && c.team === b.c.team && this.hitTest(c, eye, dir, l));
+  }
+
   // Gunshots and footsteps alert enemy bots in range.
   noise(pos, loud, source) {
     for (const b of this.bots) if (b.c.alive && b.c.team !== source?.team) b.brain.hear(pos, loud, this.now);
@@ -942,7 +967,7 @@ export class Game {
       const wall = this.collision.raycast(o, dir, range - travelled, FLAG_BULLET);
       const maxT = wall ? wall.t : range - travelled;
       for (const c of this.combatants) {
-        if (!c.alive || c === shooter || c.team === shooter.team) continue;
+        if (!c.alive || c === shooter || (c.team === shooter.team && !this.ff)) continue;
         const h = this.hitTest(c, o, dir, hit ? hit.t : maxT);
         if (h) hit = { ...h, c };
       }
@@ -1000,7 +1025,7 @@ export class Game {
     const eye = this.player.eye();
     const { fwd, right, up } = basis(this.input.pitch, this.input.yaw);
     let best = null;
-    for (const c of this.enemiesOf(this.me)) {
+    for (const c of this.ff ? this.combatants.filter((x) => x.alive && x !== this.me) : this.enemiesOf(this.me)) {
       for (const off of [[0, 0], [0.12, 0], [-0.12, 0], [0, 0.1], [0, -0.1]]) {
         const d = [0, 1, 2].map((i) => fwd[i] + right[i] * off[0] + up[i] * off[1]);
         const l = Math.hypot(...d);
@@ -1042,6 +1067,11 @@ export class Game {
   // CS2 damage: hit group multiplier, then armor (kevlar for the body, the helmet for the head).
   damage(c, dmg, { attacker = null, group = 'chest', armorRatio = 1, headshotMult = 4, point = null, dir = null, weapon = null, explosion = false, wallbang = false } = {}) {
     if (!c.alive) return;
+    // Teammates: no damage without friendly fire; with it, CS2's reductions (bullets a third, grenades 85%, fire 40%).
+    if (attacker && attacker !== c && attacker.team === c.team) {
+      if (!this.ff) return;
+      dmg *= /molotov|incgrenade/.test(weapon?.id || '') ? 0.4 : explosion ? 0.85 : 0.33;
+    }
     const mult = explosion ? 1 : { head: headshotMult, chest: 1, stomach: 1.25, arm: 1, leg: 0.75 }[group] ?? 1;
     dmg *= mult;
     const armored = group === 'head' ? c.helmet && c.armor > 0 : group !== 'leg' && c.armor > 0;
@@ -1070,7 +1100,7 @@ export class Game {
       if (c.health > 0) this.sounds.play(head ? (armored ? 'Player.DamageHeadShotArmor.Victim' : 'Player.DamageHeadShot.Victim') : armored ? 'Player.DamageBodyArmor.Victim' : 'Player.DamageBody.Victim', { volume: 0.7 });
     } else {
       this.botOf(c)?.brain.hurt(attacker, this.now);
-      if (c.health > 0) this.botOf(c)?.flinch(group);
+      if (c.health > 0) { this.botOf(c)?.flinch(group); if (attacker && attacker.team !== c.team && Math.random() < 0.3) this.radio.chatter(c, 'hurt'); }
       if (attacker === this.me && c.health > 0) this.sounds.play(head ? (armored ? 'Player.DamageHeadShotArmor.AttackerFeedback' : 'Player.DamageHeadShot.AttackerFeedback') : armored ? 'Player.DamageBodyArmor.AttackerFeedback' : 'Player.DamageBody.AttackerFeedback', { volume: 0.7 });
     }
     if (c.health <= 0) {
@@ -1086,6 +1116,7 @@ export class Game {
     c.alive = false;
     c.health = 0;
     this.match.onKill(c, attacker, weapon?.stats || weapon);
+    this.killChatter(c, attacker);
     const wname = weapon?.id ? (ITEM_NAMES[weapon.id] || (weapon.name || '').split(' | ')[0]) : weapon?.name || 'World';
     this.hud.kill({ killer: attacker?.name || '', victim: c.name, weapon: wname, headshot, wallbang, mine: attacker === this.me || c === this.me, killerTeam: attacker?.team, victimTeam: c.team });
     if (c === this.me) {
@@ -1099,6 +1130,18 @@ export class Game {
       b.vel = [0, 0, 0];
     }
   }
+
+  // Your teammates call out kills and how many enemies are left.
+  killChatter(c, attacker) {
+    const mates = this.bots.filter((b) => b.c.alive && b.c.team === this.me.team);
+    if (!mates.length || this.match.phase === 'end') return;
+    if (attacker?.bot && attacker.team === this.me.team && attacker.team !== c.team) this.radio.chatter(attacker, 'kill');
+    else if (attacker === this.me && c.team !== this.me.team && Math.random() < 0.3) this.radio.chatter(mates[0].c, 'niceShot');
+    const left = this.combatants.filter((x) => x.alive && x.team !== this.me.team).length;
+    if (c.team !== this.me.team && (left === 1 || left === 2)) setTimeout(() => !this.disposed && this.radio.chatter(mates[mates.length - 1].c, left === 1 ? 'oneLeft' : 'twoLeft', { force: true }), 900);
+  }
+  // A combatant's callout area.
+  placeOf(c) { return this.placeAt(this.positionOf(c)); }
 
   // ---- spectating ---------------------------------------------------------------------------------------------------
   spectateInput() {
@@ -1256,8 +1299,8 @@ export class Game {
   }
 
   // The callout area the player is in (env_cs_place boxes).
-  place() {
-    const o = this.player.origin;
+  place() { return this.placeAt(this.player.origin); }
+  placeAt(o) {
     let best = null, vol = Infinity;
     for (const p of this.map.info.places) {
       if (o[0] < p.min[0] || o[0] > p.max[0] || o[1] < p.min[1] || o[1] > p.max[1] || o[2] < p.min[2] - 64 || o[2] > p.max[2]) continue;

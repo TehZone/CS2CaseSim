@@ -4,6 +4,7 @@ export const BINDS = {
   forward: ['KeyW'], back: ['KeyS'], left: ['KeyA'], right: ['KeyD'], jump: ['Space'], duck: ['ControlLeft', 'ControlRight', 'KeyC'],
   walk: ['ShiftLeft', 'ShiftRight'], reload: ['KeyR'], inspect: ['KeyF'], slot1: ['Digit1'], slot2: ['Digit2'], slot3: ['Digit3'],
   slot4: ['Digit4'], slot5: ['Digit5'], lastWeapon: ['KeyQ'], scores: ['Tab'], use: ['KeyE'], drop: ['KeyG'], buy: ['KeyB'],
+  radio1: ['KeyZ'], radio2: ['KeyX'], radio3: ['KeyV'],
 };
 const GAME_KEYS = new Set(Object.values(BINDS).flat());
 

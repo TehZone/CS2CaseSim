@@ -212,6 +212,10 @@ export class Match {
       attacker.kills++; attacker.roundKills++; attacker.score += 2;
       const award = weapon?.killAward ?? 300;
       attacker.money = Math.min(this.rules.maxMoney, attacker.money + award);
+    } else if (attacker && attacker !== victim) {
+      // A team kill (friendly fire): CS2 takes $300 and a kill.
+      attacker.kills--; attacker.score -= 2;
+      attacker.money = Math.max(0, attacker.money - 300);
     }
     // Assists: 41+ damage from someone else on the killer's side.
     for (const [id, dmg] of victim.roundDamage) {

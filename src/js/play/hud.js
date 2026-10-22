@@ -1,6 +1,7 @@
 // Play mode HUD (DOM over the canvas), laid out like CS2's: round timer and team scores at the top, health, armor and
 // money bottom left, ammo bottom right, kill feed top right, crosshair, callout, round messages, plant/defuse
-// progress, damage direction, the scoreboard (Tab), the sniper scope and the end-of-match screen.
+// progress, damage direction, the scoreboard (Tab), the sniper scope, the radio menu and chat, and the end-of-match
+// screen.
 import { esc } from '../util.js';
 
 const fmtTime = (s) => { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
@@ -23,6 +24,8 @@ export class Hud {
       <div class="place"></div>
       <div class="fps"></div>
       <div class="feed"></div>
+      <div class="chat" data-chat></div>
+      <div class="radio hidden" data-radio></div>
       <div class="msg" data-msg></div>
       <div class="progress hidden" data-progress><span data-progress-label></span><i><b data-progress-bar></b></i></div>
       <div class="spec hidden" data-spec></div>
@@ -150,6 +153,23 @@ export class Hud {
     const table = (side, name) => `<div class="sb-team ${side.toLowerCase()}"><div class="sb-head"><b>${scores[side] ?? 0}</b> ${name}</div>
       <table><thead><tr><th>Player</th><th>Money</th><th>K</th><th>D</th><th>A</th><th>ADR</th><th>MVP</th><th>Score</th></tr></thead><tbody>${rows(side)}</tbody></table></div>`;
     el.innerHTML = table('CT', 'Counter-Terrorists') + table('T', 'Terrorists');
+  }
+
+  // A radio call in the chat: name @ place: text (fades after a while).
+  chat(name, place, text, team) {
+    const row = document.createElement('div');
+    row.innerHTML = `<span class="${team === 'CT' ? 'ct' : 't'}">${esc(name)}</span>${place ? ` <small>@ ${esc(place.replace(/([a-z])([A-Z])/g, '$1 $2'))}</small>` : ''}: ${esc(text)}`;
+    const box = this.q('[data-chat]');
+    box.appendChild(row);
+    while (box.children.length > 6) box.firstChild.remove();
+    setTimeout(() => row.classList.add('old'), 9000);
+    setTimeout(() => row.remove(), 10000);
+  }
+  // The radio menu (Z / X / V), or null to hide it.
+  radio(menu) {
+    const el = this.q('[data-radio]');
+    el.classList.toggle('hidden', !menu);
+    if (menu) el.innerHTML = `<h4>${esc(menu.title)}</h4>${menu.items.map(([label], i) => `<div><kbd>${i + 1}</kbd> ${esc(label)}</div>`).join('')}<div class="muted"><kbd>0</kbd> Close</div>`;
   }
 
   endScreen(html) {
