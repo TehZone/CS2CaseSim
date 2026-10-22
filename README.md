@@ -31,19 +31,28 @@ Opening a case also plays CS2's own crate: the case's 3D model drops in, lands a
 crate, or without CS2 installed, drop in as their icon). Turn it off under Settings → Case drop animation.
 
 ## Play (offline CS2 competitive against bots)
-With CS2 installed, **Play** is a competitive match on a real CS2 map from your install (Dust II for now), you and bot
+With CS2 installed, **Play** is a competitive match on any bomb defusal map in your install (Dust II, Mirage, Inferno, Nuke,
+Ancient, Anubis, Overpass, Train, Vertigo...; each map is prepared the first time you play it), you and bot
 teammates against bots (1v1 up to 5v5, four bot difficulties, first to 9 or first to 13), with your equipped skins,
 gloves and knife:
 - CS2's rounds: freeze time and buy time, the 1:55 round clock, the bomb (one terrorist carries it; plant it in a bomb
   site, 40 second fuse, defuse in 10 seconds or 5 with a kit), win by elimination, bomb, defuse or time, halftime
   side swap, and the end of the match.
+- Grenades: HE (up to 99 damage over 350 units), flashbangs (blind by how directly you look and how close you are),
+  smokes (18 seconds, nobody sees through them; they put out fires), molotovs and incendiaries (7 seconds of fire, a smoke
+  puts them out), decoys (fake gunfire). Thrown like CS2: Mouse1 full throw, Mouse2 underhand, both a medium throw, plus your
+  movement; they bounce off the map. CS2's limits: four grenades, two flashbangs.
+- Weapons drop when players die (G drops yours); walk over a gun to pick it up into a free slot, E swaps. Bullets go through
+  thin walls (wood easily, metal less, concrete barely) with less damage.
 - CS2's economy: $800 start, round rewards, the loss bonus ($1400 rising by $500, dropping by one on a win), kill
   rewards by weapon, planting and defusing bonuses, the $16,000 cap. Buy menu (B) with CS2's prices and team-only guns,
   Kevlar, helmet and defuse kits.
 - Bots walk the map's own navigation mesh: terrorists pick a site, take it and plant; counter-terrorists split up to
   hold the sites, rotate when they see terrorists, retake and defuse; they flee a bomb they can't stop. In fights they
   react after a human-like delay, aim with an error that shrinks as they track you, stop to shoot, control part of the
-  recoil and fire in bursts. They hear gunshots and footsteps, buy by their money (eco, force, AWP...) and are animated
+  recoil and fire in bursts. They smoke off and flash sites before taking them, molotov or HE where they last saw you, flash
+  retakes, burn a defuser, get blinded by flashes, step out of fire and pick up guns. They hear gunshots and footsteps, buy by
+  their money (eco, force, AWP, grenades...) and are animated
   with CS2's third-person clips (running, walking and crouching in every direction, each gun's hold pose, planting,
   defusing, deaths).
 - Radar (CS2's overview of the map), kill feed, scoreboard (Tab), damage direction, death cam and spectating
@@ -58,8 +67,8 @@ gloves and knife:
   CS2's viewmodel animations (draw, idle, shoot, reload, inspect, knife slashes and stabs) and CS2's sounds.
   Scoped rifles zoom with CS2's zoom levels.
 - Bots are CS2 agent models with per-bone hitboxes (head, chest, stomach, arms, legs) and armor.
-- Keys: WASD, Space, Ctrl (or C) crouch, Shift walk, Mouse1/Mouse2, R, F inspect, B buy, E defuse, 1/2/3/5, Q and the
-  mouse wheel switch weapons (5 is the bomb: hold Mouse1 in a site to plant), Tab scores, Esc pause.
+- Keys: WASD, Space, Ctrl (or C) crouch, Shift walk, Mouse1/Mouse2, R, F inspect, B buy, E defuse/pick up, G drop, 1/2/3,
+  4 (grenades), 5 (the bomb: hold Mouse1 in a site to plant), Q and the mouse wheel switch weapons, Tab scores, Esc pause.
   Mouse sensitivity uses CS2's scale, so your CS2 sensitivity feels the same.
 
 ## Features

@@ -26,11 +26,22 @@ export const CATALOG = [
     ['weapon_m4a1_silencer', 'M4A1-S', 'CT'], ['weapon_ssg08', 'SSG 08'], ['weapon_sg556', 'SG 553', 'T'], ['weapon_aug', 'AUG', 'CT'],
     ['weapon_awp', 'AWP'], ['weapon_g3sg1', 'G3SG1', 'T'], ['weapon_scar20', 'SCAR-20', 'CT']] },
   { cat: 'Gear', items: [['vest', 'Kevlar Vest', null, 650], ['vesthelm', 'Kevlar + Helmet', null, 1000], ['defuser', 'Defuse Kit', 'CT', 400]] },
+  { cat: 'Grenades', items: [
+    ['weapon_molotov', 'Molotov', 'T'], ['weapon_incgrenade', 'Incendiary Grenade', 'CT'], ['weapon_decoy', 'Decoy Grenade'],
+    ['weapon_flashbang', 'Flashbang'], ['weapon_hegrenade', 'High Explosive Grenade'], ['weapon_smokegrenade', 'Smoke Grenade']] },
 ];
+const GRENADE_IDS = new Set(CATALOG[4].items.map(([id]) => id));
+export const isGrenade = (id) => GRENADE_IDS.has(id);
+// CS2: four grenades at most, two flashbangs, one of every other kind.
+export const nadeRoom = (c, id) => {
+  const n = c.nades || {};
+  const total = Object.values(n).reduce((s, x) => s + x, 0);
+  return total < 4 && (n[id] || 0) < (id === 'weapon_flashbang' ? 2 : 1);
+};
 export const ITEM_NAMES = Object.fromEntries(CATALOG.flatMap((c) => c.items.map(([id, name]) => [id, name])));
 export const DEFAULT_PISTOL = { T: 'weapon_glock', CT: 'weapon_usp_silencer' };
 const PISTOLS = new Set(CATALOG[0].items.map(([id]) => id));
-export const slotOf = (id) => (PISTOLS.has(id) ? 'secondary' : 'primary');
+export const slotOf = (id) => (PISTOLS.has(id) ? 'secondary' : GRENADE_IDS.has(id) ? 'g_' + id : 'primary');
 
 let nextId = 1;
 // A player in the match (you or a bot).
@@ -43,6 +54,7 @@ export class Combatant {
     this.health = 100; this.armor = 0; this.helmet = false; this.defuser = false; this.alive = true;
     this.resetWeapons = true; // starts with the default pistol
     this.roundKills = 0; this.roundDamage = new Map(); // attacker id -> damage this round (assists)
+    this.nades = {}; // grenade id -> count
   }
 }
 
@@ -87,7 +99,7 @@ export class Match {
     for (const c of this.game.combatants) {
       c.team = c.team === 'T' ? 'CT' : 'T';
       c.money = this.rules.startMoney;
-      c.armor = 0; c.helmet = false; c.defuser = false;
+      c.armor = 0; c.helmet = false; c.defuser = false; c.nades = {};
       c.resetWeapons = true;
     }
     this.lossStreak = { T: 0, CT: 0 };
@@ -246,6 +258,7 @@ export class Match {
     if (id === 'vest' && c.armor >= 100) return false;
     if (id === 'vesthelm' && c.armor >= 100 && c.helmet) return false;
     if (id === 'defuser' && c.defuser) return false;
+    if (GRENADE_IDS.has(id) && !nadeRoom(c, id)) return false;
     return c.money >= this.costFor(c, id, stats);
   }
   // Kevlar + helmet costs only the helmet's $350 with full kevlar already on.
@@ -255,5 +268,6 @@ export class Match {
     if (id === 'vest') c.armor = 100;
     else if (id === 'vesthelm') { c.armor = 100; c.helmet = true; }
     else if (id === 'defuser') c.defuser = true;
+    else if (GRENADE_IDS.has(id)) c.nades[id] = (c.nades[id] || 0) + 1;
   }
 }

@@ -6,7 +6,8 @@
   display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; padding: 12px 14px; text-align: left;
   font-size: 20px; letter-spacing: 1px; text-transform: uppercase; color: var(--text);
 }
-.play-map[data-map="de_dust2"] { background: linear-gradient(0deg, rgba(10,13,18,.85), rgba(10,13,18,0) 60%), linear-gradient(160deg, #c9a46a, #7b5a33 70%, #3b2b18); }
+.play-map { background: linear-gradient(0deg, rgba(10,13,18,.85), rgba(10,13,18,0) 60%), var(--tint, linear-gradient(160deg, #3a3a3a, #1a1a1a)); }
+.play-maps { max-height: 70vh; overflow: auto; }
 .play-map.active { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
 .play-map.soon { opacity: .45; cursor: default; background: var(--panel); }
 .play-map small { font-size: 11px; color: var(--muted); letter-spacing: .5px; text-transform: none; }
@@ -118,7 +119,7 @@
 .play-buy .buy-head { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
 .play-buy .buy-head b { font-size: 26px; color: #8fe39a; }
 .play-buy .buy-head span { flex: 1; color: var(--muted); }
-.play-buy .buy-cols { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.play-buy .buy-cols { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
 .play-buy .buy-col h4 { margin: 0 0 8px; font-weight: 400; text-transform: uppercase; letter-spacing: 1px; font-size: 13px; color: var(--muted); }
 .play-buy .buy-col.active h4 { color: var(--gold); }
 .play-buy kbd { display: inline-block; min-width: 18px; padding: 0 4px; font-family: inherit; font-size: 11px; border: 1px solid rgba(255,255,255,.25); border-radius: 3px; text-align: center; color: var(--muted); }
@@ -129,3 +130,8 @@
 .play-buy .buy-item:disabled { opacity: .38; cursor: default; }
 .play-buy .buy-item.owned { opacity: .6; } .play-buy .buy-item.owned em { color: var(--muted); }
 .play-buy .buy-hint { margin-top: 10px; font-size: 12px; color: var(--muted); }
+
+/* flashbang blindness and grenade list */
+.play-hud .flashed { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+.play-hud .nades { font-size: 11px; letter-spacing: 1px; opacity: .8; margin-bottom: 2px; }
+.play-hud .nades b { color: #ffd35c; font-weight: 600; }

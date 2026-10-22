@@ -108,19 +108,28 @@ export class Effects {
     this.particles.push({ s, v: new THREE.Vector3(), life: 0.05, age: 0, size: 0.35, grow: 0, gravity: 0, keepMap: true });
   }
 
-  // The bomb going off: a big flash and smoke.
-  explosion(pos) {
+  // An explosion (the bomb, or smaller for an HE grenade): a flash of fire and smoke.
+  explosion(pos, scale = 1) {
     const p = toGl(pos);
-    for (let i = 0; i < 26; i++) {
+    for (let i = 0; i < Math.round(26 * Math.sqrt(scale)); i++) {
       const fire = i < 10;
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.puffTex, color: fire ? 0xffb050 : 0x6a625a, transparent: true, depthWrite: false, blending: fire ? THREE.AdditiveBlending : THREE.NormalBlending }));
-      s.position.copy(p).add(new THREE.Vector3((Math.random() - 0.5) * 2, Math.random() * 1.5, (Math.random() - 0.5) * 2));
-      const size = fire ? 4 + Math.random() * 4 : 3 + Math.random() * 3;
+      s.position.copy(p).add(new THREE.Vector3((Math.random() - 0.5) * 2 * scale, Math.random() * 1.5 * scale, (Math.random() - 0.5) * 2 * scale));
+      const size = (fire ? 4 + Math.random() * 4 : 3 + Math.random() * 3) * scale;
       s.scale.setScalar(size);
       this.group.add(s);
-      const v = new THREE.Vector3((Math.random() - 0.5) * 8, 2 + Math.random() * 6, (Math.random() - 0.5) * 8);
-      this.particles.push({ s, v, life: fire ? 0.8 : 3.5, age: 0, size, grow: fire ? 0.4 : 0.5, gravity: -0.5 });
+      const v = new THREE.Vector3((Math.random() - 0.5) * 8, 2 + Math.random() * 6, (Math.random() - 0.5) * 8).multiplyScalar(scale);
+      this.particles.push({ s, v, life: fire ? 0.8 : 3.5 * Math.sqrt(scale), age: 0, size, grow: fire ? 0.4 : 0.5, gravity: -0.5 });
     }
+  }
+
+  // A flashbang going off: a white pop.
+  flashPop(pos) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.puffTex, color: 0xffffff, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }));
+    s.position.copy(toGl(pos));
+    s.scale.setScalar(3);
+    this.group.add(s);
+    this.particles.push({ s, v: new THREE.Vector3(), life: 0.25, age: 0, size: 3, grow: 0.6, gravity: 0 });
   }
 
   // Bullet holes and particles go away when a round restarts.

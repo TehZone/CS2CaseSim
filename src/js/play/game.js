@@ -18,10 +18,12 @@ import { Brain, botGun, teamPlan } from './ai.js';
 import { Effects } from './effects.js';
 import { Hud } from './hud.js';
 import { NavMesh } from './nav.js';
-import { Match, Combatant, RULES, SHORT_RULES, DEFAULT_PISTOL, ITEM_NAMES, slotOf } from './match.js';
+import { Match, Combatant, RULES, SHORT_RULES, DEFAULT_PISTOL, ITEM_NAMES, slotOf, isGrenade } from './match.js';
 import { BuyMenu } from './buymenu.js';
 import { Radar } from './radar.js';
 import { buildCS2Model } from '../cs2/skin.js';
+import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, aimThrow as aimThrowPitch } from './grenades.js';
+import { Drops } from './drops.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
 export const TICK = 1 / 64;
@@ -43,9 +45,15 @@ const impactName = (s) => SURFACE_IMPACT[String(s).toLowerCase()] || (/wood/i.te
 
 const DEFAULT_KNIFE = { T: { wid: 'weapon_knife_t', w: 'Knife', n: 'Knife', cat: 'knife', v: true }, CT: { wid: 'weapon_knife', w: 'Knife', n: 'Knife', cat: 'knife', v: true } };
 // Guns players buy most, loaded in the background so buying them is instant.
-const PRELOAD = ['weapon_ak47', 'weapon_m4a1', 'weapon_m4a1_silencer', 'weapon_awp', 'weapon_deagle', 'weapon_galilar', 'weapon_famas', 'weapon_mp9', 'weapon_mac10'];
+const PRELOAD = ['weapon_ak47', 'weapon_m4a1', 'weapon_m4a1_silencer', 'weapon_awp', 'weapon_flashbang', 'weapon_smokegrenade', 'weapon_hegrenade', 'weapon_molotov',
+  'weapon_incgrenade', 'weapon_deagle', 'weapon_galilar', 'weapon_famas', 'weapon_mp9', 'weapon_mac10', 'weapon_decoy'];
 const BOT_GUNS = ['weapon_glock', 'weapon_usp_silencer', 'weapon_ak47', 'weapon_m4a1', 'weapon_m4a1_silencer', 'weapon_awp', 'weapon_deagle', 'weapon_p250',
-  'weapon_galilar', 'weapon_famas', 'weapon_mac10', 'weapon_mp9', 'weapon_tec9', 'weapon_fiveseven', 'weapon_knife', 'weapon_knife_t', 'weapon_c4'];
+  'weapon_galilar', 'weapon_famas', 'weapon_mac10', 'weapon_mp9', 'weapon_tec9', 'weapon_fiveseven', 'weapon_knife', 'weapon_knife_t', 'weapon_c4', ...NADE_ORDER];
+// How easily bullets go through each surface (CS2's penetration modifiers, roughly): thickness allowed = 32 x weapon
+// penetration x this.
+const PENETRATION = { wood: 1, wood_panel: 1, wood_plank: 1, wood_crate: 1.2, wood_basket: 1.5, wood_dense: 0.7, wood_solid: 0.6, wood_tree: 0.3,
+  glass: 2, chainlink: 3, plastic: 1.5, carpet: 1, computer: 0.8, pottery: 1, metalpanel: 0.6, metal: 0.4, metalvehicle: 0.5, metalvent: 0.7,
+  metal_sand_barrel: 0.5, metal_dumpster: 0.4, solidmetal: 0.15, concrete: 0.3, rock: 0.15, tile: 0.35, dirt: 0.3, sand: 0.3, rubbertire: 0.5, default: 0.4 };
 const MUSIC = 'valve_cs2_01';
 
 export class Game {
@@ -110,6 +118,10 @@ export class Game {
     if (this.disposed) return;
     this.map = map;
     if (!map.nav) throw new Error('This map has no navigation mesh for bots');
+    if (!map.info.bombsites?.length) throw new Error('This map has no bomb sites');
+    // Sites are named from their callouts; if that fails, name them in order (A, B).
+    const sites = map.info.bombsites;
+    if (new Set(sites.map((s) => s.site)).size < sites.length) sites.forEach((s, i) => { s.site = 'ABCD'[i]; });
     status('Loading collision…');
     const colBuf = await fetch(map.collision).then((r) => r.arrayBuffer());
     this.collision = new CollisionWorld(colBuf, map.info.collision);
@@ -119,6 +131,8 @@ export class Game {
     this.scene = this.world.scene;
     this.setupViewmodelLighting();
     this.effects = new Effects(this.scene, this.vmScene);
+    this.nades = new Grenades(this);
+    this.drops = new Drops(this);
     this.sounds = new SoundBank();
     this.stats = await cs2Play('stats');
     this.midSpot = this.findMid();
@@ -159,9 +173,13 @@ export class Game {
     this.renderer.shadowMap.needsUpdate = true;
     this.match.startRound();
     this.emit('loaded');
-    // Background: the guns people buy, and the bots' gun models.
-    (async () => { for (const id of PRELOAD) { if (this.disposed) return; await this.vmData(id).catch(() => {}); } })();
-    for (const id of BOT_GUNS) this.botAssets.weapon(id);
+    // Background, a little at a time so the game stays smooth: the bots' gun models, then the guns people buy.
+    (async () => {
+      const pause = () => new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 1500));
+      for (const id of BOT_GUNS) { if (this.disposed) return; await this.botAssets.weapon(id); await pause(); }
+      for (const id of PRELOAD) { if (this.disposed) return; await this.vmData(id).catch(() => {}); await pause(); }
+    })();
   }
 
   commonSounds() {
@@ -178,7 +196,8 @@ export class Game {
       'Weapon_Knife.Hit', 'Weapon_Knife.HitWall', 'Weapon_Knife.Slash', 'Weapon_Knife.Stab', 'Weapon_Knife.Deploy', 'Weapon_Knife.Swish.Heavy',
       'Default.Land', 'BulletBy.Supersonic.Crack', 'c4.plant', 'c4.initiate', 'c4.disarmstart', 'c4.disarmfinish', 'c4.explode', 'C4.PlantSound',
       'c4.keypressquiet', 'Player.PickupC4', 'Player.PickupWeapon', 'Event.BombPlanted', 'Event.BombDefused', 'Event.CTWin', 'Event.TERWin',
-      `Music.StartRound.${MUSIC}`, `Music.BombPlanted.${MUSIC}`, `Music.WonRound.${MUSIC}`, `Music.LostRound.${MUSIC}`, `Music.MatchEnd.${MUSIC}`];
+      `Music.StartRound.${MUSIC}`, `Music.BombPlanted.${MUSIC}`, `Music.WonRound.${MUSIC}`, `Music.LostRound.${MUSIC}`, `Music.MatchEnd.${MUSIC}`,
+      ...NADE_SOUNDS, 'Molotov.Draw', 'HEGrenade.Draw', 'Player.PickupGrenadeAudible', 'Player.PickupWeaponSilent'];
   }
 
   setupViewmodelLighting() {
@@ -221,6 +240,7 @@ export class Game {
           item = equipped('knife');
           def = item ? itemDef(item) : DEFAULT_KNIFE[wid === 'weapon_knife_t' ? 'T' : 'CT'];
         } else if (wid === 'weapon_c4') def = { wid, w: 'C4 Explosive', n: 'C4 Explosive', cat: 'equipment', v: true };
+        else if (NADES[wid]) def = { wid, w: NADES[wid].name, n: NADES[wid].name, cat: 'equipment', v: true };
         else {
           const w = vanilla?.w || ITEM_NAMES[wid] || wid;
           item = equipped('w:' + w);
@@ -231,7 +251,7 @@ export class Game {
         this.sounds.add(data.sounds);
         vm.rig.visible = false;
         this.vmRoot.add(vm.rig);
-        const name = wid === 'weapon_c4' ? 'C4 Explosive' : def.v ? def.w : `${def.w} | ${def.n?.split(' | ')[1] || def.n}`;
+        const name = wid === 'weapon_c4' ? 'C4 Explosive' : NADES[wid] ? NADES[wid].name : def.v ? def.w : `${def.w} | ${def.n?.split(' | ')[1] || def.n}`;
         return { data, vm, name };
       })();
       this.vmCache.set(wid, job);
@@ -269,7 +289,50 @@ export class Game {
     m.pay(me, id, this.stats);
     this.sounds.play('Player.PickupWeapon', { volume: 0.6 });
     this.buyMenu.render();
-    if (id.startsWith('weapon_')) await this.giveMe(slotOf(id), id);
+    if (isGrenade(id)) await this.syncMyNades();
+    else if (id.startsWith('weapon_')) await this.giveMe(slotOf(id), id);
+  }
+  // Your grenade slots follow your grenade counts (select: a grenade id to hold now).
+  async syncMyNades(select = null) {
+    const me = this.me;
+    for (const id of NADE_ORDER) {
+      const slot = 'g_' + id, n = me.nades[id] || 0;
+      if (n > 0 && !this.arsenal.guns[slot]) await this.giveMe(slot, id, id === select);
+      else if (n <= 0 && this.arsenal.guns[slot]) this.arsenal.remove(slot, this.now);
+      else if (n > 0 && id === select) this.arsenal.select(slot, this.now);
+    }
+  }
+  // Your grenade leaves your hand.
+  throwMyNade(id, strength) {
+    const eye = this.player.eye(), { fwd } = basis(this.input.pitch, this.input.yaw);
+    const tr = this.collision.traceBox(eye, eye.map((v, i) => v + fwd[i] * 16), [-2, -2, -2], [2, 2, 2], FLAG_PLAYER);
+    this.nades.throw(this.me, id, tr.endpos, throwVelocity(this.input.pitch, this.input.yaw, strength, this.player.velocity));
+  }
+  // After a throw: one fewer; keep holding the same kind if you have more, else back to your gun.
+  usedNade(id, t) {
+    const me = this.me;
+    me.nades[id] = Math.max(0, (me.nades[id] || 0) - 1);
+    const slot = 'g_' + id;
+    if (me.nades[id] > 0) { const g = this.arsenal.guns[slot]; this.arsenal.current = null; this.arsenal.select(slot, t); g.count = me.nades[id]; return; }
+    this.arsenal.remove(slot, t); // back to your best gun
+  }
+  // A bot throws: aim the arc onto the target (full throw, else medium, else a lob).
+  botThrow(b, id, target, preferHigh = false) {
+    const c = b.c;
+    if (!(c.nades[id] > 0)) return false;
+    const eye = b.eye();
+    const yaw = (Math.atan2(target[1] - eye[1], target[0] - eye[0]) * 180) / Math.PI;
+    for (const strength of preferHigh ? [1] : [1, 0.5, 0]) {
+      const pitch = aimThrowPitch(eye, target, strength, preferHigh);
+      if (pitch == null || pitch < -89 || pitch > 89) continue;
+      c.nades[id]--;
+      b.yaw = yaw; b.pitch = pitch;
+      const { fwd } = basis(pitch, yaw);
+      const tr = this.collision.traceBox(eye, eye.map((v, i) => v + fwd[i] * 16), [-2, -2, -2], [2, 2, 2], FLAG_PLAYER);
+      this.nades.throw(c, id, tr.endpos, throwVelocity(pitch, yaw, strength, b.vel));
+      return true;
+    }
+    return false;
   }
   openBuyMenu() {
     if (!this.match?.buyOpen || !this.inBuyZone() || !this.me.alive) return;
@@ -295,6 +358,9 @@ export class Game {
   // ---- rounds (called by the match) -------------------------------------------------------------------------------
   onRoundStart(round, { halftime, pistol }) {
     this.effects.clear();
+    this.nades.clear();
+    this.drops.clear();
+    this.flashUntil = 0;
     this.removeBomb();
     this.planting = null; this.defusing = false;
     this.deathCam = null; this.spectating = null;
@@ -332,8 +398,9 @@ export class Game {
     if (died) {
       this.arsenal.remove('primary', this.now);
       jobs.push(this.giveMe('secondary', DEFAULT_PISTOL[me.team], false));
-      me.armor = 0; me.helmet = false; me.defuser = false;
+      me.armor = 0; me.helmet = false; me.defuser = false; me.nades = {};
     }
+    jobs.push(this.syncMyNades());
     const knife = this.knifeId(me.team);
     if (this.arsenal.guns.knife?.id !== knife) jobs.push(this.giveMe('knife', knife, false));
     if (me.hasC4) jobs.push(this.giveMe('c4', 'weapon_c4', false)); else this.arsenal.remove('c4', this.now);
@@ -344,7 +411,7 @@ export class Game {
     const c = b.c;
     if (died) {
       b.weapons = {};
-      c.armor = 0; c.helmet = false; c.defuser = false;
+      c.armor = 0; c.helmet = false; c.defuser = false; c.nades = {};
     }
     b.weapons.secondary ||= botGun(DEFAULT_PISTOL[c.team], this.stats[DEFAULT_PISTOL[c.team]]);
     const knife = c.team === 'T' ? 'weapon_knife_t' : 'weapon_knife';
@@ -355,6 +422,7 @@ export class Game {
     b.equip(b.weapons[b.slot].id);
   }
   giveBot(b, id) {
+    if (isGrenade(id)) return; // counted in c.nades; bots throw straight from their hand
     const slot = slotOf(id);
     b.weapons[slot] = botGun(id, this.stats[id]);
     this.sounds.load([this.stats[id]?.shootSound].filter(Boolean));
@@ -545,6 +613,7 @@ export class Game {
       if (this.player.origin[2] < -3000) this.kill(me, null, { name: 'World' }, false);
       this.footsteps(wasGround);
       this.arsenal.tick(TICK, this.now, inp);
+      if (this.arsenal.pressed?.has('drop')) this.dropMine();
       this.useKey();
       const b = m.bomb;
       if (b?.state === 'dropped' && me.team === 'T' && Math.hypot(this.player.origin[0] - b.pos[0], this.player.origin[1] - b.pos[1], this.player.origin[2] - b.pos[2]) < 60) m.pickupBomb(me);
@@ -560,6 +629,9 @@ export class Game {
       if (bomb?.state === 'dropped' && b.c.team === 'T' && Math.hypot(b.pos[0] - bomb.pos[0], b.pos[1] - bomb.pos[1]) < 50) m.pickupBomb(b.c);
       this.botFootsteps(b);
     }
+    this.nades.tick(TICK);
+    this.drops.tick(TICK);
+    this.pickups();
     // The planted bomb beeps faster as it gets closer to going off.
     if (m.phase === 'planted' && this.now >= m.bomb.beepAt) {
       const left = m.rules.bombTime - (this.now - m.bomb.plantedAt);
@@ -576,8 +648,67 @@ export class Game {
     this.sounds.setListener(this.camEye || this.player.eye(), ear.fwd);
   }
 
-  // E: defuse the bomb when you're at it and looking at it.
+  // Walking over a gun picks it up when its slot is free (you and bots).
+  pickups() {
+    if (!this.drops.list.length) return;
+    for (const c of this.combatants) {
+      if (!c.alive) continue;
+      for (const it of this.drops.near(this.positionOf(c), 40)) {
+        if (it.by === c && this.now - it.at < 1.5) continue;
+        const slot = slotOf(it.id);
+        if (c === this.me ? this.arsenal.guns[slot] : this.botOf(c).weapons[slot]) continue;
+        this.pickUp(c, it);
+      }
+    }
+  }
+  pickUp(c, it) {
+    if (!this.drops.take(it)) return;
+    const slot = slotOf(it.id);
+    if (c === this.me) {
+      this.sounds.play('Player.PickupWeapon', { volume: 0.6 });
+      this.giveMe(slot, it.id, false).then(() => { const gun = this.arsenal.guns[slot]; if (gun) { gun.clip = it.clip; gun.reserve = it.reserve; } });
+    } else {
+      const b = this.botOf(c);
+      const gun = botGun(it.id, this.stats[it.id]);
+      gun.clip = it.clip; gun.reserve = it.reserve;
+      b.weapons[slot] = gun;
+      if (slot === 'primary') { b.slot = 'primary'; b.equip(it.id); }
+    }
+  }
+  // G: drop the gun in your hand (or the bomb).
+  dropMine() {
+    const gun = this.arsenal.gun;
+    if (!gun || gun.melee || gun.nade) return;
+    const eye = this.player.eye(), { fwd } = basis(this.input.pitch, this.input.yaw);
+    const vel = [fwd[0] * 250 + this.player.velocity[0], fwd[1] * 250 + this.player.velocity[1], fwd[2] * 250 + 60];
+    if (gun.id === 'weapon_c4') {
+      this.match.dropBomb(this.me, this.player.origin);
+      this.arsenal.remove('c4', this.now);
+      return;
+    }
+    this.drops.drop(gun, [eye[0], eye[1], eye[2] - 10], vel, this.me);
+    this.arsenal.remove(gun.slot, this.now);
+  }
+  // A dying player drops their best gun.
+  dropOnDeath(c) {
+    const gun = c === this.me ? this.arsenal.guns.primary || this.arsenal.guns.secondary : this.botOf(c).weapons.primary || this.botOf(c).weapons.secondary;
+    if (!gun) return;
+    const p = this.positionOf(c);
+    this.drops.drop(gun, [p[0], p[1], p[2] + 40], [(Math.random() - 0.5) * 120, (Math.random() - 0.5) * 120, 80], c);
+    if (c !== this.me) delete this.botOf(c).weapons[gun.slot === 'secondary' ? 'secondary' : 'primary'];
+  }
+
+  // E: defuse the bomb when you're at it and looking at it, or swap for the gun you look at.
   useKey() {
+    if (this.input.pressed && this.arsenal.pressed?.has('use') && this.match.phase !== 'planted') {
+      const it = this.drops.lookedAt(this.player.eye(), basis(this.input.pitch, this.input.yaw).fwd);
+      if (it) {
+        const slot = slotOf(it.id), cur = this.arsenal.guns[slot];
+        if (cur) { const eye = this.player.eye(); this.drops.drop(cur, [eye[0], eye[1], eye[2] - 10], [0, 0, 0], this.me); this.arsenal.remove(slot, this.now); }
+        this.pickUp(this.me, it);
+        return;
+      }
+    }
     const m = this.match, me = this.me;
     let near = false;
     if (this.input.held('use') && m.phase === 'planted' && me.team === 'CT') {
@@ -599,7 +730,7 @@ export class Game {
     for (const e of this.enemiesOf(this.me)) {
       const p = this.bodyOf(e).chest;
       const d = Math.hypot(p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]);
-      if ((fwd[0] * (p[0] - eye[0]) + fwd[1] * (p[1] - eye[1]) + fwd[2] * (p[2] - eye[2])) / d > 0.5 && this.lineOfSight(eye, p)) this.spot(e, this.me);
+      if ((fwd[0] * (p[0] - eye[0]) + fwd[1] * (p[1] - eye[1]) + fwd[2] * (p[2] - eye[2])) / d > 0.5 && this.canSee(eye, p)) this.spot(e, this.me);
     }
   }
 
@@ -661,6 +792,16 @@ export class Game {
     return { feet: b.pos, eye, head: b.bonePos('head_0') || [eye[0], eye[1], eye[2] + 1], chest: [b.pos[0], b.pos[1], b.pos[2] + (b.ducked ? 36 : 50)] };
   }
   bodies() { return this.combatants.map((c) => ({ c, feet: this.positionOf(c) })); }
+  // Seeing someone: a clear line that doesn't pass through a smoke.
+  canSee(a, b) { return this.lineOfSight(a, b) && !this.nades.smokeBlocks(a, b); }
+  viewDir(c) { return c === this.me ? basis(this.input.pitch, this.input.yaw).fwd : basis(this.botOf(c).pitch, this.botOf(c).yaw).fwd; }
+  // Flashbanged: you see white (and hear the ringing); a bot can't see for a while.
+  flash(c, secs, by) {
+    if (c === this.me) {
+      if (secs > (this.flashUntil || 0) - this.now) { this.flashUntil = this.now + secs; this.flashSecs = secs; }
+      this.sounds.play(secs > 3 ? 'Flashbang.Ring.Long' : secs > 1.5 ? 'Flashbang.Ring.Medium' : 'Flashbang.Ring.Short', { volume: 0.5 });
+    } else this.botOf(c)?.brain.flashed(this.now + secs * 0.85);
+  }
   lineOfSight(a, b) {
     const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], l = Math.hypot(...d);
     return !this.collision.raycast(a, d.map((x) => x / l), l - 2, FLAG_BULLET);
@@ -736,39 +877,63 @@ export class Game {
     this.damage(target, backstab ? 90 : 40, { attacker: b.c, group: 'chest', armorRatio: 1.7, weapon: gun, point: this.bodyOf(target).chest, dir: [to[0] / l, to[1] / l, 0] });
   }
 
-  // One bullet: the nearest enemy hitbox before the wall it hits (friendly fire is off).
+  // One bullet: the nearest enemy hitbox before the wall it hits (friendly fire is off). Bullets go on through walls
+  // thin enough for the gun's penetration and the surface (wood easily, metal less, concrete barely), losing damage.
   fireBullet(shooter, origin, dir, gun, { tracer = false, muzzle = null } = {}) {
     const st = gun.stats;
     const range = st.range || 8192;
-    const wall = this.collision.raycast(origin, dir, range, FLAG_BULLET);
-    const maxT = wall ? wall.t : range;
-    let hit = null;
-    for (const c of this.combatants) {
-      if (!c.alive || c === shooter || c.team === shooter.team) continue;
-      const h = this.hitTest(c, origin, dir, hit ? hit.t : maxT);
-      if (h) hit = { ...h, c };
+    let o = origin, travelled = 0, scale = 1, power = st.penetration || 1, hit = null, lastT = range;
+    if (shooter === this.me) this.me.shots = (this.me.shots || 0) + 1;
+    for (let wallNo = 0; wallNo < 4; wallNo++) {
+      const wall = this.collision.raycast(o, dir, range - travelled, FLAG_BULLET);
+      const maxT = wall ? wall.t : range - travelled;
+      for (const c of this.combatants) {
+        if (!c.alive || c === shooter || c.team === shooter.team) continue;
+        const h = this.hitTest(c, o, dir, hit ? hit.t : maxT);
+        if (h) hit = { ...h, c };
+      }
+      if (hit) {
+        if (shooter === this.me) this.me.hits = (this.me.hits || 0) + 1;
+        const p = [0, 1, 2].map((i) => o[i] + dir[i] * hit.t);
+        const dmg = st.damage * Math.pow(st.rangeModifier, (travelled + hit.t) / 500) * scale;
+        this.damage(hit.c, dmg, { attacker: shooter, group: hit.group, armorRatio: st.armorRatio, headshotMult: st.headshot, point: p, dir, weapon: gun, wallbang: wallNo > 0 });
+        lastT = travelled + hit.t;
+        break;
+      }
+      if (!wall) { lastT = range; break; }
+      const p = [0, 1, 2].map((i) => o[i] + dir[i] * wall.t);
+      this.effects.impact(p, wall.normal, wall.surface);
+      if (wallNo === 0) {
+        const ev = `${impactName(wall.surface)}.BulletImpact`;
+        this.sounds.play(this.sounds.has(ev) ? ev : 'Default.BulletImpact', { pos: p, listener: this, volume: 0.6 });
+        lastT = travelled + wall.t;
+      }
+      // Through the wall? Find where the bullet comes out by tracing back from the far side.
+      const maxThick = 32 * power * (PENETRATION[String(wall.surface).toLowerCase()] ?? PENETRATION.default);
+      if (maxThick < 2) break;
+      const far = [0, 1, 2].map((i) => p[i] + dir[i] * maxThick);
+      const back = this.collision.raycast(far, dir.map((v) => -v), maxThick - 0.5, FLAG_BULLET);
+      if (!back) break; // solid all the way
+      const thick = maxThick - back.t;
+      if (thick >= maxThick) break;
+      const exit = [0, 1, 2].map((i) => far[i] - dir[i] * back.t);
+      this.effects.impact(exit, back.normal, wall.surface);
+      const k = 1 - thick / maxThick;
+      scale *= 0.25 + 0.6 * k;
+      power *= 0.5 + 0.4 * k;
+      travelled += wall.t + thick + 0.5;
+      o = exit.map((v, i) => v + dir[i] * 0.5);
     }
     const end = (t) => [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
-    if (shooter === this.me) this.me.shots = (this.me.shots || 0) + 1;
-    if (hit) {
-      if (shooter === this.me) this.me.hits = (this.me.hits || 0) + 1;
-      const dmg = st.damage * Math.pow(st.rangeModifier, hit.t / 500);
-      this.damage(hit.c, dmg, { attacker: shooter, group: hit.group, armorRatio: st.armorRatio, headshotMult: st.headshot, point: end(hit.t), dir, weapon: gun });
-    } else if (wall) {
-      const p = end(wall.t);
-      this.effects.impact(p, wall.normal, wall.surface);
-      const ev = `${impactName(wall.surface)}.BulletImpact`;
-      this.sounds.play(this.sounds.has(ev) ? ev : 'Default.BulletImpact', { pos: p, listener: this, volume: 0.6 });
-    }
     // Bullets flying past your head crack.
     if (shooter !== this.me && this.me.alive && hit?.c !== this.me) {
       const e = this.player.eye(), w = [e[0] - origin[0], e[1] - origin[1], e[2] - origin[2]];
       const along = w[0] * dir[0] + w[1] * dir[1] + w[2] * dir[2];
-      if (along > 0 && along < maxT && Math.hypot(w[0] - dir[0] * along, w[1] - dir[1] * along, w[2] - dir[2] * along) < 60 && Math.random() < 0.5) {
+      if (along > 0 && along < lastT && Math.hypot(w[0] - dir[0] * along, w[1] - dir[1] * along, w[2] - dir[2] * along) < 60 && Math.random() < 0.5) {
         this.sounds.play('BulletBy.Supersonic.Crack', { volume: 0.5 });
       }
     }
-    if (tracer) this.effects.tracer(muzzle || [origin[0] + dir[0] * 40, origin[1] + dir[1] * 40, origin[2] + dir[2] * 40 - 4], end(hit ? hit.t : maxT));
+    if (tracer) this.effects.tracer(muzzle || [origin[0] + dir[0] * 40, origin[1] + dir[1] * 40, origin[2] + dir[2] * 40 - 4], end(Math.min(lastT, range)));
     if (shooter === this.me) {
       if (gun.vm.muzzle) this.effects.muzzleFlash(gun.vm.muzzle.getWorldPosition(new THREE.Vector3()));
       else this.effects.muzzleFlash(new THREE.Vector3(0.09, -0.06, -0.55).applyQuaternion(this.camera.quaternion));
@@ -820,7 +985,7 @@ export class Game {
   }
 
   // CS2 damage: hit group multiplier, then armor (kevlar for the body, the helmet for the head).
-  damage(c, dmg, { attacker = null, group = 'chest', armorRatio = 1, headshotMult = 4, point = null, dir = null, weapon = null, explosion = false } = {}) {
+  damage(c, dmg, { attacker = null, group = 'chest', armorRatio = 1, headshotMult = 4, point = null, dir = null, weapon = null, explosion = false, wallbang = false } = {}) {
     if (!c.alive) return;
     const mult = explosion ? 1 : { head: headshotMult, chest: 1, stomach: 1.25, arm: 1, leg: 0.75 }[group] ?? 1;
     dmg *= mult;
@@ -854,17 +1019,18 @@ export class Game {
     }
     if (c.health <= 0) {
       if (attacker === this.me) this.sounds.play(head ? (armored ? 'Player.DeathHeadShotArmor.AttackerFeedback' : 'Player.DeathHeadShot.AttackerFeedback') : armored ? 'Player.DeathBodyArmor.AttackerFeedback' : 'Player.DeathBody.AttackerFeedback', { volume: 0.8 });
-      this.kill(c, attacker, weapon, head);
+      this.kill(c, attacker, weapon, head, { wallbang });
     }
   }
 
-  kill(c, attacker, weapon, headshot) {
+  kill(c, attacker, weapon, headshot, { wallbang = false } = {}) {
     if (!c.alive) return;
+    this.dropOnDeath(c);
     c.alive = false;
     c.health = 0;
     this.match.onKill(c, attacker, weapon?.stats || weapon);
     const wname = weapon?.id ? (ITEM_NAMES[weapon.id] || (weapon.name || '').split(' | ')[0]) : weapon?.name || 'World';
-    this.hud.kill({ killer: attacker?.name || '', victim: c.name, weapon: wname, headshot, mine: attacker === this.me || c === this.me, killerTeam: attacker?.team, victimTeam: c.team });
+    this.hud.kill({ killer: attacker?.name || '', victim: c.name, weapon: wname, headshot, wallbang, mine: attacker === this.me || c === this.me, killerTeam: attacker?.team, victimTeam: c.team });
     if (c === this.me) {
       this.planting = null; this.defusing = false;
       this.closeBuyMenu();
@@ -950,6 +1116,7 @@ export class Game {
       b.animate(this.paused ? 0 : dt);
     }
     this.effects.update(dt);
+    this.nades.update(dt);
     this.vmSun.intensity = this.world.sun.intensity * this.sunVis;
 
     this.renderer.clear();
@@ -984,7 +1151,10 @@ export class Game {
     hud.vitals(s.health, s.armor, s.helmet);
     hud.money(me.money, { buyzone: me.alive && m.buyOpen && this.inBuyZone(), c4: me.hasC4, kit: me.defuser });
     hud.spectate(!me.alive && this.spectating && !(this.deathCam && this.now < this.deathCam.until) ? this.spectating.c.name : null);
-    hud.crosshair(me.alive && !this.buyMenu.isOpen);
+    hud.crosshair(me.alive && !this.buyMenu.isOpen && !gun?.nade);
+    const left = (this.flashUntil || 0) - this.now;
+    hud.flashed(left > 0 ? Math.min(1, left / Math.max(0.5, this.flashSecs * 0.6)) : 0);
+    hud.nades(me.alive ? NADE_ORDER.filter((id) => me.nades[id] > 0).map((id) => [id, NADES[id].short, me.nades[id]]) : [], gun?.nade ? gun.id : null);
     if (me.alive && gun && !gun.melee) hud.setCrosshair(this.arsenal.inaccuracy(gun));
     const ammoKey = me.alive && gun ? `${gun.name}|${gun.clip}|${gun.reserve}` : '';
     if (ammoKey !== this.ammoKey) { this.ammoKey = ammoKey; hud.ammo(me.alive ? gun : null); }
@@ -1048,6 +1218,8 @@ export class Game {
     for (const job of this.vmCache.values()) job.then((x) => x.vm.dispose()).catch(() => {});
     for (const b of this.bots || []) b.dispose();
     this.effects?.dispose();
+    this.nades?.dispose();
+    this.drops?.dispose();
     this.world?.dispose();
     this.vmEnv?.dispose();
     this.sounds?.dispose();

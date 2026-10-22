@@ -9,8 +9,10 @@ const FOLDER = {
   weapon_knife_survival_bowie: 'knife/knife_bowie', weapon_knife_gypsy_jackknife: 'knife/knife_navaja',
   weapon_knife_widowmaker: 'knife/knife_talon', weapon_knife_falchion: 'knife/knife_falchion', weapon_knife_css: 'knife/knife_css',
   weapon_c4: 'equipment/c4', weapon_m4a1_silencer: 'rifle/rifle_m4a4',
+  weapon_hegrenade: 'grenade/grenade_hegrenade', weapon_flashbang: 'grenade/grenade_flashbang', weapon_smokegrenade: 'grenade/grenade_smokegrenade',
+  weapon_molotov: 'grenade/grenade_molotov', weapon_incgrenade: 'grenade/grenade_incendiary', weapon_decoy: 'grenade/_default_grenade',
 };
-const DEFAULT = { knife: 'knife/_default_knife', pistol: 'pistol/_default_pistol', rifle: 'rifle/_default_rifle' };
+const DEFAULT = { knife: 'knife/_default_knife', pistol: 'pistol/_default_pistol', rifle: 'rifle/_default_rifle', grenade: 'grenade/_default_grenade' };
 const PISTOLS = /^weapon_(cz75a|deagle|elite|fiveseven|glock|hkp2000|p250|revolver|tec9|usp_silencer|taser)$/;
 
 // Picks the inspect clip for a weapon id from the list of viewmodel clip paths in the game.
@@ -34,9 +36,11 @@ const ROLES = [
   ['reloadStart', /^reload_start/], ['reloadLoop', /^reload_loop/], ['reloadEnd', /^reload_end/], ['inspect', /^lookat01_(?!draw|transfix)/],
   ['lightMiss', /^light_miss\d/, true], ['lightHit', /^light_hit\d/, true], ['heavyMiss', /^heavy_miss\d/, true], ['heavyHit', /^heavy_hit\d/, true],
   ['lightBackstab', /^light_backstab/, true], ['heavyBackstab', /^heavy_backstab/, true], ['plant', /^plant_/],
+  ['pullpin', /^pullpin_/], ['throw', /^throw_overhand_/], ['throwUnder', /^throw_underhand_/], ['throwCharge', /^throwcharge_high_/],
 ];
+const GRENADES = /^weapon_(hegrenade|flashbang|smokegrenade|molotov|incgrenade|decoy)$/;
 function playClips(weapon, clips) {
-  const kind = /knife|bayonet/.test(weapon) ? 'knife' : PISTOLS.test(weapon) ? 'pistol' : 'rifle';
+  const kind = /knife|bayonet/.test(weapon) ? 'knife' : PISTOLS.test(weapon) ? 'pistol' : GRENADES.test(weapon) ? 'grenade' : 'rifle';
   const short = weapon.replace(/^weapon_/, '');
   // Equipment (the C4) has its own clips only.
   const folders = FOLDER[weapon]?.startsWith('equipment/') ? [FOLDER[weapon]] : [DEFAULT[kind], `${kind}/${short}`, `${kind}/${kind}_${short}`, FOLDER[weapon]].filter(Boolean);

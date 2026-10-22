@@ -75,6 +75,23 @@ function looseVar(v) {
   };
 }
 
+// Is an exported glTF whole? (an export cut short when the app closed leaves a short .bin/.glb or missing textures)
+function gltfComplete(file) {
+  try {
+    if (file.endsWith('.glb')) {
+      const fd = fs.openSync(file, 'r'), h = Buffer.alloc(12);
+      fs.readSync(fd, h, 0, 12, 0);
+      fs.closeSync(fd);
+      return h.readUInt32LE(0) === 0x46546c67 && fs.statSync(file).size >= h.readUInt32LE(8);
+    }
+    const g = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const dir = path.dirname(file);
+    const ok = (uri) => fs.existsSync(path.join(dir, decodeURIComponent(uri)));
+    return (g.buffers || []).every((b) => !b.uri || (ok(b.uri) && fs.statSync(path.join(dir, decodeURIComponent(b.uri))).size >= b.byteLength))
+      && (g.images || []).every((im) => !im.uri || ok(im.uri));
+  } catch { return false; }
+}
+
 class CS2 {
   constructor({ cli, gameDir, cacheDir, env = {}, log = () => {} }) {
     this.cli = cli;
@@ -172,7 +189,8 @@ class CS2 {
     const name = base(vmdl);
     const dir = path.join(this.cacheDir, 'models', name);
     const file = path.join(dir, name + '.gltf');
-    if (fs.existsSync(file)) return file;
+    if (fs.existsSync(file) && gltfComplete(file)) return file;
+    fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
     await this.run(['-i', this.vpk, '-f', vmdl.replace(/(\.vmdl)$/, '$1_c'), '-d', '-o', file,
       '--gltf_export_format', 'gltf', '--gltf_export_materials', '--gltf_textures_adapt']);
@@ -183,7 +201,7 @@ class CS2 {
   // Exports any model/animation resource to glTF in the cache (first-person arms and inspect clips).
   async exportGltf(file, rel, { materials = false, glb = false, animations = false } = {}) {
     const out = path.join(this.cacheDir, rel);
-    if (fs.existsSync(out)) return out;
+    if (fs.existsSync(out) && gltfComplete(out)) return out;
     fs.mkdirSync(path.dirname(out), { recursive: true });
     const args = ['-i', this.vpk, '-f', file.replace(/(\.v\w+)$/, '$1_c').replace(/_c_c$/, '_c'), '-o', out, '--gltf_export_format', glb ? 'glb' : 'gltf'];
     if (materials) args.push('--gltf_export_materials', '--gltf_textures_adapt');
@@ -198,8 +216,8 @@ class CS2 {
   // under cacheDir/rel. Returns { vpkFile: localPath | null }.
   async exportGlbBatch(files, rel) {
     const root = path.join(this.cacheDir, rel);
-    const out = (f) => path.join(root, f.replace(/_c$/, '').replace(/.[^./]+$/, '.glb'));
-    const missing = [...new Set(files)].filter((f) => !fs.existsSync(out(f)));
+    const out = (f) => path.join(root, f.replace(/_c$/, '').replace(/\.[^./]+$/, '.glb'));
+    const missing = [...new Set(files)].filter((f) => !fs.existsSync(out(f)) || !gltfComplete(out(f)));
     for (let i = 0; i < missing.length; i += 40) {
       await this.run(['-i', this.vpk, '-f', missing.slice(i, i + 40).join(','), '-o', root, '--gltf_export_format', 'glb']);
     }

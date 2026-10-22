@@ -14,7 +14,12 @@ const STATIC_COMBOS = ['S_PAINT_STYLE', 'S_OVERRIDE_NORMAL', 'S_USE_ALL_MASKS', 
 const toPosix = (p) => p.replace(/\\/g, '/');
 const PISTOL_RE = /PISTOL/;
 // Models for items without paint kits (not in the skin index).
-const EXTRA_MODELS = { weapon_c4: 'weapons/models/c4/weapon_c4.vmdl', defuser: 'weapons/models/defuser/defuser.vmdl' };
+const EXTRA_MODELS = {
+  weapon_c4: 'weapons/models/c4/weapon_c4.vmdl', defuser: 'weapons/models/defuser/defuser.vmdl',
+  weapon_hegrenade: 'weapons/models/grenade/hegrenade/weapon_hegrenade.vmdl', weapon_flashbang: 'weapons/models/grenade/flashbang/weapon_flashbang.vmdl',
+  weapon_smokegrenade: 'weapons/models/grenade/smokegrenade/weapon_smokegrenade.vmdl', weapon_molotov: 'weapons/models/grenade/molotov/weapon_molotov.vmdl',
+  weapon_incgrenade: 'weapons/models/grenade/incendiary/weapon_incendiarygrenade.vmdl', weapon_decoy: 'weapons/models/grenade/decoy/weapon_decoy.vmdl',
+};
 
 // Textures of a csgo_weapon_sticker material the renderer uses. Normal maps are kept raw (hemi-octahedral
 // normal in RG, roughness in B, self-illum mask in A), exactly as CS2's sticker shader samples them.
@@ -221,8 +226,30 @@ class CS2Service {
 
   // Export the model once; strip textures out of the glTF (the renderer loads the few it needs itself,
   // downscaled) and remember which texture files belong to which material.
-  async model(vmdl) {
-    const gltfFile = await this.cs2.exportModel(vmdl);
+  // One export per model at a time (a skin and the plain weapon can ask for the same model together).
+  model(vmdl) {
+    this.modelJobs ||= new Map();
+    if (!this.modelJobs.has(vmdl)) {
+      const job = this.exportModelInfo(vmdl);
+      this.modelJobs.set(vmdl, job);
+      job.catch(() => this.modelJobs.delete(vmdl));
+    }
+    return this.modelJobs.get(vmdl);
+  }
+
+  async exportModelInfo(vmdl) {
+    let gltfFile = await this.cs2.exportModel(vmdl);
+    // The textures the model's info lists must all be there (else the export was cut short: do it again).
+    const infoFile0 = gltfFile.replace(/\.gltf$/, '.info.json');
+    try {
+      const info = JSON.parse(fs.readFileSync(infoFile0, 'utf8'));
+      const files = Object.values(info.materials).flatMap((m) => [m.color, m.orm, m.normal]).filter(Boolean);
+      const local = (u) => path.join(this.cacheDir, ...u.replace(/^cs2cache\//, '').split('/').map(decodeURIComponent));
+      if (files.some((u) => !fs.existsSync(local(u)))) {
+        fs.rmSync(path.dirname(gltfFile), { recursive: true, force: true });
+        gltfFile = await this.cs2.exportModel(vmdl);
+      }
+    } catch {}
     const infoFile = gltfFile.replace(/\.gltf$/, '.info.json');
     if (fs.existsSync(infoFile)) return { gltfFile, info: JSON.parse(fs.readFileSync(infoFile, 'utf8')) };
     const g = JSON.parse(fs.readFileSync(gltfFile, 'utf8'));

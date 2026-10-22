@@ -1,9 +1,13 @@
 // Play: offline CS2 practice against bots on real CS2 maps, with your equipped skins, gloves and knife.
 import { esc } from '../util.js';
-import { cs2Status } from '../cs2/api.js';
+import { cs2Status, cs2Play } from '../cs2/api.js';
 import { toast } from '../ui.js';
 
-const MAPS = [['de_dust2', 'Dust II']];
+// Map art colours for the lobby cards (any other installed map gets a neutral card).
+const MAP_TINT = { de_dust2: '#c9a46a, #7b5a33', de_mirage: '#d8b98a, #8a6a45', de_inferno: '#c98a5a, #6b3f22', de_nuke: '#8fa5b5, #3e4b57',
+  de_ancient: '#7fa36a, #3c5a35', de_anubis: '#d6b97a, #6d5a3a', de_overpass: '#9fb0a0, #4a5a4c', de_vertigo: '#a8b8c8, #4c5a6a', de_train: '#9a9a8a, #4a4a40',
+  cs_office: '#a0a8b8, #404858', cs_italy: '#d8a878, #7a5030' };
+let mapList = null;
 
 const PREFS_KEY = 'cs2sim.play';
 const DEFAULTS = { map: 'de_dust2', team: 'CT', teamSize: 5, difficulty: 'normal', length: 'short', sensitivity: 1.25, quality: 'balanced' };
@@ -17,12 +21,19 @@ let root = null, session = null;
 export function render(r) {
   root = r;
   const p = prefs();
+  if (!mapList) {
+    mapList = [{ id: 'de_dust2', name: 'Dust II' }];
+    cs2Play('maps').then((list) => {
+      const bomb = (list || []).filter((m) => /^de_/.test(m.id)); // bomb defusal maps
+      if (bomb.length) { mapList = bomb; if (root === r) render(r); }
+    }).catch(() => {});
+  }
   const opts = (list, cur) => list.map(([id, n]) => `<option value="${id}" ${id === cur ? 'selected' : ''}>${esc(n)}</option>`).join('');
   r.innerHTML = `<div class="page play-page">
     <div class="page-head"><h1>Play</h1><span class="sub">Offline CS2 competitive against bots, on real CS2 maps from your install, with your equipped skins, gloves and knife.</span></div>
     <div class="play-lobby">
-      <div class="play-maps">${MAPS.map(([id, n]) => `<button class="play-map ${id === p.map ? 'active' : ''}" data-map="${id}"><span>${esc(n)}</span></button>`).join('')}
-        <div class="play-map soon"><span>More maps</span><small>coming soon</small></div></div>
+      <div class="play-maps">${mapList.map(({ id, name }) => `<button class="play-map ${id === p.map ? 'active' : ''}" data-map="${id}" style="${MAP_TINT[id] ? `--tint: linear-gradient(160deg, ${MAP_TINT[id]} 70%, #1a1712)` : ''}">
+          <span>${esc(name)}</span><small>${id === 'de_dust2' ? 'Recommended' : 'The first match prepares the map (a couple of minutes)'}</small></button>`).join('')}</div>
       <div class="play-setup card">
         <label>Side<select class="input" data-k="team"><option value="CT" ${p.team === 'CT' ? 'selected' : ''}>Counter-Terrorists</option><option value="T" ${p.team === 'T' ? 'selected' : ''}>Terrorists</option></select></label>
         <label>Players per team<select class="input" data-k="teamSize">${opts([['5', '5v5'], ['4', '4v4'], ['3', '3v3'], ['2', '2v2'], ['1', '1v1']], String(p.teamSize))}</select></label>
@@ -31,7 +42,7 @@ export function render(r) {
         <label>Sensitivity (CS2)<input class="input" type="number" min="0.05" max="20" step="0.05" data-k="sensitivity" value="${p.sensitivity}"></label>
         <label>Graphics<select class="input" data-k="quality">${opts([['high', 'High (full resolution)'], ['balanced', 'Balanced'], ['performance', 'Performance']], p.quality)}</select></label>
         <button class="btn primary big" data-start>Play</button>
-        <div class="muted play-keys">WASD move · Space jump · Ctrl crouch · Shift walk · Mouse1 fire · Mouse2 scope · R reload · F inspect · B buy · E defuse · 1/2/3/5 weapons (5 = bomb, hold Mouse1 in a site to plant) · Tab scores · Esc pause</div>
+        <div class="muted play-keys">WASD move · Space jump · Ctrl crouch · Shift walk · Mouse1 fire · Mouse2 scope · R reload · F inspect · B buy · E defuse / pick up · G drop · 1/2/3 weapons · 4 grenades (Mouse1 throw, Mouse2 lob) · 5 bomb (hold Mouse1 in a site) · Tab scores · Esc pause</div>
       </div>
     </div>
   </div>`;

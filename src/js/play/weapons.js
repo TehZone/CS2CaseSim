@@ -3,6 +3,7 @@
 // spread pattern, and recoil generated from each weapon's recoil seed the way Source does (aim punch with its
 // decay, plus view punch). Angles are in degrees with Source's signs: positive pitch looks down, positive yaw turns left.
 import { UniformRandomStream } from '../cs2/rng.js';
+import { NADES, NADE_ORDER } from './grenades.js';
 
 // Source / CS2 convars.
 const RECOIL = {
@@ -41,6 +42,7 @@ export class Gun {
     Object.assign(this, { slot, id, name, stats, vm });
     this.sounds = sounds;
     this.melee = !!stats.melee || /knife|bayonet/.test(id);
+    this.nade = NADES[id] || null;
     this.clip = stats.clip;
     this.reserve = stats.reserve;
     this.mode = 0;
@@ -86,6 +88,8 @@ export class Arsenal {
   selectBest(t) {
     for (const s of ['primary', 'secondary', 'knife', 'c4']) if (this.guns[s]) { this.select(s, t); return; }
   }
+  // Slots in wheel order: guns, knife, grenades (CS2's order), bomb.
+  order() { return ['primary', 'secondary', 'knife', ...NADE_ORDER.map((id) => 'g_' + id), 'c4'].filter((s) => this.guns[s]); }
 
   select(slot, t) {
     const g = this.guns[slot];
@@ -97,7 +101,8 @@ export class Arsenal {
     g.deployEnd = t + (g.stats.deploy || 1);
     g.nextAttack = Math.max(g.nextAttack, g.deployEnd);
     g.animEnd = t + g.vm.play('draw');
-    this.sound(g.melee ? 'Weapon_Knife.Deploy' : g.prefix + 'Draw');
+    if (g.nade) { g.pin = null; g.throwAt = null; g.released = false; this.sound(g.id === 'weapon_molotov' ? 'Molotov.Draw' : 'HEGrenade.Draw', { volume: 0.5 }); }
+    else this.sound(g.melee ? 'Weapon_Knife.Deploy' : g.prefix + 'Draw');
     this.game.emit('weapon', g);
   }
 
@@ -139,15 +144,21 @@ export class Arsenal {
     for (const [a, slot] of [['slot1', 'primary'], ['slot2', 'secondary'], ['slot3', 'knife'], ['slot5', 'c4']]) if (pressed.has(a) && this.guns[slot]) this.select(slot, t);
     if (pressed.has('lastWeapon') && this.last && this.guns[this.last.slot] === this.last) this.select(this.last.slot, t);
     if (wheel) {
-      const order = ['primary', 'secondary', 'knife', 'c4'].filter((s) => this.guns[s]);
+      const order = this.order();
       const i = order.indexOf(this.current?.slot);
       if (order.length) this.select(order[(i + (wheel > 0 ? 1 : -1) + order.length) % order.length], t);
+    }
+    // 4: cycle through your grenades.
+    if (pressed.has('slot4')) {
+      const nades = this.order().filter((s) => s.startsWith('g_'));
+      if (nades.length) this.select(nades[(nades.indexOf(this.current?.slot) + 1) % nades.length], t);
     }
     const cur = this.current;
     this.recover(cur, dt, t);
     if (cur.reloading && t >= cur.reloadEnd) this.finishReload(cur, t);
     if (!cur.reloading && cur.vm.role !== 'idle' && t >= cur.animEnd && cur.vm.has('idle')) cur.vm.play('idle', { loop: true, fade: 0.12 });
     if (cur.resumeZoom && t >= cur.nextAttack) { cur.zoom = cur.resumeZoom; cur.resumeZoom = 0; }
+    if (cur.nade) { this.grenade(cur, t, input); return; }
     // The bomb: hold fire in a bomb site to plant (the game runs the planting).
     if (cur.id === 'weapon_c4') { this.game.playerPlant(!!(input.buttons & 1), t); return; }
     if (!this.game.canAttack()) { if (pressed.has('reload')) this.reload(cur, t); return; }
@@ -173,6 +184,32 @@ export class Arsenal {
         if (cur.reserve > 0) this.reload(cur, t);
       }
     }
+  }
+
+  // Grenades: pressing pulls the pin; releasing throws (Mouse1 full throw, Mouse2 underhand, both medium).
+  grenade(g, t, input) {
+    const b1 = !!(input.buttons & 1), b2 = !!(input.buttons & 4);
+    if (g.throwAt == null) {
+      if (!this.game.canAttack() || t < g.deployEnd) return;
+      if (!g.pin && (b1 || b2)) {
+        g.pin = t;
+        g.vm.play(g.vm.has('pullpin') ? 'pullpin' : 'idle');
+        this.sound(g.nade.pin, { volume: 0.6 });
+      }
+      if (g.pin) {
+        if (b1 || b2) g.strength = b1 && b2 ? 0.5 : b1 ? 1 : 0;
+        else if (t >= g.pin + 0.3) {
+          g.throwAt = t + 0.1;
+          g.vm.play(g.strength >= 0.5 ? 'throw' : g.vm.has('throwUnder') ? 'throwUnder' : 'throw', { fade: 0.03 });
+        }
+      }
+      return;
+    }
+    if (!g.released && t >= g.throwAt) {
+      g.released = true;
+      this.game.throwMyNade(g.id, g.strength ?? 1);
+    }
+    if (g.released && t >= g.throwAt + 0.45) this.game.usedNade(g.id, t);
   }
 
   recover(g, dt, t) {

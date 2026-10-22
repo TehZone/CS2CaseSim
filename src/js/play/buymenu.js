@@ -54,6 +54,6 @@ export class BuyMenu {
       <div class="buy-cols">${cats.map((c, ci) => `<div class="buy-col ${this.cat === ci ? 'active' : ''}"><h4><kbd>${ci + 1}</kbd> ${esc(c.cat)}</h4>
         ${c.items.map((it, ii) => `<button class="buy-item ${it.owned ? 'owned' : ''}" data-buy="${it.id}" ${it.ok ? '' : 'disabled'}>
           <kbd>${this.cat === ci ? ii + 1 : ''}</kbd><span>${esc(it.name)}</span><em>${it.owned ? 'Owned' : '$' + it.price}</em></button>`).join('')}</div>`).join('')}</div>
-      <div class="buy-hint">Grenades come in the next update.</div>`;
+      <div class="buy-hint">Up to 4 grenades (2 flashbangs, 1 of each other). Mouse1 throws, Mouse2 lobs, both for a medium throw.</div>`;
   }
 }

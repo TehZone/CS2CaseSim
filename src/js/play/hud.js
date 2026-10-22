@@ -10,6 +10,7 @@ export class Hud {
     this.el = document.createElement('div');
     this.el.className = 'play-hud';
     this.el.innerHTML = `
+      <div class="flashed"></div>
       <div class="scope"></div>
       <div class="dmg"></div>
       <div class="dmgdir"></div>
@@ -30,7 +31,7 @@ export class Hud {
           <div class="money"><span class="buyzone hidden" data-buyzone title="Buy zone (B)">BUY</span><span data-money>$0</span><span class="c4 hidden" data-c4>C4</span><span class="kit hidden" data-kit>KIT</span></div>
           <div class="vitals"><div><small>HP</small><span data-hp>100</span></div><div><small>ARMOR</small><span data-ar>0</span><i data-helmet class="hidden">H</i></div></div>
         </div>
-        <div class="ammo"><div class="weapon-name" data-wn></div><span data-clip>0</span> <small>/ <span data-res>0</span></small></div>
+        <div class="ammo"><div class="nades" data-nades></div><div class="weapon-name" data-wn></div><span data-clip>0</span> <small>/ <span data-res>0</span></small></div>
       </div>
       <div class="scoreboard hidden" data-scores></div>
       <div class="endscreen hidden" data-end></div>`;
@@ -71,11 +72,19 @@ export class Hud {
   }
   ammo(gun) {
     this.set('[data-wn]', gun?.name || '');
-    const melee = !gun || gun.melee || gun.id === 'weapon_c4';
+    const melee = !gun || gun.melee || gun.id === 'weapon_c4' || gun.nade;
     this.set('[data-clip]', melee ? '' : String(gun.clip));
     this.q('[data-res]').parentElement.style.display = melee ? 'none' : '';
     this.set('[data-res]', melee ? '' : String(gun.reserve));
   }
+  // Your grenades (the one in your hand highlighted).
+  nades(list, current) {
+    const html = list.map(([id, short, n]) => (id === current ? `<b>${short}${n > 1 ? ' ×' + n : ''}</b>` : `${short}${n > 1 ? ' ×' + n : ''}`)).join(' · ');
+    if (this.cache.nades !== html) { this.cache.nades = html; this.q('[data-nades]').innerHTML = html; }
+  }
+  // Flashbang: white that fades (opacity 0..1).
+  flashed(a) { const k = Math.round(a * 100) / 100; if (this.cache.fl !== k) { this.cache.fl = k; this.q('.flashed').style.opacity = String(k); } }
+
   place(name) { this.set('.place', name ? name.replace(/([a-z])([A-Z])/g, '$1 $2') : ''); }
   fps(v) { this.set('.fps', `${Math.round(v)} fps`); }
   scoped(on) { this.el.classList.toggle('scoped', !!on); }
@@ -120,10 +129,10 @@ export class Hud {
     setTimeout(() => a.remove(), 1200);
   }
 
-  kill({ killer, victim, weapon, headshot, mine, killerTeam, victimTeam }) {
+  kill({ killer, victim, weapon, headshot, wallbang, mine, killerTeam, victimTeam }) {
     const row = document.createElement('div');
     if (mine) row.className = 'mine';
-    row.innerHTML = `${killer ? `<span class="${killerTeam === 'CT' ? 'ct' : 't'}">${esc(killer)}</span> ` : ''}<span class="muted">${esc(weapon)}${headshot ? ' ⌖' : ''}</span> <span class="${victimTeam === 'CT' ? 'ct' : 't'}">${esc(victim)}</span>`;
+    row.innerHTML = `${killer ? `<span class="${killerTeam === 'CT' ? 'ct' : 't'}">${esc(killer)}</span> ` : ''}<span class="muted">${esc(weapon)}${wallbang ? ' ⫽' : ''}${headshot ? ' ⌖' : ''}</span> <span class="${victimTeam === 'CT' ? 'ct' : 't'}">${esc(victim)}</span>`;
     const feed = this.q('.feed');
     feed.prepend(row);
     while (feed.children.length > 6) feed.lastChild.remove();

@@ -45,6 +45,7 @@ export class Brain {
 
   roundStart(plan) {
     this.plan = plan || {};
+    this.blindUntil = 0; this.nadeAt = 0; this.thrown = new Set();
     this.path = null; this.goal = null; this.target = null; this.lastSeen = null; this.heard = null;
     this.task = 'idle';
     this.holdYaw = null;
@@ -72,6 +73,19 @@ export class Brain {
     }
     if (this.bot.weapons.primary || c.money >= 2500) take('vesthelm') || take('vest');
     if (c.team === 'CT' && Math.random() < 0.7) take('defuser');
+    // Grenades with what's left.
+    if (this.bot.weapons.primary) {
+      const fire = c.team === 'T' ? 'weapon_molotov' : 'weapon_incgrenade';
+      for (const [id, p] of [['weapon_flashbang', 0.65], ['weapon_smokegrenade', 0.5], [fire, 0.4], ['weapon_hegrenade', 0.35], ['weapon_flashbang', 0.3]]) {
+        if (Math.random() < p && c.money >= (st[id]?.price || 300) + 200) take(id);
+      }
+    }
+  }
+
+  // Flashbanged: blind until then (a bot that was aiming at you loses you).
+  flashed(until) {
+    this.blindUntil = Math.max(this.blindUntil || 0, until);
+    if (this.target) this.target.visible = false;
   }
 
   // ---- per tick ---------------------------------------------------------------------------------------------------
@@ -127,6 +141,7 @@ export class Brain {
   // ---- senses -----------------------------------------------------------------------------------------------------
   scan(t) {
     const g = this.game, b = this.bot, eye = b.eye();
+    if (t < this.blindUntil) { if (this.target?.visible) { this.target.visible = false; this.target.lostAt = t; } return; }
     const [aimP, aimY] = [b.pitch, b.yaw];
     const fwd = [Math.cos((aimY * Math.PI) / 180), Math.sin((aimY * Math.PI) / 180)];
     let best = null, bestD = Infinity;
@@ -137,7 +152,7 @@ export class Brain {
       const to = [(body.chest[0] - eye[0]) / d, (body.chest[1] - eye[1]) / d];
       const inView = to[0] * fwd[0] + to[1] * fwd[1] > Math.cos(((this.d.fov / 2) * Math.PI) / 180) || d < 220 || this.hurtBy === e;
       if (!inView) continue;
-      const seen = [body.head, body.chest].find((p) => g.lineOfSight(eye, p));
+      const seen = [body.head, body.chest].find((p) => g.canSee(eye, p));
       if (seen && d < bestD) { best = { c: e, point: seen }; bestD = d; }
     }
     if (best) {
@@ -216,6 +231,7 @@ export class Brain {
   // Where to look when not fighting: the last place an enemy was, a noise, the hold angle, or ahead.
   look(dt, t) {
     const b = this.bot;
+    if (t < this.blindUntil) { this.turnTo(b.pitch + Math.sin(t * 9) * 3, b.yaw + Math.sin(t * 3.1 + b.index) * 40, dt, 0.4); return; }
     if (this.lastSeen && t - this.lastSeen.t < 4) { const [p, y] = angleTo(b.eye(), [this.lastSeen.pos[0], this.lastSeen.pos[1], this.lastSeen.pos[2] + 60]); this.turnTo(p, y, dt, 0.7); return; }
     if (this.heard && t - this.heard.t < 3) { const [p, y] = angleTo(b.eye(), [this.heard.pos[0], this.heard.pos[1], this.heard.pos[2] + 60]); this.turnTo(p, y, dt, 0.6); return; }
     if (this.task === 'hold' && this.holdYaw != null && Math.hypot(b.vel[0], b.vel[1]) < 20) {
@@ -234,6 +250,13 @@ export class Brain {
     if (t - g.liveAt < this.startDelay) return;
     if (this.target?.visible && !this.target.c.alive) this.target = null;
     const siteBox = (s) => g.map.info.bombsites.find((x) => x.site === s);
+    if (!this.target?.visible && t >= this.nadeAt) this.useNades(t, siteBox);
+    // No rifle? Grab one lying nearby.
+    if (!b.weapons.primary && !this.target?.visible && (bomb.state !== 'planted' || c.team === 'T')) {
+      const loot = g.drops.list.filter((it) => !/^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/.test(it.id) && !g.nades.inFire(it.pos))
+        .map((it) => ({ it, d: Math.hypot(it.pos[0] - b.pos[0], it.pos[1] - b.pos[1]) })).filter((x) => x.d < 700).sort((x, y) => x.d - y.d)[0];
+      if (loot) return this.setTask('goto', loot.it.pos);
+    }
     if (c.team === 'T') {
       if (bomb.state === 'dropped' && g.nearestTo(bomb.pos, 'T') === c) return this.setTask('pickup', bomb.pos);
       if (bomb.state === 'planted') {
@@ -266,6 +289,46 @@ export class Brain {
   }
 
   recentlySawEnemy(t, s) { return this.lastSeen && t - this.lastSeen.t < s; }
+
+  // Grenades like CS2's bots use them: terrorists smoke off the CT side and flash before taking a site; anyone throws
+  // a molotov or HE where they last saw enemies; retaking CTs flash the bomb; terrorists burn a defuser.
+  useNades(t, siteBox) {
+    const g = this.game, m = g.match, b = this.bot, c = this.c, n = c.nades, bomb = m.bomb;
+    const has = (id) => n[id] > 0;
+    const go = (id, target, high = false) => {
+      if (!has(id) || this.thrown.has(id + (target ? Math.round(target[0] / 400) : ''))) return false;
+      if (g.botThrow(b, id, target, high)) { this.thrown.add(id + Math.round(target[0] / 400)); this.nadeAt = t + 1.2; return true; }
+      return false;
+    };
+    const fire = has('weapon_molotov') ? 'weapon_molotov' : 'weapon_incgrenade';
+    if (m.phase === 'live' && c.team === 'T' && this.plan.site) {
+      const s = siteBox(this.plan.site);
+      if (s) {
+        const center = [(s.min[0] + s.max[0]) / 2, (s.min[1] + s.max[1]) / 2, s.min[2] + 10];
+        const d = Math.hypot(center[0] - b.pos[0], center[1] - b.pos[1]);
+        const ct = g.enemySpawnCenter('T');
+        if (d < 1400 && d > 450 && !this.plan.smoked && has('weapon_smokegrenade')) {
+          // Smoke between the site and where CTs come from.
+          const k = 0.45, target = [center[0] + (ct[0] - center[0]) * k, center[1] + (ct[1] - center[1]) * k, center[2]];
+          const spot = g.nav.findArea(target, 400) ? target : center;
+          if (go('weapon_smokegrenade', spot)) { this.plan.smoked = true; return; }
+        }
+        if (d < 1000 && d > 300 && !this.plan.flashed && has('weapon_flashbang')) {
+          if (go('weapon_flashbang', [center[0], center[1], center[2] + 120], true)) { this.plan.flashed = true; return; }
+        }
+      }
+    }
+    // Enemies were just here (out of sight now): burn or blow up the spot.
+    if (this.lastSeen && t - this.lastSeen.t < 2.5 && t - this.lastSeen.t > 0.4) {
+      const d = Math.hypot(this.lastSeen.pos[0] - b.pos[0], this.lastSeen.pos[1] - b.pos[1]);
+      if (d > 350 && d < 1500) { if (go(fire, this.lastSeen.pos) || go('weapon_hegrenade', this.lastSeen.pos)) return; }
+    }
+    if (m.phase === 'planted') {
+      const d = Math.hypot(bomb.pos[0] - b.pos[0], bomb.pos[1] - b.pos[1]);
+      if (c.team === 'CT' && d < 1200 && d > 400 && go('weapon_flashbang', [bomb.pos[0], bomb.pos[1], bomb.pos[2] + 100], true)) return;
+      if (c.team === 'T' && bomb.defuser && d < 1300 && go(fire, bomb.pos)) return;
+    }
+  }
 
   // Runs away from the bomb (towards your own spawn), out of the blast.
   flee(from) {
@@ -350,6 +413,12 @@ export class Brain {
     }
     if (!moving) b.ducked = this.target?.visible ? b.ducked : this.task === 'plant' || this.task === 'defuse';
     else if (!this.target?.visible) b.ducked = false;
+    // Step out of fire.
+    const burning = g.nades.fireNear(b.pos, 30);
+    if (burning) {
+      const dx = b.pos[0] - burning.pos[0], dy = b.pos[1] - burning.pos[1], d = Math.hypot(dx, dy) || 1;
+      want = [(dx / d) * max, (dy / d) * max];
+    }
     // Keep apart from teammates and you.
     for (const o of g.bodies()) {
       if (o.c === this.c || !o.c.alive) continue;
@@ -399,7 +468,10 @@ export function teamPlan(game, side) {
   const assign = new Map();
   const order = bots.map((b) => b.c).sort(() => Math.random() - 0.5);
   const n = order.length;
-  const layout = n >= 5 ? ['A', 'A', 'B', 'B', 'mid'] : n === 4 ? ['A', 'A', 'B', 'B'] : n === 3 ? ['A', 'B', 'mid'] : n === 2 ? ['A', 'B'] : ['A'];
+  const sites = game.map.info.bombsites.map((s) => s.site);
+  const two = sites.includes('B') ? 'B' : sites[0] || 'A';
+  const mid = game.midSpot ? 'mid' : Math.random() < 0.5 ? 'A' : two;
+  const layout = n >= 5 ? ['A', 'A', two, two, mid] : n === 4 ? ['A', 'A', two, two] : n === 3 ? ['A', two, mid] : n === 2 ? ['A', two] : [Math.random() < 0.5 ? 'A' : two];
   order.forEach((c, i) => assign.set(c, layout[i % layout.length]));
   return { assign };
 }
