@@ -7,6 +7,7 @@ import { act } from '../backend.js';
 import { sfx } from '../audio.js';
 import { toast, openModal, itemCard, patternTag, sellItems, openInspect, showItemDetail, rarityOddsHTML } from '../ui.js';
 import { renderChickenThumb } from '../chicken3d.js';
+import { playCaseIntro } from '../caseintro.js';
 import { BREED, HAT, chickenValue } from '../chickens.js';
 
 const view = { mode: 'list', caseId: null, colId: null, filter: 'case', sort: 'new', q: '', qty: 1, major: 'all' };
@@ -315,7 +316,7 @@ function renderCase(root, c) {
       </div>
     </div>
     <div class="section-title">Contains</div>
-    <div class="grid">${contents}${c.rare ? `<div class="card rare-tile" style="--rc:#e4ae39" data-scroll-rare><div class="img"><span class="rare-glyph">★</span></div><div class="rbar"></div><div class="meta"><div class="n1">Exceedingly rare</div><div class="n2">★ Rare Special Item</div><div class="row"><span class="wear">${c.rareKind === 'gloves' ? 'Gloves' : c.rareKind === 'mixed' ? 'Knives & gloves' : 'Knives'}</span><span class="dim">${(rareW * 100).toFixed(2)}%</span></div></div></div>` : ''}</div>
+    <div class="grid">${contents}${c.rare ? `<div class="card rare-tile" style="--rc:#e4ae39" data-scroll-rare><div class="img"><img class="rare-icon" src="img/rare-item.png" alt=""></div><div class="rbar"></div><div class="meta"><div class="n1">Exceedingly rare</div><div class="n2">★ Rare Special Item</div><div class="row"><span class="wear">${c.rareKind === 'gloves' ? 'Gloves' : c.rareKind === 'mixed' ? 'Knives & gloves' : 'Knives'}</span><span class="dim">${(rareW * 100).toFixed(2)}%</span></div></div></div>` : ''}</div>
     ${c.rare ? `<div class="section-title" id="rare-list">Rare special items (${c.rare.length})</div><div class="grid">${rareTiles}</div>` : ''}
     <p class="dim" style="margin-top:22px;font-size:12px">Tip: click any item for prices, odds and a 3D inspect.</p>
   </div>`;
@@ -557,20 +558,22 @@ export async function openCase(c, n) {
     toast(esc(e.message), 'bad');
     return;
   }
-  sfx.open();
+  const intro = S.settings.caseIntro !== false && c.kind !== 'chickens' && c.kind !== 'agents'
+    ? (stage) => playCaseIntro(stage, c, caseImage(c)) : null;
+  if (!intro) sfx.open();
   if (r.stars) toast(`+${r.stars} Armory Star${r.stars > 1 ? 's' : ''} for opening cases`, 'gold');
-  if (r.autoSold) setTimeout(() => toast(`Auto-sold ${r.items.filter((i) => i.as).length} item${r.items.filter((i) => i.as).length === 1 ? '' : 's'} for <b class="green">${money(r.autoSold)}</b>`, 'good'), S.settings.fast ? 2600 : 6500);
   try {
-    await playRoulette(c, r.items);
+    await playRoulette(c, r.items, undefined, { intro });
   } finally {
     opening = false;
   }
+  if (r.autoSold) toast(`Auto-sold ${r.items.filter((i) => i.as).length} item${r.items.filter((i) => i.as).length === 1 ? '' : 's'} for <b class="green">${money(r.autoSold)}</b>`, 'good');
   showResults(c, r.items, n);
 }
 
 function slotHTML(entry, showAll = false) {
   if (entry.t === 'rare-placeholder' || (!showAll && entry.t === 'skin' && D.skins[entry.id]?.star)) {
-    return `<div class="slot rare" style="--rc:#e4ae39"><span class="rare-glyph">★</span><div class="sn">Rare Special Item</div></div>`;
+    return `<div class="slot rare" style="--rc:#e4ae39"><img class="rare-icon" src="img/rare-item.png" alt=""><div class="sn">★ Rare Special Item ★</div></div>`;
   }
   const r = I.rarityInfo(entry);
   const np = I.nameParts(entry);
@@ -578,12 +581,13 @@ function slotHTML(entry, showAll = false) {
 }
 
 const WIN_INDEX = 58, REEL_LEN = 66;
-export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`) {
+// `intro(stage)` (optional) plays first in the overlay and returns { done, skip } (see caseintro.js).
+export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro = null } = {}) {
   return new Promise((resolve) => {
     const n = items.length;
     const ov = document.createElement('div');
-    ov.className = 'opening';
-    ov.innerHTML = `<h3>${title}</h3><div class="strips n${n}">${items.map(() => '<div class="strip"><div class="reel"></div><div class="marker"></div></div>').join('')}</div><div class="hint">Press SPACE or click to skip</div>`;
+    ov.className = 'opening' + (intro ? ' intro' : '');
+    ov.innerHTML = `${intro ? '<div class="crate-stage"></div>' : ''}<h3>${title}</h3><div class="strips n${n}">${items.map(() => '<div class="strip"><div class="reel"></div><div class="marker"></div></div>').join('')}</div><div class="hint">Press SPACE or click to skip</div>`;
     document.body.appendChild(ov);
     const strips = [...ov.querySelectorAll('.strip')];
     const reels = strips.map((strip, si) => {
@@ -593,8 +597,9 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`) {
       reel.innerHTML = entries.map((e) => slotHTML(e, c.showAll)).join('');
       return { strip, reel };
     });
+    let skipAll = false;
     // measure after layout
-    requestAnimationFrame(() => {
+    const spin = () => requestAnimationFrame(() => {
       const fast = S.settings.fast;
       const anims = reels.map(({ strip, reel }, si) => {
         const slot = reel.children[0];
@@ -633,10 +638,31 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`) {
         if (allDone) finish();
         else requestAnimationFrame(step);
       };
-      requestAnimationFrame(step);
       const onKey = (e) => { if (e.code === 'Space' || e.key === 'Escape') { e.preventDefault(); finish(); } };
+      if (skipAll) return finish();
+      requestAnimationFrame(step);
       window.addEventListener('keydown', onKey, true);
       ov.addEventListener('click', finish);
+    });
+    if (!intro) return spin();
+    // Skipping during the intro skips the whole opening.
+    const stage = ov.querySelector('.crate-stage');
+    const run = intro(stage);
+    const onSkip = (e) => {
+      if (e.type === 'keydown' && e.code !== 'Space' && e.key !== 'Escape') return;
+      e.preventDefault();
+      skipAll = true;
+      run.skip();
+    };
+    window.addEventListener('keydown', onSkip, true);
+    ov.addEventListener('click', onSkip);
+    run.done.catch(() => {}).then(() => {
+      window.removeEventListener('keydown', onSkip, true);
+      ov.removeEventListener('click', onSkip);
+      ov.classList.remove('intro');
+      stage.classList.add('gone');
+      setTimeout(() => stage.remove(), 400);
+      spin();
     });
   });
 }

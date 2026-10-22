@@ -156,7 +156,7 @@ img { user-select: none; -webkit-user-drag: none; }
 .section-title { text-transform: uppercase; letter-spacing: 1.5px; color: var(--muted); font-size: 12px; margin: 26px 0 10px; display: flex; align-items: center; gap: 10px; }
 .section-title::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 .rare-tile .img { background: radial-gradient(ellipse at 50% 55%, rgba(228,174,57,.35), transparent 70%); }
-.rare-glyph { font-size: 58px; color: var(--gold2); text-shadow: 0 0 22px rgba(242,178,27,.8); }
+.rare-icon { width: 82%; height: 82%; object-fit: contain; filter: drop-shadow(0 4px 10px rgba(0,0,0,.6)); }
 
 /* ---------- roulette ---------- */
 .opening { position: fixed; inset: 0; background: rgba(5,8,12,.92); z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; backdrop-filter: blur(4px); }
@@ -178,7 +178,8 @@ img { user-select: none; -webkit-user-drag: none; }
 .strip .slot img { width: 86%; height: 70%; object-fit: contain; filter: drop-shadow(0 4px 6px rgba(0,0,0,.6)); }
 .strip .slot .sn { font-size: 11px; color: var(--muted); max-width: 92%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .strip .slot.rare { background: linear-gradient(180deg, #2b2312, #4b3812); }
-.strip .slot.rare .rare-glyph { font-size: 44px; }
+.strip .slot.rare .rare-icon { width: 86%; height: 70%; }
+.strip .slot.rare .sn { color: #e4ae39; }
 .strip .marker { position: absolute; top: 0; bottom: 0; left: 50%; width: 3px; margin-left: -1.5px; background: var(--gold); box-shadow: 0 0 14px var(--gold); z-index: 3; }
 .strip .marker::before, .strip .marker::after { content: ''; position: absolute; left: -7px; border: 8px solid transparent; }
 .strip .marker::before { top: 0; border-top-color: var(--gold); }
@@ -186,6 +187,34 @@ img { user-select: none; -webkit-user-drag: none; }
 .strip .slot.win { animation: winpulse 1s ease infinite; }
 @keyframes winpulse { 50% { box-shadow: 0 0 26px var(--rc), inset 0 0 22px color-mix(in srgb, var(--rc) 50%, transparent); } }
 .opening .hint { color: var(--dim); font-size: 12px; letter-spacing: 1px; }
+
+/* case drop intro (caseintro.js): the crate stage covers the overlay until the container is open */
+.crate-stage { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; transition: opacity .35s ease; pointer-events: none;
+  background: radial-gradient(ellipse 55% 45% at 50% 52%, rgba(64,78,96,.45), transparent 70%); }
+.crate-stage.gone { opacity: 0; }
+.crate-stage canvas { position: absolute; inset: 0; }
+.opening.intro > h3, .opening.intro > .strips, .opening.intro > .hint { opacity: 0; }
+.opening > h3, .opening > .strips, .opening > .hint { transition: opacity .35s ease .1s; }
+.crate-stage.crate2d img { position: relative; width: min(520px, 62vw); filter: drop-shadow(0 18px 24px rgba(0,0,0,.7)); }
+.crate-stage.crate2d.fall img { animation: crate-fall calc(.98s / var(--speed, 1)) cubic-bezier(.3,0,.4,1) both; }
+.crate-stage.crate2d.open img { animation: crate-open calc(.9s / var(--speed, 1)) ease-in both; }
+.crate-stage.crate2d .burst { position: absolute; width: 60vmin; height: 60vmin; border-radius: 50%; opacity: 0;
+  background: radial-gradient(circle, rgba(255,226,150,.95), rgba(242,178,27,.35) 35%, transparent 68%); }
+.crate-stage.crate2d.open .burst { animation: crate-burst calc(.9s / var(--speed, 1)) ease-out both; }
+@keyframes crate-fall {
+  0% { transform: translateY(-75vh) rotate(-4deg); }
+  57% { transform: translateY(0) rotate(0); }
+  66% { transform: translateY(0) scale(1.06, .92); }
+  78% { transform: translateY(-5vh) scale(.98, 1.03) rotate(1deg); }
+  90% { transform: translateY(0) scale(1.02, .97); }
+  100% { transform: translateY(0); }
+}
+@keyframes crate-open {
+  0% { transform: rotate(0); }
+  10% { transform: rotate(-3deg); } 20% { transform: rotate(3deg); } 30% { transform: rotate(-2deg); } 40% { transform: rotate(0) scale(1); filter: brightness(1) drop-shadow(0 18px 24px rgba(0,0,0,.7)); }
+  100% { transform: scale(1.35); opacity: 0; filter: brightness(2.2) drop-shadow(0 0 30px rgba(255,214,120,.9)); }
+}
+@keyframes crate-burst { 0%, 35% { opacity: 0; transform: scale(.3); } 60% { opacity: 1; } 100% { opacity: 0; transform: scale(1.4); } }
 
 /* ---------- modal ---------- */
 .modal-wrap { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgba(3,6,10,.78); backdrop-filter: blur(3px); animation: fade .15s ease; }

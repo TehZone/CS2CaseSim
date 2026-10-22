@@ -181,12 +181,13 @@ class CS2 {
   }
 
   // Exports any model/animation resource to glTF in the cache (first-person arms and inspect clips).
-  async exportGltf(file, rel, { materials = false, glb = false } = {}) {
+  async exportGltf(file, rel, { materials = false, glb = false, animations = false } = {}) {
     const out = path.join(this.cacheDir, rel);
     if (fs.existsSync(out)) return out;
     fs.mkdirSync(path.dirname(out), { recursive: true });
-    const args = ['-i', this.vpk, '-f', file.replace(/(.vw+)$/, '$1_c').replace(/_c_c$/, '_c'), '-o', out, '--gltf_export_format', glb ? 'glb' : 'gltf'];
+    const args = ['-i', this.vpk, '-f', file.replace(/(\.v\w+)$/, '$1_c').replace(/_c_c$/, '_c'), '-o', out, '--gltf_export_format', glb ? 'glb' : 'gltf'];
     if (materials) args.push('--gltf_export_materials', '--gltf_textures_adapt');
+    if (animations) args.push('--gltf_export_animations');
     await this.run(args);
     for (const f of fs.readdirSync(path.dirname(out))) if (/_physics.(glb|gltf)$/i.test(f)) fs.rmSync(path.join(path.dirname(out), f), { force: true });
     if (!fs.existsSync(out)) throw new Error('Export failed for ' + file);

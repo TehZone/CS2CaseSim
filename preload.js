@@ -19,4 +19,5 @@ contextBridge.exposeInMainWorld('native', {
   cs2VanityMaps: () => ipcRenderer.invoke('cs2:vanityMaps'),
   cs2Vanity: (id) => ipcRenderer.invoke('cs2:vanity', id),
   cs2FirstPerson: (weapon) => ipcRenderer.invoke('cs2:firstPerson', weapon),
+  cs2Crate: (id) => ipcRenderer.invoke('cs2:crate', id),
 });

@@ -44,6 +44,7 @@ function draw() {
     <div class="settings">
       <div class="setting"><div>Sound volume<p>Roulette ticks, reveals and clicks.</p></div><input type="range" min="0" max="1" step="0.05" value="${S.settings.volume}" data-s="volume"></div>
       <div class="setting"><div>Fast open by default<p>Shorter roulette animation.</p></div><input type="checkbox" ${S.settings.fast ? 'checked' : ''} data-s="fast"></div>
+      <div class="setting"><div>Case drop animation<p>The case drops in and unlocks before the roulette, like CS2 (its real 3D model when Counter-Strike 2 is installed).</p></div><input type="checkbox" ${S.settings.caseIntro !== false ? 'checked' : ''} data-s="caseIntro"></div>
       <div class="setting"><div>Auto-sell<p>Sell new drops automatically when they are worth less than an amount or have chosen rarities. <span data-aslabel>${esc(autoSellLabel())}</span></p></div><button class="btn" data-a="autosell">Set up…</button></div>
       <div class="setting"><div>Confirm sales above<p>Ask before selling items worth at least this much.</p></div><input class="input" type="number" min="0" step="1" value="${S.settings.confirmSellAbove}" style="width:110px" data-s="confirmSellAbove"></div>
       <div class="setting"><div>Market prices<p>Prices from ${D.pricedAt ? new Date(D.pricedAt).toLocaleString() : 'the bundled snapshot'}. Refreshing downloads the latest Skinport, CSFloat, Buff163, YouPin and Steam prices.</p>

@@ -162,6 +162,7 @@ function registerIpc() {
   ipcMain.handle('cs2:vanityMaps', () => cs2.vanityMaps());
   ipcMain.handle('cs2:vanity', (_e, id) => cs2.vanity(id));
   ipcMain.handle('cs2:firstPerson', (_e, weapon) => cs2.firstPerson(weapon));
+  ipcMain.handle('cs2:crate', (_e, id) => cs2.crate(id));
   ipcMain.handle('cs2:clear', () => {
     fs.rmSync(cs2Cache, { recursive: true, force: true });
     cs2 = new CS2Service({ cacheDir: cs2Cache, cliPath: cs2.cliPath, log: (m) => console.log('[cs2]', m), shrinkImages });
@@ -190,7 +191,8 @@ function createWindow() {
     icon: path.join(__dirname, 'build', 'icon.png'),
     autoHideMenuBar: true,
     show: false,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true },
+    // Smoke runs keep animating while the window is covered by other windows (they capture animations).
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, backgroundThrottling: !SMOKE },
   });
   win.once('ready-to-show', () => win.show());
   win.webContents.on('before-input-event', (event, input) => {
@@ -270,9 +272,37 @@ async function runFeatureSmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=crate` opens a case (CS2SIM_SMOKE_CASE, default the CS:GO Weapon Case) through the cases page and
+// captures the drop/unlock intro, the roulette and the results.
+async function runCrateSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `crate-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  await wait(4000);
+  const id = process.env.CS2SIM_SMOKE_CASE || 'crate-4001';
+  // Export the crate first (the intro only waits a moment for a first-time export).
+  const t = Date.now();
+  console.log('SMOKE crate', JSON.stringify(await js(`window.native.cs2Crate(${JSON.stringify(id.replace(/^crate-/, ''))})`)), ((Date.now() - t) / 1000).toFixed(1) + 's');
+  await js(`(async () => { const { S } = await import('./js/state.js'); S.money += 1000; const c = await import('./js/pages/cases.js');
+    document.querySelector('#nav [data-page=cases]').click(); c.openCaseView(${JSON.stringify(id)}); })()`);
+  await wait(800);
+  await shot('page');
+  const t0 = Date.now();
+  await js(`document.querySelector('[data-open]').click()`);
+  for (const ms of [500, 900, 1300, 1800, 2400, 3000, 3600, 4200, 5000, 12500]) {
+    await wait(ms - (Date.now() - t0));
+    await shot(String(ms).padStart(5, '0'));
+    console.log('SMOKE', ms, await js(`JSON.stringify({ stage: document.querySelector('.crate-stage')?.className ?? null, canvas: !!document.querySelector('.crate-stage canvas'), strips: !!document.querySelector('.opening:not(.intro) .strips') })`));
+  }
+  console.log('SMOKE results', await js(`JSON.stringify({ results: document.querySelectorAll('.result').length, opening: !!document.querySelector('.opening') })`));
+  console.log('SMOKE screenshots saved to', app.getPath('userData'));
+  app.quit();
+}
+
 function runSmokeTest(win) {
   win.webContents.on('console-message', (e, level, message) => console.log('[renderer]', e.message ?? message));
   if (process.env.CS2SIM_SMOKE === 'features') { win.webContents.once('did-finish-load', () => runFeatureSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'crate') { win.webContents.once('did-finish-load', () => runCrateSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   win.webContents.once('did-finish-load', async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     await wait(4000);

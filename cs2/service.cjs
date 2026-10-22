@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { CS2, findGameDir } = require('./pipeline.cjs');
 const { pickClip } = require('./firstperson.cjs');
+const { parseKV1 } = require('./kv.cjs');
 
 // Pixel-shader static combos of csgo_customweapon (feature F_X drives combo S_X).
 const STATIC_COMBOS = ['S_PAINT_STYLE', 'S_OVERRIDE_NORMAL', 'S_USE_ALL_MASKS', 'S_ROUGHNESS_TEXTURE', 'S_PEARLESCENCE_MASK',
@@ -19,6 +20,7 @@ const STICKER_META_VERSION = 1;
 // CS2's own case-opening sounds.
 const CASE_SOUNDS = {
   unlock: 'sounds/ui/panorama/case_unlock_01.vsnd',
+  drop: 'sounds/ui/panorama/case_drop_01.vsnd',
   scroll: 'sounds/ui/csgo_ui_crate_item_scroll.vsnd',
   revealRare: 'sounds/ui/panorama/case_reveal_rare_01.vsnd',
   revealMythical: 'sounds/ui/panorama/case_reveal_mythical_01.vsnd',
@@ -32,6 +34,7 @@ class CS2Service {
   constructor({ cacheDir, cliPath, cliEnv = {}, log = () => {}, shrinkImages = null }) {
     this.shrinkImages = shrinkImages;
     this.vanityJobs = new Map();
+    this.crateJobs = new Map();
     this.cacheDir = cacheDir;
     this.cliPath = cliPath;
     this.cliEnv = { VRF_GLSL_ES: '1', ...cliEnv };
@@ -110,6 +113,73 @@ class CS2Service {
       job.catch(() => this.vanityJobs.delete(id));
     }
     return this.vanityJobs.get(id);
+  }
+
+  // Container item id (items_game def index) -> its 3D crate model, read from items_game.txt once per game build.
+  async crateModels() {
+    if (!this.crateModelsJob) {
+      this.crateModelsJob = (async () => {
+        const cs2 = this.ensureCS2();
+        const file = path.join(this.cacheDir, 'crates', 'models.json');
+        const stamp = cs2.vpkStamp();
+        try { const c = JSON.parse(fs.readFileSync(file, 'utf8')); if (c.stamp === stamp) return c.models; } catch {}
+        await this.ensureIndex(); // extracts items_game.txt
+        const ig = parseKV1(fs.readFileSync(path.join(this.cacheDir, 'items_game.txt'), 'utf8')).items_game;
+        const models = {};
+        for (const items of [].concat(ig.items || [])) {
+          for (const [id, it] of Object.entries(items)) {
+            const m = it?.model_player;
+            if (typeof m === 'string' && m.startsWith('models/props/crates/')) models[id] = m;
+          }
+        }
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({ stamp, models }));
+        return models;
+      })();
+      this.crateModelsJob.catch(() => { this.crateModelsJob = null; });
+    }
+    return this.crateModelsJob;
+  }
+
+  // A container's 3D crate with CS2's own "fall" and "open" animations: { model: url }, or null if it has none
+  // (capsules, older souvenir packages).
+  crate(id) {
+    id = String(id);
+    if (!this.crateJobs.has(id)) {
+      const job = (async () => {
+        if (!this.status().available) return null;
+        const vmdl = (await this.crateModels())[id];
+        if (!vmdl) return null;
+        const name = path.basename(vmdl, '.vmdl');
+        const file = await this.ensureCS2().exportGltf(vmdl, `crates/${name}/${name}.gltf`, { materials: true, animations: true });
+        const dir = path.dirname(file);
+        const stamp = path.join(dir, '.shrunk');
+        if (this.shrinkImages && !fs.existsSync(stamp)) {
+          // Crate textures are up to 4K; the crate fills part of the screen for a few seconds.
+          const imgs = fs.readdirSync(dir).filter((f) => /\.(png|jpe?g)$/i.test(f)).map((f) => path.join(dir, f));
+          await this.shrinkImages(imgs, 1024);
+          fs.writeFileSync(stamp, '');
+        }
+        // Older crates paint their artwork with a decal texture over the base colour (second UV set), which the
+        // glTF export leaves out: { material: url }.
+        const g = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const want = {};
+        for (const m of g.materials || []) {
+          const v = m.extras?.vmat;
+          if (v?.IntParams?.F_DECAL_TEXTURE && v.TextureParams?.g_tDecal) want[m.name] = v.TextureParams.g_tDecal;
+        }
+        const files = Object.keys(want).length ? await this.cs2.extract(Object.values(want)) : {};
+        const decals = {};
+        for (const [mat, vtex] of Object.entries(want)) {
+          const local = files[vtex + '_c'];
+          if (local) decals[mat] = this.url(local);
+        }
+        return { model: this.url(file), name, decals };
+      })();
+      this.crateJobs.set(id, job);
+      job.catch(() => this.crateJobs.delete(id));
+    }
+    return this.crateJobs.get(id);
   }
 
   // CS2's case-opening sounds extracted from the player's install, as { name: url }.

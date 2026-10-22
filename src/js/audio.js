@@ -91,6 +91,10 @@ export const sfx = {
   coin() { tone(988, 0.08, { type: 'square', gain: 0.08 }); tone(1319, 0.22, { type: 'square', gain: 0.08, at: 0.07 }); },
   buy() { tone(660, 0.08, { type: 'triangle', gain: 0.2 }); tone(880, 0.12, { type: 'triangle', gain: 0.2, at: 0.06 }); },
   error() { tone(180, 0.18, { type: 'sawtooth', gain: 0.12 }); },
+  drop() {
+    if (play('drop')) return;
+    tone(95, 0.3, { type: 'sine', gain: 0.45, slide: -45 }); noise(0.18, { gain: 0.3, freq: 420, q: 0.8 });
+  },
   open() {
     if (play('unlock')) return;
     noise(0.25, { gain: 0.25, freq: 800, q: 1 }); tone(140, 0.25, { type: 'sine', gain: 0.3, slide: -60 });

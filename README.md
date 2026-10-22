@@ -23,6 +23,10 @@ With CS2 installed the inspect also offers:
   and stickers.
 - **Sticker effects**: Holo, Foil, Gold, Glitter, Lenticular and Embroidered stickers use CS2's own sticker materials.
 
+Opening a case also plays CS2's own crate: the case's 3D model drops in, lands and unlocks with the game's "fall" and
+"open" animations and sounds before the roulette (weapon cases and recent souvenir packages; containers without a 3D
+crate, or without CS2 installed, drop in as their icon). Turn it off under Settings → Case drop animation.
+
 ## Features
 - 42 real weapon cases, 150 souvenir packages (each Major's team stickers and gold MVP autographs), packages
   (X-Ray, Anubis, Genesis/Dead Hand Terminals), 229 sticker/autograph capsules, an Agent Locker and a Chicken Coop Crate
@@ -36,6 +40,7 @@ With CS2 installed the inspect also offers:
 - Team manager: 2,570 pro player cards (one per player per Major, rated from real Major results), packs, a
   five-role lineup with chemistry, round-by-round match simulation, cups, LANs and Majors against real rosters
 - Online play (optional): accounts on your own server, trading between players, live lobbies; see DEPLOY.md
+- Rare Special Items (knives and gloves) show CS:GO's classic gold "?" medallion in case contents and the roulette
 - Floats (CS2 wear distribution), pattern seeds 0-1000 with rare patterns (blue gems, Fire & Ice, full fades, Doppler phases...)
 - StatTrak™, knives and gloves, stickers with free placement, scraping, and craft bonuses
 - 3D inspect (drag, zoom, F to inspect, B to flip), clicker with upgrades and ranks, passive income, offline earnings
