@@ -16,6 +16,13 @@ game). Models/textures are extracted the first time you inspect each weapon and 
 `%APPDATA%/cs2-case-sim/cs2cache`. Nothing from the game is bundled with the app. Gloves (a different CS2
 shader) and agents still use the icon-based 3D view. Without CS2 installed, everything falls back to that view.
 
+With CS2 installed the inspect also offers:
+- **Backdrops**: the same map scenes CS2 shows behind the menu and item inspect (Dust II, Mirage, Inferno, Ancient,
+  Anubis, Nuke, Overpass, Train, Vertigo, Italy, Office...), placed where CS2 shows items and blurred like the game.
+- **First person** (V): CS2's own inspect animation for that weapon or knife, on CS2's first-person arms, with your skin
+  and stickers.
+- **Sticker effects**: Holo, Foil, Gold, Glitter, Lenticular and Embroidered stickers use CS2's own sticker materials.
+
 ## Features
 - 42 real weapon cases, 150 souvenir packages (each Major's team stickers and gold MVP autographs), packages
   (X-Ray, Anubis, Genesis/Dead Hand Terminals), 229 sticker/autograph capsules, an Agent Locker and a Chicken Coop Crate

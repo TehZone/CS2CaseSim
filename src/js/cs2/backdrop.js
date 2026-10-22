@@ -24,6 +24,7 @@ function loadScene(id) {
       const world = gltf.scene;
       world.traverse((o) => {
         if (o.isLight) o.visible = false; // the exported sun is in physical units; we light the scene ourselves
+        if (o.isMesh && [].concat(o.material || []).some((m) => /skybox|toolsskybox|nodraw/i.test(m.name || ''))) o.visible = false; // 3D-skybox cards need CS2's sky shader
         if (o.isMesh) {
           o.castShadow = false; o.receiveShadow = false;
           for (const m of [].concat(o.material || [])) {
@@ -70,7 +71,9 @@ export async function buildBackdrop(id) {
   sun.position.copy(sunDir).multiplyScalar(-10);
   scene.add(sun, sun.target);
   const night = /night/i.test(id);
-  scene.add(new THREE.HemisphereLight(night ? 0x5a6f9a : 0xbfd4ff, night ? 0x1b1a22 : 0x6b5a45, night ? 0.6 : 1.1));
+  // Baked bounce light doesn't come through the export, so undersides (awnings, arches) get a soft fill instead.
+  scene.add(new THREE.HemisphereLight(night ? 0x5a6f9a : 0xc8dcff, night ? 0x2a2733 : 0xa08b70, night ? 0.8 : 1.4));
+  scene.add(new THREE.AmbientLight(night ? 0x8090c0 : 0xfff2e0, night ? 0.35 : 0.55));
   scene.background = new THREE.Color(night ? 0x0d1424 : 0x9cc3e8);
 
   return {

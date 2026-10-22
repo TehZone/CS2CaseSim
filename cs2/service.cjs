@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { CS2, findGameDir } = require('./pipeline.cjs');
+const { pickClip } = require('./firstperson.cjs');
 
 // Pixel-shader static combos of csgo_customweapon (feature F_X drives combo S_X).
 const STATIC_COMBOS = ['S_PAINT_STYLE', 'S_OVERRIDE_NORMAL', 'S_USE_ALL_MASKS', 'S_ROUGHNESS_TEXTURE', 'S_PEARLESCENCE_MASK',
@@ -58,6 +59,29 @@ class CS2Service {
     if (!st.available) throw new Error(st.gameDir ? 'Model extractor is missing' : 'Counter-Strike 2 is not installed');
     if (!this.cs2) this.cs2 = new CS2({ cli: this.cliPath, gameDir: this.gameDir, cacheDir: this.cacheDir, env: this.cliEnv, log: this.log });
     return this.cs2;
+  }
+
+  // Viewmodel inspect clips in the game (listed once per game build).
+  async viewmodelClips() {
+    const cs2 = this.ensureCS2();
+    const file = path.join(this.cacheDir, 'fp', 'clips.json');
+    const stamp = cs2.vpkStamp();
+    try { const c = JSON.parse(fs.readFileSync(file, 'utf8')); if (c.stamp === stamp) return c.clips; } catch {}
+    const clips = (await cs2.list()).filter((f) => f.startsWith('animation/anims/viewmodel/') && f.endsWith('.vnmclip_c'));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ stamp, clips }));
+    return clips;
+  }
+
+  // First-person inspect for a weapon id: CS2's inspect clip (skeleton + animation) and the first-person arms.
+  async firstPerson(weapon) {
+    const cs2 = this.ensureCS2();
+    const clip = pickClip(String(weapon), await this.viewmodelClips());
+    if (!clip) throw new Error('No first-person inspect for ' + weapon);
+    const name = clip.split('/').pop().replace(/.vnmclip_c$/, '');
+    const clipFile = await cs2.exportGltf(clip, `fp/clips/${name}.glb`, { glb: true });
+    const armsFile = await cs2.exportGltf('weapons/models/shared/arms/weapon_arms.vmdl', 'fp/arms/weapon_arms.gltf', { materials: true });
+    return { clip: this.url(clipFile), arms: this.url(armsFile), name };
   }
 
   // Inspect backdrops (CS2's vanity maps) available in this install: [{ id, name }].

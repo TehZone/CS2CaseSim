@@ -180,6 +180,19 @@ class CS2 {
     return file;
   }
 
+  // Exports any model/animation resource to glTF in the cache (first-person arms and inspect clips).
+  async exportGltf(file, rel, { materials = false, glb = false } = {}) {
+    const out = path.join(this.cacheDir, rel);
+    if (fs.existsSync(out)) return out;
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    const args = ['-i', this.vpk, '-f', file.replace(/(.vw+)$/, '$1_c').replace(/_c_c$/, '_c'), '-o', out, '--gltf_export_format', glb ? 'glb' : 'gltf'];
+    if (materials) args.push('--gltf_export_materials', '--gltf_textures_adapt');
+    await this.run(args);
+    for (const f of fs.readdirSync(path.dirname(out))) if (/_physics.(glb|gltf)$/i.test(f)) fs.rmSync(path.join(path.dirname(out), f), { force: true });
+    if (!fs.existsSync(out)) throw new Error('Export failed for ' + file);
+    return out;
+  }
+
   // The inspect/menu backdrops in this install (maps/<id>_vanity.vpk).
   vanityMaps() {
     return listVanity(path.join(this.gameDir, 'maps'));

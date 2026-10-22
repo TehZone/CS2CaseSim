@@ -57,6 +57,18 @@ export function cs2Vanity(id) {
   return vanities.get(id);
 }
 
+// First-person inspect for a weapon id: { clip, arms } glTF URLs (CS2's inspect animation and arms).
+const firstPersons = new Map();
+export function cs2FirstPerson(weapon) {
+  if (!firstPersons.has(weapon)) {
+    const p = window.native?.cs2FirstPerson ? window.native.cs2FirstPerson(weapon)
+      : fetch(`api/cs2/first-person?weapon=${encodeURIComponent(weapon)}`).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); });
+    firstPersons.set(weapon, p);
+    p.catch(() => firstPersons.delete(weapon));
+  }
+  return firstPersons.get(weapon);
+}
+
 const prepared = new Map();
 export function cs2Prepare(weapon, paint) {
   const key = weapon + '|' + (paint || '');

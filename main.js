@@ -161,6 +161,7 @@ function registerIpc() {
   ipcMain.handle('cs2:sticker', (_e, material) => cs2.sticker(material));
   ipcMain.handle('cs2:vanityMaps', () => cs2.vanityMaps());
   ipcMain.handle('cs2:vanity', (_e, id) => cs2.vanity(id));
+  ipcMain.handle('cs2:firstPerson', (_e, weapon) => cs2.firstPerson(weapon));
   ipcMain.handle('cs2:clear', () => {
     fs.rmSync(cs2Cache, { recursive: true, force: true });
     cs2 = new CS2Service({ cacheDir: cs2Cache, cliPath: cs2.cliPath, log: (m) => console.log('[cs2]', m), shrinkImages });
@@ -283,7 +284,13 @@ function runSmokeTest(win) {
     await win.webContents.executeJavaScript(`(async () => {
       const ui = await import('./js/ui.js'); const I = await import('./js/items.js'); const { D } = await import('./js/data.js');
       const s = Object.values(D.skins).find((x) => x.n === (${JSON.stringify(process.env.CS2SIM_SMOKE_SKIN || 'AK-47 | Case Hardened')}));
-      ui.openInspect(I.makeSkinItem(s, { stt: true, fl: 0.05, sd: 661 }));
+      const it = I.makeSkinItem(s, { stt: true, fl: 0.05, sd: 661 });
+      // CS2SIM_SMOKE_STICKERS=1 puts three stickers (holo, foil, gold) on the receiver.
+      if (${JSON.stringify(!!process.env.CS2SIM_SMOKE_STICKERS)}) {
+        const pick = (fx) => Object.values(D.stickers).find((x) => x.fx === fx && x.sm && !x.so);
+        it.stk = ['Holo', 'Foil', 'Gold'].map((fx, i) => ({ id: pick(fx).id, x: 0.38 + i * 0.12, y: 0.35, r: 0, wr: 0, m: 1 }));
+      }
+      ui.openInspect(it);
     })()`);
     for (let i = 0; i < 240; i++) {
       await wait(500);
@@ -294,6 +301,13 @@ function runSmokeTest(win) {
       const tb = Date.now();
       const r = await win.webContents.executeJavaScript(`(async () => { const { inspectView } = await import('./js/inspect.js'); try { await inspectView.setBackdrop(${JSON.stringify(process.env.CS2SIM_SMOKE_BG)}); return 'ok ' + inspectView.backdrop?.name; } catch (e) { return 'FAILED ' + e.message; } })()`);
       console.log('SMOKE backdrop', r, ((Date.now() - tb) / 1000).toFixed(1) + 's');
+    }
+    // CS2SIM_SMOKE_FP=1.5 switches to the first-person inspect and captures that many seconds into the animation.
+    if (process.env.CS2SIM_SMOKE_FP) {
+      const tf = Date.now();
+      const r = await win.webContents.executeJavaScript(`(async () => { const { inspectView } = await import('./js/inspect.js'); try { await inspectView.enterFirstPerson(); return 'ok ' + inspectView.fp.duration.toFixed(2) + 's clip'; } catch (e) { return 'FAILED ' + e.message; } })()`);
+      console.log('SMOKE first person', r, ((Date.now() - tf) / 1000).toFixed(1) + 's');
+      await wait(Number(process.env.CS2SIM_SMOKE_FP) * 1000 - 1500);
     }
     await wait(1500);
     const insp = await win.webContents.executeJavaScript(`(async () => { const { inspectView } = await import('./js/inspect.js');

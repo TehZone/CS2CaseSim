@@ -242,6 +242,7 @@ export function openInspect(item) {
     <div class="val">${money(I.itemValue(item))}</div>
     <div class="top">
       <select class="input bg-pick" data-bg title="Background" style="display:none"></select>
+      <button class="btn" data-a="fp" style="display:none">First person (V)</button>
       <button class="btn" data-a="inspect">Inspect (F)</button>
       <button class="btn" data-a="flip">Flip (B)</button>
       <button class="btn" data-a="reset">Reset (R)</button>
@@ -290,8 +291,32 @@ export function openInspect(item) {
   });
   wrap.querySelector('.loading').classList.add('model');
   inspectView.show(item)
-    .then(() => { clearTimeout(slow); wrap.querySelector('.loading.model')?.remove(); })
+    .then(() => {
+      clearTimeout(slow);
+      wrap.querySelector('.loading.model')?.remove();
+      // First person is available for real CS2 guns and knives.
+      if (inspectView.model?.userData.weapon) wrap.querySelector('[data-a=fp]').style.display = '';
+    })
     .catch((e) => { wrap.querySelector('.loading.model').textContent = 'Could not load model: ' + e.message; });
+  const fpBtn = wrap.querySelector('[data-a=fp]');
+  let fpBusy = false;
+  const toggleFP = async () => {
+    if (fpBusy || fpBtn.style.display === 'none') return;
+    fpBusy = true;
+    try {
+      if (inspectView.fp) { inspectView.exitFirstPerson(); fpBtn.textContent = 'First person (V)'; wrap.classList.remove('fp'); }
+      else {
+        fpBtn.textContent = 'Loading…';
+        await inspectView.enterFirstPerson();
+        fpBtn.textContent = 'Third person (V)';
+        wrap.classList.add('fp');
+      }
+    } catch (e) {
+      toast('First person isn’t available for this item: ' + esc(e.message), 'bad');
+      fpBtn.textContent = 'First person (V)';
+    }
+    fpBusy = false;
+  };
   const close = () => {
     inspectView.unmount();
     wrap.remove();
@@ -300,12 +325,13 @@ export function openInspect(item) {
   const act = (a) => {
     if (a === 'close') close();
     if (a === 'inspect') inspectView.playInspect();
+    if (a === 'fp') toggleFP();
     if (a === 'flip') inspectView.flip();
     if (a === 'reset') inspectView.reset();
   };
   const onKey = (e) => {
     const k = e.key.toLowerCase();
-    const map = { escape: 'close', f: 'inspect', b: 'flip', r: 'reset' };
+    const map = { escape: 'close', f: 'inspect', b: 'flip', r: 'reset', v: 'fp' };
     if (map[k]) { e.stopPropagation(); e.preventDefault(); act(map[k]); }
   };
   window.addEventListener('keydown', onKey, true);

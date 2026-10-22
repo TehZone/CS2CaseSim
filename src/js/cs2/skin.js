@@ -399,8 +399,16 @@ export async function buildCS2Model(item, def, renderer) {
   wrap.add(tilt);
   wrap.userData.cs2 = { prep, mesh: prep.mesh };
   wrap.userData.unitScale = 4 / longest; // scene units per glTF metre (lines up CS2 inspect backdrops)
+  wrap.userData.weapon = wid; // for the first-person inspect
+  wrap.userData.root = root;
   if (item.stk?.length) {
     try { await addStickerDecals(wrap, item, def); } catch (e) { console.warn('sticker decals failed', e); }
+    // Where the decals sit relative to the weapon's main bone, so they can follow it in first person.
+    wrap.updateMatrixWorld(true);
+    let bone = null;
+    root.traverse((o) => { if (!bone && o.isBone && o.name === 'weapon_offset') bone = o; });
+    root.traverse((o) => { if (!bone && o.isBone && o.name === 'weapon') bone = o; });
+    if (bone) wrap.userData.decalBone = { name: bone.name, matrixWorld: bone.matrixWorld.clone() };
   }
   return wrap;
 }
@@ -536,6 +544,7 @@ async function placeDecal(wrap, targets, ray, box, sd, s, x, y, width, hit = nul
     const geo = new DecalGeometry(hit.object, hit.point, orient.rotation, size);
     const decal = new THREE.Mesh(geo, mat);
     decal.renderOrder = 2;
+    decal.userData.decal = true;
     wrap.add(decal);
   }
 }

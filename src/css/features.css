@@ -235,3 +235,7 @@ body:not(.is-online) .online-only { display: none !important; }
 .inspect.has-bg .stage::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(0deg, rgba(0,0,0,.55) 0%, rgba(0,0,0,0) 32%), linear-gradient(180deg, rgba(0,0,0,.35) 0%, rgba(0,0,0,0) 14%); }
 .inspect .stage { position: absolute; }
 .inspect .bg-pick { min-width: 140px; }
+
+/* first-person inspect: rotate/flip do not apply */
+.inspect.fp [data-a=flip], .inspect.fp [data-a=reset] { display: none; }
+.inspect.fp .help { visibility: hidden; }

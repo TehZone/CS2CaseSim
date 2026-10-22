@@ -60,6 +60,9 @@ http.createServer(async (req, res) => {
     if (url.pathname === '/api/cs2/vanity-maps') {
       try { return json(res, 200, cs2.vanityMaps()); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
     }
+    if (url.pathname === '/api/cs2/first-person') {
+      try { return json(res, 200, await cs2.firstPerson(url.searchParams.get('weapon'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
+    }
     if (url.pathname === '/api/cs2/vanity') {
       try { return json(res, 200, await cs2.vanity(url.searchParams.get('id'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
     }

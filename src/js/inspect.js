@@ -7,6 +7,7 @@ import { buildChicken } from './chicken3d.js';
 import { cs2Status } from './cs2/api.js';
 import { buildCS2Model } from './cs2/skin.js';
 import { buildBackdrop, BlurredBackdrop, backdropEnvironment } from './cs2/backdrop.js';
+import { buildFirstPerson } from './cs2/firstperson.js';
 import { stickerSurface } from './cs2/sticker.js';
 import { clamp } from './util.js';
 
@@ -285,6 +286,9 @@ class InspectView {
     this.scene.environment = this.envRoom;
     this.scene.environmentIntensity = 0.95;
     this.camera = new THREE.PerspectiveCamera(30, 1, 0.05, 200);
+    // First person: CS2's viewmodel field of view (68° at 4:3) from the player's eyes, in game metres.
+    this.fpCamera = new THREE.PerspectiveCamera(54, 1, 0.01, 400);
+    this.fp = null;
     const key = new THREE.DirectionalLight(0xffffff, 1.7); key.position.set(3, 4, 6);
     const fill = new THREE.DirectionalLight(0xa9c4ff, 0.55); fill.position.set(-5, 1, 3);
     const rim = new THREE.DirectionalLight(0xffe0bd, 1.1); rim.position.set(0, 3, -6);
@@ -368,9 +372,12 @@ class InspectView {
     this.renderer.domElement.style.height = '100%';
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.fpCamera.aspect = w / h;
+    this.fpCamera.updateProjectionMatrix();
   }
 
   clearModel() {
+    this.exitFirstPerson();
     if (!this.model) return;
     this.pivot.remove(this.model);
     this.model.traverse((o) => {
@@ -413,13 +420,16 @@ class InspectView {
   // Lighting for the current model and background (studio, or a map backdrop's sun and reflections).
   applyLighting() {
     const bd = this.backdrop;
-    if (bd && this.unitScale && bd.scale !== this.unitScale) {
-      bd.setScale(this.unitScale);
-      bd.scale = this.unitScale;
+    const want = this.fp ? 1 : this.unitScale;
+    if (bd && want && (bd.scale !== want || bd.fpView !== !!this.fp)) {
+      bd.setScale(want);
+      bd.outer.position.y = this.fp ? -0.6 : 0;
+      bd.scale = want;
+      bd.fpView = !!this.fp;
       bd.env?.dispose();
       bd.env = backdropEnvironment(this.renderer, bd);
     }
-    this.shadow.visible = !bd;
+    this.shadow.visible = !bd && !this.fp;
     for (const l of this.studioLights) l.intensity = l.userData.base ?? (l.userData.base = l.intensity);
     if (bd) {
       this.scene.environment = bd.env;
@@ -433,6 +443,32 @@ class InspectView {
       this.scene.environmentIntensity = this.source === 'cs2' ? 1.0 : 0.95;
       this.sunLight.intensity = 0;
     }
+  }
+
+  // First-person inspect: CS2's arms and inspect animation with this weapon (CS2 models only).
+  async enterFirstPerson() {
+    if (!this.model?.userData.weapon) throw new Error('First person needs the real CS2 model of a gun or knife');
+    const model = this.model;
+    if (!model.userData.fp) model.userData.fp = await buildFirstPerson(model);
+    if (this.model !== model) return;
+    this.fp = model.userData.fp;
+    this.scene.add(this.fp.rig);
+    this.pivot.visible = false;
+    this.applyLighting();
+    this.playFirstPerson();
+  }
+  exitFirstPerson() {
+    if (!this.fp) return;
+    this.scene.remove(this.fp.rig);
+    this.fp.action.stop();
+    this.fp = null;
+    if (this.pivot) this.pivot.visible = true;
+    if (this.model) this.applyLighting();
+  }
+  playFirstPerson() {
+    if (!this.fp) return;
+    this.fp.action.reset();
+    this.fp.action.play();
   }
 
   // Shows a CS2 map behind the item ('studio' for the plain inspect room). Resolves when it's ready.
@@ -545,6 +581,7 @@ class InspectView {
 
   // The "F" inspect: roll the weapon over to show both sides, then return.
   playInspect() {
+    if (this.fp) return this.playFirstPerson();
     const s = this.state;
     const y0 = s.yaw, p0 = s.pitch;
     s.anim = {
@@ -594,17 +631,24 @@ class InspectView {
       this.camera.position.set(0, -lift, dist * (1 + zOff));
       this.camera.lookAt(0, -lift, 0);
     }
+    let cam = this.camera;
+    if (this.fp) {
+      this.fp.update(dt);
+      cam = this.fpCamera;
+      cam.position.set(0, 0, 0);
+      cam.rotation.set(0, 0, 0);
+    }
     if (this.backdrop) {
       // Map backdrop: draw the scene blurred (CS2's inspect depth of field), then the item on top.
       const r = this.renderer;
       r.autoClear = false;
       r.clear();
-      this.blurBg.render(r, this.backdrop, this.camera, 3);
+      this.blurBg.render(r, this.backdrop, cam, this.fp ? 2 : 3);
       r.clearDepth();
-      r.render(this.scene, this.camera);
+      r.render(this.scene, cam);
       r.autoClear = true;
     } else {
-      this.renderer.render(this.scene, this.camera);
+      this.renderer.render(this.scene, cam);
     }
   }
 }
