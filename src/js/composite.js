@@ -5,6 +5,10 @@ import { itemDef, patternInfo } from './items.js';
 
 export const STICKER_BASE = 0.15; // sticker width as a fraction of the weapon image width at scale 1
 
+// Sticker width (fraction of the weapon's length) for a weapon. Stickers are a fixed real size in CS2, so on
+// pistols (a quarter of a rifle's length) they take up a much larger share of the gun.
+export const stickerBase = (def) => STICKER_BASE * (def?.cat === 'pistol' ? 2 : 1);
+
 function canvas(w, h) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
@@ -140,7 +144,7 @@ export function alphaBox(canvasOrCtx) {
 
 // Stickers with `m` were placed on the real model's side view (coordinates relative to its bounding
 // box); on icons they are mapped through the icon's weapon bounding box.
-export async function drawStickers(ctx, W, H, stickers, box = null) {
+export async function drawStickers(ctx, W, H, stickers, box = null, weapon = null) {
   for (const s0 of stickers) {
     const def = D.stickers[s0.id];
     if (!def) continue;
@@ -152,7 +156,7 @@ export async function drawStickers(ctx, W, H, stickers, box = null) {
     }
     let im;
     try { im = await loadImage(imgUrl(def.img, 'm')); } catch { continue; }
-    const w = STICKER_BASE * W * (s.s || 1) * scale;
+    const w = stickerBase(weapon) * W * (s.s || 1) * scale;
     const h = (w * im.height) / im.width;
     const tmp = canvas(Math.ceil(w), Math.ceil(h));
     const t = tmp.getContext('2d');
@@ -192,7 +196,7 @@ export async function composeItem(item, { size = 'l', stickers = true } = {}) {
       applyWear(id.data, W, H, base, item.fl, item.sd, def.cat === 'gloves');
       ctx.putImageData(id, 0, 0);
     }
-    if (stickers && item.stk?.length) await drawStickers(ctx, W, H, item.stk);
+    if (stickers && item.stk?.length) await drawStickers(ctx, W, H, item.stk, null, def);
     return c;
   })();
   cache.set(key, job);

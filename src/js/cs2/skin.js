@@ -11,6 +11,7 @@ import { gloveMaterials } from './glove.js';
 import { loadGltf as loadRig, rebind, bonesByName, forearmTwist } from './rig.js';
 import { loadSource, texture, whiteTex } from './textures.js';
 import { stickerSurface, contentBox } from './sticker.js';
+import { stickerBase } from '../composite.js';
 import { D } from '../data.js';
 
 const BAKE_SIZE = 2048;
@@ -553,7 +554,7 @@ async function addStickerDecals(wrap, item, def) {
     const v = (s.y - icon.y0) / Math.max(1e-6, icon.y1 - icon.y0);
     if (s.m) {
       // Placed on the model's own side view (sticker editor with CS2 models): exact mapping.
-      await placeDecal(wrap, targets, ray, box, sd, s, box.min.x + s.x * W, box.max.y - s.y * H, 0.15 * (s.s || 1) * W);
+      await placeDecal(wrap, targets, ray, box, sd, s, box.min.x + s.x * W, box.max.y - s.y * H, stickerBase(def) * (s.s || 1) * W);
       continue;
     }
     const cx = box.min.x + u * W;
@@ -580,7 +581,7 @@ async function addStickerDecals(wrap, item, def) {
       hit = ray.intersectObjects(targets, false)[0] || null;
     }
     if (!hit) continue;
-    await placeDecal(wrap, targets, ray, box, sd, s, hit.point.x, hit.point.y, (0.15 * (s.s || 1) * W) / Math.max(0.05, icon.x1 - icon.x0), hit);
+    await placeDecal(wrap, targets, ray, box, sd, s, hit.point.x, hit.point.y, (stickerBase(def) * (s.s || 1) * W) / Math.max(0.05, icon.x1 - icon.x0), hit);
   }
 }
 

@@ -3,7 +3,7 @@ import { esc, money, imgUrl } from './util.js';
 import { D } from './data.js';
 import * as I from './items.js';
 import { S } from './state.js';
-import { composeItem, drawStickers, STICKER_BASE } from './composite.js';
+import { composeItem, drawStickers, stickerBase } from './composite.js';
 import { cs2Status } from './cs2/api.js';
 import { renderSideView } from './cs2/skin.js';
 import { inspectView } from './inspect.js';
@@ -115,7 +115,7 @@ export function openStickerEditor(item, { onDone } = {}) {
       c.width = side.canvas.width; c.height = side.canvas.height;
       const cctx = c.getContext('2d', { willReadFrequently: true });
       cctx.drawImage(side.canvas, 0, 0);
-      await drawStickers(cctx, c.width, c.height, pending.map((p) => ({ ...placed(p), m: 0 })));
+      await drawStickers(cctx, c.width, c.height, pending.map((p) => ({ ...placed(p), m: 0 })), null, I.itemDef(item));
     } else {
       c = await composeItem(preview(), { size: 'l' });
     }
@@ -169,7 +169,7 @@ export function openStickerEditor(item, { onDone } = {}) {
   function updateGhost(e) {
     if (!selected || (item.stk?.length || 0) + pending.length >= I.MAX_STICKERS) { ghost.style.display = 'none'; return; }
     const rect = wrap.getBoundingClientRect();
-    const w = (STICKER_BASE * rect.width) / crop.w;
+    const w = (stickerBase(I.itemDef(item)) * rect.width) / crop.w;
     ghost.src = imgUrl(D.stickers[selected].img, 'm');
     ghost.style.width = w + 'px';
     if (e) {
