@@ -1,12 +1,16 @@
 // CS2's competitive rules for an offline match: rounds with freeze time and buy time, the round timer, the bomb
 // (plant, 40 second fuse, defuse with or without a kit), win conditions, the economy (round rewards, loss bonus,
-// kill rewards by weapon) and halftime. The game (game.js) supplies the players and the world; this only keeps score.
+// kill rewards by weapon), halftime and overtime. The game (game.js) supplies the players and the world; this only
+// keeps score.
 
 export const RULES = {
   freeze: 15, roundTime: 115, buyTime: 20, bombTime: 40, plantTime: 3, defuseTime: 10, defuseKitTime: 5, endDelay: 7,
   startMoney: 800, maxMoney: 16000, maxRounds: 24, winsNeeded: 13, halftime: 12,
 };
 export const SHORT_RULES = { ...RULES, maxRounds: 16, winsNeeded: 9, halftime: 8 };
+// CS2's overtime (Premier): a tie after regulation plays MR3 overtimes, first to 4 of 6 rounds, everyone on $12,500
+// each half, sides swapping after 3; a tie again starts another overtime. Without it a tie is a draw (Competitive).
+export const OVERTIME = { rounds: 6, money: 12500 };
 const WIN_REWARD = { elimination: 3250, bomb: 3500, defuse: 3500, time: 3250 };
 const LOSS_BONUS = [1400, 1900, 2400, 2900, 3400];
 const PLANT_BONUS_TEAM = 800, PLANT_BONUS = 300, DEFUSE_BONUS = 300;
@@ -25,7 +29,7 @@ export const CATALOG = [
     ['weapon_galilar', 'Galil AR', 'T'], ['weapon_famas', 'FAMAS', 'CT'], ['weapon_ak47', 'AK-47', 'T'], ['weapon_m4a1', 'M4A4', 'CT'],
     ['weapon_m4a1_silencer', 'M4A1-S', 'CT'], ['weapon_ssg08', 'SSG 08'], ['weapon_sg556', 'SG 553', 'T'], ['weapon_aug', 'AUG', 'CT'],
     ['weapon_awp', 'AWP'], ['weapon_g3sg1', 'G3SG1', 'T'], ['weapon_scar20', 'SCAR-20', 'CT']] },
-  { cat: 'Gear', items: [['vest', 'Kevlar Vest', null, 650], ['vesthelm', 'Kevlar + Helmet', null, 1000], ['defuser', 'Defuse Kit', 'CT', 400]] },
+  { cat: 'Gear', items: [['vest', 'Kevlar Vest', null, 650], ['vesthelm', 'Kevlar + Helmet', null, 1000], ['defuser', 'Defuse Kit', 'CT', 400], ['weapon_taser', 'Zeus x27']] },
   { cat: 'Grenades', items: [
     ['weapon_molotov', 'Molotov', 'T'], ['weapon_incgrenade', 'Incendiary Grenade', 'CT'], ['weapon_decoy', 'Decoy Grenade'],
     ['weapon_flashbang', 'Flashbang'], ['weapon_hegrenade', 'High Explosive Grenade'], ['weapon_smokegrenade', 'Smoke Grenade']] },
@@ -41,7 +45,7 @@ export const nadeRoom = (c, id) => {
 export const ITEM_NAMES = Object.fromEntries(CATALOG.flatMap((c) => c.items.map(([id, name]) => [id, name])));
 export const DEFAULT_PISTOL = { T: 'weapon_glock', CT: 'weapon_usp_silencer' };
 const PISTOLS = new Set(CATALOG[0].items.map(([id]) => id));
-export const slotOf = (id) => (PISTOLS.has(id) ? 'secondary' : GRENADE_IDS.has(id) ? 'g_' + id : 'primary');
+export const slotOf = (id) => (PISTOLS.has(id) ? 'secondary' : GRENADE_IDS.has(id) ? 'g_' + id : id === 'weapon_taser' ? 'taser' : 'primary');
 
 let nextId = 1;
 // A player in the match (you or a bot).
@@ -76,10 +80,20 @@ export class Match {
   alive(side) { return this.game.combatants.filter((c) => c.team === side && c.alive); }
 
   // ---- round flow -----------------------------------------------------------------------------------------------
+  // Round number within overtime (1-based), or 0 in regulation.
+  get otRound() { return Math.max(0, this.round - this.rules.maxRounds); }
+  get overtime() { return this.otRound ? Math.ceil(this.otRound / OVERTIME.rounds) : 0; }
+
   startRound() {
     this.round++;
-    const halftime = this.round === this.rules.halftime + 1;
+    const ot = this.otRound;
+    const otStart = ot > 0 && (ot - 1) % OVERTIME.rounds === 0, otHalf = ot > 0 && (ot - 1) % OVERTIME.rounds === OVERTIME.rounds / 2;
+    const halftime = this.round === this.rules.halftime + 1 || otHalf;
     if (halftime) this.swapSides();
+    if (otStart || otHalf) {
+      for (const c of this.game.combatants) c.money = OVERTIME.money;
+      this.lossStreak = { T: 0, CT: 0 };
+    }
     this.phase = 'freeze';
     this.time = this.rules.freeze;
     this.roundStart = this.game.now;
@@ -92,7 +106,7 @@ export class Match {
     }
     // One terrorist carries the bomb (you, if you're the only one or by chance).
     if (ts.length) { const carrier = ts[Math.floor(Math.random() * ts.length)]; carrier.hasC4 = true; this.bomb.carrier = carrier; }
-    this.game.onRoundStart(this.round, { halftime, pistol: this.round === 1 || halftime });
+    this.game.onRoundStart(this.round, { halftime, pistol: this.round === 1 || (halftime && !ot), overtime: otStart ? this.overtime : 0 });
   }
 
   swapSides() {
@@ -238,8 +252,12 @@ export class Match {
   }
 
   finished() {
-    const r = this.rules;
-    return this.score.A >= r.winsNeeded || this.score.B >= r.winsNeeded || this.round >= r.maxRounds;
+    const r = this.rules, { A, B } = this.score;
+    if (this.round < r.maxRounds) return A >= r.winsNeeded || B >= r.winsNeeded;
+    if (this.round === r.maxRounds) return A !== B || !r.overtime;
+    // Overtime k: first to (tie score + 3(k-1)) + 4.
+    const need = r.maxRounds / 2 + 3 * (this.overtime - 1) + 4;
+    return A >= need || B >= need;
   }
   winnerSquad() { return this.score.A === this.score.B ? null : this.score.A > this.score.B ? 'A' : 'B'; }
 

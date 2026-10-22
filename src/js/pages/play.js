@@ -10,7 +10,7 @@ const MAP_TINT = { de_dust2: '#c9a46a, #7b5a33', de_mirage: '#d8b98a, #8a6a45', 
 let mapList = null;
 
 const PREFS_KEY = 'cs2sim.play';
-const DEFAULTS = { map: 'de_dust2', team: 'CT', teamSize: 5, difficulty: 'normal', length: 'short', sensitivity: 1.25, quality: 'balanced' };
+const DEFAULTS = { map: 'de_dust2', team: 'CT', teamSize: 5, difficulty: 'normal', length: 'short', overtime: 'on', sensitivity: 1.25, quality: 'balanced' };
 function prefs() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULTS }; }
 }
@@ -39,10 +39,11 @@ export function render(r) {
         <label>Players per team<select class="input" data-k="teamSize">${opts([['5', '5v5'], ['4', '4v4'], ['3', '3v3'], ['2', '2v2'], ['1', '1v1']], String(p.teamSize))}</select></label>
         <label>Bot difficulty<select class="input" data-k="difficulty">${opts([['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard'], ['expert', 'Expert']], p.difficulty)}</select></label>
         <label>Match length<select class="input" data-k="length">${opts([['short', 'Short (first to 9)'], ['long', 'Long (first to 13)']], p.length)}</select></label>
+        <label>Overtime<select class="input" data-k="overtime">${opts([['on', 'On (MR3, $12,500)'], ['off', 'Off (ties are draws)']], p.overtime)}</select></label>
         <label>Sensitivity (CS2)<input class="input" type="number" min="0.05" max="20" step="0.05" data-k="sensitivity" value="${p.sensitivity}"></label>
         <label>Graphics<select class="input" data-k="quality">${opts([['high', 'High (full resolution)'], ['balanced', 'Balanced'], ['performance', 'Performance']], p.quality)}</select></label>
         <button class="btn primary big" data-start>Play</button>
-        <div class="muted play-keys">WASD move · Space jump · Ctrl crouch · Shift walk · Mouse1 fire · Mouse2 scope · R reload · F inspect · B buy · E defuse / pick up · G drop · 1/2/3 weapons · 4 grenades (Mouse1 throw, Mouse2 lob) · 5 bomb (hold Mouse1 in a site) · Tab scores · Esc pause</div>
+        <div class="muted play-keys">WASD move · Space jump · Ctrl crouch · Shift walk · W into a ladder climbs it · Mouse1 fire · Mouse2 scope / silencer / burst mode · R reload · F inspect · B buy · E defuse / pick up · G drop · 1/2/3 weapons (3 again for the Zeus) · 4 grenades (Mouse1 throw, Mouse2 lob) · 5 bomb (hold Mouse1 in a site) · Tab scores · Esc pause</div>
       </div>
     </div>
   </div>`;
@@ -79,7 +80,7 @@ async function start() {
   overlay.querySelector('[data-cancel]').addEventListener('click', leave);
   overlay.querySelector('[data-leave]').addEventListener('click', leave);
   overlay.querySelector('[data-resume]').addEventListener('click', () => session?.game.resume());
-  const game = new Game(overlay, { map: p.map, team: p.team, teamSize: p.teamSize, difficulty: p.difficulty, length: p.length, sensitivity: p.sensitivity, quality: p.quality, onStatus: (m) => { statusEl.textContent = m; } });
+  const game = new Game(overlay, { map: p.map, team: p.team, teamSize: p.teamSize, difficulty: p.difficulty, length: p.length, overtime: p.overtime !== 'off', sensitivity: p.sensitivity, quality: p.quality, onStatus: (m) => { statusEl.textContent = m; } });
   session = { game, overlay };
   const showStats = () => {
     const me = game.me, m = game.match;

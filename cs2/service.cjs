@@ -482,7 +482,9 @@ class CS2Service {
   // The map's nav mesh (bots walk on it) as play/<id>/nav.json; exported separately so older map exports gain it.
   async playNav(id, vpk, dir) {
     const file = path.join(dir, 'nav.json');
-    if (!fs.existsSync(file)) {
+    let current = false;
+    try { current = JSON.parse(fs.readFileSync(file, 'utf8')).version === play.NAV_VERSION; } catch {}
+    if (!current) {
       try {
         const cs2 = this.ensureCS2();
         const tmp = path.join(dir, 'tmp-nav');
@@ -510,7 +512,8 @@ class CS2Service {
       const tmp = path.join(this.cacheDir, 'play', 'tmp-data');
       const files = ['scripts/weapons.vdata_c', 'soundevents/game_sounds_weapons.vsndevts_c', 'soundevents/game_sounds_player.vsndevts_c',
         'soundevents/game_sounds_physics.vsndevts_c', 'soundevents/game_sounds_footsteps.vsndevts_c', 'soundevents/game_sounds_ui.vsndevts_c',
-        'soundevents/vo/announcer/game_sounds_cs2_classic.vsndevts_c', 'soundevents/music/valve_cs2_01/game_sounds_music.vsndevts_c'];
+        'soundevents/vo/announcer/game_sounds_cs2_classic.vsndevts_c', 'soundevents/music/valve_cs2_01/game_sounds_music.vsndevts_c',
+        ...['phoenix', 'leet', 'sas', 'seal'].map((a) => `soundevents/vo/agents/game_sounds_${a}.vsndevts_c`)]; // the bots' voices
       await cs2.run(['-i', cs2.vpk, '-f', files.join(','), '-d', '-o', tmp]);
       const read = (f) => fs.readFileSync(path.join(tmp, f.replace(/_c$/, '')), 'utf8');
       const weapons = play.weaponStats(read(files[0]));

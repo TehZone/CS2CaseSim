@@ -1,5 +1,5 @@
-// The map's navigation mesh (CS2's .nav for the player hull): convex areas with their neighbours. Used to put bots on
-// walkable ground and to find paths between places. Game units.
+// The map's navigation mesh (CS2's .nav for the player hull): convex areas with their neighbours and the ladders
+// between them. Used to put bots on walkable ground and to find paths between places. Game units.
 const CELL = 256;
 const FLAG_CROUCH = 0x10000, FLAG_JUMP = 0x2, FLAG_AVOID = 0x80;
 
@@ -15,6 +15,15 @@ export class NavMesh {
       return { id: a.id, flags: a.flags, corners: a.c, edges: a.e, hiding: a.h, center: [cx, cy, cz], size, min, max, links: [...new Set(a.e.flat())] };
     });
     this.byId = new Map(this.areas.map((a) => [a.id, a]));
+    // Ladders: climbable links between the areas at their bottom and top. dir is the side you climb from (Source's
+    // NavDirType: north -y, east +x, south +y, west -x), so the climber stands at bottom + normal x 16.
+    this.ladders = (data.ladders || []).map((l) => {
+      const normal = [[0, -1, 0], [1, 0, 0], [0, 1, 0], [-1, 0, 0]][l.dir] || [0, 1, 0];
+      return { ...l, normal, bottomAreas: [...new Set(l.bottomAreas)], topAreas: [...new Set(l.topAreas)] };
+    });
+    this.ladderLinks = new Map(); // area id -> [{ to, ladder, up }]
+    const link = (from, to, ladder, up) => { if (!this.ladderLinks.has(from)) this.ladderLinks.set(from, []); this.ladderLinks.get(from).push({ to, ladder, up }); };
+    for (const l of this.ladders) for (const b of l.bottomAreas) for (const t of l.topAreas) { link(b, t, l, true); link(t, b, l, false); }
     this.grid = new Map();
     for (const a of this.areas) {
       for (let gx = Math.floor(a.min[0] / CELL); gx <= Math.floor(a.max[0] / CELL); gx++) {
@@ -44,8 +53,8 @@ export class NavMesh {
   }
 
   // Ground height under (x, y) near z, from the nav mesh (null off the mesh).
-  heightAt(x, y, z) {
-    const a = this.findArea([x, y, z], 80);
+  heightAt(x, y, z, maxDz = 80) {
+    const a = this.findArea([x, y, z], maxDz);
     return a ? heightIn(a.corners, x, y) : null;
   }
 
@@ -104,7 +113,19 @@ export class NavMesh {
         const areas = [];
         for (let n = cur; n; n = n.prev) areas.unshift(n.a);
         const pts = [];
-        for (let i = 1; i < areas.length; i++) pts.push(portal(areas[i - 1], areas[i]));
+        const chain = [];
+        for (let n = cur; n; n = n.prev) chain.unshift(n);
+        for (let i = 1; i < areas.length; i++) {
+          const lad = chain[i].ladder;
+          if (!lad) { pts.push(portal(areas[i - 1], areas[i])); continue; }
+          // Climb: walk to the foot (or the top), then up (or down) the rungs, then step off.
+          const { ladder: l, up } = lad, n = l.normal;
+          const foot = [l.bottom[0] + n[0] * 16, l.bottom[1] + n[1] * 16, l.bottom[2]], head = [l.top[0] + n[0] * 16, l.top[1] + n[1] * 16, l.top[2]];
+          const off = [l.top[0] - n[0] * 24, l.top[1] - n[1] * 24, l.top[2]];
+          const into = areas[i];
+          if (up) { pts.push(foot); pts.push(Object.assign(head, { ladder: l, up: true })); pts.push(heightPoint(into, off)); }
+          else { pts.push(heightPoint(areas[i - 1], off)); pts.push(head); pts.push(Object.assign(foot, { ladder: l, up: false })); }
+        }
         pts.push(to.slice());
         return { areas, points: pts };
       }
@@ -115,6 +136,14 @@ export class NavMesh {
         const g = cur.g + dist(cur.a.center, b.center) * (b.flags & FLAG_CROUCH ? 2 : 1);
         const o = open.get(id);
         if (!o || g < o.g) open.set(id, { a: b, g, f: g + dist(b.center, goal.center), prev: cur });
+      }
+      for (const lk of this.ladderLinks.get(cur.a.id) || []) {
+        if (closed.has(lk.to)) continue;
+        const b = this.byId.get(lk.to);
+        if (!b) continue;
+        const g = cur.g + dist(cur.a.center, lk.ladder.bottom) + lk.ladder.length * 1.6 + dist(lk.ladder.top, b.center);
+        const o = open.get(lk.to);
+        if (!o || g < o.g) open.set(lk.to, { a: b, g, f: g + dist(b.center, goal.center), prev: cur, ladder: lk });
       }
     }
     return null;
@@ -140,6 +169,13 @@ function triHeight(a, b, c, x, y) {
   const w = 1 - u - v;
   if (u < -1e-4 || v < -1e-4 || w < -1e-4) return null;
   return u * a[2] + v * b[2] + w * c[2];
+}
+
+// A point moved onto an area's surface (its height there, or the area's centre height).
+function heightPoint(a, p) {
+  const x = Math.min(Math.max(p[0], a.min[0]), a.max[0]), y = Math.min(Math.max(p[1], a.min[1]), a.max[1]);
+  const h = heightIn(a.corners, x, y);
+  return [x, y, h ?? a.center[2]];
 }
 
 // A random point inside a convex area (area-weighted triangle of its fan).

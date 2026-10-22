@@ -124,7 +124,9 @@ export class Brain {
     if (want !== b.slot && !gun?.reloading) this.game.botSwitch(b, want, t);
     if (gun && !gun.melee && !gun.reloading && gun.clip < gun.stats.clip && gun.reserve > 0 && (gun.clip === 0 || (!this.target?.visible && gun.clip < gun.stats.clip * 0.4 && t > (this.target?.lostAt || 0) + 1.5))) {
       gun.reloading = true;
-      gun.reloadEnd = t + (RELOAD_TIME[gun.stats.type] || 2.5);
+      // CS2's reload time from the weapon data (shotguns: half a second a shell).
+      const st = gun.stats;
+      gun.reloadEnd = t + (st.bulletsPerReload === 1 ? 0.5 * (st.clip - gun.clip) : st.reloadTime || RELOAD_TIME[st.type] || 2.5);
       this.game.botSound(b, gun.prefix + 'Clipout', 0.5);
     }
   }
@@ -231,6 +233,7 @@ export class Brain {
   // Where to look when not fighting: the last place an enemy was, a noise, the hold angle, or ahead.
   look(dt, t) {
     const b = this.bot;
+    if (b.climbing) return;
     if (t < this.blindUntil) { this.turnTo(b.pitch + Math.sin(t * 9) * 3, b.yaw + Math.sin(t * 3.1 + b.index) * 40, dt, 0.4); return; }
     if (this.lastSeen && t - this.lastSeen.t < 4) { const [p, y] = angleTo(b.eye(), [this.lastSeen.pos[0], this.lastSeen.pos[1], this.lastSeen.pos[2] + 60]); this.turnTo(p, y, dt, 0.7); return; }
     if (this.heard && t - this.heard.t < 3) { const [p, y] = angleTo(b.eye(), [this.heard.pos[0], this.heard.pos[1], this.heard.pos[2] + 60]); this.turnTo(p, y, dt, 0.6); return; }
@@ -253,9 +256,14 @@ export class Brain {
     if (!this.target?.visible && t >= this.nadeAt) this.useNades(t, siteBox);
     // No rifle? Grab one lying nearby.
     if (!b.weapons.primary && !this.target?.visible && (bomb.state !== 'planted' || c.team === 'T')) {
-      const loot = g.drops.list.filter((it) => !/^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/.test(it.id) && !g.nades.inFire(it.pos))
+      const loot = g.drops.list.filter((it) => it.id !== 'defuser' && !/^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/.test(it.id) && !g.nades.inFire(it.pos))
         .map((it) => ({ it, d: Math.hypot(it.pos[0] - b.pos[0], it.pos[1] - b.pos[1]) })).filter((x) => x.d < 700).sort((x, y) => x.d - y.d)[0];
       if (loot) return this.setTask('goto', loot.it.pos);
+    }
+    // A CT without a kit picks one up lying nearby.
+    if (c.team === 'CT' && !c.defuser && !this.target?.visible) {
+      const kit = g.drops.list.find((it) => it.id === 'defuser' && Math.hypot(it.pos[0] - b.pos[0], it.pos[1] - b.pos[1]) < 600);
+      if (kit) return this.setTask('goto', kit.pos);
     }
     if (c.team === 'T') {
       if (bomb.state === 'dropped' && g.nearestTo(bomb.pos, 'T') === c) return this.setTask('pickup', bomb.pos);
@@ -397,6 +405,7 @@ export class Brain {
   move(dt, t, moving) {
     const g = this.game, b = this.bot, nav = g.nav;
     const gun = b.weapons[b.slot];
+    if (this.climb(dt, moving)) return;
     let max = gun?.stats?.maxSpeed?.[0] || 250;
     if (b.ducked) max *= 0.34;
     else if (this.walking(t)) max *= 0.52;
@@ -405,7 +414,7 @@ export class Brain {
       let wp = this.path[this.pi];
       let dx = wp[0] - b.pos[0], dy = wp[1] - b.pos[1];
       let d = Math.hypot(dx, dy);
-      while (d < 24 && this.pi < this.path.length - 1) { this.pi++; wp = this.path[this.pi]; dx = wp[0] - b.pos[0]; dy = wp[1] - b.pos[1]; d = Math.hypot(dx, dy); }
+      while (d < 24 && !wp.ladder && this.pi < this.path.length - 1) { this.pi++; wp = this.path[this.pi]; dx = wp[0] - b.pos[0]; dy = wp[1] - b.pos[1]; d = Math.hypot(dx, dy); }
       if (d > 8) { want = [(dx / d) * max, (dy / d) * max]; wpZ = wp[2]; } else if (this.pi >= this.path.length - 1) this.path = null;
     } else if (this.target?.visible && b.weapons[b.slot]?.melee && moving) {
       const e = g.bodyOf(this.target.c).feet, dx = e[0] - b.pos[0], dy = e[1] - b.pos[1], d = Math.hypot(dx, dy);
@@ -430,7 +439,11 @@ export class Brain {
     b.vel[1] += (want[1] - b.vel[1]) * k;
     const nx = b.pos[0] + b.vel[0] * dt, ny = b.pos[1] + b.vel[1] * dt;
     const h = nav.heightAt(nx, ny, b.pos[2] + 20);
-    if (h === null && wpZ === null) {
+    const below = h === null && wpZ === null ? nav.heightAt(b.pos[0], b.pos[1], b.pos[2] + 20, 600) : null;
+    if (below !== null && below < b.pos[2] - 1) {
+      // In the air over lower ground (dropped off a ledge at the end of a path): fall onto it.
+      b.vel[2] -= 800 * dt; b.pos[2] = Math.max(below, b.pos[2] + b.vel[2] * dt); if (b.pos[2] === below) b.vel[2] = 0;
+    } else if (h === null && wpZ === null) {
       // Off the mesh (e.g. pushed by a teammate): don't go there.
       b.vel[0] *= 0.3; b.vel[1] *= 0.3;
     } else if (h === null) {
@@ -445,7 +458,7 @@ export class Brain {
       else { b.pos[2] = h; b.vel[2] = 0; }
     }
     // Stuck: find the way again.
-    if (moving && this.path) {
+    if (moving && this.path && !b.climbing) {
       this.stuckT += dt;
       if (this.stuckT > 1) {
         if (dist2(b.pos, this.lastProgress) < 20 && this.goal) this.goTo(this.goal);
@@ -454,6 +467,26 @@ export class Brain {
       }
     }
   }
+  // Ladders: at the foot (or the top) of one on the path, go straight up (or down) the rungs at CS2's climbing
+  // speed, facing the ladder. Returns true while the bot is on a ladder.
+  climb(dt, moving) {
+    const b = this.bot, wp = this.path?.[this.pi];
+    if (!wp?.ladder) { b.climbing = null; return false; }
+    const n = wp.ladder.normal;
+    if (!b.climbing && Math.hypot(wp[0] - b.pos[0], wp[1] - b.pos[1]) > 24) return false;
+    b.climbing = wp.ladder;
+    b.ducked = false;
+    b.yaw = (Math.atan2(-n[1], -n[0]) * 180) / Math.PI;
+    if (!moving) { b.vel = [0, 0, 0]; return true; }
+    const dz = wp[2] - b.pos[2], step = Math.sign(dz) * Math.min(Math.abs(dz), 156 * dt);
+    b.pos[0] += (wp[0] - b.pos[0]) * Math.min(1, dt * 8);
+    b.pos[1] += (wp[1] - b.pos[1]) * Math.min(1, dt * 8);
+    b.pos[2] += step;
+    b.vel = [0, 0, step / dt];
+    if (Math.abs(dz) < 1) { this.pi++; b.climbing = null; b.vel = [0, 0, 0]; }
+    return true;
+  }
+
   walking(t) { return this.task === 'hold' || (this.lastSeen && t - this.lastSeen.t < 6 && !this.target?.visible); }
 }
 

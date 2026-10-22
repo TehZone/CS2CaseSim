@@ -31,7 +31,8 @@ function pickClip(weapon, clips) {
 // Every viewmodel clip Play mode uses for a weapon, by role: { draw, idle, shoot: [], reload, ... } (paths).
 // The weapon's own folder wins over its class's default folder (knives share the default attacks, for example).
 const ROLES = [
-  ['draw', /^draw_/], ['idle', /^idle_(?!slide|empty)/], ['idleEmpty', /^idle_(slide_back|empty)/], ['shootEmpty', /^shoot_empty/],
+  ['draw', /^draw_(?!silenced)/], ['idle', /^idle_(?!slide|empty)/], ['idleEmpty', /^idle_(slide_back|empty)/], ['shootEmpty', /^shoot_empty/],
+  ['shootAlt', /^shoot_alt/], ['prepare', /^prepare_shoot/], ['silencerAttach', /^silencer_attach/], ['silencerDetach', /^silencer_detach/],
   ['shoot', /^shoot\d*_/, true], ['reloadEmpty', /^reload_empty/], ['reload', /^reload_(?!empty|start|loop|end)/],
   ['reloadStart', /^reload_start/], ['reloadLoop', /^reload_loop/], ['reloadEnd', /^reload_end/], ['inspect', /^lookat01_(?!draw|transfix)/],
   ['lightMiss', /^light_miss\d/, true], ['lightHit', /^light_hit\d/, true], ['heavyMiss', /^heavy_miss\d/, true], ['heavyHit', /^heavy_hit\d/, true],

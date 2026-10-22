@@ -10,7 +10,7 @@ const { decodePNG, encodePNG } = require('./png.cjs');
 
 const IN = 0.0254; // the exporter writes game inches as metres
 const PLAY_VERSION = 1; // map exports
-const DATA_VERSION = 3; // weapon stats + sound events
+const DATA_VERSION = 5; // weapon stats + sound events
 // Collision flags per triangle: what it stops.
 const F_PLAYER = 1, F_BULLET = 2, F_GRENADE = 4;
 // The irradiance lightmap is stored as 8-bit sRGB of value / IRR_MAX.
@@ -221,13 +221,17 @@ function bakeSky(exr, outFile) {
 // ---- navigation -----------------------------------------------------------------------------------------
 // The patched CLI's nav mesh JSON (VRF_NAV_JSON=1) -> the player hull's areas: { areas: [{ id, flags, c: corners,
 // e: neighbour ids per edge, h: hiding spots }] } in game units.
+// nav.json format version (2: ladders).
+const NAV_VERSION = 2;
 function compactNav(text) {
   const j = JSON.parse(text.slice(text.indexOf('{')));
   const r = (v) => Math.round(v * 10) / 10;
   return {
+    version: NAV_VERSION,
     areas: j.areas.filter((a) => a.hull === 0).map((a) => ({
       id: a.id, flags: a.flags, c: a.corners.map((p) => p.map(r)), e: a.connections, h: a.hiding.map((s) => s.slice(0, 3).map(r)),
     })),
+    ladders: (j.ladders || []).map((l) => ({ id: l.id, width: r(l.width), length: r(l.length), dir: l.dir, top: l.top.map(r), bottom: l.bottom.map(r), topAreas: l.topAreas, bottomAreas: l.bottomAreas })),
   };
 }
 
@@ -268,6 +272,8 @@ function weaponStats(text) {
       recoilSeed: w.m_nRecoilSeed || 0, spreadSeed: w.m_nSpreadSeed || 0, deploy: w.m_flDeployDuration ?? 1,
       zoomLevels: w.m_nZoomLevels || 0, zoomFov: [w.m_nZoomFOV1 || 90, w.m_nZoomFOV2 || 90], zoomTime: [w.m_flZoomTime0 || 0, w.m_flZoomTime1 || 0, w.m_flZoomTime2 || 0],
       silencer: w.m_eSilencerType || 'WEAPONSILENCER_NONE', burst: !!w.m_bHasBurstMode, revolver: !!w.m_bIsRevolver,
+      burstCycle: w.m_flCycleTimeWhenInBurstMode || 0, burstGap: w.m_flTimeBetweenBurstShots || 0,
+      reloadTime: w.m_flDisallowAttackAfterReloadStartDuration || 0,
       tracerFrequency: pair(w.m_nTracerFrequency, 1)[0], unzoomsAfterShot: !!w.m_bUnzoomsAfterShot,
       hideViewmodelZoomed: !!w.m_bHideViewModelWhenZoomed, attackMoveFactor: w.m_flAttackMovespeedFactor ?? 1,
       shootSound: w.m_aShootSounds?.WEAPON_SOUND_SINGLE || '', worldModel: w.m_szWorldModel || '',
@@ -296,5 +302,5 @@ function soundEventFiles(text) {
 
 module.exports = {
   PLAY_VERSION, DATA_VERSION, F_PLAYER, F_BULLET, F_GRENADE, IRR_MAX, readGlb, buildCollision, gameVolumes, mapInfo, bakeLightmap, bakeSky,
-  weaponStats, soundEventFiles, parseEntities, compactNav,
+  weaponStats, soundEventFiles, parseEntities, compactNav, NAV_VERSION,
 };

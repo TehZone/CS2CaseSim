@@ -102,6 +102,42 @@ p.tick(1 / 64, { forward: 0, side: 0, yaw: 0, maxSpeed: 250 });
 run(p, 30, {});
 ok(!p.ducked, 'stands up again');
 
+// ---- ladders: a wall at y=1000..1040 up to z=200 with a ladder plane in front of it, and a roof to step onto ----
+{
+  const tris = [];
+  const add = (min, max, surface) => boxTris(min, max).forEach((t) => tris.push({ t, surface }));
+  add([-2000, -2000, -64], [2000, 3000, 0], 0); // floor
+  add([-200, 1000, 0], [200, 1400, 200], 0); // a block to climb onto (top z=200)
+  add([-16, 998, 0], [16, 1000, 200], 1); // the ladder (2 units thick, its climbable face at y=998 facing -y)
+  const n = tris.length, buf = new ArrayBuffer(n * 38);
+  const pos = new Float32Array(buf, 0, n * 9), fl = new Uint8Array(buf, n * 36, n), sf = new Uint8Array(buf, n * 37, n);
+  tris.forEach(({ t, surface }, i) => { pos.set(t.flat(), i * 9); fl[i] = FLAG_PLAYER | FLAG_BULLET; sf[i] = surface; });
+  const L = new CollisionWorld(buf, { tris: n, surfaces: ['default', 'ladder'] });
+  const climb = (cmd, ticks, q) => { for (let i = 0; i < ticks; i++) q.tick(1 / 64, { forward: 0, side: 0, yaw: 90, pitch: 0, maxSpeed: 250, ...cmd }); return q; };
+  let q = new PlayerMovement(L, [0, 900, 0]);
+  climb({ forward: 1 }, 64, q);
+  ok(q.onLadder && q.origin[2] > 20, 'walking into a ladder climbs it: z=' + q.origin[2].toFixed(1));
+  const z1 = q.origin[2];
+  climb({ forward: 1 }, 16, q);
+  ok(near(q.origin[2] - z1, MOVE.climbSpeed / 4, 4), 'climbs at CS2 ladder speed: ' + ((q.origin[2] - z1) * 4).toFixed(1) + '/s');
+  climb({}, 32, q);
+  ok(q.onLadder && near(q.velocity[2], 0, 0.01) && q.origin[2] > z1, 'hangs on the ladder without input');
+  climb({ forward: 1, pitch: 80 }, 32, q);
+  ok(q.origin[2] < z1 + 40, 'looking down and pressing forward climbs down: z=' + q.origin[2].toFixed(1));
+  let roof = false;
+  for (let i = 0; i < 64 * 4 && !roof; i++) { climb({ forward: 1, pitch: -30 }, 1, q); roof = q.onGround && q.origin[2] > 199; }
+  ok(roof && q.origin[1] > 980, 'climbs over the top onto the roof: ' + q.origin.map((v) => v.toFixed(1)));
+  q = new PlayerMovement(L, [0, 900, 0]);
+  climb({ forward: 1 }, 64, q);
+  climb({ jump: true }, 1, q);
+  ok(!q.onLadder && q.velocity[1] < -200, 'jumping pushes off the ladder: vy=' + q.velocity[1].toFixed(1));
+  // fall damage speed: a 300-unit drop lands at about 690 units/s (CS2 hurts above 580)
+  q = new PlayerMovement(L, [0, 1200, 500]);
+  let landed = 0;
+  for (let i = 0; i < 200 && !landed; i++) { q.tick(1 / 64, { forward: 0, side: 0, yaw: 0, maxSpeed: 250 }); landed = q.landed; }
+  ok(near(landed, Math.sqrt(2 * MOVE.gravity * 300), 25), 'landing speed after a 300-unit fall: ' + landed.toFixed(0));
+}
+
 // ---- match rules (economy, rounds, bomb) with a stand-in game ----
 function fakeGame() {
   const g = { now: 0, team: 'CT', enemyTeam: 'T', map: { info: { bombsites: [{ site: 'A', min: [0, 0, 0], max: [100, 100, 100] }] } } };
@@ -161,6 +197,26 @@ function fakeGame() {
   ok(m.round === SHORT_RULES.halftime + 1 && me.team === 'T' && t1.team === 'CT' && me.money === 800, `halftime swap: ${me.team} money ${me.money}`);
   while (m.phase !== 'over') { m.endRound('T', 'time'); m.tick(SHORT_RULES.endDelay + 0.01); }
   ok(m.winnerSquad() === 'A' && m.score.A >= SHORT_RULES.winsNeeded, 'match ends at ' + SHORT_RULES.winsNeeded + ' wins: ' + JSON.stringify(m.score));
+}
+// overtime: 8-8 goes to MR3 overtimes ($12,500, swap after 3); without overtime it's a draw
+{
+  const play = (rules, wins) => {
+    const g = fakeGame(), m = new Match(g, rules);
+    const log = [];
+    g.onRoundStart = (round, o) => log.push({ round, ...o, team: g.me.team, money: g.me.money });
+    m.startRound();
+    for (const w of wins) { if (m.phase === 'over') break; m.tick(rules.freeze + 0.01); m.endRound(g.combatants.find((c) => c.squad === w).team, 'time'); m.tick(rules.endDelay + 0.01); }
+    return { m, g, log };
+  };
+  const tie = 'ABABABABABABABAB'.split(''); // 8-8 after 16
+  let r = play(SHORT_RULES, tie);
+  ok(r.m.phase === 'over' && r.m.winnerSquad() === null, 'no overtime: 8-8 is a draw');
+  r = play({ ...SHORT_RULES, overtime: true }, [...tie, 'A', 'B', 'A', 'B', 'A', 'B', 'A', 'A', 'A', 'A']);
+  const ot1 = r.log.find((x) => x.round === 17), ot1half = r.log.find((x) => x.round === 20), ot2 = r.log.find((x) => x.round === 23);
+  ok(ot1?.overtime === 1 && ot1.money === 12500 && ot1.team === r.log.find((x) => x.round === 16).team, 'overtime 1: $12,500, same sides as the second half');
+  ok(ot1half?.halftime && ot1half.money === 12500 && ot1half.team !== ot1.team, 'overtime halftime: sides swap, $12,500 again');
+  ok(ot2?.overtime === 2, 'a tied overtime (11-11) starts overtime 2');
+  ok(r.m.phase === 'over' && r.m.winnerSquad() === 'A' && r.m.score.A === 15 && r.m.score.B === 11, 'overtime 2 won at 15: ' + JSON.stringify(r.m.score));
 }
 
 console.log(`${pass} passed, ${fail} failed`);

@@ -1,11 +1,13 @@
 // Player movement, ported from Source's game movement (the code CS2's movement grew from): friction, ground and air
 // acceleration, sliding the player's box along walls (TryPlayerMove), stepping up stairs and ledges (StepMove),
-// jumping, crouching and crouch-jumping. Units are CS2's: inches and seconds, Z up.
+// jumping, crouching and crouch-jumping, and ladders (LadderMove: CS2 maps mark ladders with the "ladder" surface).
+// Units are CS2's: inches and seconds, Z up.
 import { FLAG_PLAYER } from './collision.js';
 
 export const MOVE = {
   gravity: 800, friction: 5.2, stopSpeed: 80, accelerate: 5.5, airAccelerate: 12, airMaxWishSpeed: 30,
   maxSpeed: 320, stepSize: 18, jumpImpulse: 301.993, walkScale: 0.52, duckScale: 0.34, duckTime: 0.125,
+  climbSpeed: 200 * 0.78, ladderDistance: 2, ladderJump: 270, // MAX_CLIMB_SPEED x sv_ladder_scale_speed
 };
 export const HULL_STAND = { mins: [-16, -16, 0], maxs: [16, 16, 72] };
 export const HULL_DUCK = { mins: [-16, -16, 0], maxs: [16, 16, 54] };
@@ -14,6 +16,7 @@ const DUCK_DIFF = HULL_STAND.maxs[2] - HULL_DUCK.maxs[2];
 const NON_JUMP_VELOCITY = 140;
 
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 
 export class PlayerMovement {
   constructor(world, origin = [0, 0, 0]) {
@@ -40,12 +43,21 @@ export class PlayerMovement {
     this.origin = origin.slice();
     this.velocity = [0, 0, 0];
     this.ducked = false; this.duckAmount = 0;
+    this.onLadder = false;
     this.categorize();
   }
 
-  // One movement tick. cmd: { forward, side (-1..1, +side = right), yaw (degrees), jump, duck, walk, maxSpeed }.
+  // One movement tick. cmd: { forward, side (-1..1, +side = right), yaw, pitch (degrees), jump, duck, walk, maxSpeed }.
   tick(dt, cmd) {
     this.duck(dt, cmd.duck);
+    if (this.ladderMove(cmd)) {
+      this.jumpHeld = !!cmd.jump;
+      this.tryPlayerMove(dt);
+      const wasOnGround = this.onGround;
+      this.categorize();
+      this.fallVelocity = 0;
+      return;
+    }
     let maxSpeed = Math.min(MOVE.maxSpeed, cmd.maxSpeed || 250);
     if (this.ducked && this.onGround) maxSpeed *= MOVE.duckScale;
     else if (cmd.walk) maxSpeed *= MOVE.walkScale;
@@ -75,13 +87,58 @@ export class PlayerMovement {
       this.walkMove(dt);
     } else {
       this.velocity[2] -= MOVE.gravity * dt * 0.5;
+      this.fallVelocity = -this.velocity[2]; // before the move: landing clips it to zero
       this.airAccelerate(wish, wishSpeed, MOVE.airAccelerate, dt);
       this.tryPlayerMove(dt);
       this.velocity[2] -= MOVE.gravity * dt * 0.5;
     }
-    const wasOnGround = this.onGround, fall = -this.velocity[2];
+    const wasOnGround = this.onGround, fall = Math.max(-this.velocity[2], this.fallVelocity || 0);
     this.categorize();
     if (!wasOnGround && this.onGround) { this.landed = fall; this.velocity[2] = 0; }
+    if (this.onGround) this.fallVelocity = 0;
+  }
+
+  // Source's LadderMove: moving into a ladder surface climbs it. Forward climbs towards where you look (look down and
+  // press forward to go down), back goes the other way, strafing slides sideways, jump pushes you off.
+  ladderMove(cmd) {
+    let wish;
+    const yaw = (cmd.yaw * Math.PI) / 180, pitch = ((cmd.pitch || 0) * Math.PI) / 180;
+    const fwd = [Math.cos(pitch) * Math.cos(yaw), Math.cos(pitch) * Math.sin(yaw), -Math.sin(pitch)];
+    const right = [Math.sin(yaw), -Math.cos(yaw), 0];
+    if (this.onLadder) wish = this.ladderNormal.map((v) => -v);
+    else {
+      if (!cmd.forward && !cmd.side) return false;
+      wish = [0, 1, 2].map((i) => fwd[i] * cmd.forward + right[i] * cmd.side);
+      wish[2] = 0;
+      const l = Math.hypot(...wish);
+      if (l < 1e-6) return false;
+      wish = wish.map((v) => v / l);
+    }
+    // The ladder in that direction, unless something else is in front of it (ladders often share their plane with a clip).
+    const end = this.origin.map((o, i) => o + wish[i] * MOVE.ladderDistance);
+    const tr = this.world.ladders.size ? this.world.traceBox(this.origin, end, this.hull.mins, this.hull.maxs, FLAG_PLAYER, this.world.ladders) : null;
+    if (!tr?.normal || tr.fraction === 1 || Math.abs(tr.normal[2]) > 0.7 || this.trace(this.origin, end).fraction < tr.fraction - 0.01) { this.onLadder = false; return false; }
+    this.onLadder = true;
+    const n = tr.normal;
+    this.ladderNormal = n;
+    const onFloor = this.onGround;
+    if (cmd.jump && !this.jumpHeld) {
+      this.onLadder = false;
+      this.velocity = n.map((v) => v * MOVE.ladderJump);
+      this.onGround = false;
+      return true;
+    }
+    const fs = cmd.forward * MOVE.climbSpeed, rs = cmd.side * MOVE.climbSpeed;
+    if (!fs && !rs) { this.velocity = [0, 0, 0]; return true; }
+    const vel = [0, 1, 2].map((i) => fwd[i] * fs + right[i] * rs);
+    const perp = cross([0, 0, 1], n), pl = Math.hypot(...perp) || 1;
+    for (let i = 0; i < 3; i++) perp[i] /= pl;
+    const normal = dot(vel, n);
+    const lateral = vel.map((v, i) => v - n[i] * normal);
+    const up = cross(n, perp);
+    this.velocity = lateral.map((v, i) => v - up[i] * normal);
+    if (onFloor && normal > 0) for (let i = 0; i < 3; i++) this.velocity[i] += n[i] * MOVE.climbSpeed; // stepping off at the bottom
+    return true;
   }
 
   friction(dt) {

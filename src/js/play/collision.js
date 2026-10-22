@@ -14,6 +14,7 @@ export class CollisionWorld {
     this.flags = new Uint8Array(buffer, tris * 36, tris);
     this.surface = new Uint8Array(buffer, tris * 37, tris);
     this.surfaces = surfaces;
+    this.ladders = new Set(surfaces.map((s, i) => (/ladder/i.test(s) ? i : -1)).filter((i) => i >= 0));
     this.build();
   }
 
@@ -60,6 +61,9 @@ export class CollisionWorld {
     this.stack = new Int32Array(256);
   }
 
+  // Is this triangle part of a ladder (CS2 maps give ladders the "ladder" surface)?
+  isLadder(tri) { return tri >= 0 && this.ladders.has(this.surface[tri]); }
+
   // Ray from o along unit direction d, up to maxDist. Returns { t, normal, tri, surface } or null.
   // mask: which flags count as solid (FLAG_BULLET for shots).
   raycast(o, d, maxDist, mask = FLAG_BULLET, ignore = null) {
@@ -91,8 +95,8 @@ export class CollisionWorld {
   }
 
   // Sweeps an axis-aligned box (mins/maxs relative to start) from start to end. Returns Source-style trace results:
-  // { fraction, endpos, normal, startsolid, tri }.
-  traceBox(start, end, mins, maxs, mask = FLAG_PLAYER) {
+  // { fraction, endpos, normal, startsolid, tri }. only: a Set of surface ids to consider (e.g. ladders).
+  traceBox(start, end, mins, maxs, mask = FLAG_PLAYER, only = null) {
     const ext = [(maxs[0] - mins[0]) / 2, (maxs[1] - mins[1]) / 2, (maxs[2] - mins[2]) / 2];
     const c0 = [start[0] + (mins[0] + maxs[0]) / 2, start[1] + (mins[1] + maxs[1]) / 2, start[2] + (mins[2] + maxs[2]) / 2];
     const v = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
@@ -109,7 +113,7 @@ export class CollisionWorld {
       if (c >= 0) { S[sp++] = a; S[sp++] = c; continue; }
       for (let k = a; k < a - c; k++) {
         const tri = this.order[k];
-        if (!(this.flags[tri] & mask)) continue;
+        if (!(this.flags[tri] & mask) || (only && !only.has(this.surface[tri]))) continue;
         if (!sweepBoxTri(P, tri * 9, c0, ext, v, best, res)) continue;
         if (res.solid) { startsolid = true; continue; }
         if (res.t < best) { best = res.t; normal = res.n.slice(); hitTri = tri; }

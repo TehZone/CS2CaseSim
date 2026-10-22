@@ -1,5 +1,5 @@
 diff --git a/CLI/Decompiler.cs b/CLI/Decompiler.cs
-index d37a4bc..8baecc1 100644
+index d37a4bc..ba5bd81 100644
 --- a/CLI/Decompiler.cs
 +++ b/CLI/Decompiler.cs
 @@ -1316,6 +1316,13 @@ private void ParseNAV(string path, Stream stream, string? originalPath)
@@ -16,7 +16,7 @@ index d37a4bc..8baecc1 100644
                  if (!CollectStats)
                  {
                      Console.WriteLine(navMeshFile.ToString());
-@@ -1333,6 +1340,61 @@ private void ParseNAV(string path, Stream stream, string? originalPath)
+@@ -1333,6 +1340,100 @@ private void ParseNAV(string path, Stream stream, string? originalPath)
              }
          }
  
@@ -64,6 +64,45 @@ index d37a4bc..8baecc1 100644
 +                        w.WriteNumberValue(spot.Position.Z);
 +                        w.WriteNumberValue((int)spot.Flags);
 +                        w.WriteEndArray();
++                    }
++                    w.WriteEndArray();
++                    w.WriteEndObject();
++                }
++                w.WriteEndArray();
++                w.WriteStartArray("ladders");
++                foreach (var ladder in navMesh.Ladders)
++                {
++                    w.WriteStartObject();
++                    w.WriteNumber("id", ladder.Id);
++                    w.WriteNumber("width", ladder.Width);
++                    w.WriteNumber("length", ladder.Length);
++                    w.WriteNumber("dir", (int)ladder.Direction);
++                    w.WriteStartArray("top");
++                    w.WriteNumberValue(ladder.Top.X);
++                    w.WriteNumberValue(ladder.Top.Y);
++                    w.WriteNumberValue(ladder.Top.Z);
++                    w.WriteEndArray();
++                    w.WriteStartArray("bottom");
++                    w.WriteNumberValue(ladder.Bottom.X);
++                    w.WriteNumberValue(ladder.Bottom.Y);
++                    w.WriteNumberValue(ladder.Bottom.Z);
++                    w.WriteEndArray();
++                    w.WriteStartArray("topAreas");
++                    foreach (var area in new[] { ladder.TopForwardArea, ladder.TopLeftArea, ladder.TopRightArea, ladder.TopBehindArea })
++                    {
++                        if (area != null)
++                        {
++                            w.WriteNumberValue(area.AreaId);
++                        }
++                    }
++                    w.WriteEndArray();
++                    w.WriteStartArray("bottomAreas");
++                    foreach (var area in new[] { ladder.BottomArea, ladder.BottomLeftArea, ladder.BottomRightArea })
++                    {
++                        if (area != null)
++                        {
++                            w.WriteNumberValue(area.AreaId);
++                        }
 +                    }
 +                    w.WriteEndArray();
 +                    w.WriteEndObject();

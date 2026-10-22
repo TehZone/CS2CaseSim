@@ -1,5 +1,5 @@
 // A weapon in first person for Play mode: your skin on CS2's model, on CS2's arms (or your equipped gloves), playing
-// CS2's viewmodel animations (draw, idle, shoot, reload, inspect, knife attacks).
+// CS2's viewmodel animations (draw, idle, shoot, reload, inspect, knife attacks, the silencer screwed on and off).
 import * as THREE from 'three';
 import { assembleViewmodel } from '../cs2/firstperson.js';
 import { loadGltf } from '../cs2/rig.js';
@@ -39,7 +39,14 @@ export async function buildViewmodel(item, def, data, { gloves = null, renderer 
   };
   const has = (role) => !!clips[role]?.length;
   const length = (role) => clips[role]?.[0]?.duration || 0;
-  const update = (dt) => { mixer.update(dt); vm.pose(); };
+  // A detachable silencer (its own bone): hidden while it's off (the idle clips would put it back on the muzzle).
+  let silencerOff = false;
+  const setSilencer = (on) => { silencerOff = !on; if (on) vm.bones.silencer?.scale.setScalar(1); };
+  const update = (dt) => {
+    mixer.update(dt);
+    if (silencerOff) vm.bones.silencer?.scale.setScalar(1e-4);
+    vm.pose();
+  };
   play(has('idle') ? 'idle' : 'draw', { loop: has('idle') });
   update(0);
 
@@ -47,7 +54,7 @@ export async function buildViewmodel(item, def, data, { gloves = null, renderer 
   let muzzle = null;
   vm.rig.traverse((o) => { if (!muzzle && /muzzle/i.test(o.name)) muzzle = o; });
   return {
-    model, rig: vm.rig, bones: vm.bones, muzzle, play, has, length, update,
+    model, rig: vm.rig, bones: vm.bones, muzzle, play, has, length, update, setSilencer,
     get role() { return currentRole; },
     dispose() {
       mixer.stopAllAction();

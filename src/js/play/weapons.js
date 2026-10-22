@@ -1,7 +1,10 @@
 // Your weapons in Play mode, following CS2's weapon data (scripts/weapons.vdata from your install): fire rate, magazine,
 // damage with range falloff and armor, inaccuracy (standing, crouching, moving, in the air, firing) with recovery, the
 // spread pattern, and recoil generated from each weapon's recoil seed the way Source does (aim punch with its
-// decay, plus view punch). Angles are in degrees with Source's signs: positive pitch looks down, positive yaw turns left.
+// decay, plus view punch), and each weapon's special modes: the M4A1-S and USP-S silencer (Mouse2 screws it off/on),
+// the Glock-18 and FAMAS burst fire (Mouse2), the R8 Revolver (Mouse1 cocks then fires, Mouse2 fans), shotguns
+// loading one shell at a time, and the Zeus x27 (one charge, recharging after 30 seconds).
+// Angles are in degrees with Source's signs: positive pitch looks down, positive yaw turns left.
 import { UniformRandomStream } from '../cs2/rng.js';
 import { NADES, NADE_ORDER } from './grenades.js';
 
@@ -35,6 +38,11 @@ export function basis(pitch, yaw) {
   return { fwd: [cp * cy, cp * sy, -sp], right: [sy, -cy, 0], up: [sp * cy, sp * sy, cp] };
 }
 
+// Which of the weapon data's paired values apply (CS2 keeps two per stat): the second when scoped, with the silencer
+// off, in burst mode.
+export const altMode = (g) => (g.zoom > 0 || (g.detachable && !g.silenced) || g.burstMode ? 1 : 0);
+const REVOLVER_COCK = 0.2, TASER_RECHARGE = 30, SHELL_TIME = 0.5;
+
 const KNIFE = { light: { range: 48, damage: 40, again: 25, backstab: 90, cycle: 0.5, againCycle: 0.4 }, heavy: { range: 32, damage: 65, backstab: 180, cycle: 1.0 } };
 
 export class Gun {
@@ -53,6 +61,10 @@ export class Gun {
     // Sound events share the shot's prefix (Weapon_AK47.*); knives inherit a gun's shot sound in the data.
     this.prefix = this.melee ? 'Weapon_Knife.' : (stats.shootSound || '').replace(/\.[^.]*$/, '.');
     this.silenced = stats.silencer !== 'WEAPONSILENCER_NONE' && !!stats.silencer;
+    this.detachable = stats.silencer === 'WEAPONSILENCER_DETACHABLE';
+    this.burstMode = false; this.burstLeft = 0; this.nextBurst = 0;
+    this.taser = stats.type === 'WEAPONTYPE_TASER';
+    this.rechargeAt = 0;
   }
   get scoped() { return this.zoom > 0; }
 }
@@ -86,15 +98,19 @@ export class Arsenal {
     if (this.current === g) { this.current = null; this.selectBest(t); }
   }
   selectBest(t) {
-    for (const s of ['primary', 'secondary', 'knife', 'c4']) if (this.guns[s]) { this.select(s, t); return; }
+    for (const s of ['primary', 'secondary', 'knife', 'taser', 'c4']) if (this.guns[s]) { this.select(s, t); return; }
   }
-  // Slots in wheel order: guns, knife, grenades (CS2's order), bomb.
-  order() { return ['primary', 'secondary', 'knife', ...NADE_ORDER.map((id) => 'g_' + id), 'c4'].filter((s) => this.guns[s]); }
+  // Slots in wheel order: guns, knife, Zeus, grenades (CS2's order), bomb.
+  order() { return ['primary', 'secondary', 'knife', 'taser', ...NADE_ORDER.map((id) => 'g_' + id), 'c4'].filter((s) => this.guns[s]); }
 
   select(slot, t) {
     const g = this.guns[slot];
     if (!g || g === this.current) return;
-    if (this.current) { this.current.zoom = 0; this.current.reloading = false; }
+    if (this.current) {
+      const c = this.current;
+      c.zoom = 0; c.reloading = false; c.shellReload = false; c.burstLeft = 0; c.cockAt = null;
+      if (c.pendingSilencer != null) { c.pendingSilencer = null; c.vm.setSilencer?.(c.silenced); } // switching away cancels it
+    }
     this.last = this.current;
     this.current = g;
     this.scheduled = [];
@@ -121,8 +137,8 @@ export class Arsenal {
     return [pitch + this.view[0] + this.aim[0] * k, yaw + this.view[1] + this.aim[1] * k];
   }
 
-  inaccuracy(g) {
-    const st = g.stats, m = g.scoped ? 1 : 0, p = this.game.player;
+  inaccuracy(g, m = altMode(g)) {
+    const st = g.stats, p = this.game.player;
     let inacc = (p.ducked ? st.inaccCrouch[m] : st.inaccStand[m]) + g.penalty;
     const max = this.maxSpeed();
     const move = clamp01((p.speed2d() - max * 0.34) / (max * 0.95 - max * 0.34));
@@ -134,6 +150,9 @@ export class Arsenal {
   tick(dt, t, input) {
     const g = this.current;
     this.decayPunch(dt);
+    for (const z of Object.values(this.guns)) {
+      if (z.taser && z.clip <= 0 && z.rechargeAt && t >= z.rechargeAt) { z.clip = 1; z.rechargeAt = 0; if (z === g) this.sound('Weapon_Taser.ChargeReady', { volume: 0.5 }); }
+    }
     for (const s of this.scheduled.splice(0)) { if (t >= s.at) this.sound(s.event); else this.scheduled.push(s); }
     if (!g) return;
     const pressed = input.takePressed();
@@ -141,7 +160,9 @@ export class Arsenal {
     const wheel = input.takeWheel();
     this.pressed = pressed;
     if (!this.game.me.alive) return;
-    for (const [a, slot] of [['slot1', 'primary'], ['slot2', 'secondary'], ['slot3', 'knife'], ['slot5', 'c4']]) if (pressed.has(a) && this.guns[slot]) this.select(slot, t);
+    for (const [a, slot] of [['slot1', 'primary'], ['slot2', 'secondary'], ['slot5', 'c4']]) if (pressed.has(a) && this.guns[slot]) this.select(slot, t);
+    // 3: the knife, or the Zeus when you already hold the knife (CS2 keeps both in slot 3).
+    if (pressed.has('slot3')) this.select(this.current?.slot === 'knife' && this.guns.taser ? 'taser' : this.guns.knife ? 'knife' : 'taser', t);
     if (pressed.has('lastWeapon') && this.last && this.guns[this.last.slot] === this.last) this.select(this.last.slot, t);
     if (wheel) {
       const order = this.order();
@@ -156,6 +177,7 @@ export class Arsenal {
     const cur = this.current;
     this.recover(cur, dt, t);
     if (cur.reloading && t >= cur.reloadEnd) this.finishReload(cur, t);
+    if (cur.pendingSilencer != null && t >= cur.silencerAt) { cur.silenced = cur.pendingSilencer; cur.pendingSilencer = null; cur.vm.setSilencer?.(cur.silenced); }
     if (!cur.reloading && cur.vm.role !== 'idle' && t >= cur.animEnd && cur.vm.has('idle')) cur.vm.play('idle', { loop: true, fade: 0.12 });
     if (cur.resumeZoom && t >= cur.nextAttack) { cur.zoom = cur.resumeZoom; cur.resumeZoom = 0; }
     if (cur.nade) { this.grenade(cur, t, input); return; }
@@ -170,20 +192,85 @@ export class Arsenal {
       else if ((clicked & 4 || alt) && t >= cur.nextAttack) this.knife(cur, t, 'heavy');
       return;
     }
-    if (clicked & 4 && cur.stats.zoomLevels > 0 && !cur.reloading && t >= cur.deployEnd) {
-      cur.zoom = (cur.zoom + 1) % (cur.stats.zoomLevels + 1);
-      cur.resumeZoom = 0;
-      this.sound(cur.zoom ? 'Weapon_AWP.Zoom' : 'Weapon_AWP.ZoomOut', { volume: 0.5 });
-    }
-    const wants = cur.stats.fullAuto ? held : !!(clicked & 1);
-    if (wants && t >= cur.nextAttack && !cur.reloading) {
-      if (cur.clip > 0) this.shoot(cur, t);
-      else {
-        this.sound(/PISTOL/.test(cur.stats.type) ? 'Default.ClipEmpty_Pistol' : 'Default.ClipEmpty_Rifle');
-        cur.nextAttack = t + 0.2;
-        if (cur.reserve > 0) this.reload(cur, t);
+    if (cur.taser) { if (clicked & 1 && t >= cur.nextAttack) this.zap(cur, t); return; }
+    if (cur.stats.revolver) { this.revolver(cur, t, held, alt); return; }
+    if (clicked & 4 && !cur.reloading && t >= cur.deployEnd) {
+      if (cur.stats.zoomLevels > 0) {
+        cur.zoom = (cur.zoom + 1) % (cur.stats.zoomLevels + 1);
+        cur.resumeZoom = 0;
+        this.sound(cur.zoom ? 'Weapon_AWP.Zoom' : 'Weapon_AWP.ZoomOut', { volume: 0.5 });
+      } else if (cur.detachable && t >= cur.nextAttack && cur.pendingSilencer == null) this.toggleSilencer(cur, t);
+      else if (cur.stats.burst) {
+        cur.burstMode = !cur.burstMode;
+        this.game.hud?.message(cur.burstMode ? 'Switched to burst-fire mode' : cur.stats.fullAuto ? 'Switched to full-automatic' : 'Switched to semi-automatic', 1500);
+        this.sound('Weapon_Glock.Element_Click', { volume: 0.5 });
       }
     }
+    // The rest of a burst: two more shots, a burst gap apart.
+    if (cur.burstLeft > 0 && t >= cur.nextBurst) {
+      if (cur.clip > 0 && !cur.reloading) { this.shoot(cur, t, { burst: true }); cur.burstLeft--; cur.nextBurst = t + cur.stats.burstGap; } else cur.burstLeft = 0;
+    }
+    const wants = cur.stats.fullAuto && !cur.burstMode ? held : !!(clicked & 1);
+    // Shotguns can fire in the middle of loading shells.
+    if (wants && cur.shellReload && cur.clip > 0) { cur.reloading = false; cur.shellReload = false; }
+    if (wants && t >= cur.nextAttack && !cur.reloading && cur.pendingSilencer == null) {
+      if (cur.clip > 0) {
+        this.shoot(cur, t);
+        if (cur.burstMode) { cur.burstLeft = 2; cur.nextBurst = t + cur.stats.burstGap; cur.nextAttack = t + cur.stats.burstCycle; }
+      } else this.dryFire(cur, t);
+    }
+  }
+
+  dryFire(g, t) {
+    this.sound(/PISTOL/.test(g.stats.type) ? 'Default.ClipEmpty_Pistol' : 'Default.ClipEmpty_Rifle');
+    g.nextAttack = t + 0.2;
+    if (g.reserve > 0) this.reload(g, t);
+  }
+
+  // M4A1-S / USP-S: screw the silencer off or on (its own animation; it takes effect when that ends).
+  toggleSilencer(g, t) {
+    const on = !g.silenced;
+    const role = on ? 'silencerAttach' : 'silencerDetach';
+    const len = g.vm.has(role) ? g.vm.play(role, { fade: 0.08 }) : 2.6;
+    g.zoom = 0;
+    g.animEnd = t + len;
+    g.nextAttack = Math.max(g.nextAttack, t + len);
+    g.silencerAt = t + len * 0.9;
+    g.pendingSilencer = on;
+    if (on) g.vm.setSilencer?.(true); // it comes into view from your hand; screwed off, it's hidden once put away
+    const pistol = g.id === 'weapon_usp_silencer';
+    this.sound(pistol ? (on ? 'Weapon_USP.AttachSilencer' : 'Weapon_USP.DetachSilencer') : on ? 'Weapon_M4A1.Silencer_On' : 'Weapon_M4A1.Silencer_Off', { volume: 0.6 });
+    this.game.emit('silencer', { gun: g, on });
+  }
+
+  // R8 Revolver: holding Mouse1 cocks the hammer (a fifth of a second) and fires; Mouse2 fans the hammer, fast and
+  // inaccurate (the data's second values).
+  revolver(g, t, held, alt) {
+    if (g.reloading) { g.cockAt = null; return; }
+    if (g.clip <= 0) { if ((held || alt) && t >= g.nextAttack) { g.cockAt = null; this.dryFire(g, t); } return; }
+    if (alt) { g.cockAt = null; if (t >= g.nextAttack) this.shoot(g, t, { mode: 1 }); return; }
+    if (!held) { if (g.cockAt != null) { g.cockAt = null; if (g.vm.has('idle')) g.vm.play('idle', { loop: true, fade: 0.1 }); } return; }
+    if (t < g.nextAttack) return;
+    if (g.cockAt == null) {
+      g.cockAt = t + REVOLVER_COCK;
+      if (g.vm.has('prepare')) g.animEnd = t + g.vm.play('prepare', { fade: 0.03 });
+      this.sound('Weapon_Revolver.Prepare', { volume: 0.7 });
+    } else if (t >= g.cockAt) { g.cockAt = null; this.shoot(g, t, { mode: 0 }); }
+  }
+
+  // Zeus x27: one shock at close range that kills; it recharges in 30 seconds.
+  zap(g, t) {
+    if (g.clip <= 0) { this.sound('Weapon_Taser.ChargeNotReady', { volume: 0.5 }); g.nextAttack = t + 0.4; return; }
+    g.clip = 0;
+    g.rechargeAt = t + TASER_RECHARGE;
+    g.nextAttack = t + 0.5;
+    g.lastShot = t;
+    const { fwd } = basis(this.game.input.pitch, this.game.input.yaw);
+    this.game.fireBullet(this.game.me, this.game.player.eye(), fwd, g, { tracer: true });
+    this.sound('Weapon_Taser.Single', { volume: 0.8 });
+    g.animEnd = t + g.vm.play('shoot', { fade: 0.02 });
+    this.game.noise(this.game.player.eye(), 1400, this.game.me);
+    this.game.emit('shot', g);
   }
 
   // Grenades: pressing pulls the pin; releasing throws (Mouse1 full throw, Mouse2 underhand, both medium).
@@ -235,13 +322,13 @@ export class Arsenal {
     this.view[0] *= vp; this.view[1] *= vp;
   }
 
-  shoot(g, t) {
-    const st = g.stats, m = g.scoped ? 1 : 0;
+  shoot(g, t, { mode = altMode(g), burst = false } = {}) {
+    const st = g.stats, m = mode;
     const game = this.game;
     g.clip--;
     g.shots++;
-    g.nextAttack = t + st.cycle[m];
-    const inacc = this.inaccuracy(g), spread = st.spread[m];
+    if (!burst) g.nextAttack = t + st.cycle[m];
+    const inacc = this.inaccuracy(g, m), spread = st.spread[m];
     // Bullets leave along your aim plus the full aim punch.
     const pitch = game.input.pitch + this.aim[0] * RECOIL.scale, yaw = game.input.yaw + this.aim[1] * RECOIL.scale;
     const { fwd, right, up } = basis(pitch, yaw);
@@ -262,7 +349,7 @@ export class Arsenal {
     const event = g.silenced && this.game.sounds?.has(g.prefix + 'Silenced') ? g.prefix + 'Silenced'
       : g.silenced && this.game.sounds?.has(g.prefix + 'SilencedShot') ? g.prefix + 'SilencedShot' : st.shootSound;
     this.sound(event, { volume: 0.8 });
-    const role = g.clip === 0 && g.vm.has('shootEmpty') ? 'shootEmpty' : 'shoot';
+    const role = st.revolver && m === 1 && g.vm.has('shootAlt') ? 'shootAlt' : g.clip === 0 && g.vm.has('shootEmpty') ? 'shootEmpty' : 'shoot';
     g.animEnd = t + g.vm.play(role, { fade: 0.02 });
     if (st.unzoomsAfterShot && g.zoom) { g.resumeZoom = g.zoom; g.zoom = 0; }
     game.emit('shot', g);
@@ -282,8 +369,9 @@ export class Arsenal {
   }
 
   reload(g, t) {
-    if (g.melee || g.reloading || g.clip >= g.stats.clip || g.reserve <= 0 || t < g.deployEnd) return;
-    g.zoom = 0; g.resumeZoom = 0;
+    if (g.melee || g.taser || g.reloading || g.clip >= g.stats.clip || g.reserve <= 0 || t < g.deployEnd || g.pendingSilencer != null) return;
+    g.zoom = 0; g.resumeZoom = 0; g.burstLeft = 0; g.cockAt = null;
+    if (g.stats.bulletsPerReload === 1) { this.loadShell(g, t); this.game.emit('reload', g); return; }
     const empty = g.clip === 0 && g.vm.has('reloadEmpty');
     const len = g.vm.play(empty ? 'reloadEmpty' : 'reload') || 2.5;
     g.reloading = true;
@@ -297,7 +385,26 @@ export class Arsenal {
     this.game.emit('reload', g);
   }
 
-  finishReload(g) {
+  // Shotguns (Nova, XM1014, Sawed-Off) load one shell at a time: each shell replays the start of the reload animation
+  // (grab a shell, push it in); after the last one the animation plays on (back to the pump).
+  loadShell(g, t) {
+    g.reloading = true;
+    g.shellReload = true;
+    const len = g.vm.play('reload', { fade: 0.05 }) || SHELL_TIME;
+    g.reloadEnd = t + SHELL_TIME;
+    g.animEnd = t + len;
+  }
+
+  finishReload(g, t) {
+    if (g.shellReload) {
+      g.clip++; g.reserve--;
+      const ev = [g.prefix + 'Insertshell', g.prefix + 'InsertShell'].find((e) => this.game.sounds?.has(e));
+      if (ev) this.sound(ev, { volume: 0.7 });
+      if (g.clip < g.stats.clip && g.reserve > 0) this.loadShell(g, t);
+      else { g.reloading = false; g.shellReload = false; g.recoilIndex = 0; }
+      this.game.emit('ammo', g);
+      return;
+    }
     const take = Math.min(g.stats.clip - g.clip, g.reserve);
     g.clip += take;
     g.reserve -= take;

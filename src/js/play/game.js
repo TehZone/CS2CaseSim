@@ -36,7 +36,7 @@ const IN = 0.0254;
 const SURFACE_STEP = { concrete: 'Concrete', rock: 'Concrete', tile: 'Tile', sand: 'Sand', dirt: 'Dirt', wood: 'Wood', wood_solid: 'Wood_Solid',
   wood_panel: 'Wood', wood_plank: 'Wood', wood_dense: 'Wood', wood_crate: 'Wood', wood_basket: 'Wood_Basket', wood_tree: 'Wood', metal: 'SolidMetal',
   solidmetal: 'SolidMetal', metalpanel: 'SolidMetal', metalvent: 'MetalVent', metalvehicle: 'MetalVehicle', metal_sand_barrel: 'MetalBarrel',
-  metal_dumpster: 'SolidMetal', chainlink: 'ChainLink', glass: 'Glass', carpet: 'Default', default: 'Default' };
+  metal_dumpster: 'SolidMetal', chainlink: 'ChainLink', glass: 'Glass', carpet: 'Default', default: 'Default', ladder: 'Ladder', wood_ladder: 'Wood_Ladder' };
 const SURFACE_IMPACT = { concrete: 'Concrete', rock: 'Concrete', tile: 'Tile', sand: 'Sand', dirt: 'Dirt', metal: 'SolidMetal', solidmetal: 'SolidMetal',
   metalpanel: 'SolidMetal', metalvent: 'SolidMetal', metalvehicle: 'MetalVehicle', metal_sand_barrel: 'MetalBarrel', metal_dumpster: 'SolidMetal',
   chainlink: 'ChainLink', glass: 'Glass', carpet: 'Carpet', pottery: 'Pottery', computer: 'Computer' };
@@ -46,7 +46,7 @@ const impactName = (s) => SURFACE_IMPACT[String(s).toLowerCase()] || (/wood/i.te
 const DEFAULT_KNIFE = { T: { wid: 'weapon_knife_t', w: 'Knife', n: 'Knife', cat: 'knife', v: true }, CT: { wid: 'weapon_knife', w: 'Knife', n: 'Knife', cat: 'knife', v: true } };
 // Guns players buy most, loaded in the background so buying them is instant.
 const PRELOAD = ['weapon_ak47', 'weapon_m4a1', 'weapon_m4a1_silencer', 'weapon_awp', 'weapon_flashbang', 'weapon_smokegrenade', 'weapon_hegrenade', 'weapon_molotov',
-  'weapon_incgrenade', 'weapon_deagle', 'weapon_galilar', 'weapon_famas', 'weapon_mp9', 'weapon_mac10', 'weapon_decoy'];
+  'weapon_incgrenade', 'weapon_deagle', 'weapon_galilar', 'weapon_famas', 'weapon_mp9', 'weapon_mac10', 'weapon_decoy', 'weapon_taser'];
 const BOT_GUNS = ['weapon_glock', 'weapon_usp_silencer', 'weapon_ak47', 'weapon_m4a1', 'weapon_m4a1_silencer', 'weapon_awp', 'weapon_deagle', 'weapon_p250',
   'weapon_galilar', 'weapon_famas', 'weapon_mac10', 'weapon_mp9', 'weapon_tec9', 'weapon_fiveseven', 'weapon_knife', 'weapon_knife_t', 'weapon_c4', ...NADE_ORDER];
 // How easily bullets go through each surface (CS2's penetration modifiers, roughly): thickness allowed = 32 x weapon
@@ -57,12 +57,12 @@ const PENETRATION = { wood: 1, wood_panel: 1, wood_plank: 1, wood_crate: 1.2, wo
 const MUSIC = 'valve_cs2_01';
 
 export class Game {
-  constructor(root, { map = 'de_dust2', team = 'CT', teamSize = 5, difficulty = 'normal', length = 'short', sensitivity = 1.25, quality = 'balanced', onStatus = () => {} } = {}) {
+  constructor(root, { map = 'de_dust2', team = 'CT', teamSize = 5, difficulty = 'normal', length = 'short', overtime = true, sensitivity = 1.25, quality = 'balanced', onStatus = () => {} } = {}) {
     Object.assign(this, { root, mapId: map, team, onStatus });
     this.enemyTeam = team === 'T' ? 'CT' : 'T';
     this.teamSize = Math.max(1, Math.min(5, teamSize | 0));
     this.difficulty = difficulty;
-    this.rules = length === 'long' ? RULES : SHORT_RULES;
+    this.rules = { ...(length === 'long' ? RULES : SHORT_RULES), overtime: !!overtime };
     this.disposed = false;
     this.paused = true;
     this.listeners = new Set();
@@ -197,7 +197,8 @@ export class Game {
       'Default.Land', 'BulletBy.Supersonic.Crack', 'c4.plant', 'c4.initiate', 'c4.disarmstart', 'c4.disarmfinish', 'c4.explode', 'C4.PlantSound',
       'c4.keypressquiet', 'Player.PickupC4', 'Player.PickupWeapon', 'Event.BombPlanted', 'Event.BombDefused', 'Event.CTWin', 'Event.TERWin',
       `Music.StartRound.${MUSIC}`, `Music.BombPlanted.${MUSIC}`, `Music.WonRound.${MUSIC}`, `Music.LostRound.${MUSIC}`, `Music.MatchEnd.${MUSIC}`,
-      ...NADE_SOUNDS, 'Molotov.Draw', 'HEGrenade.Draw', 'Player.PickupGrenadeAudible', 'Player.PickupWeaponSilent'];
+      ...NADE_SOUNDS, 'Molotov.Draw', 'HEGrenade.Draw', 'Player.PickupGrenadeAudible', 'Player.PickupWeaponSilent', 'Player.DeathTaser', 'Player.DamageFall',
+      'CT_Ladder.StepLeft', 'CT_Wood_Ladder.StepLeft'];
   }
 
   setupViewmodelLighting() {
@@ -274,7 +275,7 @@ export class Game {
     if (id === 'defuser') return this.me.defuser;
     if (id === 'vest') return this.me.armor >= 100;
     if (id === 'vesthelm') return this.me.armor >= 100 && this.me.helmet;
-    return g?.primary?.id === id || g?.secondary?.id === id;
+    return g?.primary?.id === id || g?.secondary?.id === id || g?.taser?.id === id;
   }
 
   // ---- buying -----------------------------------------------------------------------------------------------------
@@ -356,7 +357,7 @@ export class Game {
   }
 
   // ---- rounds (called by the match) -------------------------------------------------------------------------------
-  onRoundStart(round, { halftime, pistol }) {
+  onRoundStart(round, { halftime, pistol, overtime }) {
     this.effects.clear();
     this.nades.clear();
     this.drops.clear();
@@ -381,7 +382,7 @@ export class Game {
     this.plans = { T: teamPlan(this, 'T'), CT: teamPlan(this, 'CT') };
     for (const b of this.bots) { b.brain.roundStart(this.plans[b.c.team]); b.brain.buy(pistol); }
     this.liveAt = Infinity;
-    this.hud.message(halftime ? 'Switching sides' : round === 1 ? 'Match start · Round 1' : `Round ${round}`, 2500);
+    this.hud.message(overtime ? `Overtime ${overtime} · $12,500 each` : halftime ? 'Switching sides' : round === 1 ? 'Match start · Round 1' : `Round ${round}`, 2500);
     this.sounds.play(`Music.StartRound.${MUSIC}`, { volume: 0.35 });
     this.emit('round', round);
   }
@@ -397,6 +398,7 @@ export class Game {
     const jobs = [];
     if (died) {
       this.arsenal.remove('primary', this.now);
+      this.arsenal.remove('taser', this.now);
       jobs.push(this.giveMe('secondary', DEFAULT_PISTOL[me.team], false));
       me.armor = 0; me.helmet = false; me.defuser = false; me.nades = {};
     }
@@ -600,10 +602,10 @@ export class Game {
     m.tick(TICK);
     // You
     const frozen = m.phase === 'freeze' || !me.alive || this.planting || this.defusing || m.phase === 'over';
-    const cmd = frozen ? { forward: 0, side: 0, yaw: inp.yaw, jump: false, duck: inp.held('duck') && me.alive, walk: false, maxSpeed: this.arsenal.maxSpeed() } : {
+    const cmd = frozen ? { forward: 0, side: 0, yaw: inp.yaw, pitch: inp.pitch, jump: false, duck: inp.held('duck') && me.alive, walk: false, maxSpeed: this.arsenal.maxSpeed() } : {
       forward: (inp.held('forward') ? 1 : 0) - (inp.held('back') ? 1 : 0),
       side: (inp.held('right') ? 1 : 0) - (inp.held('left') ? 1 : 0),
-      yaw: inp.yaw, jump: inp.held('jump'), duck: inp.held('duck'), walk: inp.held('walk'),
+      yaw: inp.yaw, pitch: inp.pitch, jump: inp.held('jump'), duck: inp.held('duck'), walk: inp.held('walk'),
       maxSpeed: this.arsenal.maxSpeed(),
     };
     if (me.alive) {
@@ -611,6 +613,7 @@ export class Game {
       this.player.tick(TICK, cmd);
       this.pushOutOfBots();
       if (this.player.origin[2] < -3000) this.kill(me, null, { name: 'World' }, false);
+      this.fallDamage();
       this.footsteps(wasGround);
       this.arsenal.tick(TICK, this.now, inp);
       if (this.arsenal.pressed?.has('drop')) this.dropMine();
@@ -655,6 +658,7 @@ export class Game {
       if (!c.alive) continue;
       for (const it of this.drops.near(this.positionOf(c), 40)) {
         if (it.by === c && this.now - it.at < 1.5) continue;
+        if (it.id === 'defuser') { if (c.team === 'CT' && !c.defuser && this.drops.take(it)) { c.defuser = true; if (c === this.me) this.sounds.play('Player.PickupWeapon', { volume: 0.6 }); } continue; }
         const slot = slotOf(it.id);
         if (c === this.me ? this.arsenal.guns[slot] : this.botOf(c).weapons[slot]) continue;
         this.pickUp(c, it);
@@ -678,7 +682,7 @@ export class Game {
   // G: drop the gun in your hand (or the bomb).
   dropMine() {
     const gun = this.arsenal.gun;
-    if (!gun || gun.melee || gun.nade) return;
+    if (!gun || gun.melee || gun.nade || gun.taser) return;
     const eye = this.player.eye(), { fwd } = basis(this.input.pitch, this.input.yaw);
     const vel = [fwd[0] * 250 + this.player.velocity[0], fwd[1] * 250 + this.player.velocity[1], fwd[2] * 250 + 60];
     if (gun.id === 'weapon_c4') {
@@ -689,8 +693,13 @@ export class Game {
     this.drops.drop(gun, [eye[0], eye[1], eye[2] - 10], vel, this.me);
     this.arsenal.remove(gun.slot, this.now);
   }
-  // A dying player drops their best gun.
+  // A dying player drops their best gun (and their defuse kit).
   dropOnDeath(c) {
+    if (c.defuser) {
+      const p = this.positionOf(c);
+      this.drops.drop({ id: 'defuser', clip: 0, reserve: 0 }, [p[0], p[1], p[2] + 30], [(Math.random() - 0.5) * 80, (Math.random() - 0.5) * 80, 60], c);
+      c.defuser = false;
+    }
     const gun = c === this.me ? this.arsenal.guns.primary || this.arsenal.guns.secondary : this.botOf(c).weapons.primary || this.botOf(c).weapons.secondary;
     if (!gun) return;
     const p = this.positionOf(c);
@@ -702,7 +711,7 @@ export class Game {
   useKey() {
     if (this.input.pressed && this.arsenal.pressed?.has('use') && this.match.phase !== 'planted') {
       const it = this.drops.lookedAt(this.player.eye(), basis(this.input.pitch, this.input.yaw).fwd);
-      if (it) {
+      if (it && it.id !== 'defuser') {
         const slot = slotOf(it.id), cur = this.arsenal.guns[slot];
         if (cur) { const eye = this.player.eye(); this.drops.drop(cur, [eye[0], eye[1], eye[2] - 10], [0, 0, 0], this.me); this.arsenal.remove(slot, this.now); }
         this.pickUp(this.me, it);
@@ -748,8 +757,28 @@ export class Game {
     }
   }
 
+  // CS2's fall damage: landing faster than 580 units/s hurts (armor doesn't help), 1024+ is about 125 damage.
+  fallDamage() {
+    const v = this.player.landed;
+    if (v <= 580 || !this.me.alive) return;
+    this.sounds.play('Player.DamageFall', { volume: 0.8 });
+    this.damage(this.me, ((v - 580) * 100 / (1024 - 580)) * 1.25, { group: 'leg', explosion: true, weapon: { name: 'World' } });
+  }
+
   footsteps(wasGround) {
     const pl = this.player;
+    if (pl.onLadder) {
+      // Climbing: a rung every 0.4 seconds while moving.
+      if (Math.hypot(...pl.velocity) < 30) return;
+      this.stepT = (this.stepT || 0) + TICK;
+      if (this.stepT < 0.4) return;
+      this.stepT = 0;
+      const tr = this.collision.traceBox(pl.origin, pl.origin.map((o, i) => o - pl.ladderNormal[i] * 4), pl.hull.mins, pl.hull.maxs, FLAG_PLAYER);
+      const surf = tr.tri >= 0 ? this.collision.surfaces[this.collision.surface[tr.tri]] : 'ladder';
+      this.sounds.play(`CT_${/wood/i.test(surf) ? 'Wood_Ladder' : 'Ladder'}.StepLeft`, { volume: 0.6 });
+      this.noise(pl.origin, 700, this.me);
+      return;
+    }
     const surface = pl.groundTri != null ? this.collision.surfaces[this.collision.surface[pl.groundTri]] : 'default';
     if (pl.landed > 200) this.sounds.play(`Land_${stepName(surface)}.StepLeft`, { volume: 0.7 });
     pl.landed = 0;
@@ -882,7 +911,7 @@ export class Game {
   fireBullet(shooter, origin, dir, gun, { tracer = false, muzzle = null } = {}) {
     const st = gun.stats;
     const range = st.range || 8192;
-    let o = origin, travelled = 0, scale = 1, power = st.penetration || 1, hit = null, lastT = range;
+    let o = origin, travelled = 0, scale = 1, power = gun.taser ? 0 : st.penetration || 1, hit = null, lastT = range;
     if (shooter === this.me) this.me.shots = (this.me.shots || 0) + 1;
     for (let wallNo = 0; wallNo < 4; wallNo++) {
       const wall = this.collision.raycast(o, dir, range - travelled, FLAG_BULLET);
@@ -1018,6 +1047,7 @@ export class Game {
       if (attacker === this.me && c.health > 0) this.sounds.play(head ? (armored ? 'Player.DamageHeadShotArmor.AttackerFeedback' : 'Player.DamageHeadShot.AttackerFeedback') : armored ? 'Player.DamageBodyArmor.AttackerFeedback' : 'Player.DamageBody.AttackerFeedback', { volume: 0.7 });
     }
     if (c.health <= 0) {
+      if (weapon?.taser) this.sounds.play('Player.DeathTaser', { pos: this.bodyOf(c).chest, listener: this, volume: 0.8 });
       if (attacker === this.me) this.sounds.play(head ? (armored ? 'Player.DeathHeadShotArmor.AttackerFeedback' : 'Player.DeathHeadShot.AttackerFeedback') : armored ? 'Player.DeathBodyArmor.AttackerFeedback' : 'Player.DeathBody.AttackerFeedback', { volume: 0.8 });
       this.kill(c, attacker, weapon, head, { wallbang });
     }
