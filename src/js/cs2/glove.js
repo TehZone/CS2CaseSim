@@ -352,7 +352,7 @@ function bakeQuad() {
 const COPY_VS = 'precision highp float; in vec3 position; out vec2 vUv; void main() { vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }';
 const COPY_FS = 'precision highp float; uniform sampler2D src; in vec2 vUv; out vec4 outColor; void main() { outColor = texture(src, vUv); }';
 async function layerArray(renderer, urls, srgb, maxSize) {
-  const texs = await Promise.all(urls.map((u) => (u ? texture(u, { srgb }) : null)));
+  const texs = await Promise.all(urls.map((u) => (u ? texture(u, { srgb, exact: true }) : null)));
   const size = Math.min(maxSize, Math.max(4, ...texs.map((t) => (t ? Math.max(t.image.width, t.image.height) : 4))));
   const rt = new THREE.WebGLArrayRenderTarget(size, size, texs.length, {
     depthBuffer: false, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter,
@@ -415,7 +415,7 @@ async function loadTextures(renderer, prep, variant) {
     const name = m ? m[1] : u;
     let t = whiteTex();
     if (url(name)) {
-      t = await texture(url(name), { srgb: variant.srgb.test(name) });
+      t = await texture(url(name), { srgb: variant.srgb.test(name), exact: true });
       if (/Point|Dummy/.test(m?.[2] || '')) { t.minFilter = t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; }
       owned.push(t);
     }
