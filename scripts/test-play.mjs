@@ -5,6 +5,7 @@ import { CollisionWorld, FLAG_PLAYER, FLAG_BULLET } from '../src/js/play/collisi
 import { PlayerMovement, MOVE } from '../src/js/play/movement.js';
 import { Match, Combatant, SHORT_RULES } from '../src/js/play/match.js';
 import { SmokeField } from '../src/js/play/smoke.js';
+import { Deathmatch, ARMS_RACE } from '../src/js/play/modes.js';
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) pass++; else { fail++; console.log('FAIL', msg); } };
@@ -242,6 +243,41 @@ function fakeGame() {
   for (let i = 0; i < 40; i++) f.heal(0.05);
   ok(f.thickness([-100, 0, 60], [100, 0, 60], 3) > 30, 'the tunnel closes again');
   ok(f.densityAt([0, 0, 60], 18.5) < 0.6 && f.densityAt([0, 0, 60], 21) === 0, 'fades out after 18 seconds');
+}
+
+// ---- Deathmatch and Arms Race scoring ----
+{
+  const g = fakeGame();
+  g.ffa = true;
+  g.hostile = (a, b) => a !== b;
+  const respawned = [], levels = [];
+  g.respawn = (c) => { c.alive = true; respawned.push(c); };
+  g.onLevel = (c, d) => levels.push([c.name, d]);
+  let over = null;
+  g.onMatchOver = (squad) => { over = squad; };
+  const dm = new Deathmatch(g, { minutes: 1 });
+  dm.startRound();
+  const [me, a, b] = g.combatants;
+  b.alive = false; dm.onKill(b, me, { id: 'weapon_ak47' }, { headshot: true });
+  ok(me.points === 15 && me.kills === 1 && b.deaths === 1, 'deathmatch: a headshot kill is 15 points: ' + me.points);
+  a.alive = false; dm.onKill(a, me, { id: 'weapon_deagle' });
+  ok(me.points === 30, 'deathmatch: a pistol kill is worth more: ' + me.points);
+  g.now = 1; dm.tick(1);
+  ok(respawned.length === 0, 'no respawn before 2 seconds');
+  g.now = 2.1; dm.tick(1.1);
+  ok(respawned.includes(a) && respawned.includes(b), 'the dead respawn after 2 seconds');
+  g.now = 61; dm.tick(60);
+  ok(dm.phase === 'over' && over === 'A' && dm.leader === me, 'the match ends at the time limit, most points wins');
+  const ar = new Deathmatch(g, { minutes: 10, armsRace: true });
+  ar.startRound();
+  const [p, q] = g.combatants;
+  for (let i = 0; i < ARMS_RACE.length - 1; i++) { q.alive = false; ar.onKill(q, p, { id: ARMS_RACE[p.level] }); }
+  ok(p.level === ARMS_RACE.length - 1 && ar.phase === 'live', 'arms race: a new weapon every kill up to the knife: level ' + p.level);
+  q.level = 3; q.alive = false; ar.onKill(q, p, { id: 'weapon_knife' });
+  ok(ar.phase === 'over' && ar.leader === p, 'arms race: the knife kill wins');
+  const ar2 = new Deathmatch(g, { armsRace: true }); ar2.startRound();
+  q.level = 4; p.level = 2; q.alive = false; ar2.onKill(q, p, { id: 'weapon_knife' });
+  ok(q.level === 3 && p.level === 3, 'arms race: knifed players go back a weapon');
 }
 
 console.log(`${pass} passed, ${fail} failed`);

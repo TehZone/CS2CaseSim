@@ -144,3 +144,14 @@
 .play-hud .radio { position: absolute; left: 22px; top: 40%; transform: translateY(-50%); background: rgba(0,0,0,.6); padding: 10px 14px; border-radius: 4px; font-size: 14px; display: flex; flex-direction: column; gap: 3px; min-width: 200px; }
 .play-hud .radio h4 { margin: 0 0 4px; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: #f0c76a; }
 .play-hud .radio kbd { display: inline-block; min-width: 18px; padding: 0 4px; margin-right: 6px; font-family: inherit; font-size: 11px; border: 1px solid rgba(255,255,255,.3); border-radius: 3px; text-align: center; }
+/* Game modes: the mode line under the clock; free-for-all hides the team scores */
+.play-hud .modeline { position: absolute; left: 50%; top: 50px; transform: translateX(-50%); font-size: 13px; letter-spacing: .5px; background: rgba(0,0,0,.4); padding: 2px 10px; border-radius: 3px; white-space: nowrap; }
+.play-hud .modeline:empty { display: none; }
+.play-hud .top.ffa .team { display: none; }
+.play-hud .top.ffa .clock { border-radius: 4px; }
+.play-hud .sb-team.ffa .sb-head { color: #e8e2d4; }
+.play-modes { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.play-modes button { flex: 1 1 120px; text-align: left; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line, rgba(255,255,255,.12)); background: rgba(255,255,255,.03); color: inherit; cursor: pointer; }
+.play-modes button b { display: block; font-size: 14px; }
+.play-modes button small { opacity: .7; font-size: 11px; }
+.play-modes button.active { border-color: var(--accent, #f0c76a); background: rgba(240,199,106,.08); }

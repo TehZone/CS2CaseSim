@@ -1,5 +1,6 @@
 // The buy menu (B): CS2's catalog for your side with prices from the game's weapon data. Click an item, or use the
 // number keys like the classic menu (category, then item). Shows the cursor while open; you can still move.
+// In Deathmatch every gun is free and the menu opens anywhere.
 import { esc } from '../util.js';
 import { CATALOG } from './match.js';
 
@@ -37,9 +38,11 @@ export class BuyMenu {
 
   categories() {
     const g = this.game, me = g.me, m = g.match;
-    return CATALOG.map((c) => ({
+    // Deathmatch: every gun, free (no gear or grenades).
+    const dm = g.respawnMode;
+    return CATALOG.filter((c) => !dm || ['Pistols', 'Mid-Tier', 'Rifles'].includes(c.cat)).map((c) => ({
       cat: c.cat,
-      items: c.items.filter(([, , team]) => !team || team === me.team).map(([id, name]) => {
+      items: c.items.filter(([, , team]) => dm || !team || team === me.team).map(([id, name]) => {
         const owned = g.owns(id);
         return { id, name, price: m.costFor(me, id, g.stats), owned, ok: !owned && m.canBuy(me, id, g.stats) && g.inBuyZone() };
       }),
@@ -49,11 +52,15 @@ export class BuyMenu {
   render() {
     if (!this.game.me) return;
     const cats = this.categories();
+    const dm = this.game.respawnMode;
     const left = this.game.match.buyOpen ? Math.max(0, Math.ceil(this.game.buyTimeLeft())) : 0;
-    this.el.innerHTML = `<div class="buy-head"><b>$${this.game.me.money}</b><span>${left ? `Buy time ${left}s` : 'Buy time is over'}</span><button class="btn ghost sm" data-close>Close (B)</button></div>
+    const money = '$' + this.game.me.money;
+    const head = dm ? 'Every weapon is free · you respawn with what you pick' : left ? `Buy time ${left}s` : 'Buy time is over';
+    const price = (it) => (it.owned ? 'Owned' : dm ? 'Free' : '$' + it.price);
+    this.el.innerHTML = `<div class="buy-head"><b>${dm ? 'Deathmatch' : money}</b><span>${head}</span><button class="btn ghost sm" data-close>Close (B)</button></div>
       <div class="buy-cols">${cats.map((c, ci) => `<div class="buy-col ${this.cat === ci ? 'active' : ''}"><h4><kbd>${ci + 1}</kbd> ${esc(c.cat)}</h4>
         ${c.items.map((it, ii) => `<button class="buy-item ${it.owned ? 'owned' : ''}" data-buy="${it.id}" ${it.ok ? '' : 'disabled'}>
-          <kbd>${this.cat === ci ? ii + 1 : ''}</kbd><span>${esc(it.name)}</span><em>${it.owned ? 'Owned' : '$' + it.price}</em></button>`).join('')}</div>`).join('')}</div>
-      <div class="buy-hint">Up to 4 grenades (2 flashbangs, 1 of each other). Mouse1 throws, Mouse2 lobs, both for a medium throw.</div>`;
+          <kbd>${this.cat === ci ? ii + 1 : ''}</kbd><span>${esc(it.name)}</span><em>${price(it)}</em></button>`).join('')}</div>`).join('')}</div>
+      <div class="buy-hint">${dm ? 'B opens this anywhere. What you pick is what you respawn with.' : 'Up to 4 grenades (2 flashbangs, 1 of each other). Mouse1 throws, Mouse2 lobs, both for a medium throw.'}</div>`;
   }
 }

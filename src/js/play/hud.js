@@ -22,6 +22,7 @@ export class Hud {
         <div class="team t"><b data-score-t>0</b><span class="alive" data-alive-t></span></div>
       </div>
       <div class="place"></div>
+      <div class="modeline" data-mode></div>
       <div class="fps"></div>
       <div class="feed"></div>
       <div class="chat" data-chat></div>
@@ -68,7 +69,8 @@ export class Hud {
     this.q('.vitals').classList.toggle('low', hp <= 25);
   }
   money(m, { buyzone = false, c4 = false, kit = false } = {}) {
-    this.set('[data-money]', '$' + Math.max(0, Math.floor(m)));
+    this.toggle('[data-money]', m != null); // no money in Deathmatch
+    this.set('[data-money]', m == null ? '' : '$' + Math.max(0, Math.floor(m)));
     this.toggle('[data-buyzone]', buyzone);
     this.toggle('[data-c4]', c4);
     this.toggle('[data-kit]', kit);
@@ -88,12 +90,14 @@ export class Hud {
   // Flashbang: white that fades (opacity 0..1).
   flashed(a) { const k = Math.round(a * 100) / 100; if (this.cache.fl !== k) { this.cache.fl = k; this.q('.flashed').style.opacity = String(k); } }
 
+  mode(text) { this.set('[data-mode]', text || ''); }
   place(name) { this.set('.place', name ? name.replace(/([a-z])([A-Z])/g, '$1 $2') : ''); }
   fps(v) { this.set('.fps', `${Math.round(v)} fps`); }
   scoped(on) { this.el.classList.toggle('scoped', !!on); }
 
   // Top bar: scores by side, alive players, the round clock (or the planted bomb).
-  top({ ct, t, aliveCT, aliveT, totalCT, totalT, clock, planted, phase }) {
+  top({ ct, t, aliveCT, aliveT, totalCT, totalT, clock, planted, phase, ffa = false }) {
+    this.q('.top').classList.toggle('ffa', ffa);
     this.set('[data-score-ct]', String(ct));
     this.set('[data-score-t]', String(t));
     this.q('[data-alive-ct]').innerHTML !== this.cache.act && (this.q('[data-alive-ct]').innerHTML = this.cache.act = pips(aliveCT, totalCT));
@@ -142,11 +146,20 @@ export class Hud {
     setTimeout(() => row.remove(), 7000);
   }
 
-  // Tab: both teams with kills, deaths, assists, damage per round, money (your team) and MVPs.
-  scoreboard(show, { players = [], myTeam, round = 1, scores = {} } = {}) {
+  // Tab: both teams with kills, deaths, assists, damage per round, money (your team) and MVPs; in free-for-all one list
+  // by points (or Arms Race level).
+  scoreboard(show, { players = [], myTeam, round = 1, scores = {}, ffa = false, respawn = false } = {}) {
     const el = this.q('[data-scores]');
     el.classList.toggle('hidden', !show);
     if (!show) return;
+    if (respawn) {
+      const list = (side) => players.filter((p) => ffa || p.team === side).sort((a, b) => b.level - a.level || b.points - a.points).map((p) => `
+        <tr class="${p.alive ? '' : 'dead'} ${p.me ? 'me' : ''}"><td>${esc(p.name)}</td><td>${p.kills}</td><td>${p.deaths}</td><td>${ffa && p.level ? p.level + 1 : p.points}</td></tr>`).join('');
+      const table = (side, name) => `<div class="sb-team ${side ? side.toLowerCase() : 'ffa'}"><div class="sb-head">${side ? `<b>${scores[side] ?? 0}</b> ` : ''}${name}</div>
+        <table><thead><tr><th>Player</th><th>K</th><th>D</th><th>${players.some((p) => p.level) ? 'Level' : 'Points'}</th></tr></thead><tbody>${list(side)}</tbody></table></div>`;
+      el.innerHTML = ffa ? table(null, 'Free for all') : table('CT', 'Counter-Terrorists') + table('T', 'Terrorists');
+      return;
+    }
     const rows = (side) => players.filter((p) => p.team === side).sort((a, b) => b.score - a.score).map((p) => `
       <tr class="${p.alive ? '' : 'dead'} ${p.me ? 'me' : ''}"><td>${esc(p.name)}</td><td>${p.team === myTeam ? '$' + p.money : ''}</td>
       <td>${p.kills}</td><td>${p.deaths}</td><td>${p.assists}</td><td>${Math.round(p.damage / Math.max(1, round - 1 || 1))}</td><td>${p.mvps ? '★' + p.mvps : ''}</td><td>${p.score}</td></tr>`).join('');

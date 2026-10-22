@@ -41,7 +41,7 @@ export class Radio {
   // Bots don't repeat themselves too often (force skips that, for answers and your own calls).
   say(c, line, text, { force = false } = {}) {
     const g = this.game, now = g.now;
-    if (!c || c.team !== g.me.team || (!c.alive && c !== g.me)) return false;
+    if (!c || c.team !== g.me.team || (!c.alive && c !== g.me) || (g.ffa && c !== g.me)) return false; // free-for-all: no teammates
     if (!force && (now - (this.last.get(c) ?? -99) < 5 || now - this.lastAny < 1.5)) return false;
     this.last.set(c, now);
     this.lastAny = now;

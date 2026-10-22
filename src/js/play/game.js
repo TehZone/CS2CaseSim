@@ -1,4 +1,5 @@
-// Play mode: an offline competitive match on a CS2 map, you and bot teammates against bots. Owns the renderer, the
+// Play mode: an offline match on a CS2 map against bots (Competitive, Wingman, Deathmatch or Arms Race; modes.js).
+// Owns the renderer, the
 // 64-tick simulation (movement, weapons, bots, the round) and the frame loop. Rendering interpolates between ticks like
 // CS2's client; your weapon is drawn in its own pass with CS2's viewmodel field of view.
 import * as THREE from 'three';
@@ -26,6 +27,7 @@ import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, aimThrow as ai
 import { Drops } from './drops.js';
 import { Post } from './post.js';
 import { Radio } from './radio.js';
+import { MODES, WINGMAN_RULES, Deathmatch, ARMS_RACE, PROTECT } from './modes.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
 export const TICK = 1 / 64;
@@ -59,13 +61,20 @@ const PENETRATION = { wood: 1, wood_panel: 1, wood_plank: 1, wood_crate: 1.2, wo
 const MUSIC = 'valve_cs2_01';
 
 export class Game {
-  constructor(root, { map = 'de_dust2', team = 'CT', teamSize = 5, difficulty = 'normal', length = 'short', overtime = true, friendlyFire = false, sensitivity = 1.25, quality = 'balanced', onStatus = () => {} } = {}) {
+  constructor(root, { map = 'de_dust2', mode = 'competitive', team = 'CT', teamSize = 5, difficulty = 'normal', length = 'short', overtime = true, friendlyFire = false,
+    site = 'A', minutes = 10, ffa = true, sensitivity = 1.25, quality = 'balanced', onStatus = () => {} } = {}) {
     Object.assign(this, { root, mapId: map, team, onStatus });
     this.enemyTeam = team === 'T' ? 'CT' : 'T';
-    this.teamSize = Math.max(1, Math.min(5, teamSize | 0));
+    this.mode = MODES[mode] ? mode : 'competitive';
+    this.respawnMode = !!MODES[this.mode].respawn;
+    this.armsRace = this.mode === 'armsrace';
+    this.ffa = this.armsRace || (this.mode === 'deathmatch' && !!ffa);
+    this.minutes = minutes;
+    this.wingmanSite = site;
+    this.teamSize = this.mode === 'wingman' ? 2 : Math.max(1, Math.min(5, teamSize | 0));
     this.difficulty = difficulty;
-    this.rules = { ...(length === 'long' ? RULES : SHORT_RULES), overtime: !!overtime };
-    this.ff = !!friendlyFire;
+    this.rules = { ...(this.mode === 'wingman' ? WINGMAN_RULES : length === 'long' ? RULES : SHORT_RULES), overtime: !!overtime };
+    this.ff = !!friendlyFire && !this.ffa;
     this.disposed = false;
     this.paused = true;
     this.listeners = new Set();
@@ -122,10 +131,12 @@ export class Game {
     if (this.disposed) return;
     this.map = map;
     if (!map.nav) throw new Error('This map has no navigation mesh for bots');
-    if (!map.info.bombsites?.length) throw new Error('This map has no bomb sites');
+    if (!map.info.bombsites?.length && !this.respawnMode) throw new Error('This map has no bomb sites');
     // Sites are named from their callouts; if that fails, name them in order (A, B).
-    const sites = map.info.bombsites;
+    const sites = map.info.bombsites || [];
     if (new Set(sites.map((s) => s.site)).size < sites.length) sites.forEach((s, i) => { s.site = 'ABCD'[i]; });
+    // Wingman plays one site.
+    if (this.mode === 'wingman') map.info.bombsites = sites.filter((s) => s.site === this.wingmanSite).length ? sites.filter((s) => s.site === this.wingmanSite) : sites.slice(0, 1);
     status('Loading collision…');
     const colBuf = await fetch(map.collision).then((r) => r.arrayBuffer());
     this.collision = new CollisionWorld(colBuf, map.info.collision);
@@ -158,8 +169,13 @@ export class Game {
       this.scene.add(b.root);
       this.bots.push(b);
     };
-    for (let i = 0; i < this.teamSize - 1; i++) addBot(this.team, 'A');
-    for (let i = 0; i < this.teamSize; i++) addBot(this.enemyTeam, 'B');
+    if (this.ffa) {
+      // Free for all: everyone against everyone (half wear each side's agents).
+      for (let i = 0; i < this.teamSize * 2 - 1; i++) addBot(i % 2 ? this.team : this.enemyTeam, 'B');
+    } else {
+      for (let i = 0; i < this.teamSize - 1; i++) addBot(this.team, 'A');
+      for (let i = 0; i < this.teamSize; i++) addBot(this.enemyTeam, 'B');
+    }
     this.combatants = [this.me, ...this.bots.map((b) => b.c)];
     this.radio = new Radio(this);
 
@@ -174,7 +190,8 @@ export class Game {
     if (this.disposed) return;
     this.bombTemplate = buildCS2Model({ t: 'skin', fl: 0, sd: 0 }, { wid: 'weapon_c4', w: 'C4', n: 'C4', cat: 'equipment', v: true }, this.renderer).catch(() => null);
     if (map.radar) this.radar = new Radar(this.root, map.radar);
-    this.match = new Match(this, this.rules);
+    this.match = this.respawnMode ? new Deathmatch(this, { minutes: this.minutes, ffa: this.ffa, armsRace: this.armsRace }) : new Match(this, this.rules);
+    if (this.respawnMode) await Promise.all((this.armsRace ? ARMS_RACE : [this.dmWeapon('primary'), this.dmWeapon('secondary')]).slice(0, 2).map((id) => this.vmData(id).catch(() => {})));
     status('Compiling shaders…');
     this.post.compile(this.scene, this.camera);
     this.renderer.compile(this.vmScene, this.vmCamera);
@@ -288,16 +305,19 @@ export class Game {
 
   // ---- buying -----------------------------------------------------------------------------------------------------
   inBuyZone(c = this.me) {
+    if (this.respawnMode) return true; // Deathmatch: buy anywhere
     const p = this.positionOf(c);
     return (this.map.info.buyzones || []).some((z) => z.team === c.team && p[0] >= z.min[0] && p[0] <= z.max[0] && p[1] >= z.min[1] && p[1] <= z.max[1] && p[2] >= z.min[2] - 64 && p[2] <= z.max[2] + 64);
   }
-  buyTimeLeft() { const m = this.match; return m.phase === 'freeze' ? m.time + m.rules.buyTime : m.rules.buyTime - (m.rules.roundTime - m.time); }
+  buyTimeLeft() { const m = this.match; if (this.respawnMode) return Infinity; return m.phase === 'freeze' ? m.time + m.rules.buyTime : m.rules.buyTime - (m.rules.roundTime - m.time); }
   async buy(id) {
     const m = this.match, me = this.me;
     if (!this.inBuyZone() || this.owns(id) || !m.canBuy(me, id, this.stats)) return;
     m.pay(me, id, this.stats);
     this.sounds.play('Player.PickupWeapon', { volume: 0.6 });
     this.buyMenu.render();
+    if (this.respawnMode && slotOf(id) === 'primary') this.dmPrimary = id;
+    if (this.respawnMode && slotOf(id) === 'secondary') this.dmSecondary = id;
     if (isGrenade(id)) await this.syncMyNades();
     else if (id.startsWith('weapon_')) await this.giveMe(slotOf(id), id);
   }
@@ -376,7 +396,7 @@ export class Game {
   menuKey(code, down) {
     if (!down) return false;
     // Radio: Z commands, X reports, V responses; a number picks a line.
-    if (/^Key[ZXV]$/.test(code) && this.radio && this.me?.alive && !this.buyMenu.isOpen) { this.radio.open(code); return true; }
+    if (/^Key[ZXV]$/.test(code) && this.radio && this.me?.alive && !this.buyMenu.isOpen && !this.ffa) { this.radio.open(code); return true; }
     if (this.radio?.menu) {
       const n = /^Digit(\d)$/.exec(code)?.[1];
       if (n != null) { if (n === '0') this.radio.close(); else this.radio.choose(Number(n)); return true; }
@@ -391,7 +411,8 @@ export class Game {
   }
 
   // ---- rounds (called by the match) -------------------------------------------------------------------------------
-  onRoundStart(round, { halftime, pistol, overtime }) {
+  onRoundStart(round, { halftime, pistol, overtime, respawn }) {
+    if (respawn) { this.startRespawnMode(); return; }
     this.effects.clear();
     this.nades.clear();
     this.drops.clear();
@@ -421,10 +442,110 @@ export class Game {
     this.sounds.play(`Music.StartRound.${MUSIC}`, { volume: 0.35 });
     this.emit('round', round);
   }
+  // ---- Deathmatch / Arms Race: everyone respawns where no enemy is close ------------------------------------------------
+  startRespawnMode() {
+    this.effects.clear(); this.nades.clear(); this.drops.clear(); this.removeBomb();
+    this.flashUntil = 0; this.deathCam = null; this.spectating = null;
+    this.plans = { T: {}, CT: {} };
+    for (const c of this.combatants) { c.alive = false; c.resetWeapons = true; this.respawn(c); }
+    this.hud.message(this.armsRace ? 'Arms Race · a new weapon every kill, the knife last' : `Deathmatch${this.ffa ? ' · free for all' : ''} · ${this.minutes} minutes`, 3500);
+    this.sounds.play(`Music.StartRound.${MUSIC}`, { volume: 0.35 });
+    this.emit('round', 1);
+  }
+  // A spawn point away from enemies: the map's spawns and random spots on the nav mesh, the one furthest from (and
+  // out of sight of) everyone hostile.
+  spawnPoint(c) {
+    const foes = this.combatants.filter((x) => x.alive && this.hostile(c, x)).map((x) => this.positionOf(x));
+    const cands = [...this.map.info.spawns.T, ...this.map.info.spawns.CT].map((s) => ({ origin: s.origin, yaw: s.yaw }));
+    for (let i = 0; i < 24; i++) { const r = this.nav.randomPoint(); if (r) cands.push({ origin: r.point, yaw: Math.random() * 360 }); }
+    let best = null, bestScore = -Infinity;
+    for (let i = 0; i < 18; i++) {
+      const sp = cands[Math.floor(Math.random() * cands.length)];
+      const eye = [sp.origin[0], sp.origin[1], sp.origin[2] + 64];
+      let near = Infinity, seen = false;
+      for (const p of foes) {
+        near = Math.min(near, Math.hypot(p[0] - eye[0], p[1] - eye[1]));
+        if (!seen && Math.hypot(p[0] - eye[0], p[1] - eye[1]) < 2500) seen = this.lineOfSight(eye, [p[0], p[1], p[2] + 60]);
+      }
+      const score = Math.min(near, 2500) - (seen ? 2000 : 0) + Math.random() * 100;
+      if (score > bestScore) { bestScore = score; best = sp; }
+    }
+    // Face the open: the direction with the most room.
+    const o = best.origin, eye = [o[0], o[1], o[2] + 64];
+    let yaw = best.yaw, room = -1;
+    for (let a = 0; a < 360; a += 45) { const d = [Math.cos((a * Math.PI) / 180), Math.sin((a * Math.PI) / 180), 0]; const h = this.collision.raycast(eye, d, 1500, FLAG_BULLET); const t = h ? h.t : 1500; if (t > room) { room = t; yaw = a; } }
+    return { origin: o.slice(), yaw };
+  }
+  // The weapons you respawn with in Deathmatch (the last ones you bought).
+  dmWeapon(slot) {
+    if (slot === 'primary') return this.dmPrimary || (this.team === 'T' ? 'weapon_ak47' : 'weapon_m4a1_silencer');
+    return this.dmSecondary || DEFAULT_PISTOL[this.team];
+  }
+  respawn(c) {
+    const sp = this.spawnPoint(c);
+    c.alive = true; c.health = 100; c.armor = 100; c.helmet = true; c.defuser = false; c.nades = {};
+    c.protectUntil = this.now + PROTECT;
+    if (c === this.me) {
+      this.deathCam = null; this.spectating = null;
+      this.player.teleport(sp.origin);
+      this.input.yaw = sp.yaw; this.input.pitch = 0;
+      this.prevEye = this.player.eye();
+      this.arsenal.aim = [0, 0]; this.arsenal.aimVel = [0, 0]; this.arsenal.view = [0, 0];
+      for (const slot of Object.keys(this.arsenal.guns)) this.arsenal.remove(slot, this.now);
+      const jobs = [this.giveMe('knife', this.knifeId(c.team), false)];
+      if (this.armsRace) jobs.push(this.giveLevel(c));
+      else jobs.push(this.giveMe('primary', this.dmWeapon('primary'), false), this.giveMe('secondary', this.dmWeapon('secondary'), false));
+      Promise.all(jobs).then(() => { this.arsenal.current = null; this.arsenal.selectBest(this.now); });
+    } else {
+      const b = this.botOf(c);
+      b.weapons = {};
+      const knife = c.team === 'T' ? 'weapon_knife_t' : 'weapon_knife';
+      b.weapons.knife = botGun(knife, this.stats[knife] || this.stats.weapon_knife);
+      if (this.armsRace) this.giveLevel(c);
+      else {
+        const r = Math.random();
+        const primary = r < 0.12 ? 'weapon_awp' : r < 0.55 ? (c.team === 'T' ? 'weapon_ak47' : Math.random() < 0.5 ? 'weapon_m4a1' : 'weapon_m4a1_silencer')
+          : ['weapon_ak47', 'weapon_m4a1_silencer', 'weapon_famas', 'weapon_galilar', 'weapon_aug', 'weapon_sg556', 'weapon_mp9', 'weapon_mac10', 'weapon_p90', 'weapon_ump45'][Math.floor(Math.random() * 10)];
+        const pistol = Math.random() < 0.3 ? 'weapon_deagle' : DEFAULT_PISTOL[c.team];
+        b.weapons.primary = botGun(primary, this.stats[primary]);
+        b.weapons.secondary = botGun(pistol, this.stats[pistol]);
+        this.sounds.load([this.stats[primary]?.shootSound].filter(Boolean));
+      }
+      b.spawn(sp.origin, sp.yaw);
+      b.slot = b.weapons.primary ? 'primary' : b.weapons.secondary ? 'secondary' : 'knife';
+      b.equip(b.weapons[b.slot].id);
+      b.brain.roundStart({});
+      b.brain.startDelay = 0;
+    }
+  }
+  // Arms Race: your weapon for your level (the knife at the end).
+  async giveLevel(c) {
+    const id = ARMS_RACE[Math.min(c.level || 0, ARMS_RACE.length - 1)];
+    const slot = /knife/.test(id) ? 'knife' : slotOf(id);
+    if (c === this.me) {
+      for (const s of ['primary', 'secondary']) if (s !== slot) this.arsenal.remove(s, this.now);
+      if (slot !== 'knife') await this.giveMe(slot, id, true); else this.arsenal.select('knife', this.now);
+    } else {
+      const b = this.botOf(c);
+      delete b.weapons.primary; delete b.weapons.secondary;
+      if (slot !== 'knife') { b.weapons[slot] = botGun(id, this.stats[id]); this.sounds.load([this.stats[id]?.shootSound].filter(Boolean)); }
+      b.slot = slot; if (c.alive) b.equip(b.weapons[slot].id);
+    }
+  }
+  onLevel(c, delta) {
+    if (!c.alive) return;
+    this.giveLevel(c);
+    if (c === this.me) {
+      const id = ARMS_RACE[Math.min(c.level, ARMS_RACE.length - 1)];
+      this.hud.message(delta > 0 ? `Level ${c.level + 1} / ${ARMS_RACE.length} · ${/knife/.test(id) ? 'Knife: get a knife kill to win' : ITEM_NAMES[id] || id}` : 'Knifed! Back one weapon', 2000);
+      this.sounds.play('Player.PickupWeapon', { volume: 0.6 });
+    }
+  }
+
   onLive() {
     this.liveAt = this.now;
-    const mate = this.bots.filter((b) => b.c.alive && b.c.team === this.me.team)[0];
-    if (mate && Math.random() < 0.6) this.radio.chatter(mate.c, 'roundStart', { force: true });
+    const mate = this.bots.filter((b) => b.c.alive && !this.hostile(this.me, b.c))[0];
+    if (mate && Math.random() < 0.6 && !this.respawnMode) this.radio.chatter(mate.c, 'roundStart', { force: true });
   }
   onHalftime() { for (const b of this.bots) b.setModel(b.c.team); }
 
@@ -490,8 +611,10 @@ export class Game {
     const won = squad === 'A', draw = squad == null;
     this.sounds.play(`Music.MatchEnd.${MUSIC}`, { volume: 0.4 });
     this.matchOver = true;
+    const lead = this.match.leader;
+    const final = this.ffa ? (won ? 'You win' : `${lead?.name || '?'} wins`) + (this.armsRace ? '' : ` · ${lead?.points || 0} points`) : `${this.match.score.A} : ${this.match.score.B}`;
     this.hud.endScreen(`<h1 class="${draw ? '' : won ? 'win' : 'loss'}">${draw ? 'Draw' : won ? 'Victory' : 'Defeat'}</h1>
-      <div class="final">${this.match.score.A} : ${this.match.score.B}</div>
+      <div class="final">${final}</div>
       <div class="sub">You: ${this.me.kills} kills, ${this.me.deaths} deaths, ${this.me.assists} assists, ${this.me.mvps} MVPs</div>`);
     this.hud.scoreboard(true, this.scoreData());
     this.input.unlock();
@@ -850,7 +973,9 @@ export class Game {
 
   // ---- combat ---------------------------------------------------------------------------------------------------------
   botOf(c) { return this.bots.find((b) => b.c === c) || null; }
-  enemiesOf(c) { return this.combatants.filter((x) => x.alive && x.team !== c.team); }
+  // Enemies: the other team, or everyone else in free-for-all.
+  hostile(a, b) { return !!a && !!b && a !== b && (this.ffa || a.team !== b.team); }
+  enemiesOf(c) { return this.combatants.filter((x) => x.alive && this.hostile(c, x)); }
   positionOf(c) { return c === this.me ? this.player.origin.slice() : this.botOf(c).pos.slice(); }
   // Where a combatant's head, chest and feet are (game units).
   bodyOf(c) {
@@ -909,13 +1034,14 @@ export class Game {
 
   // Gunshots and footsteps alert enemy bots in range.
   noise(pos, loud, source) {
-    for (const b of this.bots) if (b.c.alive && b.c.team !== source?.team) b.brain.hear(pos, loud, this.now);
+    for (const b of this.bots) if (b.c.alive && (!source || this.hostile(b.c, source))) b.brain.hear(pos, loud, this.now);
   }
   botSound(b, event, volume = 1) { this.sounds.play(event, { pos: b.eye(), listener: this, volume }); }
 
   // A bot fires its gun: CS2's inaccuracy and spread, and recoil it partly controls.
   botShoot(b, gun, t, control) {
     const st = gun.stats;
+    b.c.protectUntil = 0;
     gun.clip--;
     gun.nextAttack = t + (st.cycle?.[0] || 0.1);
     gun.lastShot = t;
@@ -962,12 +1088,12 @@ export class Game {
     const st = gun.stats;
     const range = st.range || 8192;
     let o = origin, travelled = 0, scale = 1, power = gun.taser ? 0 : st.penetration || 1, hit = null, lastT = range;
-    if (shooter === this.me) this.me.shots = (this.me.shots || 0) + 1;
+    if (shooter === this.me) { this.me.shots = (this.me.shots || 0) + 1; this.me.protectUntil = 0; }
     for (let wallNo = 0; wallNo < 4; wallNo++) {
       const wall = this.collision.raycast(o, dir, range - travelled, FLAG_BULLET);
       const maxT = wall ? wall.t : range - travelled;
       for (const c of this.combatants) {
-        if (!c.alive || c === shooter || (c.team === shooter.team && !this.ff)) continue;
+        if (!c.alive || c === shooter || (!this.hostile(shooter, c) && !this.ff)) continue;
         const h = this.hitTest(c, o, dir, hit ? hit.t : maxT);
         if (h) hit = { ...h, c };
       }
@@ -1068,7 +1194,8 @@ export class Game {
   damage(c, dmg, { attacker = null, group = 'chest', armorRatio = 1, headshotMult = 4, point = null, dir = null, weapon = null, explosion = false, wallbang = false } = {}) {
     if (!c.alive) return;
     // Teammates: no damage without friendly fire; with it, CS2's reductions (bullets a third, grenades 85%, fire 40%).
-    if (attacker && attacker !== c && attacker.team === c.team) {
+    if (c.protectUntil > this.now && attacker && attacker !== c) return; // just respawned
+    if (attacker && attacker !== c && !this.hostile(attacker, c)) {
       if (!this.ff) return;
       dmg *= /molotov|incgrenade/.test(weapon?.id || '') ? 0.4 : explosion ? 0.85 : 0.33;
     }
@@ -1112,18 +1239,18 @@ export class Game {
 
   kill(c, attacker, weapon, headshot, { wallbang = false } = {}) {
     if (!c.alive) return;
-    this.dropOnDeath(c);
+    if (!this.respawnMode) this.dropOnDeath(c);
     c.alive = false;
     c.health = 0;
-    this.match.onKill(c, attacker, weapon?.stats || weapon);
-    this.killChatter(c, attacker);
+    this.match.onKill(c, attacker, weapon?.stats || weapon, { headshot });
+    if (!this.ffa) this.killChatter(c, attacker);
     const wname = weapon?.id ? (ITEM_NAMES[weapon.id] || (weapon.name || '').split(' | ')[0]) : weapon?.name || 'World';
     this.hud.kill({ killer: attacker?.name || '', victim: c.name, weapon: wname, headshot, wallbang, mine: attacker === this.me || c === this.me, killerTeam: attacker?.team, victimTeam: c.team });
     if (c === this.me) {
       this.planting = null; this.defusing = false;
       this.closeBuyMenu();
       this.sounds.play(headshot ? 'Player.DeathHeadShot.Victim' : 'Player.DeathBody.Victim', { volume: 0.8 });
-      this.deathCam = { until: this.now + 2.5, killer: attacker, from: this.player.eye() };
+      this.deathCam = { until: this.now + (this.respawnMode ? 60 : 2.5), killer: attacker, from: this.player.eye() };
     } else {
       const b = this.botOf(c);
       b.setMode('dead', { headshot });
@@ -1247,7 +1374,14 @@ export class Game {
     const m = this.match, me = this.me, gun = this.arsenal.gun, hud = this.hud;
     if (!m) return;
     const sideScore = (side) => m.score[this.combatants.find((c) => c.team === side)?.squad] ?? 0;
+    if (this.respawnMode) {
+      // Deathmatch / Arms Race: your points (or level) against the leader's.
+      const lead = this.combatants.slice().sort((a, b) => m.rank(b) - m.rank(a))[0];
+      const val = (c) => (this.armsRace ? `level ${Math.min(c.level, ARMS_RACE.length - 1) + 1}/${ARMS_RACE.length}` : `${c.points || 0} pts`);
+      hud.mode(this.ffa ? `You ${val(me)} · Leader: ${lead === me ? 'you' : lead.name} ${val(lead)}` : `${MODES[this.mode].name} · kills per team`);
+    } else hud.mode(this.mode === 'wingman' ? 'Wingman' : '');
     hud.top({
+      ffa: this.ffa,
       ct: sideScore('CT'), t: sideScore('T'),
       aliveCT: m.alive('CT').length, aliveT: m.alive('T').length,
       totalCT: this.combatants.filter((c) => c.team === 'CT').length, totalT: this.combatants.filter((c) => c.team === 'T').length,
@@ -1255,7 +1389,7 @@ export class Game {
     });
     const s = this.spectating && !me.alive ? this.spectating.c : me;
     hud.vitals(s.health, s.armor, s.helmet);
-    hud.money(me.money, { buyzone: me.alive && m.buyOpen && this.inBuyZone(), c4: me.hasC4, kit: me.defuser });
+    hud.money(this.respawnMode ? null : me.money, { buyzone: me.alive && m.buyOpen && this.inBuyZone() && !this.armsRace, c4: me.hasC4, kit: me.defuser });
     hud.spectate(!me.alive && this.spectating && !(this.deathCam && this.now < this.deathCam.until) ? this.spectating.c.name : null);
     hud.crosshair(me.alive && !this.buyMenu.isOpen && !gun?.nade);
     const left = (this.flashUntil || 0) - this.now;
@@ -1265,7 +1399,8 @@ export class Game {
     const ammoKey = me.alive && gun ? `${gun.name}|${gun.clip}|${gun.reserve}` : '';
     if (ammoKey !== this.ammoKey) { this.ammoKey = ammoKey; hud.ammo(me.alive ? gun : null); }
     // Planting / defusing progress.
-    if (this.planting) hud.progress('Planting the bomb', Math.min(1, (this.now - this.planting.start) / m.rules.plantTime));
+    if (this.respawnMode && !me.alive && me.respawnAt != null) hud.progress('Respawning', Math.min(1, 1 - (me.respawnAt - this.now) / 2));
+    else if (this.planting) hud.progress('Planting the bomb', Math.min(1, (this.now - this.planting.start) / m.rules.plantTime));
     else if (m.bomb?.defuser === me) { const tot = me.defuser ? m.rules.defuseKitTime : m.rules.defuseTime; hud.progress(me.defuser ? 'Defusing (kit)' : 'Defusing', 1 - (m.bomb.defuseEnd - this.now) / tot); }
     else hud.progress(null);
     this.hudTimer = (this.hudTimer || 0) - dt;
@@ -1282,8 +1417,8 @@ export class Game {
   scoreData() {
     const side = (s) => this.match.score[this.combatants.find((c) => c.team === s)?.squad] ?? 0;
     return {
-      myTeam: this.me.team, round: this.match.round, scores: { CT: side('CT'), T: side('T') },
-      players: this.combatants.map((c) => ({ name: c.name, team: c.team, money: c.money, kills: c.kills, deaths: c.deaths, assists: c.assists, damage: c.damage, mvps: c.mvps, score: c.score, alive: c.alive, me: c === this.me })),
+      myTeam: this.me.team, round: this.match.round, scores: { CT: side('CT'), T: side('T') }, ffa: this.ffa, respawn: this.respawnMode,
+      players: this.combatants.map((c) => ({ name: c.name, team: c.team, money: this.respawnMode ? null : c.money, points: c.points || 0, level: c.level || 0, kills: c.kills, deaths: c.deaths, assists: c.assists, damage: c.damage, mvps: c.mvps, score: c.score, alive: c.alive, me: c === this.me })),
     };
   }
   radarData() {
@@ -1293,8 +1428,8 @@ export class Game {
     const bomb = b && (b.state === 'planted' || (b.state === 'dropped' && me.team === 'T')) ? { pos: b.pos, planted: b.state === 'planted' } : null;
     return {
       center: view.pos, yaw: view.yaw, myTeam: me.team, bomb,
-      mates: this.combatants.filter((c) => c.team === me.team && c !== me).map((c) => ({ pos: this.positionOf(c), alive: c.alive })),
-      enemies: this.combatants.filter((c) => c.team !== me.team && c.alive && c.spottedBy === me.squad && this.now - (c.spottedAt ?? -9) < 1.5).map((c) => ({ pos: this.positionOf(c) })),
+      mates: this.combatants.filter((c) => c !== me && !this.hostile(me, c)).map((c) => ({ pos: this.positionOf(c), alive: c.alive })),
+      enemies: this.combatants.filter((c) => this.hostile(me, c) && c.alive && c.spottedBy === me.squad && this.now - (c.spottedAt ?? -9) < 1.5).map((c) => ({ pos: this.positionOf(c) })),
     };
   }
 

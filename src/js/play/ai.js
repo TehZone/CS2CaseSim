@@ -301,6 +301,7 @@ export class Brain {
     const g = this.game, m = g.match, b = this.bot, c = this.c, bomb = m.bomb;
     if (t - g.liveAt < this.startDelay) return;
     if (this.target?.visible && !this.target.c.alive) this.target = null;
+    if (g.respawnMode) return this.hunt(t);
     const siteBox = (s) => g.map.info.bombsites.find((x) => x.site === s);
     if (!this.target?.visible && t >= this.nadeAt) this.useNades(t, siteBox);
     if (this.followOrder(t)) return;
@@ -345,6 +346,23 @@ export class Brain {
     const site = this.plan.rotate || this.plan.assign?.get(c) || 'A';
     if (site === 'mid' && g.midSpot) return this.holdAt(g.midSpot, t);
     return this.holdIn(siteBox(site), t, false);
+  }
+
+  // Deathmatch / Arms Race: go where enemies were last seen or heard, else roam towards the nearest one's area.
+  hunt(t) {
+    const g = this.game, b = this.bot;
+    if (this.followOrder(t)) return;
+    if (this.lastSeen && t - this.lastSeen.t < 5) return this.setTask('goto', this.lastSeen.pos);
+    if (this.heard && t - this.heard.t < 4 && dist2(this.heard.pos, b.pos) > 80) return this.setTask('goto', this.heard.pos);
+    if (this.task === 'goto' && this.path && t < (this.roamUntil || 0)) return;
+    const foes = g.enemiesOf(this.c).map((c) => g.positionOf(c)).sort((p, q) => dist2(p, b.pos) - dist2(q, b.pos));
+    let goal = null;
+    if (foes.length && Math.random() < 0.7) {
+      const p = foes[0];
+      goal = g.nav.randomPointIn([p[0] - 500, p[1] - 500, p[2] - 200], [p[0] + 500, p[1] + 500, p[2] + 200])?.point;
+    }
+    goal ||= g.nav.randomPoint()?.point;
+    if (goal) { this.roamUntil = t + 12; this.setTask('goto', goal); }
   }
 
   recentlySawEnemy(t, s) { return this.lastSeen && t - this.lastSeen.t < s; }
@@ -545,16 +563,16 @@ export class Brain {
 // Team plans for a round: the T site and lurker, the CT split.
 export function teamPlan(game, side) {
   const bots = game.bots.filter((b) => b.c.team === side);
+  const have = game.map.info.bombsites.map((s) => s.site);
   if (side === 'T') {
-    const site = Math.random() < 0.5 ? 'A' : 'B';
+    const site = have[Math.floor(Math.random() * have.length)] || 'A';
     const lurk = bots.length >= 4 ? bots[Math.floor(Math.random() * bots.length)].c : null;
     return { site, lurk: lurk?.hasC4 ? null : lurk };
   }
   const assign = new Map();
   const order = bots.map((b) => b.c).sort(() => Math.random() - 0.5);
   const n = order.length;
-  const sites = game.map.info.bombsites.map((s) => s.site);
-  const two = sites.includes('B') ? 'B' : sites[0] || 'A';
+  const two = have.includes('B') ? 'B' : have[0] || 'A';
   const mid = game.midSpot ? 'mid' : Math.random() < 0.5 ? 'A' : two;
   const layout = n >= 5 ? ['A', 'A', two, two, mid] : n === 4 ? ['A', 'A', two, two] : n === 3 ? ['A', two, mid] : n === 2 ? ['A', two] : [Math.random() < 0.5 ? 'A' : two];
   order.forEach((c, i) => assign.set(c, layout[i % layout.length]));
