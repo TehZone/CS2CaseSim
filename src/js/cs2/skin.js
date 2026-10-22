@@ -6,7 +6,9 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
 import { imgUrl, loadImage } from '../util.js';
 import { UniformRandomStream } from './rng.js';
-import { cs2Prepare } from './api.js';
+import { cs2Prepare, cs2GloveClip } from './api.js';
+import { gloveMaterials } from './glove.js';
+import { loadGltf as loadRig, rebind, bonesByName } from './rig.js';
 import { loadSource, texture, whiteTex } from './textures.js';
 import { stickerSurface, contentBox } from './sticker.js';
 import { D } from '../data.js';
@@ -335,8 +337,59 @@ async function plainMaterial(info) {
   });
 }
 
+// The glove model's first-person ("viewmodel") mesh with the item's skin baked onto both hands by CS2's own
+// glove shader; the bare arm keeps CS2's own material. Returns { root, prep } (root: a fresh skinned scene).
+export async function buildGloveScene(item, def, renderer) {
+  const prep = await cs2Prepare(def.wid, def.v ? null : def.fid);
+  if (!prep.glove) throw new Error('No CS2 glove skin for ' + def.n);
+  const [gltf, hands] = await Promise.all([loadGltf(prep.model), gloveMaterials(renderer, prep, item)]);
+  const root = cloneSkinned(gltf.scene);
+  const meshes = [];
+  root.traverse((o) => { if (o.isMesh) meshes.push(o); });
+  const inView = (o) => { for (let n = o; n; n = n.parent) if (n.name.includes(prep.mesh)) return true; return false; };
+  for (const o of meshes) {
+    if (!inView(o)) { o.parent.remove(o); continue; }
+    const name = o.material?.name || '';
+    o.material = hands[name] || await plainMaterial(prep.materials[name]);
+    o.frustumCulled = false;
+  }
+  return { root, prep };
+}
+
+// Gloves for the 3D inspect: both hands on CS2's glove inspect pose (its looping pedestal animation), centred.
+async function buildGloveModel(item, def, renderer) {
+  const [{ root, prep }, { clip }] = await Promise.all([buildGloveScene(item, def, renderer), cs2GloveClip()]);
+  const clipG = await loadRig(clip);
+  const skel = cloneSkinned(clipG.scene);
+  skel.traverse((o) => { if (o.isMesh) o.visible = false; });
+  rebind(root, bonesByName(skel), skel);
+  const posed = new THREE.Group();
+  posed.add(skel, root);
+  const mixer = new THREE.AnimationMixer(skel);
+  mixer.clipAction(clipG.animations[0]).play();
+  mixer.update(0);
+
+  posed.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  root.traverse((o) => { if (o.isMesh) box.expandByObject(o, true); });
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  posed.position.sub(center);
+  const inner = new THREE.Group();
+  inner.add(posed);
+  const longest = Math.max(size.x, size.y, size.z) || 1;
+  inner.scale.setScalar(4 / longest);
+  const wrap = new THREE.Group();
+  wrap.add(inner);
+  wrap.userData.cs2 = { prep, mesh: prep.mesh };
+  wrap.userData.unitScale = 4 / longest;
+  wrap.userData.tick = (dt) => mixer.update(dt);
+  return wrap;
+}
+
 // Returns a THREE.Group with the item on its real model, centred, barrel along +X, or null if unsupported.
 export async function buildCS2Model(item, def, renderer) {
+  if (def.cat === 'gloves') return buildGloveModel(item, def, renderer);
   const paint = def.v ? null : def.fid;
   // Vanilla knives carry a HUD id instead of the weapon id; borrow it from a finished skin of the same knife.
   const wid = def.wid.startsWith('weapon_') ? def.wid

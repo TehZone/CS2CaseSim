@@ -86,7 +86,16 @@ export function take(ctx, uids, { allowLocked = false } = {}) {
   const set = new Set(uids);
   ctx.st.inv = ctx.st.inv.filter((i) => !set.has(i.uid));
   ctx.del.push(...uids);
+  unequip(ctx, set);
   return items;
+}
+// Clears loadout slots holding any of these uids (the items left the inventory or were unequipped).
+function unequip(ctx, uids) {
+  const lo = ctx.st.loadout || {};
+  const keep = Object.entries(lo).filter(([, u]) => !uids.has(u));
+  if (keep.length === Object.keys(lo).length) return;
+  ctx.st.loadout = Object.fromEntries(keep);
+  ctx.dirty.add('loadout');
 }
 export function touch(ctx, item) { ctx.upd.set(item.uid, item); }
 
@@ -160,6 +169,18 @@ export const ACTIONS = {
     const it = findOwned(ctx, uid);
     if (lk) it.lk = true; else delete it.lk;
     touch(ctx, it);
+  },
+  // Loadout: equip an item in its slot (replacing what was there), or take it off.
+  'loadout.equip'(ctx, { uid }) {
+    const it = findOwned(ctx, String(uid));
+    const slot = I.loadoutSlot(it);
+    if (!slot) fail(`${I.itemName(it)} can't be equipped`);
+    ctx.st.loadout = { ...(ctx.st.loadout || {}), [slot]: it.uid };
+    ctx.dirty.add('loadout');
+    return { slot };
+  },
+  'loadout.unequip'(ctx, { uid }) {
+    unequip(ctx, new Set([String(uid)]));
   },
   'item.seen'(ctx, { uids }) {
     for (const u of uids || []) {

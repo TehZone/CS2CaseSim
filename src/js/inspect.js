@@ -8,6 +8,7 @@ import { cs2Status } from './cs2/api.js';
 import { buildCS2Model } from './cs2/skin.js';
 import { buildBackdrop, BlurredBackdrop, backdropEnvironment } from './cs2/backdrop.js';
 import { buildFirstPerson } from './cs2/firstperson.js';
+import { equipped } from './loadout.js';
 import { stickerSurface } from './cs2/sticker.js';
 import { clamp } from './util.js';
 
@@ -379,6 +380,7 @@ class InspectView {
   clearModel() {
     this.exitFirstPerson();
     if (!this.model) return;
+    this.model.userData.fp?.dispose();
     this.pivot.remove(this.model);
     this.model.traverse((o) => {
       o.geometry?.dispose();
@@ -449,7 +451,15 @@ class InspectView {
   async enterFirstPerson() {
     if (!this.model?.userData.weapon) throw new Error('First person needs the real CS2 model of a gun or knife');
     const model = this.model;
-    if (!model.userData.fp) model.userData.fp = await buildFirstPerson(model);
+    // Your equipped gloves are on the hands, like in game.
+    const gloves = equipped('gloves');
+    if (model.userData.fp?.glovesUid !== (gloves?.uid ?? null)) {
+      const fp = await buildFirstPerson(model, { gloves, renderer: this.renderer });
+      fp.glovesUid = gloves?.uid ?? null;
+      if (this.model !== model) { fp.dispose(); return; }
+      model.userData.fp?.dispose();
+      model.userData.fp = fp;
+    }
     if (this.model !== model) return;
     this.fp = model.userData.fp;
     this.scene.add(this.fp.rig);
@@ -506,7 +516,7 @@ class InspectView {
       return wrap;
     }
     // Real CS2 model + CS2's own skin shader when the game is installed (guns and knives).
-    if (item.t === 'skin' && def.cat !== 'gloves') {
+    if (item.t === 'skin') {
       try {
         if ((await cs2Status()).available) {
           const real = await buildCS2Model(item, def, this.renderer);
@@ -631,6 +641,7 @@ class InspectView {
       this.camera.position.set(0, -lift, dist * (1 + zOff));
       this.camera.lookAt(0, -lift, 0);
     }
+    this.model?.userData.tick?.(dt); // animated models (gloves on CS2's inspect pose)
     let cam = this.camera;
     if (this.fp) {
       this.fp.update(dt);

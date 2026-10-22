@@ -1,0 +1,12 @@
+/* Loadout: equipped tag on item cards and the inventory's loadout panel. */
+.tag.eq { color: #0d1a10; background: var(--green); border-color: var(--green); }
+
+.lo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.lo-slot { cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
+.lo-name { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.lo-empty {
+  flex: 1; min-height: 180px; display: grid; place-items: center; border: 1px dashed var(--line2); border-radius: var(--radius);
+  color: var(--dim); background: var(--panel2); transition: border-color .15s, color .15s;
+}
+.lo-slot:hover .lo-empty { border-color: var(--gold); color: var(--text); }
+.lo-head { margin: 18px 0 10px; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }

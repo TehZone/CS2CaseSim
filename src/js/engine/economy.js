@@ -17,6 +17,7 @@ export function freshState() {
     upg: {},
     coopSlots: 3,
     team: freshTeam(),
+    loadout: {}, // slot (see items.loadoutSlot) -> uid
     stats: {
       opened: 0, spent: 0, sold: 0, clicks: 0, clickEarned: 0, passiveEarned: 0,
       bestValue: 0, bestName: '', drops: {}, knives: 0, stickersApplied: 0,
@@ -39,6 +40,7 @@ export function upgradeState(saved) {
   st.settings.autoSell = { ...AUTO_SELL_DEFAULT, ...(saved.settings?.autoSell || {}) };
   st.team = { ...freshTeam(), ...(saved.team || {}) };
   st.team.slots = { ...freshTeam().slots, ...(st.team.slots || {}) };
+  st.loadout = { ...(saved.loadout || {}) };
   st.v = base.v;
   return st;
 }

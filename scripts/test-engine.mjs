@@ -293,5 +293,32 @@ function tierFreq(box, n) {
   void cards;
 }
 
+// ---- loadout -------------------------------------------------------------------------------------
+{
+  const st = freshState();
+  st.money = 100;
+  const run = (name, args) => { const ctx = ACT.makeCtx(st, { rng }); const r = ACT.runAction(ctx, name, args); return { r, d: ACT.delta(ctx) }; };
+  const skinOf = (f) => Object.values(D.skins).find(f);
+  const mk = (def, uid) => ({ uid, t: 'skin', id: def.id, fl: 0.2, sd: 1, at: 0 });
+  const g1 = mk(skinOf((s) => s.cat === 'gloves'), 'g1'), g2 = mk(skinOf((s) => s.cat === 'gloves' && s.id !== g1.id), 'g2');
+  const ak = mk(skinOf((s) => s.w === 'AK-47'), 'ak'), knife = mk(skinOf((s) => s.cat === 'knife'), 'kn');
+  const agent = { uid: 'ag', t: 'agent', id: Object.values(D.agents).find((a) => a.team === 'CT').id, at: 0 };
+  st.inv.push(g1, g2, ak, knife, agent, { uid: 'st', t: 'sticker', id: Object.keys(D.stickers)[0], at: 0 });
+  check('loadout slots by item kind', I.loadoutSlot(g1) === 'gloves' && I.loadoutSlot(knife) === 'knife' && I.loadoutSlot(ak) === 'w:AK-47'
+    && I.loadoutSlot(agent) === 'agentCT' && I.loadoutSlot(st.inv[5]) === null);
+  const e1 = run('loadout.equip', { uid: 'g1' });
+  run('loadout.equip', { uid: 'ak' });
+  run('loadout.equip', { uid: 'ag' });
+  check('equip fills the slot and sends the loadout', st.loadout.gloves === 'g1' && st.loadout['w:AK-47'] === 'ak' && e1.d.set.loadout?.gloves === 'g1');
+  run('loadout.equip', { uid: 'g2' });
+  check('equipping replaces the item in that slot', st.loadout.gloves === 'g2');
+  let bad = null; try { run('loadout.equip', { uid: 'st' }); } catch (e) { bad = e; }
+  check('stickers cannot be equipped', bad && !st.loadout.sticker);
+  run('loadout.unequip', { uid: 'ag' });
+  check('unequip clears only that slot', !st.loadout.agentCT && st.loadout.gloves === 'g2');
+  const sold = run('item.sell', { uids: ['g2'] });
+  check('selling an equipped item takes it out of the loadout', !st.loadout.gloves && st.loadout['w:AK-47'] === 'ak' && 'loadout' in sold.d.set);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

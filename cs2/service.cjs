@@ -17,6 +17,9 @@ const STICKER_TEXTURES = ['g_tSticker0', 'g_tSfxMaskSticker0', 'g_tHoloSpectrumS
 const STICKER_RAW_TEXTURES = ['g_tNormalRoughnessSticker0', 'g_tGlitterNormalSticker0'];
 const STICKER_META_VERSION = 1;
 
+// Glove composite textures csgo_customglove samples as raw hemi-octahedral normals.
+const GLOVE_RAW_TEXTURES = /^g_t(Normal|DetailNormal\d|DamageNormal\d)$/;
+
 // CS2's own case-opening sounds.
 const CASE_SOUNDS = {
   unlock: 'sounds/ui/panorama/case_unlock_01.vsnd',
@@ -85,6 +88,13 @@ class CS2Service {
     const clipFile = await cs2.exportGltf(clip, `fp/clips/${name}.glb`, { glb: true });
     const armsFile = await cs2.exportGltf('weapons/models/shared/arms/weapon_arms.vmdl', 'fp/arms/weapon_arms.gltf', { materials: true });
     return { clip: this.url(clipFile), arms: this.url(armsFile), name };
+  }
+
+  // CS2's glove inspect animation (both hands posed on the viewmodel skeleton): { clip } glTF URL.
+  async gloveClip() {
+    const cs2 = this.ensureCS2();
+    const file = await cs2.exportGltf('animation/anims/viewmodel/arms/inspects/pedestal_gloves_loop.vnmclip_c', 'fp/clips/pedestal_gloves_loop.glb', { glb: true });
+    return { clip: this.url(file) };
   }
 
   // Inspect backdrops (CS2's vanity maps) available in this install: [{ id, name }].
@@ -311,6 +321,7 @@ class CS2Service {
     const material = mesh.materials.find((n) => index.inputs[n]) || mesh.materials[0];
     const inputs = index.inputs[material] || null;
 
+    if (kit?.shader === 'csgo_customglove') return this.prepareGlove(gltfFile, info, kit);
     const result = { model: this.url(gltfFile), meshes: info.meshes, mesh: mesh.name, material, materials: info.materials, inputs, kit, textures: {}, shader: null };
     if (!kit || !inputs) return result;
 
@@ -332,6 +343,26 @@ class CS2Service {
     }).filter(Boolean).join(',');
     result.shader = { combo, source: await this.cs2.shaderSource(kit.shader, combo || 'S_PAINT_STYLE=0') };
     return result;
+  }
+
+  // Glove kits use csgo_customglove, which CS2 runs once per hand (glove_*_left / glove_*_right materials of the
+  // first-person "viewmodel" mesh). Normal maps stay raw (hemi-octahedral), as the shader samples them.
+  async prepareGlove(gltfFile, info, kit) {
+    const mesh = info.meshes.find((m) => m.name === 'viewmodel') || info.meshes[0];
+    const hands = mesh.materials.filter((n) => /^glove_/.test(n));
+    const tex = Object.entries(kit.color).filter(([, v]) => v?.kind === 'texture' && v.value);
+    const isRaw = (n) => GLOVE_RAW_TEXTURES.test(n);
+    const [files, rawFiles] = await Promise.all([
+      this.cs2.extract(tex.filter(([n]) => !isRaw(n)).map(([, v]) => v.value)),
+      this.cs2.extract(tex.filter(([n]) => isRaw(n)).map(([, v]) => v.value), { raw: true }),
+    ]);
+    const urls = (found) => Object.fromEntries(Object.entries(found).filter(([, f]) => f).map(([vpk, f]) => [vpk.replace(/_c$/, ''), this.url(f)]));
+    const combo = `S_BACKWARDS_COMPATIBILITY=0,S_ANISOTROPIC_GLOSS=${kit.color.F_ANISOTROPIC_GLOSS?.value ? 1 : 0},S_TINT_ID=0`;
+    return {
+      model: this.url(gltfFile), meshes: info.meshes, mesh: mesh.name, material: hands[0] || null, materials: info.materials,
+      inputs: null, kit, glove: true, hands, textures: urls(files), rawTextures: urls(rawFiles),
+      shader: { combo, source: await this.cs2.shaderSource(kit.shader, combo) },
+    };
   }
 }
 

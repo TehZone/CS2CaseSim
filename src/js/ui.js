@@ -11,6 +11,7 @@ import { composeItem } from './composite.js';
 import { chickenIncome, featherMult, HAT, BREED } from './chickens.js';
 import { openStickerEditor } from './stickerEditor.js';
 import { TIER_LABEL } from './patterns.js';
+import { isEquipped, slotName } from './loadout.js';
 
 // ---- toasts --------------------------------------------------------------------------------
 export function toast(msg, type = '') {
@@ -91,7 +92,7 @@ export function itemCard(item, { selectable = false, selected = false, extra = '
   const stk = item.stk?.length ? `<div class="stickers">${item.stk.map((s) => `<img src="${imgUrl(D.stickers[s.id]?.img, 's')}">`).join('')}</div>` : '';
   return `<div class="card ${selected ? 'selected' : ''} ${extra}" data-uid="${item.uid}" style="--rc:${r.c}">
     ${selectable ? '<div class="sel"></div>' : ''}
-    <div class="tags">${item.nw ? '<span class="tag new">New</span>' : ''}${item.stt ? '<span class="tag st">ST™</span>' : ''}${item.sv ? '<span class="tag sv">Souvenir</span>' : ''}${patternTag(pat)}${item.lk ? '<span class="tag lock">🔒</span>' : ''}</div>
+    <div class="tags">${item.nw ? '<span class="tag new">New</span>' : ''}${item.stt ? '<span class="tag st">ST™</span>' : ''}${item.sv ? '<span class="tag sv">Souvenir</span>' : ''}${patternTag(pat)}${item.lk ? '<span class="tag lock">🔒</span>' : ''}${isEquipped(item) ? '<span class="tag eq">Equipped</span>' : ''}</div>
     <div class="img"><img loading="lazy" src="${I.itemImage(item, 'm')}" alt="">${stk}</div>
     <div class="rbar"></div>
     ${item.t === 'skin' && item.fl != null ? `<div class="floatline"><i style="left:${item.fl * 100}%"></i></div>` : ''}
@@ -187,6 +188,9 @@ function detailBody(item) {
       <div class="actions">
         <button class="btn gold" data-a="inspect">Inspect in 3D</button>
         ${I.canHaveStickers(item) ? `<button class="btn" data-a="stickers">Stickers (${item.stk?.length || 0}/${I.MAX_STICKERS})</button>` : ''}
+        ${I.loadoutSlot(item) ? (isEquipped(item)
+          ? `<button class="btn" data-a="unequip" title="Equipped as your ${esc(slotName(I.loadoutSlot(item)))}">Unequip</button>`
+          : `<button class="btn" data-a="equip">Equip (${esc(slotName(I.loadoutSlot(item)))})</button>`) : ''}
         <button class="btn" data-a="lock">${item.lk ? 'Unlock' : 'Lock'}</button>
         <button class="btn primary" data-a="sell" ${item.lk ? 'disabled' : ''}>Sell ${money(vb.total)}</button>
       </div>
@@ -218,6 +222,11 @@ export function showItemDetail(item, { onChange } = {}) {
       const a = b.dataset.a;
       if (a === 'inspect') openInspect(item);
       if (a === 'lock') { if (await tryAct('item.lock', { uid: item.uid, lk: !item.lk })) refresh(); }
+      if (a === 'equip' && await tryAct('loadout.equip', { uid: item.uid })) {
+        toast(`Equipped ${esc(I.itemName(item))}${I.loadoutSlot(item) === 'gloves' ? ' — you’ll see them in the first-person inspect' : ''}`, 'good');
+        refresh();
+      }
+      if (a === 'unequip' && await tryAct('loadout.unequip', { uid: item.uid })) refresh();
       if (a === 'sell') { if (await sellItems([item])) m.close(); }
       if (a === 'stickers') openStickerEditor(item, { onDone: () => { emit('inv'); refresh(); } });
     }));

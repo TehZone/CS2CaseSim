@@ -99,6 +99,7 @@ export function applyDelta(d, { local = false } = {}) {
   if (d.add?.length || d.del?.length || d.upd?.length || 'coopSlots' in set) emit('inv');
   if ('stars' in set) emit('stars');
   if ('team' in set) emit('team');
+  if ('loadout' in set) emit('inv');
   if ('upg' in set) emit('money');
   emit('state', d);
 }

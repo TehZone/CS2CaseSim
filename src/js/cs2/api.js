@@ -57,6 +57,17 @@ export function cs2Vanity(id) {
   return vanities.get(id);
 }
 
+// CS2's glove inspect animation: { clip } glTF URL.
+let gloveClip = null;
+export function cs2GloveClip() {
+  if (!gloveClip) {
+    gloveClip = window.native?.cs2GloveClip ? window.native.cs2GloveClip()
+      : fetch('api/cs2/glove-clip').then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); });
+    gloveClip.catch(() => { gloveClip = null; });
+  }
+  return gloveClip;
+}
+
 // First-person inspect for a weapon id: { clip, arms } glTF URLs (CS2's inspect animation and arms).
 const firstPersons = new Map();
 export function cs2FirstPerson(weapon) {

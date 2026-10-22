@@ -278,6 +278,17 @@ export function cleanAutoSell(r) {
   return { on: true, below, ranks, keepStt: !!r.keepStt, keepRare: !!r.keepRare };
 }
 
+// Loadout slot an item is equipped in: gloves, knife, one agent per side, and one skin per gun (null = not equippable).
+export function loadoutSlot(item) {
+  const d = itemDef(item);
+  if (!d) return null;
+  if (item.t === 'agent') return d.team === 'CT' ? 'agentCT' : 'agentT';
+  if (item.t !== 'skin') return null;
+  if (d.cat === 'gloves') return 'gloves';
+  if (d.cat === 'knife') return 'knife';
+  return d.w ? 'w:' + d.w : null;
+}
+
 export function floatString(f) {
   return f == null ? '—' : String(Math.fround(f));
 }

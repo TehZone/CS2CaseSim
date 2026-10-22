@@ -161,6 +161,7 @@ function registerIpc() {
   ipcMain.handle('cs2:sticker', (_e, material) => cs2.sticker(material));
   ipcMain.handle('cs2:vanityMaps', () => cs2.vanityMaps());
   ipcMain.handle('cs2:vanity', (_e, id) => cs2.vanity(id));
+  ipcMain.handle('cs2:gloveClip', () => cs2.gloveClip());
   ipcMain.handle('cs2:firstPerson', (_e, weapon) => cs2.firstPerson(weapon));
   ipcMain.handle('cs2:crate', (_e, id) => cs2.crate(id));
   ipcMain.handle('cs2:clear', () => {
@@ -319,6 +320,14 @@ function runSmokeTest(win) {
       if (${JSON.stringify(!!process.env.CS2SIM_SMOKE_STICKERS)}) {
         const pick = (fx) => Object.values(D.stickers).find((x) => x.fx === fx && x.sm && !x.so);
         it.stk = ['Holo', 'Foil', 'Gold'].map((fx, i) => ({ id: pick(fx).id, x: 0.38 + i * 0.12, y: 0.35, r: 0, wr: 0, m: 1 }));
+      }
+      // CS2SIM_SMOKE_GLOVES="★ Sport Gloves | Vice" equips those gloves (worn in the first-person inspect).
+      const gloves = ${JSON.stringify(process.env.CS2SIM_SMOKE_GLOVES || '')};
+      if (gloves) {
+        const st = await import('./js/state.js'); const { act } = await import('./js/backend.js');
+        const g = I.makeSkinItem(Object.values(D.skins).find((x) => x.n === gloves), { fl: 0.1, sd: 42 });
+        st.S.inv.unshift(g);
+        await act('loadout.equip', { uid: g.uid });
       }
       ui.openInspect(it);
     })()`);

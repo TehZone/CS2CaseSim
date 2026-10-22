@@ -2,47 +2,23 @@
 // and on the real weapon model with your skin, seen from the player's eyes. The clip (exported from the player's
 // install) carries the viewmodel skeleton: arms, hands, fingers and the weapon's own bones (bolt, magazine...).
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2FirstPerson } from './api.js';
-
-const loader = new GLTFLoader();
-const files = new Map();
-const load = (url) => {
-  if (!files.has(url)) { const p = loader.loadAsync(url); files.set(url, p); p.catch(() => files.delete(url)); }
-  return files.get(url);
-};
-
-// A bone the clip doesn't animate (forearm twist helpers, the body, extra weapon bones) is copied onto its parent
-// in the clip's skeleton with its rest offset, so it follows the animation instead of staying behind.
-function graft(b, bones, fallback) {
-  if (bones[b.name]) return bones[b.name];
-  const parent = b.parent && (bones[b.parent.name] || (b.parent.isBone ? graft(b.parent, bones, fallback) : null));
-  const g = new THREE.Bone();
-  g.name = b.name;
-  g.position.copy(b.position); g.quaternion.copy(b.quaternion); g.scale.copy(b.scale);
-  (parent || fallback).add(g);
-  bones[b.name] = g;
-  return g;
-}
-
-// Points a skinned scene's meshes at the clip's bones (by name), so the animation moves them.
-function rebind(scene, bones, fallback) {
-  scene.traverse((o) => {
-    if (!o.isSkinnedMesh) return;
-    const sk = o.skeleton;
-    o.bind(new THREE.Skeleton(sk.bones.map((b) => graft(b, bones, fallback)), sk.boneInverses), o.bindMatrix);
-    o.frustumCulled = false;
-  });
-}
+import { loadGltf as load, rebind, bonesByName } from './rig.js';
+import { buildGloveScene } from './skin.js';
+import { itemDef } from '../items.js';
 
 // Builds the first-person rig for an inspect model made by buildCS2Model. Returns { rig, mixer, action, duration }.
-// The rig is in game metres with the eye at the origin, looking down -Z.
-export async function buildFirstPerson(model) {
+// The rig is in game metres with the eye at the origin, looking down -Z. `gloves` (an inventory item) replaces
+// CS2's default arms with that glove model and its skin, like equipped gloves in game.
+export async function buildFirstPerson(model, { gloves = null, renderer = null } = {}) {
   const weapon = model.userData.weapon;
   if (!weapon || !model.userData.root) throw new Error('First person needs the real CS2 model');
   const { clip, arms } = await cs2FirstPerson(weapon);
-  const [clipG, armsG] = await Promise.all([load(clip), load(arms)]);
+  const [clipG, gloveArms] = await Promise.all([load(clip), gloves && renderer ? buildGloveScene(gloves, itemDef(gloves), renderer).catch((e) => {
+    console.warn('Equipped gloves unavailable in first person, using the default arms:', e);
+    return null;
+  }) : null]);
 
   const rig = new THREE.Group();
   const view = new THREE.Group(); // the exported viewmodel faces +Z; turn it to face -Z like our cameras
@@ -52,8 +28,7 @@ export async function buildFirstPerson(model) {
   const skel = cloneSkinned(clipG.scene);
   skel.traverse((o) => { if (o.isMesh) o.visible = false; }); // the clip's placeholder meshes
   view.add(skel);
-  const bones = {};
-  skel.traverse((o) => { if (o.name && !bones[o.name]) bones[o.name] = o; });
+  const bones = bonesByName(skel);
   // CS2 bone-merges the weapon onto the hands: its "weapon" bone follows the viewmodel's "wpn" bone, and the
   // clip animates the weapon's own parts (bolt, magazine, blade...) relative to it.
   const weaponBone = bones.weapon;
@@ -63,7 +38,7 @@ export async function buildFirstPerson(model) {
     weaponRoot.matrixAutoUpdate = false;
   }
 
-  const armsScene = cloneSkinned(armsG.scene);
+  const armsScene = gloveArms ? gloveArms.root : cloneSkinned((await load(arms)).scene);
   armsScene.traverse((o) => {
     if (!o.isMesh) return;
     for (const m of [].concat(o.material || [])) { m.envMapIntensity = 0.7; if (m.transparent && m.map) { m.alphaTest = 0.4; m.transparent = false; } }
@@ -104,5 +79,16 @@ export async function buildFirstPerson(model) {
     }
   };
   update(0);
-  return { rig, mixer, action, update, duration: anim.duration };
+  // Frees what this rig made itself (the equipped gloves' baked textures); the weapon's materials belong to the model.
+  const dispose = () => {
+    gloveArms?.root.traverse((o) => {
+      if (!o.isMesh) return;
+      for (const m of [].concat(o.material || [])) {
+        for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap']) m[k]?.dispose();
+        m.userData.dispose?.();
+        m.dispose();
+      }
+    });
+  };
+  return { rig, mixer, action, update, dispose, duration: anim.duration };
 }

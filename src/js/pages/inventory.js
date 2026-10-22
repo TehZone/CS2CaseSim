@@ -5,6 +5,7 @@ import { act } from '../backend.js';
 import { itemCard, showItemDetail, sellItems, openModal, toast } from '../ui.js';
 import { rarityColor } from '../data.js';
 import { SELL_RANKS } from '../autosell.js';
+import { MAIN_SLOTS, equipped, equippedUids, slotName } from '../loadout.js';
 
 const view = { type: 'all', sort: 'new', q: '', select: false, selected: new Set(), limit: 150 };
 const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['pro', 'Players'], ['chicken', 'Chickens']];
@@ -78,7 +79,7 @@ function draw() {
         ? `<button class="btn" data-a="all">Select all shown</button><button class="btn" data-a="none">Clear</button>
            <button class="btn primary" data-a="sellsel" ${selItems.length ? '' : 'disabled'}>Sell ${selItems.length} (${money(selValue)})</button>
            <button class="btn ghost" data-a="done">Done</button>`
-        : `<button class="btn" data-a="bulk">Bulk sell…</button><button class="btn" data-a="select">Select</button>`}
+        : `<button class="btn" data-a="loadout">Loadout</button><button class="btn" data-a="bulk">Bulk sell…</button><button class="btn" data-a="select">Select</button>`}
     </div>
     ${items.length ? `<div class="grid">${items.slice(0, view.limit).map((i) => itemCard(i, { selectable: view.select, selected: view.selected.has(i.uid) })).join('')}</div>` : `<div class="empty">${S.inv.length ? 'Nothing matches your filters.' : 'Your inventory is empty. Open some cases!'}</div>`}
     ${items.length > view.limit ? `<div class="pager"><button class="btn" data-a="more">Show more (${items.length - view.limit} more)</button></div>` : ''}
@@ -111,13 +112,52 @@ async function action(a, items) {
     if (await sellItems(sel)) { view.selected.clear(); view.select = false; draw(); }
   }
   if (a === 'bulk') bulkSell();
+  if (a === 'loadout') loadoutModal();
+}
+
+// Loadout: gloves, knife and agents (pick from your inventory), plus the gun skins you equipped from their item page.
+function loadoutModal() {
+  const m = openModal({ title: 'Loadout', cls: 'wide', body: '<div data-lo></div>' });
+  const box = m.el.querySelector('[data-lo]');
+  const fits = (slot) => S.inv.filter((i) => I.loadoutSlot(i) === slot).sort((a, b) => I.itemValue(b) - I.itemValue(a));
+  const drawSlots = () => {
+    const guns = Object.keys(S.loadout || {}).filter((k) => k.startsWith('w:') && equipped(k)).sort();
+    const slot = (k) => {
+      const it = equipped(k);
+      return `<div class="lo-slot" data-slot="${esc(k)}"><div class="lo-name">${esc(slotName(k))}</div>
+        ${it ? itemCard(it) : `<div class="lo-empty">${fits(k).length ? 'Choose…' : 'None in your inventory'}</div>`}</div>`;
+    };
+    box.innerHTML = `<p class="muted" style="margin-top:0">Equipped gloves are worn on your hands in the first-person inspect.
+        Equip gun skins from their item page (one per gun).</p>
+      <div class="lo-grid">${MAIN_SLOTS.map(([k]) => slot(k)).join('')}</div>
+      ${guns.length ? `<h3 class="lo-head">Guns</h3><div class="lo-grid">${guns.map(slot).join('')}</div>` : ''}`;
+    box.querySelectorAll('[data-slot]').forEach((el) => el.addEventListener('click', () => choose(el.dataset.slot)));
+  };
+  const choose = (k) => {
+    const list = fits(k);
+    const cur = equipped(k);
+    if (!list.length) return;
+    box.innerHTML = `<div class="toolbar" style="margin-top:0"><button class="btn ghost" data-back>← Back</button>
+        <b>${esc(slotName(k))}</b><span class="spacer"></span>${cur ? '<button class="btn" data-off>Unequip</button>' : ''}</div>
+      <div class="grid">${list.slice(0, 200).map((i) => itemCard(i)).join('')}</div>`;
+    box.querySelector('[data-back]').addEventListener('click', drawSlots);
+    box.querySelector('[data-off]')?.addEventListener('click', async () => {
+      try { await act('loadout.unequip', { uid: cur.uid }); } catch (e) { toast(esc(e.message), 'bad'); }
+      drawSlots();
+    });
+    box.querySelectorAll('.card[data-uid]').forEach((c) => c.addEventListener('click', async () => {
+      try { await act('loadout.equip', { uid: c.dataset.uid }); } catch (e) { toast(esc(e.message), 'bad'); }
+      drawSlots();
+    }));
+  };
+  drawSlots();
 }
 
 function bulkSell() {
   const m = openModal({
     title: 'Bulk sell',
     body: `<p class="muted" style="margin-top:0">Sell every unlocked item that is worth less than an amount <b>or</b> has one of the ticked rarities.
-      Locked items, knives, gloves and other ★ items are never sold here, and neither are players in your team.</p>
+      Locked items, knives, gloves and other ★ items are never sold here, and neither are players in your team or anything in your loadout.</p>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
         <label class="check">Worth less than $ <input class="input" type="number" min="0" step="0.5" value="1" style="width:110px" data-th></label>
         <select class="input" data-ty>${TYPES.map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select>
@@ -129,6 +169,7 @@ function bulkSell() {
   });
   const th = m.el.querySelector('[data-th]'), ty = m.el.querySelector('[data-ty]'), pv = m.el.querySelector('[data-preview]');
   const teamUids = new Set([...Object.values(S.team?.slots || {}), ...(S.team?.bench || [])].filter(Boolean));
+  for (const u of equippedUids()) teamUids.add(u);
   const matchesType = (i) => { const prevT = view.type, prevQ = view.q; view.type = ty.value; view.q = ''; const r = matches(i); view.type = prevT; view.q = prevQ; return r; };
   const pick = () => {
     const below = +th.value || 0;
