@@ -49,7 +49,7 @@ export class Brain {
     this.blindUntil = 0; this.nadeAt = 0; this.thrown = new Set();
     this.path = null; this.goal = null; this.target = null; this.lastSeen = null; this.heard = null;
     this.task = 'idle';
-    this.holdYaw = null;
+    this.holdYaw = null; this.baseYaw = null;
     this.startDelay = rnd(0, 1.5);
     this.walkUntil = 0;
     this.order = null;
@@ -130,6 +130,7 @@ export class Brain {
 
   // Flashbanged: blind until then (a bot that was aiming at you loses you).
   flashed(until) {
+    if (!(this.blindUntil > this.game.now)) this.blindYaw = this.bot.yaw;
     this.blindUntil = Math.max(this.blindUntil || 0, until);
     if (this.target) this.target.visible = false;
   }
@@ -283,7 +284,9 @@ export class Brain {
   look(dt, t) {
     const b = this.bot;
     if (b.climbing) return;
-    if (t < this.blindUntil) { this.turnTo(b.pitch + Math.sin(t * 9) * 3, b.yaw + Math.sin(t * 3.1 + b.index) * 40, dt, 0.4); return; }
+    // Blind: looking about, around where it faced when the flash went off (targets relative to the current facing
+    // would add up, frame after frame, into spinning).
+    if (t < this.blindUntil) { this.turnTo(8 + Math.sin(t * 9) * 3, (this.blindYaw ?? b.yaw) + Math.sin(t * 3.1 + b.index) * 35, dt, 0.4); return; }
     if (this.lastSeen && t - this.lastSeen.t < 4) { const [p, y] = angleTo(b.eye(), [this.lastSeen.pos[0], this.lastSeen.pos[1], this.lastSeen.pos[2] + 60]); this.turnTo(p, y, dt, 0.7); return; }
     if (this.heard && t - this.heard.t < 3) { const [p, y] = angleTo(b.eye(), [this.heard.pos[0], this.heard.pos[1], this.heard.pos[2] + 60]); this.turnTo(p, y, dt, 0.6); return; }
     if (this.task === 'hold' && this.holdYaw != null && Math.hypot(b.vel[0], b.vel[1]) < 20) {
@@ -294,7 +297,11 @@ export class Brain {
     const sp = Math.hypot(b.vel[0], b.vel[1]);
     if (sp > 30) this.turnTo(0, (Math.atan2(b.vel[1], b.vel[0]) * 180) / Math.PI, dt, 0.5);
   }
-  lookAround(dt, t) { this.turnTo(0, this.bot.yaw + Math.sin(t * 0.5 + this.bot.index) * 0.3, dt, 0.1); }
+  // Freeze time: a glance either side of the heading it spawned with.
+  lookAround(dt, t) {
+    this.baseYaw ??= this.bot.yaw;
+    this.turnTo(0, this.baseYaw + Math.sin(t * 0.5 + this.bot.index) * 10, dt, 0.1);
+  }
 
   // ---- objectives -------------------------------------------------------------------------------------------------
   decide(t) {

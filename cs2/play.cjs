@@ -9,7 +9,7 @@ const { readEXR } = require('./exr.cjs');
 const { decodePNG, encodePNG } = require('./png.cjs');
 
 const IN = 0.0254; // the exporter writes game inches as metres
-const PLAY_VERSION = 1; // map exports
+const PLAY_VERSION = 2; // map exports (2: second texture layers, sharper world textures, non-solid brushes left out)
 const DATA_VERSION = 5; // weapon stats + sound events
 // Collision flags per triangle: what it stops.
 const F_PLAYER = 1, F_BULLET = 2, F_GRENADE = 4;
@@ -91,8 +91,17 @@ function collisionFlags(extras = {}) {
   return 0;
 }
 
+// Whether a func_brush blocks: its Solidity (0: solid while enabled, 1: never, 2: always) and whether it starts
+// disabled (Retakes' blockers on Mirage, for one, are switched on by that mode only).
+function brushSolid(e) {
+  const solidity = String(e.solidity ?? '0');
+  if (solidity === '1') return false;
+  return solidity === '2' || !/^(true|1)$/i.test(String(e.startdisabled ?? ''));
+}
+
 // collision.bin: triangle positions (Float32 x9 each), then one flags byte and one surface byte per triangle.
-function buildCollision(worldPhys, entityPhys) {
+// ents: the map's entities (to leave out brushes that don't block).
+function buildCollision(worldPhys, entityPhys, ents = []) {
   const surfaces = [];
   const parts = [];
   const add = (glb, node, flags) => {
@@ -103,8 +112,16 @@ function buildCollision(worldPhys, entityPhys) {
     parts.push({ tris, flags, surface: surfaces.indexOf(s) });
   };
   for (const n of worldPhys.json.nodes) add(worldPhys, n, collisionFlags(n.extras));
-  // Brush entities that are solid (doors and planks built as func_brush).
-  if (entityPhys) for (const n of entityPhys.json.nodes) if (n.name === 'func_brush') add(entityPhys, n, F_PLAYER | F_BULLET | F_GRENADE);
+  // Brush entities that are solid (doors and planks built as func_brush). The export names their physics by class
+  // only; the node sits at its entity's origin.
+  const brushes = ents.filter((e) => e.classname === 'func_brush').map((e) => ({ e, o: vec(e.origin) }));
+  if (entityPhys) for (const n of entityPhys.json.nodes) {
+    if (n.name !== 'func_brush') continue;
+    const m = nodeMatrix(n), o = [m[14] / IN, m[12] / IN, m[13] / IN];
+    let best = null, bd = 4;
+    for (const b of brushes) { const d = Math.hypot(b.o[0] - o[0], b.o[1] - o[1], b.o[2] - o[2]); if (d < bd) { bd = d; best = b.e; } }
+    if (!best || brushSolid(best)) add(entityPhys, n, F_PLAYER | F_BULLET | F_GRENADE);
+  }
   const count = parts.reduce((s, p) => s + p.tris.length / 9, 0);
   const buf = Buffer.alloc(count * 38);
   const pos = new Float32Array(buf.buffer, buf.byteOffset, count * 9);
@@ -301,6 +318,6 @@ function soundEventFiles(text) {
 }
 
 module.exports = {
-  PLAY_VERSION, DATA_VERSION, F_PLAYER, F_BULLET, F_GRENADE, IRR_MAX, readGlb, buildCollision, gameVolumes, mapInfo, bakeLightmap, bakeSky,
+  PLAY_VERSION, DATA_VERSION, F_PLAYER, F_BULLET, F_GRENADE, IRR_MAX, readGlb, buildCollision, brushSolid, gameVolumes, mapInfo, bakeLightmap, bakeSky,
   weaponStats, soundEventFiles, parseEntities, compactNav, NAV_VERSION,
 };

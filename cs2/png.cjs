@@ -19,38 +19,53 @@ function decodePNG(buf) {
   const bpp = ch * (depth / 8), stride = w * bpp;
   const raw = zlib.inflateSync(Buffer.concat(idat));
   const out = Buffer.alloc(h * stride);
+  // Undoes each row's filter (one loop per filter type: map exports decode hundreds of 2048px textures).
   for (let y = 0; y < h; y++) {
-    const f = raw[y * (stride + 1)], src = y * (stride + 1) + 1, dst = y * stride;
-    for (let x = 0; x < stride; x++) {
-      const a = x >= bpp ? out[dst + x - bpp] : 0, b = y ? out[dst - stride + x] : 0, c = x >= bpp && y ? out[dst - stride + x - bpp] : 0;
-      let v = raw[src + x];
-      if (f === 1) v += a; else if (f === 2) v += b; else if (f === 3) v += (a + b) >> 1;
-      else if (f === 4) { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
-      out[dst + x] = v & 255;
+    const f = raw[y * (stride + 1)], src = y * (stride + 1) + 1, dst = y * stride, up = dst - stride;
+    if (f === 0 || (f === 2 && !y)) out.set(raw.subarray(src, src + stride), dst);
+    else if (f === 1) {
+      for (let x = 0; x < bpp; x++) out[dst + x] = raw[src + x];
+      for (let x = bpp; x < stride; x++) out[dst + x] = raw[src + x] + out[dst + x - bpp];
+    } else if (f === 2) for (let x = 0; x < stride; x++) out[dst + x] = raw[src + x] + out[up + x];
+    else if (f === 3) {
+      for (let x = 0; x < bpp; x++) out[dst + x] = raw[src + x] + (y ? out[up + x] >> 1 : 0);
+      if (y) for (let x = bpp; x < stride; x++) out[dst + x] = raw[src + x] + ((out[dst + x - bpp] + out[up + x]) >> 1);
+      else for (let x = bpp; x < stride; x++) out[dst + x] = raw[src + x] + (out[dst + x - bpp] >> 1);
+    } else if (f === 4) {
+      for (let x = 0; x < stride; x++) {
+        const a = x >= bpp ? out[dst + x - bpp] : 0, b = y ? out[up + x] : 0, c = x >= bpp && y ? out[up + x - bpp] : 0;
+        const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+        out[dst + x] = raw[src + x] + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c);
+      }
     }
   }
   return { width: w, height: h, channels: ch, depth, data: out };
 }
 
 const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
-const crc = (b) => { let c = 0xffffffff; for (const v of b) c = crcTable[(c ^ v) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+const crc = (b) => {
+  if (zlib.crc32) return zlib.crc32(b) >>> 0;
+  let c = 0xffffffff;
+  for (let i = 0; i < b.length; i++) c = crcTable[(c ^ b[i]) & 255] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
 function chunk(type, data) {
   const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
   const td = Buffer.concat([Buffer.from(type), data]);
   const c = Buffer.alloc(4); c.writeUInt32BE(crc(td));
   return Buffer.concat([len, td, c]);
 }
-// 8-bit RGBA encoder.
-function encodePNG(width, height, rgba) {
+// 8-bit RGBA encoder (level: zlib's, 1 is fastest).
+function encodePNG(width, height, rgba, { level = 6 } = {}) {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4); ihdr[8] = 8; ihdr[9] = 6;
   const raw = Buffer.alloc(height * (width * 4 + 1));
   for (let y = 0; y < height; y++) Buffer.from(rgba.buffer, rgba.byteOffset + y * width * 4, width * 4).copy(raw, y * (width * 4 + 1) + 1);
-  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level: 6 })), chunk('IEND', Buffer.alloc(0))]);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level })), chunk('IEND', Buffer.alloc(0))]);
 }
 
 // Box-downscales PNG files in place so their longest side is at most `max` (8-bit only; others are left alone).
-// Used where Electron's native image resizer isn't available (the dev server).
+// Every channel is averaged as it is (alpha isn't premultiplied: many textures keep a mask in alpha, not coverage).
 async function shrinkPNGs(files, max) {
   for (const f of files) {
     try {
@@ -58,19 +73,21 @@ async function shrinkPNGs(files, max) {
       if (img.depth !== 8 || Math.max(img.width, img.height) <= max) continue;
       const k = Math.ceil(Math.max(img.width, img.height) / max);
       const w = Math.max(1, Math.floor(img.width / k)), h = Math.max(1, Math.floor(img.height / k)), ch = img.channels;
-      const out = new Uint8Array(w * h * 4);
+      const out = new Uint8Array(w * h * 4), src = img.data, n = k * k, half = n >> 1;
       for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-        const acc = [0, 0, 0, 0];
-        for (let dy = 0; dy < k; dy++) for (let dx = 0; dx < k; dx++) {
-          const o = ((y * k + dy) * img.width + x * k + dx) * ch;
-          const g = img.data[o];
-          if (ch === 1) { acc[0] += g; acc[1] += g; acc[2] += g; acc[3] += 255; }
-          else if (ch === 2) { acc[0] += g; acc[1] += g; acc[2] += g; acc[3] += img.data[o + 1]; }
-          else { acc[0] += g; acc[1] += img.data[o + 1]; acc[2] += img.data[o + 2]; acc[3] += ch === 4 ? img.data[o + 3] : 255; }
+        let r = 0, g = 0, b = 0, a = 0;
+        for (let dy = 0; dy < k; dy++) {
+          let o = ((y * k + dy) * img.width + x * k) * ch;
+          for (let dx = 0; dx < k; dx++, o += ch) {
+            if (ch >= 3) { r += src[o]; g += src[o + 1]; b += src[o + 2]; a += ch === 4 ? src[o + 3] : 255; }
+            else { r += src[o]; a += ch === 2 ? src[o + 1] : 255; }
+          }
         }
-        for (let c = 0; c < 4; c++) out[(y * w + x) * 4 + c] = Math.round(acc[c] / (k * k));
+        if (ch < 3) { g = r; b = r; }
+        const p = (y * w + x) * 4;
+        out[p] = (r + half) / n; out[p + 1] = (g + half) / n; out[p + 2] = (b + half) / n; out[p + 3] = (a + half) / n;
       }
-      fs.writeFileSync(f, encodePNG(w, h, out));
+      fs.writeFileSync(f, encodePNG(w, h, out, { level: 1 }));
     } catch {}
     await new Promise((r) => setImmediate(r));
   }

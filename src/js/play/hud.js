@@ -99,8 +99,9 @@ export class Hud {
     this.q('.top').classList.toggle('ffa', ffa);
     this.set('[data-score-ct]', String(ct));
     this.set('[data-score-t]', String(t));
-    this.q('[data-alive-ct]').innerHTML !== this.cache.act && (this.q('[data-alive-ct]').innerHTML = this.cache.act = pips(aliveCT, totalCT));
-    this.q('[data-alive-t]').innerHTML !== this.cache.att && (this.q('[data-alive-t]').innerHTML = this.cache.att = pips(aliveT, totalT));
+    const act = pips(aliveCT, totalCT, 'ct'), att = pips(aliveT, totalT, 't');
+    if (act !== this.cache.act) this.q('[data-alive-ct]').innerHTML = this.cache.act = act;
+    if (att !== this.cache.att) this.q('[data-alive-t]').innerHTML = this.cache.att = att;
     const text = planted ? 'C4' : fmtTime(clock);
     this.set('[data-clock]', text);
     this.q('[data-clock]').className = 'clock' + (planted ? ' bomb' : clock <= 10 && phase === 'live' ? ' low' : phase === 'freeze' ? ' freeze' : '');
@@ -135,10 +136,14 @@ export class Hud {
     setTimeout(() => a.remove(), 1200);
   }
 
-  kill({ killer, victim, weapon, headshot, wallbang, mine, killerTeam, victimTeam }) {
+  // A kill feed line, with CS2's marks for how it happened: a blinded killer before the weapon; after it, in the air,
+  // no scope, through smoke, through a wall, headshot.
+  kill({ killer, victim, weapon, headshot, wallbang, smoke, air, blind, noscope, mine, killerTeam, victimTeam }) {
     const row = document.createElement('div');
     if (mine) row.className = 'mine';
-    row.innerHTML = `${killer ? `<span class="${killerTeam === 'CT' ? 'ct' : 't'}">${esc(killer)}</span> ` : ''}<span class="muted">${esc(weapon)}${wallbang ? ' ⫽' : ''}${headshot ? ' ⌖' : ''}</span> <span class="${victimTeam === 'CT' ? 'ct' : 't'}">${esc(victim)}</span>`;
+    const mark = (on, k) => (on ? KILL_MARKS[k] : '');
+    row.innerHTML = `${killer ? `<span class="${killerTeam === 'CT' ? 'ct' : 't'}">${esc(killer)}</span>` : ''}${mark(blind, 'blind')}<span class="wpn">${esc(weapon)}</span>`
+      + `${mark(air, 'air')}${mark(noscope, 'noscope')}${mark(smoke, 'smoke')}${mark(wallbang, 'wallbang')}${mark(headshot, 'headshot')}<span class="${victimTeam === 'CT' ? 'ct' : 't'}">${esc(victim)}</span>`;
     const feed = this.q('.feed');
     feed.prepend(row);
     while (feed.children.length > 6) feed.lastChild.remove();
@@ -206,4 +211,16 @@ export function crosshairHtml(x, gap = x.gap) {
   return lines.map((p) => `<i style="${p};${look}"></i>`).join('');
 }
 
-const pips = (alive, total) => Array.from({ length: total }, (_, i) => `<i class="${i < alive ? 'on' : ''}"></i>`).join('');
+// Kill feed marks (16px, drawn in the text colour).
+const svg = (title, body) => `<svg class="km" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><title>${title}</title>${body}</svg>`;
+const KILL_MARKS = {
+  headshot: svg('Headshot', '<circle cx="8" cy="7.5" r="4.3"/><circle cx="8" cy="7.5" r="1.1" fill="currentColor" stroke="none"/><path d="M8 .8v2.4M8 11.8v2.4M1.3 7.5h2.4M12.3 7.5h2.4"/>'),
+  wallbang: svg('Through a wall', '<path d="M7 1.5v13" stroke-width="3.2" opacity=".55"/><path d="M1 8h13M10.8 4.8 14 8l-3.2 3.2"/>'),
+  smoke: svg('Through smoke', '<path d="M4.4 12.6h7.4a2.9 2.9 0 0 0 .3-5.8 4 4 0 0 0-7.6-1A3.4 3.4 0 0 0 4.4 12.6z" fill="currentColor" stroke="none"/>'),
+  air: svg('In the air', '<path d="M8 10.5V2.2M4.6 5.6 8 2.2l3.4 3.4"/><path d="M3 14h10" stroke-dasharray="2 1.8"/>'),
+  noscope: svg('No scope', '<circle cx="8" cy="8" r="5.6"/><path d="M8 3.6v8.8M3.6 8h8.8"/><path d="M2.2 13.8 13.8 2.2" stroke="#ff5a5a"/>'),
+  blind: svg('Blinded', '<path d="M1.5 8S3.8 4.2 8 4.2 14.5 8 14.5 8 12.2 11.8 8 11.8 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.7" fill="currentColor" stroke="none"/><path d="M8 .6v1.6M2.6 2.2l1.1 1.1M13.4 2.2l-1.1 1.1"/>'),
+};
+
+// A bar per player, the ones alive next to their team's score (the CT bars sit left of it, the T bars right).
+const pips = (alive, total, side) => Array.from({ length: total }, (_, i) => `<i class="${(side === 'ct' ? total - 1 - i : i) < alive ? 'on' : ''}"></i>`).join('');

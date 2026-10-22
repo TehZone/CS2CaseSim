@@ -49,6 +49,9 @@
 .play-hud .feed div { background: rgba(0,0,0,.45); padding: 3px 9px; border-radius: 3px; font-size: 13px; border: 1px solid transparent; }
 .play-hud .feed div.mine { border-color: #d22; }
 .play-hud .feed .ct { color: #8fc1ff; } .play-hud .feed .t { color: #f0c76a; }
+.play-hud .feed div { display: flex; align-items: center; gap: 6px; }
+.play-hud .feed .wpn { color: #d8dbe2; }
+.play-hud .feed .km { width: 16px; height: 16px; flex: none; color: #e9ecf2; }
 .play-hud .hit { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 12px; opacity: 0; }
 .play-hud .scope { position: absolute; inset: 0; display: none; background: radial-gradient(circle at 50% 50%, transparent 0, transparent 38vh, #000 38.2vh); }
 .play-hud .scope::before, .play-hud .scope::after { content: ''; position: absolute; background: #000; }

@@ -93,6 +93,7 @@ export class Game {
     this.renderer.shadowMap.autoUpdate = false; // the map's shadows are static: rendered once after loading
     this.renderer.autoClear = false;
     this.msaa = quality === 'performance' ? 0 : 4;
+    this.anisotropy = quality === 'high' ? 16 : quality === 'performance' ? 4 : 8;
     this.camera = new THREE.PerspectiveCamera(vfov(FOV), 1, 0.05, 400);
     this.camera.rotation.order = 'YXZ';
     this.vmScene = new THREE.Scene();
@@ -148,7 +149,7 @@ export class Game {
     const colBuf = await fetch(map.collision).then((r) => r.arrayBuffer());
     this.collision = new CollisionWorld(colBuf, map.info.collision);
     this.nav = new NavMesh(await fetch(map.nav).then((r) => r.json()));
-    this.world = await loadWorld(map, this.renderer, { onProgress: status });
+    this.world = await loadWorld(map, this.renderer, { onProgress: status, anisotropy: this.anisotropy });
     if (this.disposed) return;
     this.scene = this.world.scene;
     this.setupViewmodelLighting();
@@ -312,7 +313,7 @@ export class Game {
     if (id === 'defuser') return this.me.defuser;
     if (id === 'vest') return this.me.armor >= 100;
     if (id === 'vesthelm') return this.me.armor >= 100 && this.me.helmet;
-    return g?.primary?.id === id || g?.secondary?.id === id || g?.taser?.id === id;
+    return this.buying?.has(id) || g?.primary?.id === id || g?.secondary?.id === id || g?.taser?.id === id;
   }
 
   // ---- buying -----------------------------------------------------------------------------------------------------
@@ -325,13 +326,18 @@ export class Game {
   async buy(id) {
     const m = this.match, me = this.me;
     if (!this.inBuyZone() || this.owns(id) || !m.canBuy(me, id, this.stats)) return;
+    // A gun counts as owned while it loads, so a second click doesn't pay for it twice.
+    const gun = id.startsWith('weapon_') && !isGrenade(id);
+    if (gun) (this.buying ||= new Set()).add(id);
     m.pay(me, id, this.stats);
     this.sounds.play('Player.PickupWeapon', { volume: 0.6 });
     this.buyMenu.render();
     if (this.respawnMode && slotOf(id) === 'primary') this.dmPrimary = id;
     if (this.respawnMode && slotOf(id) === 'secondary') this.dmSecondary = id;
     if (isGrenade(id)) await this.syncMyNades();
-    else if (id.startsWith('weapon_')) await this.giveMe(slotOf(id), id);
+    else if (gun) {
+      try { await this.giveMe(slotOf(id), id); } finally { this.buying.delete(id); if (this.buyMenu.isOpen) this.buyMenu.render(); }
+    }
   }
   // Your grenade slots follow your grenade counts (select: a grenade id to hold now).
   async syncMyNades(select = null) {
@@ -1159,6 +1165,11 @@ export class Game {
     const st = gun.stats;
     const range = st.range || 8192;
     let o = origin, travelled = 0, scale = 1, power = gun.taser ? 0 : st.penetration || 1, hit = null, lastT = range;
+    // For the kill feed: through a wall, through smoke, a sniper rifle fired without its scope.
+    const how = (wallNo, p) => ({
+      wallbang: wallNo > 0, smoke: this.nades.volume.active && this.nades.volume.thickness(origin, p) > 6,
+      noscope: shooter === this.me && st.zoomLevels > 0 && !gun.zoom,
+    });
     if (shooter === this.me) { this.me.shots = (this.me.shots || 0) + 1; this.me.protectUntil = 0; }
     for (let wallNo = 0; wallNo < 4; wallNo++) {
       const wall = this.collision.raycast(o, dir, range - travelled, FLAG_BULLET);
@@ -1172,7 +1183,7 @@ export class Game {
         if (shooter === this.me) this.me.hits = (this.me.hits || 0) + 1;
         const p = [0, 1, 2].map((i) => o[i] + dir[i] * hit.t);
         const dmg = st.damage * Math.pow(st.rangeModifier, (travelled + hit.t) / 500) * scale;
-        this.damage(hit.c, dmg, { attacker: shooter, group: hit.group, armorRatio: st.armorRatio, headshotMult: st.headshot, point: p, dir, weapon: gun, wallbang: wallNo > 0 });
+        this.damage(hit.c, dmg, { attacker: shooter, group: hit.group, armorRatio: st.armorRatio, headshotMult: st.headshot, point: p, dir, weapon: gun, how: how(wallNo, p) });
         lastT = travelled + hit.t;
         break;
       }
@@ -1262,7 +1273,8 @@ export class Game {
   }
 
   // CS2 damage: hit group multiplier, then armor (kevlar for the body, the helmet for the head).
-  damage(c, dmg, { attacker = null, group = 'chest', armorRatio = 1, headshotMult = 4, point = null, dir = null, weapon = null, explosion = false, wallbang = false } = {}) {
+  // how: what the kill feed shows about a bullet that kills ({ wallbang, smoke, noscope }).
+  damage(c, dmg, { attacker = null, group = 'chest', armorRatio = 1, headshotMult = 4, point = null, dir = null, weapon = null, explosion = false, how = {} } = {}) {
     if (!c.alive) return;
     // Teammates: no damage without friendly fire; with it, CS2's reductions (bullets a third, grenades 85%, fire 40%).
     if (c.protectUntil > this.now && attacker && attacker !== c) return; // just respawned
@@ -1304,11 +1316,15 @@ export class Game {
     if (c.health <= 0) {
       if (weapon?.taser) this.sounds.play('Player.DeathTaser', { pos: this.bodyOf(c).chest, listener: this, volume: 0.8 });
       if (attacker === this.me) this.sounds.play(head ? (armored ? 'Player.DeathHeadShotArmor.AttackerFeedback' : 'Player.DeathHeadShot.AttackerFeedback') : armored ? 'Player.DeathBodyArmor.AttackerFeedback' : 'Player.DeathBody.AttackerFeedback', { volume: 0.8 });
-      this.kill(c, attacker, weapon, head, { wallbang });
+      this.kill(c, attacker, weapon, head, how);
     }
   }
 
-  kill(c, attacker, weapon, headshot, { wallbang = false } = {}) {
+  // Whether someone is off the ground (jumping or falling) or blinded by a flashbang, for the kill feed.
+  inAir(c) { return c === this.me ? !this.player.onGround && !this.player.onLadder : !!this.botOf(c)?.airborne; }
+  isBlind(c) { return c === this.me ? (this.flashUntil || 0) - this.now > 0.5 : (this.botOf(c)?.brain.blindUntil || 0) > this.now; }
+
+  kill(c, attacker, weapon, headshot, how = {}) {
     if (!c.alive) return;
     if (!this.respawnMode) this.dropOnDeath(c);
     c.alive = false;
@@ -1316,7 +1332,11 @@ export class Game {
     this.match.onKill(c, attacker, weapon?.stats || weapon, { headshot });
     if (!this.ffa) this.killChatter(c, attacker);
     const wname = weapon?.id ? (ITEM_NAMES[weapon.id] || (weapon.name || '').split(' | ')[0]) : weapon?.name || 'World';
-    this.hud.kill({ killer: attacker?.name || '', victim: c.name, weapon: wname, headshot, wallbang, mine: attacker === this.me || c === this.me, killerTeam: attacker?.team, victimTeam: c.team });
+    const by = attacker && attacker !== c;
+    this.hud.kill({
+      killer: attacker?.name || '', victim: c.name, weapon: wname, mine: attacker === this.me || c === this.me, killerTeam: attacker?.team, victimTeam: c.team,
+      headshot, ...how, air: by && this.inAir(attacker), blind: by && this.isBlind(attacker),
+    });
     if (c === this.me) {
       this.planting = null; this.defusing = false;
       this.closeBuyMenu();

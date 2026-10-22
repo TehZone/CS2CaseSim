@@ -1,4 +1,4 @@
-const { app, BrowserWindow, protocol, net, ipcMain, shell, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, protocol, net, ipcMain, shell, Menu } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
@@ -46,19 +46,24 @@ function playCall(fn, arg) {
   return PLAY_CALLS[fn](arg);
 }
 
-// Shrinks images in place (inspect backdrop textures are drawn blurred, so 512px is plenty).
-async function shrinkImages(files, max) {
-  for (const f of files) {
-    try {
-      const img = nativeImage.createFromPath(f);
-      const { width, height } = img.getSize();
-      if (width && Math.max(width, height) > max) {
-        const k = max / Math.max(width, height);
-        fs.writeFileSync(f, img.resize({ width: Math.max(1, Math.round(width * k)), height: Math.max(1, Math.round(height * k)), quality: 'good' }).toPNG());
-      }
-    } catch {}
-    await new Promise((r) => setImmediate(r));
+// Shrinks PNGs in place (inspect backdrop textures are drawn blurred, so 512px is plenty) with cs2/png.cjs on a worker
+// thread: it keeps every channel as it is (Electron's resizer premultiplies alpha, which blacks out the colour of
+// textures that keep a mask in alpha). The worker gets png.cjs's source, as it can't load scripts from the app's asar.
+let shrinkWorker = null, shrinkJobs = 0;
+const shrinkWaiting = new Map();
+function shrinkImages(files, max) {
+  if (!files.length) return Promise.resolve();
+  if (!shrinkWorker) {
+    const { Worker } = require('node:worker_threads');
+    const src = fs.readFileSync(path.join(__dirname, 'cs2', 'png.cjs'), 'utf8');
+    shrinkWorker = new Worker(`const module = { exports: {} };\n${src}\nconst { parentPort } = require('node:worker_threads');
+parentPort.on('message', ({ id, files, max }) => module.exports.shrinkPNGs(files, max).then(() => parentPort.postMessage(id), () => parentPort.postMessage(id)));`, { eval: true });
+    shrinkWorker.on('message', (id) => { shrinkWaiting.get(id)?.(); shrinkWaiting.delete(id); });
+    shrinkWorker.on('error', (e) => { console.warn('[shrink]', e); for (const done of shrinkWaiting.values()) done(); shrinkWaiting.clear(); shrinkWorker = null; });
+    shrinkWorker.unref();
   }
+  const id = ++shrinkJobs;
+  return new Promise((resolve) => { shrinkWaiting.set(id, resolve); shrinkWorker.postMessage({ id, files, max }); });
 }
 
 const inflight = new Map();

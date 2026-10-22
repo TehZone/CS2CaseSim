@@ -1,7 +1,8 @@
 // A playable CS2 map in three.js. World surfaces use CS2's baked lighting: the irradiance lightmap (second UV set) plus
 // the sun drawn live and masked by CS2's baked sun shadows (lightmap alpha). Props (CS2 lights those with probes we
-// can't read) get a sky/ground ambient plus the sun with a shadow map rendered once when the map loads. The exported
-// world is thousands of small meshes, so it's merged by material in large cells to keep draw calls down.
+// can't read) get a sky/ground ambient plus the sun with a shadow map rendered once when the map loads. CS2's
+// two-layer materials (sand painted over asphalt, plaster over brick...) blend their second layer in like CS2 does. The
+// exported world is thousands of small meshes, so it's merged by material in large cells to keep draw calls down.
 // Coordinates: the scene stays in the exporter's glTF metres (Y up); gameplay runs in game units.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -38,8 +39,64 @@ async function loadLightmap(url, size) {
   return tex;
 }
 
+// A two-layer material's second layer (F_LAYERS): { color, normal, blendMod, mode, soft, tint1, tint2, key } or null.
+// textures: the map export's { vtex path: file name }; load(file, srgb) gives a texture.
+function layerOf(vm, textures, load) {
+  const t = vm.TextureParams || {};
+  if (!vm.IntParams?.F_LAYERS || !textures[t.g_tLayer2Color]) return null;
+  const file = (k) => textures[t[k]] || null;
+  const tint = (k) => { const v = vm.VectorParams?.[k]; return v ? new THREE.Color().setRGB(v[0], v[1], v[2], THREE.SRGBColorSpace) : new THREE.Color(1, 1, 1); };
+  const mode = vm.IntParams.F_FANCY_BLENDING | 0;
+  const L = {
+    color: load(file('g_tLayer2Color'), true), normal: file('g_tLayer2NormalRoughness') && load(file('g_tLayer2NormalRoughness'), false),
+    blendMod: mode && file('g_tBlendModulation') ? load(file('g_tBlendModulation'), false) : null,
+    mode, soft: vm.FloatParams?.g_flBlendSoftness ?? 0.1, tint1: tint('g_vLayer1Tint'), tint2: tint('g_vLayer2Tint'),
+  };
+  L.key = `L${mode}${L.normal ? 'n' : ''}${L.blendMod ? 'm' : ''}`;
+  return L;
+}
+
+// Blends the second layer in like CS2's csgo_lightmappedgeneric: the vertex paint (cs2Blend) sharpened by the blend
+// modulation texture (F_FANCY_BLENDING 1: threshold in its green channel, softness in red; 2: green with
+// g_flBlendSoftness; 3: alpha with g_flBlendSoftness), for colour, normal and roughness (the layer's normal alpha).
+function addLayer(sh, L) {
+  Object.assign(sh.uniforms, {
+    cs2Layer2: { value: L.color }, cs2Layer2Normal: { value: L.normal }, cs2BlendMod: { value: L.blendMod },
+    cs2BlendSoft: { value: L.soft }, cs2Tint1: { value: L.tint1 }, cs2Tint2: { value: L.tint2 },
+  });
+  sh.vertexShader = 'attribute float cs2Blend;\nvarying float vCs2Blend;\n' + sh.vertexShader.replace('#include <uv_vertex>', '#include <uv_vertex>\n\tvCs2Blend = cs2Blend;');
+  const defs = `#define CS2_BLEND_MODE ${L.mode}\n${L.normal ? '#define CS2_LAYER2_NORMAL\n' : ''}${L.blendMod ? '#define CS2_BLENDMOD\n' : ''}`;
+  sh.fragmentShader = defs + 'uniform sampler2D cs2Layer2;\nuniform sampler2D cs2Layer2Normal;\nuniform sampler2D cs2BlendMod;\nuniform float cs2BlendSoft;\nuniform vec3 cs2Tint1;\nuniform vec3 cs2Tint2;\nvarying float vCs2Blend;\n' + sh.fragmentShader
+    .replace('#include <map_fragment>', `float cs2B = clamp( vCs2Blend, 0.0, 1.0 );
+#ifdef CS2_BLENDMOD
+	{
+		vec4 bm = texture2D( cs2BlendMod, vMapUv );
+		#if CS2_BLEND_MODE == 1
+			float mask = bm.g, soft = bm.r;
+		#elif CS2_BLEND_MODE == 3
+			float mask = bm.a, soft = cs2BlendSoft;
+		#else
+			float mask = bm.g, soft = cs2BlendSoft;
+		#endif
+		soft = max( soft, 0.002 );
+		cs2B = smoothstep( max( 0.0, mask - soft ), min( 1.0, mask + soft ), cs2B );
+	}
+#endif
+diffuseColor *= mix( texture2D( map, vMapUv ) * vec4( cs2Tint1, 1.0 ), texture2D( cs2Layer2, vMapUv ) * vec4( cs2Tint2, 1.0 ), cs2B );`)
+    .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+#ifdef CS2_LAYER2_NORMAL
+	roughnessFactor = mix( roughnessFactor, roughness * texture2D( cs2Layer2Normal, vMapUv ).a, cs2B );
+#endif`)
+    .replace('#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps.replace('vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;',
+      `#ifdef CS2_LAYER2_NORMAL
+		vec3 mapN = mix( texture2D( normalMap, vNormalMapUv ).xyz, texture2D( cs2Layer2Normal, vMapUv ).xyz, cs2B ) * 2.0 - 1.0;
+	#else
+		vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;
+	#endif`));
+}
+
 // Lightmapped surfaces: the sun's direct light is multiplied by the baked sun visibility in the lightmap's alpha.
-function lightmapped(m, lightMap, irrMax) {
+function lightmapped(m, lightMap, irrMax, layer = null) {
   m.lightMap = lightMap;
   m.lightMapIntensity = irrMax * Math.PI;
   m.onBeforeCompile = (sh) => {
@@ -47,19 +104,21 @@ function lightmapped(m, lightMap, irrMax) {
       'float cs2SunMask = texture2D( lightMap, vLightMapUv ).a;\n' + THREE.ShaderChunk.lights_fragment_begin.replace(
         'getDirectionalLightInfo( directionalLight, directLight );',
         'getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= cs2SunMask;'));
+    if (layer) addLayer(sh, layer);
   };
-  m.customProgramCacheKey = () => 'cs2lm';
+  m.customProgramCacheKey = () => 'cs2lm' + (layer?.key || '');
 }
 
 // Everything else: a sky/ground ambient (by normal) and the shadow-mapped sun.
-export function ambientLit(m, ambient) {
+export function ambientLit(m, ambient, layer = null) {
   m.onBeforeCompile = (sh) => {
     sh.uniforms.cs2Sky = ambient.sky;
     sh.uniforms.cs2Ground = ambient.ground;
     sh.fragmentShader = 'uniform vec3 cs2Sky;\nuniform vec3 cs2Ground;\n' + sh.fragmentShader
       .replace('#include <lights_fragment_maps>', '#include <lights_fragment_maps>\n\t{ vec3 wn = inverseTransformDirection( geometryNormal, viewMatrix );\n\tirradiance += mix( cs2Ground, cs2Sky, wn.y * 0.5 + 0.5 ); }');
+    if (layer) addLayer(sh, layer);
   };
-  m.customProgramCacheKey = () => 'cs2amb';
+  m.customProgramCacheKey = () => 'cs2amb' + (layer?.key || '');
 }
 
 // An attribute's values as a tightly packed Float32Array (plain float arrays are used as they are). Cached: the
@@ -83,23 +142,25 @@ function floats(attr) {
   return out;
 }
 
-// Merges meshes (placed by `matrix`) into one geometry with position, normal, uv and optionally uv1 (lightmap) and
-// tangent. Only the vertices each mesh's triangles use are copied (fragments index into shared buffers).
+// Merges meshes (placed by `matrix`) into one geometry with position, normal, uv and optionally uv1 (lightmap),
+// tangent and cs2Blend (the second layer's vertex paint, the exporter's _TEXCOORD_4.x). Only the vertices each mesh's
+// triangles use are copied (fragments index into shared buffers).
 let remap = new Int32Array(0), mark = new Int32Array(0), gen = 0;
-function mergeMeshes(list, { lm, tangents }) {
+function mergeMeshes(list, { lm, tangents, blend = false }) {
   let nv = 0, ni = 0;
   for (const { geo } of list) {
     const c = geo.index ? geo.index.count : geo.attributes.position.count;
     ni += c; nv += Math.min(c, geo.attributes.position.count);
   }
   let pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), uv = new Float32Array(nv * 2);
-  let uv1 = lm ? new Float32Array(nv * 2) : null, tan = tangents ? new Float32Array(nv * 4) : null;
+  let uv1 = lm ? new Float32Array(nv * 2) : null, tan = tangents ? new Float32Array(nv * 4) : null, bl = blend ? new Float32Array(nv) : null;
   const idx = new Uint32Array(ni);
   const nm = new THREE.Matrix3();
   let vo = 0, io = 0;
   for (const { geo, matrix } of list) {
     const a = geo.attributes, count = a.position.count;
     const P = floats(a.position), N = floats(a.normal), U = floats(a.uv), U1 = uv1 && floats(a.uv1), T = tan && floats(a.tangent);
+    const B = bl && floats(a._texcoord_4), Bk = a._texcoord_4?.itemSize || 1;
     const e = matrix.elements, m = nm.getNormalMatrix(matrix).elements;
     if (mark.length < count) { mark = new Int32Array(count * 2); remap = new Int32Array(count * 2); gen = 0; }
     gen++;
@@ -123,6 +184,7 @@ function mergeMeshes(list, { lm, tangents }) {
         }
         if (U) { uv[vo * 2] = U[v * 2]; uv[vo * 2 + 1] = U[v * 2 + 1]; }
         if (U1) { uv1[vo * 2] = U1[v * 2]; uv1[vo * 2 + 1] = U1[v * 2 + 1]; }
+        if (bl) bl[vo] = B ? B[v * Bk] : 0;
         if (tan) {
           const t = vo * 4;
           if (T) {
@@ -142,12 +204,14 @@ function mergeMeshes(list, { lm, tangents }) {
   pos = pos.slice(0, vo * 3); nor = nor.slice(0, vo * 3); uv = uv.slice(0, vo * 2);
   if (uv1) uv1 = uv1.slice(0, vo * 2);
   if (tan) tan = tan.slice(0, vo * 4);
+  if (bl) bl = bl.slice(0, vo);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   if (uv1) g.setAttribute('uv1', new THREE.BufferAttribute(uv1, 2));
   if (tan) g.setAttribute('tangent', new THREE.BufferAttribute(tan, 4));
+  if (bl) g.setAttribute('cs2Blend', new THREE.BufferAttribute(bl, 1));
   g.setIndex(new THREE.BufferAttribute(idx, 1));
   g.computeBoundingBox();
   g.computeBoundingSphere();
@@ -167,7 +231,8 @@ function fragmentCenter(geo, out) {
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 // Loads a map exported by CS2Service.playMap: { scene, sun, sunDir, ambient, bounds, dispose }.
-export async function loadWorld(map, renderer, { onProgress = () => {} } = {}) {
+// anisotropy: texture filtering for the world's surfaces (props get at most 4).
+export async function loadWorld(map, renderer, { onProgress = () => {}, anisotropy = 8 } = {}) {
   const info = map.info;
   onProgress('Loading the map…');
   const [gltf, lightMap, sky] = await Promise.all([
@@ -178,6 +243,19 @@ export async function loadWorld(map, renderer, { onProgress = () => {} } = {}) {
   onProgress('Building the world…');
   await tick();
   gltf.scene.updateMatrixWorld(true);
+  // The second layers' textures, next to the map's glTF.
+  const base = map.world.replace(/[^/]*$/, ''), layerTextures = new Map(), aniso = Math.min(anisotropy, renderer.capabilities.getMaxAnisotropy());
+  const loadLayer = (file, srgb) => {
+    if (!layerTextures.has(file)) {
+      const t = new THREE.TextureLoader().load(base + encodeURIComponent(file));
+      t.flipY = false; // glTF's texture convention
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      t.anisotropy = aniso;
+      layerTextures.set(file, t);
+    }
+    return layerTextures.get(file);
+  };
   const ambient = { sky: { value: new THREE.Color(0.42, 0.47, 0.56) }, ground: { value: new THREE.Color(0.46, 0.39, 0.31) } };
   const variants = new Map(), groups = new Map(), originals = new Set();
   const center = new THREE.Vector3();
@@ -193,8 +271,11 @@ export async function loadWorld(map, renderer, { onProgress = () => {} } = {}) {
       v.vertexColors = false; // CS2 uses vertex colours for layer blending, not tint
       v.envMap = null;
       if (v.transparent) { v.depthWrite = false; v.polygonOffset = true; v.polygonOffsetFactor = -2; v.polygonOffsetUnits = -4; }
-      if (lm) lightmapped(v, lightMap, info.lightmap.irrMax); else ambientLit(v, ambient);
+      const layer = v.map ? layerOf(vm, info.layers || {}, loadLayer) : null;
+      if (lm) lightmapped(v, lightMap, info.lightmap.irrMax, layer); else ambientLit(v, ambient, layer);
       v.userData.lm = lm;
+      v.userData.layer = !!layer;
+      for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) if (v[k]) v[k].anisotropy = Math.max(v[k].anisotropy, lm ? aniso : Math.min(4, aniso));
       variants.set(key, v);
       originals.add(m);
     }
@@ -207,7 +288,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {} } = {}) {
   const world = new THREE.Group();
   let n = 0;
   for (const { material, list } of groups.values()) {
-    const mesh = new THREE.Mesh(mergeMeshes(list, { lm: material.userData.lm, tangents: !!material.normalMap }), material);
+    const mesh = new THREE.Mesh(mergeMeshes(list, { lm: material.userData.lm, tangents: !!material.normalMap, blend: material.userData.layer }), material);
     mesh.matrixAutoUpdate = false;
     mesh.castShadow = !material.transparent;
     mesh.receiveShadow = !material.userData.lm;
@@ -254,6 +335,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {} } = {}) {
       }
       world.traverse((o) => o.geometry?.dispose());
       lightMap?.dispose();
+      for (const t of layerTextures.values()) t.dispose();
       sky?.dispose();
       sun.shadow.map?.dispose();
     },

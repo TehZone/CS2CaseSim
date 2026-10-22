@@ -80,8 +80,9 @@ export function patternTag(p) {
 export function floatBar(item) {
   const d = I.itemDef(item);
   if (item.fl == null) return '';
-  return `<div class="floatbar"><div class="range" style="left:${d.mn * 100}%;right:${(1 - d.mx) * 100}%"></div><i style="left:${item.fl * 100}%"></i></div>
-    <div class="floatlabels"><span>FN</span><span>MW</span><span>FT</span><span>WW</span><span>BS</span></div>`;
+  // Each wear's label sits under the middle of its own stretch of the bar.
+  return `<div class="floatwrap"><div class="floatbar"><div class="range" style="left:${d.mn * 100}%;right:${(1 - d.mx) * 100}%"></div><i style="left:${item.fl * 100}%"></i></div>
+    <div class="floatlabels">${WEARS.map((w) => `<span style="left:${((w.min + w.max) / 2) * 100}%" title="${w.n}">${w.k}</span>`).join('')}</div></div>`;
 }
 
 export function itemCard(item, { selectable = false, selected = false, extra = '' } = {}) {

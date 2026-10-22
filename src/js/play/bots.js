@@ -43,6 +43,9 @@ const HOLD = {
   weapon_c4: 'equipment/c4/idle_c4',
 };
 const PISTOL_RE = /^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/;
+const wrap = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
+// Standing still, the body turns to the aim only once it's this far off (CS2's turn in place); the spine twists the rest.
+const TURN_LIMIT = 50;
 // Locomotion set: grenades and the Zeus are carried like a pistol or knife (CS2 has no running clips for them).
 export const setOf = (id) => (/knife|bayonet/.test(id || '') || GRENADE_RE.test(id || '') ? 'knife' : PISTOL_RE.test(id || '') || id === 'weapon_taser' ? 'pistol' : 'rifle');
 function holdPath(id) {
@@ -185,6 +188,7 @@ export class Bot {
     this.root = new THREE.Group();
     this.pos = [0, 0, 0]; this.vel = [0, 0, 0];
     this.yaw = 0; this.pitch = 0; this.ducked = false;
+    this.bodyYaw = 0; // where the legs face (yaw is where it aims)
     this.weapons = {}; this.slot = 'secondary';
     this.mode = 'move'; // move | plant | defuse | dead
     this.time = 0;
@@ -299,7 +303,7 @@ export class Bot {
   spawn(origin, yaw) {
     this.setModel(this.c.team);
     this.pos = origin.slice(); this.vel = [0, 0, 0];
-    this.yaw = yaw; this.pitch = 0; this.ducked = false;
+    this.yaw = yaw; this.bodyYaw = yaw; this.turning = false; this.pitch = 0; this.ducked = false;
     this.mode = 'move';
     this.mixer.stopAllAction();
     this.loco = null;
@@ -340,6 +344,7 @@ export class Bot {
   animate(dt) {
     const l = this.loco;
     this.time += dt;
+    this.turnBody(dt);
     if (this.gestureAction && this.time >= this.gestureEnd) this.endGesture();
     // On a ladder the clip moves the arms too (hands on the rungs): the hold pose steps aside.
     if (!!this.climbing !== !!this.wasClimbing && this.armsAction && !this.gestureAction) {
@@ -353,7 +358,7 @@ export class Bot {
       for (const a of l.all) a.setEffectiveWeight(a === l[k] ? 1 : 0);
       if (this.climbing && l.ladder) l.ladder.timeScale = Math.min(1.6, Math.abs(this.vel[2]) / 100);
     } else if (l && this.mode === 'move') {
-      const yr = (this.yaw * Math.PI) / 180;
+      const yr = (this.bodyYaw * Math.PI) / 180;
       const vf = this.vel[0] * Math.cos(yr) + this.vel[1] * Math.sin(yr);
       const vr = this.vel[0] * Math.sin(yr) - this.vel[1] * Math.cos(yr);
       const speed = Math.hypot(vf, vr);
@@ -372,12 +377,27 @@ export class Bot {
     if (this.mode === 'move' && !this.climbing) this.bendSpine();
   }
 
-  // Leans the spine to aim up and down (CS2 blends aim poses; this bends spine_1..3 by a third each).
+  // The legs: moving (or planting, climbing...) they face the aim; standing, they stay put until the aim is more than
+  // TURN_LIMIT off, then step round to it. Aiming around while standing turns only the upper body (bendSpine).
+  turnBody(dt) {
+    if (this.mode === 'dead') return;
+    const d = wrap(this.yaw - this.bodyYaw);
+    const moving = this.mode !== 'move' || this.climbing || this.airborne || Math.hypot(this.vel[0], this.vel[1]) > 20;
+    if (moving || Math.abs(d) > TURN_LIMIT) this.turning = true;
+    if (!this.turning) return;
+    const step = (moving ? 720 : 300) * dt;
+    this.bodyYaw = wrap(this.bodyYaw + Math.max(-step, Math.min(step, d)));
+    if (!moving && Math.abs(wrap(this.yaw - this.bodyYaw)) < 3) this.turning = false;
+  }
+
+  // Twists the spine round to where the bot aims and leans it to aim up and down (CS2 blends aim poses; this turns
+  // spine_1..3 by a third each).
   bendSpine() {
     const yr = (this.yaw * Math.PI) / 180;
     const axis = new THREE.Vector3(-Math.cos(yr), 0, Math.sin(yr)); // the bot's right, in glTF axes
     const angle = (-this.pitch * Math.PI) / 180 / 3;
-    const pq = new THREE.Quaternion(), q = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+    const twist = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ((wrap(this.yaw - this.bodyYaw) * Math.PI) / 180) / 3);
+    const pq = new THREE.Quaternion(), q = new THREE.Quaternion().setFromAxisAngle(axis, angle).multiply(twist);
     for (const n of ['spine_1', 'spine_2', 'spine_3']) {
       const b = this.bones[n];
       if (!b?.parent) continue;
@@ -387,10 +407,10 @@ export class Bot {
     }
   }
 
-  // Copies the simulated position and facing onto the model.
+  // Copies the simulated position and the body's facing onto the model.
   sync() {
     toGl(this.pos, this.root.position);
-    this.root.rotation.set(0, (this.yaw * Math.PI) / 180, 0);
+    this.root.rotation.set(0, (this.bodyYaw * Math.PI) / 180, 0);
   }
 
   eye() { return [this.pos[0], this.pos[1], this.pos[2] + (this.ducked ? 46 : 64)]; }

@@ -74,8 +74,10 @@ What's in a match:
   up guns and kits. They hear gunshots and footsteps, buy by their money (eco, force, AWP, grenades...) and are animated
   with CS2's third-person clips: running, walking and crouching in every direction, each gun's hold pose, drawing and
   reloading it, pulling a grenade's pin and throwing it, flinching when hit, covering their eyes when flashed, climbing
-  ladders, falling, planting, defusing, deaths.
-- Radar (CS2's overview of the map), kill feed, scoreboard (Tab), damage direction, death cam and spectating
+  ladders, falling, planting, defusing, deaths. Standing still they aim around with the upper body and only step round
+  when the aim swings far off, like CS2's turn in place.
+- Radar (CS2's overview of the map), kill feed (with CS2's marks for headshots, wallbangs, kills through smoke, jumping,
+  no-scope and blinded kills), scoreboard (Tab), damage direction, death cam and spectating
   teammates, CS2's announcer, round music and bomb sounds, and an end screen with your K/D/A, ADR, headshots, accuracy,
   MVPs and multi-kills.
 - Finished matches pay into your wallet when you play offline: kills, assists, MVPs, rounds won and the win, more
@@ -84,7 +86,9 @@ What's in a match:
   the viewmodel (field of view, offsets, CS2's presets), every key, music and radio volume, the fps counter.
 - The map is exported from your install the first time (a couple of minutes, cached in `cs2cache/play`): CS2's render
   world lit with the map's baked lighting (its irradiance lightmap, plus the sun masked by CS2's baked sun shadows),
-  the map's sky, its collision mesh, nav mesh with ladders, spawns, bomb sites, buy zones and callout areas.
+  CS2's two-layer surfaces blended like the game does (sand painted over asphalt and tiles, plaster worn down to brick),
+  the map's sky, its collision mesh (brushes that only switch on in other modes, like Retakes' blockers, left out), nav
+  mesh with ladders, spawns, bomb sites, buy zones and callout areas.
 - Movement ported from Source's: CS2's acceleration, friction, air strafing, 18-unit steps, jumping (no auto bunny
   hop), crouching, crouch-jumps, walking and ladders, with the weapon's own speed; footsteps by surface.
 - Weapons use CS2's data from `scripts/weapons.vdata` (damage, range falloff, armor penetration, fire rate,

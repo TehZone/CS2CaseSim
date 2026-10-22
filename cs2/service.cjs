@@ -27,6 +27,16 @@ const STICKER_TEXTURES = ['g_tSticker0', 'g_tSfxMaskSticker0', 'g_tHoloSpectrumS
 const STICKER_RAW_TEXTURES = ['g_tNormalRoughnessSticker0', 'g_tGlitterNormalSticker0'];
 const STICKER_META_VERSION = 1;
 
+// Folders whose textures were made smaller carry this stamp. Version 1 was written by Electron's resizer, which
+// premultiplied alpha (textures keeping a mask in alpha came out dark or black), so those folders are exported again.
+const SHRUNK = '.shrunk2';
+const shrunkBadly = (dir) => fs.existsSync(path.join(dir, '.shrunk')) && !fs.existsSync(path.join(dir, SHRUNK));
+
+// CS2's two-layer world materials blend a second layer in with vertex paint; the glTF export keeps the first only.
+const LAYER_TEXTURES = ['g_tLayer2Color', 'g_tLayer2NormalRoughness', 'g_tBlendModulation'];
+// Shaders of world geometry (big surfaces seen up close: their textures are kept sharper).
+const WORLD_SHADERS = /lightmappedgeneric|static_overlay|environment_blend|csgo_environment\.vfx/i;
+
 // Glove composite textures csgo_customglove samples as raw hemi-octahedral normals.
 const GLOVE_RAW_TEXTURES = /^g_t(Normal|DetailNormal\d|DamageNormal\d|SurfaceNormal\d|SubstrateNormal\d|TintId)$/;
 
@@ -120,9 +130,11 @@ class CS2Service {
     if (!this.vanityJobs.has(id)) {
       const job = (async () => {
         const cs2 = this.ensureCS2();
+        const old = path.join(this.cacheDir, 'vanity', String(id));
+        if (this.shrinkImages && shrunkBadly(old)) fs.rmSync(old, { recursive: true, force: true });
         const r = await cs2.exportVanity(String(id));
         const dir = path.dirname(r.glb);
-        const stamp = path.join(dir, '.shrunk');
+        const stamp = path.join(dir, SHRUNK);
         if (this.shrinkImages && !fs.existsSync(stamp)) {
           // The backdrop is drawn blurred behind the weapon, so small textures are plenty (and load fast).
           const imgs = fs.readdirSync(dir).filter((f) => /.(png|jpe?g)$/i.test(f)).map((f) => path.join(dir, f));
@@ -173,9 +185,11 @@ class CS2Service {
         const vmdl = (await this.crateModels())[id];
         if (!vmdl) return null;
         const name = path.basename(vmdl, '.vmdl');
+        const old = path.join(this.cacheDir, 'crates', name);
+        if (this.shrinkImages && shrunkBadly(old)) fs.rmSync(old, { recursive: true, force: true });
         const file = await this.ensureCS2().exportGltf(vmdl, `crates/${name}/${name}.gltf`, { materials: true, animations: true });
         const dir = path.dirname(file);
-        const stamp = path.join(dir, '.shrunk');
+        const stamp = path.join(dir, SHRUNK);
         if (this.shrinkImages && !fs.existsSync(stamp)) {
           // Crate textures are up to 4K; the crate fills part of the screen for a few seconds.
           const imgs = fs.readdirSync(dir).filter((f) => /\.(png|jpe?g)$/i.test(f)).map((f) => path.join(dir, f));
@@ -440,7 +454,7 @@ class CS2Service {
       if (!physFile) throw new Error('No collision mesh in ' + id);
       const entPhysFile = path.join(dir, 'world_physics.glb'); // brush entities, exported along with the world
       const entPhys = fs.existsSync(entPhysFile) ? play.readGlb(entPhysFile) : null;
-      const col = play.buildCollision(play.readGlb(physFile), entPhys);
+      const col = play.buildCollision(play.readGlb(physFile), entPhys, ents);
       fs.writeFileSync(path.join(dir, 'collision.bin'), col.buf);
       const volumes = play.gameVolumes(entPhys, ents);
       const info = play.mapInfo(ents);
@@ -459,24 +473,66 @@ class CS2Service {
         } catch (e) { this.log('sky: ' + e.message); }
       }
 
+      say('Exporting the second texture layers…');
+      const { json } = play.readGlb(glb);
+      const layers = await this.playLayers(vpk, dir, json);
+
       say('Optimising textures…');
       if (this.shrinkImages) {
+        // World surfaces (floors and walls, seen up close) keep twice the resolution of props.
+        const world = new Set(Object.values(layers));
+        const uri = (t) => t && json.images[json.textures[t.index]?.source]?.uri;
+        for (const m of json.materials || []) {
+          if (!WORLD_SHADERS.test(m.extras?.vmat?.ShaderName || '')) continue;
+          for (const t of [m.pbrMetallicRoughness?.baseColorTexture, m.pbrMetallicRoughness?.metallicRoughnessTexture, m.normalTexture]) if (uri(t)) world.add(uri(t));
+        }
         const imgs = fs.readdirSync(dir).filter((f) => /\.png$/i.test(f) && f !== 'sky.png');
-        const group = (re) => imgs.filter((f) => re.test(f)).map((f) => path.join(dir, f));
-        await this.shrinkImages(group(/_orm_/i), 128);
-        await this.shrinkImages(group(/^(?!.*_orm_).*normal/i), 256);
-        await this.shrinkImages(group(/^(?!.*(_orm_|normal))/i), 512);
+        const group = (re, isWorld) => imgs.filter((f) => re.test(f) && world.has(f) === isWorld).map((f) => path.join(dir, f));
+        for (const isWorld of [false, true]) {
+          const k = isWorld ? 2 : 1;
+          await this.shrinkImages(group(/_orm_/i, isWorld), 128 * k);
+          await this.shrinkImages(group(/^(?!.*_orm_).*(normal|blendmod)/i, isWorld), 256 * k);
+          await this.shrinkImages(group(/^(?!.*(_orm_|normal|blendmod))/i, isWorld), 512 * k);
+        }
       }
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(entPhysFile, { force: true });
       const meta = {
-        version: play.PLAY_VERSION, stamp, id, name: nameOf(id), ...info, ...volumes, lightmap, sky,
+        version: play.PLAY_VERSION, stamp, id, name: nameOf(id), ...info, ...volumes, lightmap, sky, layers,
         collision: { tris: col.tris, surfaces: col.surfaces, flags: { player: play.F_PLAYER, bullet: play.F_BULLET, grenade: play.F_GRENADE } },
       };
       fs.writeFileSync(metaFile, JSON.stringify(meta));
       this.progress.delete('map:' + id);
       return result(meta);
     });
+  }
+
+  // The second layer of CS2's two-layer world materials (sand painted over asphalt, plaster over brick...): its colour
+  // and normal map and the blend modulation texture, copied into the map folder. Returns { vtex path: file name }.
+  async playLayers(vpk, dir, json) {
+    const want = new Set();
+    for (const m of json.materials || []) {
+      const v = m.extras?.vmat;
+      if (!v?.IntParams?.F_LAYERS) continue;
+      for (const k of LAYER_TEXTURES) if (v.TextureParams?.[k]) want.add(v.TextureParams[k]);
+    }
+    if (!want.size) return {};
+    const cs2 = this.ensureCS2();
+    // Most are in the game's VPK; a map can bring its own.
+    const found = await cs2.extract([...want]).catch(() => ({}));
+    const rest = [...want].filter((f) => !found[f + '_c']);
+    const tmp = path.join(dir, 'tmp-layers');
+    for (let i = 0; i < rest.length; i += 40) await cs2.run(['-i', vpk, '-f', rest.slice(i, i + 40).map((f) => f + '_c').join(','), '-d', '-o', tmp]).catch(() => {});
+    const out = {};
+    for (const f of want) {
+      const src = found[f + '_c'] || path.join(tmp, f.replace(/\.vtex$/, '.png'));
+      if (!/\.png$/i.test(src) || !fs.existsSync(src)) continue;
+      const name = 'layer_' + path.basename(src);
+      fs.copyFileSync(src, path.join(dir, name));
+      out[f] = name;
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+    return out;
   }
 
   // The map's nav mesh (bots walk on it) as play/<id>/nav.json; exported separately so older map exports gain it.
@@ -567,8 +623,10 @@ class CS2Service {
     if (!/^agents\/models\/[a-z0-9_/]+\.vmdl$/i.test(vmdl)) return Promise.reject(new Error('Bad agent model'));
     return this.playJob('agent:' + vmdl, async () => {
       const name = vmdl.split('/').pop().replace(/\.vmdl$/, '');
+      const old = path.join(this.cacheDir, 'play', 'agents', name);
+      if (this.shrinkImages && shrunkBadly(old)) fs.rmSync(old, { recursive: true, force: true });
       const file = await this.ensureCS2().exportGltf(vmdl, `play/agents/${name}/${name}.gltf`, { materials: true });
-      const dir = path.dirname(file), stamp = path.join(dir, '.shrunk');
+      const dir = path.dirname(file), stamp = path.join(dir, SHRUNK);
       if (this.shrinkImages && !fs.existsSync(stamp)) {
         await this.shrinkImages(fs.readdirSync(dir).filter((f) => /\.png$/i.test(f)).map((f) => path.join(dir, f)), 1024);
         fs.writeFileSync(stamp, '');

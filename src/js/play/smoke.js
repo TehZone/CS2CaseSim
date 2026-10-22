@@ -315,6 +315,8 @@ export class SmokeSystem {
   carve(o, d, maxT) { for (const f of this.fields) f.carve(o, d, maxT); }
   blast(p) { for (const f of this.fields) f.blast(p); }
   blocks(a, b) { const now = this.game.now; let sum = 0; for (const f of this.fields) { sum += f.thickness(a, b, now); if (sum > BLOCK) return true; } return false; }
+  // Units of full smoke between two points.
+  thickness(a, b) { const now = this.game.now; return this.fields.reduce((sum, f) => sum + f.thickness(a, b, now), 0); }
   densityAt(p) { const now = this.game.now; return this.fields.reduce((m, f) => Math.max(m, f.densityAt(p, now)), 0); }
   clear() { this.fields = []; this.data.fill(0); this.dirty = true; }
   dispose() { this.tex.dispose(); this.noise.dispose(); }

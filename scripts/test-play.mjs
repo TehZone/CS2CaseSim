@@ -280,5 +280,27 @@ function fakeGame() {
   ok(q.level === 3 && p.level === 3, 'arms race: knifed players go back a weapon');
 }
 
+// ---- Bots standing still: the body keeps its facing while the aim moves about; freeze time doesn't spin them.
+{
+  const { Bot } = await import('../src/js/play/bots.js');
+  const { Brain } = await import('../src/js/play/ai.js');
+  const b = { mode: 'move', yaw: 0, bodyYaw: 0, vel: [0, 0, 0], turning: false };
+  const step = (secs, aim) => { for (let t = 0; t < secs; t += 1 / 60) { b.yaw = aim(t); Bot.prototype.turnBody.call(b, 1 / 60); } };
+  step(4, (t) => Math.sin(t * 0.7) * 25);
+  ok(b.bodyYaw === 0, 'a bot sweeping its aim 25° either way keeps its feet still: body ' + b.bodyYaw.toFixed(1));
+  step(1, () => 90);
+  ok(Math.abs(b.bodyYaw - 90) < 3 && !b.turning, 'aiming 90° away turns the body round, then it stops: ' + b.bodyYaw.toFixed(1));
+  b.vel = [200, 0, 0];
+  step(0.3, () => -60);
+  ok(Math.abs(b.bodyYaw + 60) < 1, 'moving, the body faces the aim: ' + b.bodyYaw.toFixed(1));
+
+  const bot = { yaw: 40, pitch: 0, index: 1 };
+  const brain = Object.assign(Object.create(Brain.prototype), { bot, d: { turn: 380 } });
+  Brain.prototype.roundStart.call(brain, {});
+  let lo = Infinity, hi = -Infinity;
+  for (let t = 0; t < 15; t += 1 / 144) { brain.lookAround(1 / 144, t); lo = Math.min(lo, bot.yaw); hi = Math.max(hi, bot.yaw); }
+  ok(lo >= 29.5 && hi <= 50.5, `freeze time: a bot glances a little either side of its heading (${lo.toFixed(1)}..${hi.toFixed(1)}), not round`);
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
