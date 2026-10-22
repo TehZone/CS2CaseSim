@@ -98,7 +98,8 @@ function colorCorrect([contrast, saturation, brightness], o) {
     new THREE.Matrix4().makeScale(contrast, contrast, contrast), new THREE.Matrix4().makeTranslation(-o.x, -o.y, -o.z));
 }
 // MatrixColorTint2(rgb, 1): luminance-preserving tint.
-function colorTint(rgb) {
+function colorTint(color) {
+  const rgb = [0, 1, 2].map((i) => color?.[i] ?? 1); // materials store colours as four values; the 4th isn't colour
   const mx = Math.max(...rgb), mn = Math.min(...rgb);
   const sat = mx === 0 ? 0 : (mx - mn) / mx;
   const gray = new THREE.Vector3(...rgb).applyMatrix4(chain(LUM_ROT, LUM_SCALE));
@@ -451,6 +452,7 @@ function bakeHand(renderer, prep, item, left, tex, mat) {
   for (const { name, type } of parseGlobals(prep.shader.source)) globals[name] = uniformValue(p[name], type);
   const uniforms = mat.uniforms;
   uniforms._Globals_.value = globals;
+  if (globalThis.__cs2Debug) globalThis.__cs2LastGlove = { p, globals, avg: tex.avg };
   for (const [k, v] of Object.entries(p.$vs || {})) uniforms[k] = { value: v };
   const target = (srgb) => {
     const rt = new THREE.WebGLRenderTarget(BAKE_SIZE, BAKE_SIZE, {
@@ -491,23 +493,31 @@ function bakeHand(renderer, prep, item, left, tex, mat) {
   return out;
 }
 
-// The material of one hand: the baked textures on three's physical material, with cloth sheen where CS2's
-// cloth mask says so.
+// The material of one hand: the baked textures on three's physical material. Like CS2's cloth shading, cloth (by
+// the baked cloth mask) gets a sheen tinted by the fabric's own colour instead of a specular reflection, so
+// fabric and leather stay matte rather than looking glossy or metallic.
 function handMaterial(prep, rt) {
   const sheenScale = prep.kit.final?.g_flSheenScale?.value ?? prep.kit.color.g_flSheenScale?.value ?? DEFAULTS.g_flSheenScale;
   const cloth = !!(prep.kit.final?.F_CLOTH_SHADING?.value ?? prep.kit.color.F_CLOTH_SHADING?.value);
   const m = new THREE.MeshPhysicalMaterial({
     map: rt.color.texture, normalMap: rt.normal.texture, roughnessMap: rt.orm.texture, metalnessMap: rt.orm.texture, aoMap: rt.orm.texture,
-    roughness: 1, metalness: 1, sheen: cloth ? 1 : 0, sheenColor: new THREE.Color(1, 1, 1).multiplyScalar(Math.min(1, sheenScale)), sheenRoughness: 0.55,
+    roughness: 1, metalness: 1, sheen: cloth ? 1 : 0, sheenColor: new THREE.Color(1, 1, 1).multiplyScalar(Math.min(1, sheenScale)),
+    sheenColorMap: cloth ? rt.color.texture : null, sheenRoughness: 0.55,
   });
   if (cloth) {
     m.onBeforeCompile = (shader) => {
       shader.fragmentShader = shader.fragmentShader.replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
-      #ifdef USE_SHEEN
-        material.sheenColor *= texture2D(metalnessMap, vMetalnessMapUv).a;
-      #endif`);
+      {
+        float cs2Cloth = texture2D(metalnessMap, vMetalnessMapUv).a;
+        #ifdef USE_SHEEN
+          material.sheenColor *= cs2Cloth;
+        #endif
+        material.specularColor *= 1.0 - cs2Cloth;
+        material.specularColorBlended *= 1.0 - cs2Cloth;
+        material.specularF90 *= 1.0 - cs2Cloth;
+      }`);
     };
-    m.customProgramCacheKey = () => 'cs2glovecloth';
+    m.customProgramCacheKey = () => 'cs2glovecloth2';
   }
   m.userData.dispose = () => { for (const t of Object.values(rt)) t.dispose(); };
   m.userData.baked = rt;

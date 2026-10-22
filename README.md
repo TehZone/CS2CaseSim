@@ -22,7 +22,8 @@ With CS2 installed the inspect also offers:
 - **Backdrops**: the same map scenes CS2 shows behind the menu and item inspect (Dust II, Mirage, Inferno, Ancient,
   Anubis, Nuke, Overpass, Train, Vertigo, Italy, Office...), placed where CS2 shows items and blurred like the game.
 - **First person** (V): CS2's own inspect animation for that weapon or knife, on CS2's first-person arms, with your skin
-  and stickers. Gloves equipped in your **loadout** are worn on the hands, like in game.
+  and stickers. Gloves equipped in your **loadout** are worn on the hands, like in game. Gloves themselves can be
+  seen in first person too: worn, inspecting your equipped knife (or the default knife).
 - **Sticker effects**: Holo, Foil, Gold, Glitter, Lenticular and Embroidered stickers use CS2's own sticker materials.
 
 Opening a case also plays CS2's own crate: the case's 3D model drops in, lands and unlocks with the game's "fall" and

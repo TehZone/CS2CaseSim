@@ -382,14 +382,7 @@ class InspectView {
     if (!this.model) return;
     this.model.userData.fp?.dispose();
     this.pivot.remove(this.model);
-    this.model.traverse((o) => {
-      o.geometry?.dispose();
-      for (const m of [].concat(o.material || [])) {
-        for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap']) m[k]?.dispose();
-        m.userData.dispose?.();
-        m.dispose();
-      }
-    });
+    disposeTree(this.model);
     this.model = null;
   }
 
@@ -450,13 +443,26 @@ class InspectView {
 
   // First-person inspect: CS2's arms and inspect animation with this weapon (CS2 models only).
   async enterFirstPerson() {
-    if (!this.model?.userData.weapon) throw new Error('First person needs the real CS2 model of a gun or knife');
     const model = this.model;
-    // Your equipped gloves are on the hands, like in game.
-    const gloves = equipped('gloves');
-    if (model.userData.fp?.glovesUid !== (gloves?.uid ?? null)) {
-      const fp = await buildFirstPerson(model, { gloves, renderer: this.renderer });
-      fp.glovesUid = gloves?.uid ?? null;
+    const gloveItem = model?.userData.gloveItem;
+    if (!model?.userData.weapon && !gloveItem) throw new Error('First person needs the real CS2 model of a gun, knife or gloves');
+    // Your equipped gloves are on the hands, like in game. Gloves themselves are seen the way players look at them
+    // in game: worn, inspecting your equipped knife (or the default knife).
+    const gloves = gloveItem || equipped('gloves');
+    const knife = gloveItem ? equipped('knife') : null;
+    const key = `${gloves?.uid ?? ''}|${gloveItem ? knife?.uid ?? 'default' : ''}`;
+    if (model.userData.fp?.key !== key) {
+      let held = model;
+      if (gloveItem) held = await buildCS2Model(knife || DEFAULT_KNIFE_ITEM, knife ? itemDef(knife) : DEFAULT_KNIFE, this.renderer);
+      let fp;
+      try {
+        fp = await buildFirstPerson(held, { gloves, renderer: this.renderer });
+      } catch (e) {
+        if (held !== model) disposeTree(held);
+        throw e;
+      }
+      fp.key = key;
+      if (held !== model) { const own = fp.dispose; fp.dispose = () => { own(); disposeTree(held); }; }
       if (this.model !== model) { fp.dispose(); return; }
       model.userData.fp?.dispose();
       model.userData.fp = fp;
@@ -666,3 +672,19 @@ class InspectView {
 }
 
 export const inspectView = new InspectView();
+
+// CS2's default knife (what you hold with no knife equipped), for looking at gloves in first person.
+const DEFAULT_KNIFE = { wid: 'weapon_knife', w: 'Knife', n: 'Knife', cat: 'knife', v: true };
+const DEFAULT_KNIFE_ITEM = { t: 'skin', fl: 0, sd: 0 };
+
+// Frees a model's geometry, textures and materials.
+function disposeTree(root) {
+  root.traverse((o) => {
+    o.geometry?.dispose();
+    for (const m of [].concat(o.material || [])) {
+      for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap']) m[k]?.dispose();
+      m.userData.dispose?.();
+      m.dispose();
+    }
+  });
+}

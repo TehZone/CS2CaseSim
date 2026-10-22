@@ -407,6 +407,7 @@ async function buildGloveModel(item, def, renderer) {
   wrap.userData.cs2 = { prep, mesh: prep.mesh };
   wrap.userData.unitScale = 4 / longest;
   wrap.userData.tick = tick;
+  wrap.userData.gloveItem = item; // first person: worn, holding a knife
   wrap.userData.bounds = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(), size.multiplyScalar(4 / longest)); // for framing
   return wrap;
 }

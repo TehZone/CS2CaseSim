@@ -304,7 +304,7 @@ export function openInspect(item) {
       clearTimeout(slow);
       wrap.querySelector('.loading.model')?.remove();
       // First person is available for real CS2 guns and knives.
-      if (inspectView.model?.userData.weapon) wrap.querySelector('[data-a=fp]').style.display = '';
+      if (inspectView.model?.userData.weapon || inspectView.model?.userData.gloveItem) wrap.querySelector('[data-a=fp]').style.display = '';
     })
     .catch((e) => { wrap.querySelector('.loading.model').textContent = 'Could not load model: ' + e.message; });
   const fpBtn = wrap.querySelector('[data-a=fp]');
