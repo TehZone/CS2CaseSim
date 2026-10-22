@@ -21,7 +21,8 @@ const CS2_CACHE = path.join(ROOT, 'cache', 'cs2');
 const TMP = path.join(process.env.LOCALAPPDATA || '', 'Temp');
 const cs2 = new CS2Service({
   cacheDir: CS2_CACHE,
-  cliPath: process.env.CS2SIM_CLI || path.join(TMP, 'vrfcli', 'Source2Viewer-CLI.exe'),
+  // The app's own (patched) extractor when it's there, else a development build.
+  cliPath: process.env.CS2SIM_CLI || [path.join(ROOT, 'tools', 's2v', 'Source2Viewer-CLI.exe'), path.join(TMP, 'vrfcli', 'Source2Viewer-CLI.exe')].find((f) => fs.existsSync(f)),
   cliEnv: { DOTNET_ROOT: path.join(TMP, 'dotnet') },
   log: (m) => console.log('[cs2]', m),
   shrinkImages: (files, max) => require('../cs2/png.cjs').shrinkPNGs(files, max),

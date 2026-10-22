@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2FirstPerson } from './api.js';
-import { loadGltf as load, rebind, bonesByName } from './rig.js';
+import { loadGltf as load, rebind, bonesByName, forearmTwist } from './rig.js';
 import { buildGloveScene } from './skin.js';
 import { itemDef } from '../items.js';
 
@@ -45,6 +45,7 @@ export async function buildFirstPerson(model, { gloves = null, renderer = null }
   });
   rebind(armsScene, bones, skel);
   view.add(armsScene);
+  const twist = forearmTwist(bones);
 
   // The weapon: a copy of the inspect model's glTF scene (same skin materials), without its inspect framing.
   const root = cloneSkinned(model.userData.root);
@@ -73,6 +74,7 @@ export async function buildFirstPerson(model, { gloves = null, renderer = null }
   // Advances the animation and keeps the weapon merged onto the hands.
   const update = (dt) => {
     mixer.update(dt);
+    twist();
     if (weaponRoot && bones.wpn) {
       weaponBone.updateMatrix();
       weaponRoot.matrix.copy(weaponBone.matrix).invert();

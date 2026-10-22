@@ -33,6 +33,25 @@ export function rebind(scene, bones, fallback) {
   });
 }
 
+// CS2's forearm twist (the arms model's CTiltTwistConstraints): the clips don't animate the forearm twist bones;
+// the game turns them by a share of the hand's roll around the forearm (bone X axis), measured from the hand's rest
+// orientation (the constraint's target offset). Returns an update to run after each animation step.
+const TWIST_REST = new THREE.Quaternion(0.684638, -0.0025270376, 0.03596654, 0.72799087).invert();
+const TWISTS = [['arm_lower_L_TWIST', 'hand_L', 0.5], ['arm_lower_L_TWIST1', 'hand_L', 1], ['arm_lower_R_TWIST', 'hand_R', 0.5], ['arm_lower_R_TWIST1', 'hand_R', 1]];
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+export function forearmTwist(bones) {
+  const list = TWISTS.filter(([b, h]) => bones[b] && bones[h]).map(([b, h, w]) => ({ bone: bones[b], hand: bones[h], w, rest: bones[b].quaternion.clone() }));
+  const q = new THREE.Quaternion(), t = new THREE.Quaternion();
+  return () => {
+    for (const { bone, hand, w, rest } of list) {
+      q.copy(TWIST_REST).multiply(hand.quaternion);
+      if (q.w < 0) q.set(-q.x, -q.y, -q.z, -q.w);
+      const angle = 2 * Math.atan2(q.x, q.w); // the twist part of the swing-twist split about X
+      bone.quaternion.copy(rest).multiply(t.setFromAxisAngle(X_AXIS, angle * w));
+    }
+  };
+}
+
 // Bones of a scene by name (first match wins).
 export function bonesByName(scene) {
   const bones = {};

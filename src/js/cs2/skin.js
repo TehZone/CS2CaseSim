@@ -8,7 +8,7 @@ import { imgUrl, loadImage } from '../util.js';
 import { UniformRandomStream } from './rng.js';
 import { cs2Prepare, cs2GloveClip } from './api.js';
 import { gloveMaterials } from './glove.js';
-import { loadGltf as loadRig, rebind, bonesByName } from './rig.js';
+import { loadGltf as loadRig, rebind, bonesByName, forearmTwist } from './rig.js';
 import { loadSource, texture, whiteTex } from './textures.js';
 import { stickerSurface, contentBox } from './sticker.js';
 import { D } from '../data.js';
@@ -356,22 +356,45 @@ export async function buildGloveScene(item, def, renderer) {
   return { root, prep };
 }
 
-// Gloves for the 3D inspect: both hands on CS2's glove inspect pose (its looping pedestal animation), centred.
+// Grows a box by the (skinned) vertices a mesh actually draws. CS2's glove model shares one vertex buffer between
+// the gloves and the bare arm, so the whole buffer would include the hidden arm.
+function expandByDrawn(box, mesh) {
+  const g = mesh.geometry, idx = g.index, v = new THREE.Vector3();
+  const seen = new Uint8Array(g.attributes.position.count);
+  const n = idx ? idx.count : g.attributes.position.count;
+  for (let i = 0; i < n; i++) {
+    const k = idx ? idx.getX(i) : i;
+    if (seen[k]) continue;
+    seen[k] = 1;
+    box.expandByPoint(mesh.getVertexPosition(k, v).applyMatrix4(mesh.matrixWorld));
+  }
+}
+
+// Gloves for the 3D inspect: just the two gloves (no arms), posed by CS2's glove inspect animation (its looping
+// pedestal clip), centred.
 async function buildGloveModel(item, def, renderer) {
   const [{ root, prep }, { clip }] = await Promise.all([buildGloveScene(item, def, renderer), cs2GloveClip()]);
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    if (!o.material.userData.baked) o.visible = false; // the bare arm
+    else o.material.side = THREE.DoubleSide; // the cuff opening shows the glove's inside
+  });
   const clipG = await loadRig(clip);
   const skel = cloneSkinned(clipG.scene);
   skel.traverse((o) => { if (o.isMesh) o.visible = false; });
-  rebind(root, bonesByName(skel), skel);
+  const bones = bonesByName(skel);
+  rebind(root, bones, skel);
+  const twist = forearmTwist(bones);
   const posed = new THREE.Group();
   posed.add(skel, root);
   const mixer = new THREE.AnimationMixer(skel);
   mixer.clipAction(clipG.animations[0]).play();
-  mixer.update(0);
+  const tick = (dt) => { mixer.update(dt); twist(); };
+  tick(0);
 
   posed.updateMatrixWorld(true);
   const box = new THREE.Box3();
-  root.traverse((o) => { if (o.isMesh) box.expandByObject(o, true); });
+  root.traverse((o) => { if (o.isMesh && o.visible) expandByDrawn(box, o); });
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   posed.position.sub(center);
@@ -383,7 +406,8 @@ async function buildGloveModel(item, def, renderer) {
   wrap.add(inner);
   wrap.userData.cs2 = { prep, mesh: prep.mesh };
   wrap.userData.unitScale = 4 / longest;
-  wrap.userData.tick = (dt) => mixer.update(dt);
+  wrap.userData.tick = tick;
+  wrap.userData.bounds = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(), size.multiplyScalar(4 / longest)); // for framing
   return wrap;
 }
 

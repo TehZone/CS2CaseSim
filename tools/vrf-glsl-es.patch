@@ -14,17 +14,33 @@ index d9a40b2..f6c529e 100644
          {
              var backend = backendsToTry[i];
 diff --git a/ValveResourceFormat/CompiledShader/ShaderSpirvReflection.cs b/ValveResourceFormat/CompiledShader/ShaderSpirvReflection.cs
-index 513af6a..be74005 100644
+index 513af6a..91b34a8 100644
 --- a/ValveResourceFormat/CompiledShader/ShaderSpirvReflection.cs
 +++ b/ValveResourceFormat/CompiledShader/ShaderSpirvReflection.cs
-@@ -239,10 +239,11 @@ static bool Error(out string code, spvc_context context)
+@@ -216,7 +216,13 @@ static bool Error(out string code, spvc_context context)
+ 
+         try
+         {
+-            result = SpirvCrossApi.spvc_context_parse_spirv(context, vulkanSource.Bytecode, out var parsedIr);
++            var spirv = vulkanSource.Bytecode;
++            if (backend == Backend.GLSL && Environment.GetEnvironmentVariable("VRF_GLSL_ES") == "1")
++            {
++                spirv = PlainDerivatives(spirv);
++            }
++
++            result = SpirvCrossApi.spvc_context_parse_spirv(context, spirv, out var parsedIr);
+ 
+             if (result != Result.Success) // Typically InvalidSPIRV
+             {
+@@ -239,10 +245,12 @@ static bool Error(out string code, spvc_context context)
  
              if (backend == Backend.GLSL)
              {
 -                SpirvCrossApi.spvc_compiler_options_set_uint(options, CompilerOption.GLSLVersion, 460);
 -                SpirvCrossApi.spvc_compiler_options_set_bool(options, CompilerOption.GLSLES, SpirvCrossApi.SPVC_FALSE);
 +                var glslEs = Environment.GetEnvironmentVariable("VRF_GLSL_ES") == "1";
-+                SpirvCrossApi.spvc_compiler_options_set_uint(options, CompilerOption.GLSLVersion, glslEs ? 300u : 460u);
++                var esVersion = uint.TryParse(Environment.GetEnvironmentVariable("VRF_GLSL_ES_VERSION"), out var v) ? v : 300u;
++                SpirvCrossApi.spvc_compiler_options_set_uint(options, CompilerOption.GLSLVersion, glslEs ? esVersion : 460u);
 +                SpirvCrossApi.spvc_compiler_options_set_bool(options, CompilerOption.GLSLES, glslEs ? SpirvCrossApi.SPVC_TRUE : SpirvCrossApi.SPVC_FALSE);
                  SpirvCrossApi.spvc_compiler_options_set_bool(options, CompilerOption.GLSLVulkanSemantics,
 -                    SpirvCrossApi.SPVC_TRUE);
@@ -32,7 +48,7 @@ index 513af6a..be74005 100644
                  SpirvCrossApi.spvc_compiler_options_set_bool(options,
                      CompilerOption.GLSLEmitUniformBufferAsPlainUniforms, SpirvCrossApi.SPVC_TRUE);
              }
-@@ -288,6 +289,11 @@ static bool Error(out string code, spvc_context context)
+@@ -288,6 +296,11 @@ static bool Error(out string code, spvc_context context)
                  }
              }
  
@@ -44,10 +60,42 @@ index 513af6a..be74005 100644
              result = SpirvCrossApi.spvc_compiler_compile(compiler, out var compiledCode);
  
              if (result != Result.Success)
-@@ -366,6 +372,23 @@ private static void BuildComboComment(VfxShaderFile shaderFile, StringWriter buf
+@@ -366,6 +379,55 @@ private static void BuildComboComment(VfxShaderFile shaderFile, StringWriter buf
          }
      }
  
++    // GLSL ES 3.00 only has plain derivatives: turn OpDPdx/OpDPdy/OpFwidth Fine and Coarse into the plain ones and
++    // drop the DerivativeControl capability (declared as Shader instead), so SPIRV-Cross can emit GLSL ES.
++    private static byte[] PlainDerivatives(byte[] bytecode)
++    {
++        var words = new uint[bytecode.Length / 4];
++        Buffer.BlockCopy(bytecode, 0, words, 0, words.Length * 4);
++        for (var i = 5; i < words.Length;)
++        {
++            var count = (int)(words[i] >> 16);
++            var op = words[i] & 0xffff;
++            if (count == 0)
++            {
++                break;
++            }
++
++            if (op >= 210 && op <= 215)
++            {
++                words[i] = (words[i] & 0xffff0000u) | (207 + (op - 210) % 3);
++            }
++            else if (op == 17 && count == 2 && words[i + 1] == 51)
++            {
++                words[i + 1] = 1;
++            }
++
++            i += count;
++        }
++
++        var result = new byte[bytecode.Length];
++        Buffer.BlockCopy(words, 0, result, 0, words.Length * 4);
++        return result;
++    }
++
 +    // WebGL has no separate textures/samplers: merge them and name each pair "<texture>__<sampler>".
 +    private static unsafe void CombineImageSamplers(spvc_compiler compiler)
 +    {

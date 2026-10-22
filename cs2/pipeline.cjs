@@ -7,7 +7,7 @@ const { spawn, execFileSync } = require('child_process');
 const { parseKV1, splitDataDump } = require('./kv.cjs');
 const { listVanity, parseEntities, sceneInfo } = require('./vanity.cjs');
 
-const INDEX_VERSION = 3;
+const INDEX_VERSION = 4;
 // Parameters a weapon's composite_inputs material provides to the paint shader.
 const WEAPON_KEYS = ['g_tAmbientOcclusion', 'g_tColor', 'g_tMasks', 'g_tMetalness', 'g_tPosition', 'g_tSurface',
   'g_flUvScale1', 'g_flWeaponLength1', 'F_SEPARATE_CHANNEL_INPUTS'];
@@ -89,9 +89,9 @@ class CS2 {
   }
 
   // Runs the CLI (serialised; the tool preloads the whole VPK on each start).
-  run(args, { capture = true } = {}) {
+  run(args, { capture = true, env = {} } = {}) {
     const job = () => new Promise((resolve, reject) => {
-      const p = spawn(this.cli, args, { env: { ...process.env, ...this.env }, windowsHide: true });
+      const p = spawn(this.cli, args, { env: { ...process.env, ...this.env, ...env }, windowsHide: true });
       const out = [], err = [];
       p.stdout.on('data', (d) => capture && out.push(d));
       p.stderr.on('data', (d) => err.push(d));
@@ -223,13 +223,16 @@ class CS2 {
   }
 
   // GLSL ES 3.00 for one static combo of a compiled pixel shader (needs the patched CLI).
-  async shaderSource(shader, combo) {
-    const key = `${shader}__${combo.replace(/[^\w=,]/g, '').replace(/[=,]/g, '_')}`;
+  // `es` picks the GLSL ES version SPIRV-Cross targets: 310 for shaders it can't express in 3.00 (arrays of arrays),
+  // which the renderer then converts.
+  async shaderSource(shader, combo, { es = 300 } = {}) {
+    const key = `${shader}__${combo.replace(/[^\w=,]/g, '').replace(/[=,]/g, '_')}${es === 300 ? '' : '__es' + es}`;
     const file = path.join(this.cacheDir, 'shaders', key + '.frag');
     if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8');
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const text = await this.run(['-i', this.shaderVpk, '-f', `shaders/vfx/${shader}_vulkan_50_ps.vcs`, '--shader_combo', combo, '-q']);
-    if (!/#version 300 es/.test(text)) throw new Error('Shader decompile failed: ' + text.slice(0, 300));
+    const text = await this.run(['-i', this.shaderVpk, '-f', `shaders/vfx/${shader}_vulkan_50_ps.vcs`, '--shader_combo', combo, '-q'],
+      { env: { VRF_GLSL_ES_VERSION: String(es) } });
+    if (!new RegExp(`#version ${es} es`).test(text)) throw new Error('Shader decompile failed: ' + text.slice(0, 300));
     fs.writeFileSync(file, text);
     return text;
   }
@@ -253,13 +256,14 @@ class CS2 {
     const gloveMats = await this.dump('gloves/paints/', 'vcompmat_c,vmat_c');
     const paintVmats = await this.dump('materials/models/weapons/customization/paints/vmats/', 'vmat_c');
     const templates = await this.dump('workshop/paintkits/', 'vmat_c');
+    const assetPaints = await this.dump('items/assets/paintkits/', 'vmat_c');
     this.log('Reading weapon composite inputs…');
     const all = await this.list();
     const inputFiles = all.filter((f) => /composite_inputs\.vmat_c$/.test(f));
     const inputs = {};
     for (let i = 0; i < inputFiles.length; i += 60) Object.assign(inputs, await this.dump(inputFiles.slice(i, i + 60).join(','), null));
 
-    const materials = { ...paintVmats, ...templates, ...gloveMats };
+    const materials = { ...paintVmats, ...templates, ...gloveMats, ...assetPaints };
     const compByName = {}, compByPath = {};
     for (const [p, doc] of Object.entries({ ...compmats, ...gloveMats })) {
       if (!p.endsWith('.vcompmat')) continue;
@@ -347,6 +351,11 @@ class CS2 {
           const mat = materials[mp];
           if (alias === 'paint') paintMaterial = mp;
           if (mat) containers[alias] = { kind: 'material', vars: materialVars(mat) };
+        } else if (type === 'CONTAINER_SOURCE_TYPE_LOOSE_VARIABLES' && (c.m_vecLooseVariables || []).some((v) => v.m_strResourceMaterial)) {
+          const mp = c.m_vecLooseVariables.find((v) => v.m_strResourceMaterial).m_strResourceMaterial.replace(/\\/g, '/');
+          const mat = materials[mp];
+          if (alias === 'paint') paintMaterial = mp;
+          if (mat) containers[alias] = { kind: 'material', vars: materialVars(mat) };
         } else if (type === 'CONTAINER_SOURCE_TYPE_LOOSE_VARIABLES') {
           const prev = containers[alias]?.vars || {};
           const vars = { ...prev };
@@ -363,10 +372,24 @@ class CS2 {
 
     // Randomised variables, in roll order.
     const rolls = [];
+    const rollSets = [];
     const walk = (list, fn) => { for (const m of list || []) { fn(m); if (m.m_vecConditionalMutators) walk(m.m_vecConditionalMutators, fn); } };
     for (const proc of procs) {
       walk(proc.m_vecPropertyMutators, (m) => {
         if (m.m_nMutatorCommandType !== 'COMP_MAT_PROPERTY_MUTATOR_RANDOM_ROLL_INPUT_VARIABLES') return;
+        rollSets.push({
+          seed: (m.m_strRandomRollInputVars_SeedInputVar || '').split('.').pop(),
+          conds: (m.m_vecConditions || []).map((c) => ({
+            on: c.m_strMutatorConditionContainerName + '.' + c.m_strMutatorConditionContainerVarName,
+            exists: c.m_nMutatorCondition === 'COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EXISTS',
+            value: c.m_strMutatorConditionContainerVarValue, not: c.m_bPassWhenTrue === false,
+          })),
+          vars: (m.m_vecRandomRollInputVars_InputVarsToRoll || []).map((spec) => {
+            const [alias, name, comps] = spec.split('.');
+            const v = containers[alias]?.vars?.[name];
+            return v ? { alias, name, comps: comps.length, min: v.min, max: v.max } : { alias, name, comps: comps.length, consume: true };
+          }),
+        });
         if (!/g_nRandomSeed$/.test(m.m_strRandomRollInputVars_SeedInputVar || '')) return;
         for (const spec of m.m_vecRandomRollInputVars_InputVarsToRoll || []) {
           const [alias, name, comps] = spec.split('.');
@@ -382,13 +405,14 @@ class CS2 {
     const finalProps = {};
     const condOk = (conds) => (conds || []).every((c) => {
       const v = containers[c.m_strMutatorConditionContainerName]?.vars?.[c.m_strMutatorConditionContainerVarName];
-      if (c.m_nMutatorCondition === 'COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EXISTS') return v != null;
-      if (c.m_nMutatorCondition === 'COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EQUALS') {
+      let ok = true;
+      if (c.m_nMutatorCondition === 'COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EXISTS') ok = v != null;
+      else if (c.m_nMutatorCondition === 'COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EQUALS') {
         const want = c.m_strMutatorConditionContainerVarValue;
         const have = v?.value;
-        return String(have === true ? 1 : have === false ? 0 : have) === String(want === 'true' ? 1 : want === 'false' ? 0 : want);
+        ok = String(have === true ? 1 : have === false ? 0 : have) === String(want === 'true' ? 1 : want === 'false' ? 0 : want);
       }
-      return true;
+      return c.m_bPassWhenTrue === false ? !ok : ok;
     });
     const copyFrom = (alias, into) => {
       const c = containers[alias];
@@ -398,6 +422,7 @@ class CS2 {
         return;
       }
       for (const [k, v] of Object.entries(c.vars || {})) {
+        if (k === '$shader' && into.$shader) continue;
         if (alias === 'econ_instance' || alias === 'grunge_wear') into[k] = { kind: 'instance', alias, name: k, base: v };
         else into[k] = v;
       }
@@ -432,7 +457,7 @@ class CS2 {
     const color = passes.g_tColor;
     if (!color) throw new Error('no colour pass');
     const strip = (vars) => Object.fromEntries(Object.entries(vars).filter(([k]) => k !== '$weapon'));
-    const shader = containers.paint ? (materials[paintMaterial]?.m_shaderName || 'csgo_customweapon.vfx') : 'csgo_customweapon.vfx';
+    const shader = color.$shader?.value || (containers.paint ? (materials[paintMaterial]?.m_shaderName || 'csgo_customweapon.vfx') : 'csgo_customweapon.vfx');
     return {
       id,
       legacy: kit.use_legacy_model === '1',
@@ -444,6 +469,7 @@ class CS2 {
       rough: passes.g_tMetalness ? strip(passes.g_tMetalness) : null,
       final: finalProps,
       rolls,
+      ...(/customglove/.test(shader) ? { rollSets } : {}),
     };
   }
 }

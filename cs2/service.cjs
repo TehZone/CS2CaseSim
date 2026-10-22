@@ -18,7 +18,7 @@ const STICKER_RAW_TEXTURES = ['g_tNormalRoughnessSticker0', 'g_tGlitterNormalSti
 const STICKER_META_VERSION = 1;
 
 // Glove composite textures csgo_customglove samples as raw hemi-octahedral normals.
-const GLOVE_RAW_TEXTURES = /^g_t(Normal|DetailNormal\d|DamageNormal\d)$/;
+const GLOVE_RAW_TEXTURES = /^g_t(Normal|DetailNormal\d|DamageNormal\d|SurfaceNormal\d|SubstrateNormal\d|TintId)$/;
 
 // CS2's own case-opening sounds.
 const CASE_SOUNDS = {
@@ -357,11 +357,15 @@ class CS2Service {
       this.cs2.extract(tex.filter(([n]) => isRaw(n)).map(([, v]) => v.value), { raw: true }),
     ]);
     const urls = (found) => Object.fromEntries(Object.entries(found).filter(([, f]) => f).map(([vpk, f]) => [vpk.replace(/_c$/, ''), this.url(f)]));
-    const combo = `S_BACKWARDS_COMPATIBILITY=0,S_ANISOTROPIC_GLOSS=${kit.color.F_ANISOTROPIC_GLOSS?.value ? 1 : 0},S_TINT_ID=0`;
+    // Older kits use the "Source1 texture layout"; the newest (Source2 height blending) layer surface and substrate
+    // materials and may tint by ID. SPIRV-Cross needs GLSL ES 3.10 for that variant (the renderer converts it).
+    const f = (n) => (kit.color[n]?.value ? 1 : 0);
+    const layered = f('F_BACKWARDS_COMPATIBILITY');
+    const combo = `S_BACKWARDS_COMPATIBILITY=${layered},S_ANISOTROPIC_GLOSS=${f('F_ANISOTROPIC_GLOSS')},S_TINT_ID=${layered && f('F_TINT_ID')}`;
     return {
       model: this.url(gltfFile), meshes: info.meshes, mesh: mesh.name, material: hands[0] || null, materials: info.materials,
       inputs: null, kit, glove: true, hands, textures: urls(files), rawTextures: urls(rawFiles),
-      shader: { combo, source: await this.cs2.shaderSource(kit.shader, combo) },
+      shader: { combo, layered: !!layered, source: await this.cs2.shaderSource(kit.shader, combo, { es: layered ? 310 : 300 }) },
     };
   }
 }

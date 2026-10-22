@@ -402,7 +402,8 @@ class InspectView {
     // Measure visible geometry in the model's own frame (before it inherits the pivot's rotation).
     model.updateMatrixWorld(true);
     const box = new THREE.Box3();
-    model.traverse((o) => {
+    if (model.userData.bounds) box.copy(model.userData.bounds);
+    else model.traverse((o) => {
       let shown = o.visible;
       for (let n = o.parent; n && shown; n = n.parent) shown = n.visible;
       if (o.isMesh && shown) box.expandByObject(o, !!model.userData.cs2);

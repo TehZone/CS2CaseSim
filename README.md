@@ -13,10 +13,10 @@ your own install with a bundled, patched build of [Source 2 Viewer](https://gith
 (`tools/s2v`), then runs CS2's own skin compositing shader (decompiled from your game files) in WebGL to
 bake each skin for the item's exact float and pattern seed (so blue gems, fades and Doppler phases match the
 game). Models/textures are extracted the first time you inspect each weapon and cached in
-`%APPDATA%/cs2-case-sim/cs2cache`. Nothing from the game is bundled with the app. Gloves are shown on CS2's
-glove model, both hands on CS2's own glove inspect pose, with the skin baked per hand by CS2's glove compositing
-shader (csgo_customglove). Agents still use the icon-based 3D view. Without CS2 installed, everything falls back to
-that view.
+`%APPDATA%/cs2-case-sim/cs2cache`. Nothing from the game is bundled with the app. Gloves are shown as CS2's
+glove models (just the gloves, posed by CS2's own glove inspect animation), with the skin baked per hand by CS2's
+glove compositing shader (csgo_customglove), including the newest gloves' layered materials. Agents still use the
+icon-based 3D view. Without CS2 installed, everything falls back to that view.
 
 With CS2 installed the inspect also offers:
 - **Backdrops**: the same map scenes CS2 shows behind the menu and item inspect (Dust II, Mirage, Inferno, Ancient,
