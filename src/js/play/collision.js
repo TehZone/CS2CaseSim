@@ -132,6 +132,46 @@ export class CollisionWorld {
   }
 }
 
+// Does any solid triangle touch the box min..max? (Smoke fills only free space.)
+CollisionWorld.prototype.boxOverlap = function boxOverlap(min, max, mask = FLAG_BULLET) {
+  const B = this.box, L = this.link, S = this.stack, P = this.pos;
+  const c = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2], e = [(max[0] - min[0]) / 2, (max[1] - min[1]) / 2, (max[2] - min[2]) / 2];
+  let sp = 0;
+  S[sp++] = 0;
+  while (sp) {
+    const node = S[--sp], b = node * 6;
+    if (B[b] > max[0] || B[b + 3] < min[0] || B[b + 1] > max[1] || B[b + 4] < min[1] || B[b + 2] > max[2] || B[b + 5] < min[2]) continue;
+    const a = L[node * 2], n = L[node * 2 + 1];
+    if (n >= 0) { S[sp++] = a; S[sp++] = n; continue; }
+    for (let k = a; k < a - n; k++) {
+      const tri = this.order[k];
+      if ((this.flags[tri] & mask) && triBoxOverlap(P, tri * 9, c, e)) return true;
+    }
+  }
+  return false;
+};
+
+// Static triangle / AABB overlap (separating axes: box faces, triangle normal, edge cross products).
+function triBoxOverlap(P, i, c, e) {
+  const v = [P[i] - c[0], P[i + 1] - c[1], P[i + 2] - c[2], P[i + 3] - c[0], P[i + 4] - c[1], P[i + 5] - c[2], P[i + 6] - c[0], P[i + 7] - c[1], P[i + 8] - c[2]];
+  for (let k = 0; k < 3; k++) {
+    if (Math.min(v[k], v[3 + k], v[6 + k]) > e[k] || Math.max(v[k], v[3 + k], v[6 + k]) < -e[k]) return false;
+  }
+  const f = [v[3] - v[0], v[4] - v[1], v[5] - v[2], v[6] - v[3], v[7] - v[4], v[8] - v[5], v[0] - v[6], v[1] - v[7], v[2] - v[8]];
+  const test = (ax, ay, az) => {
+    const p0 = v[0] * ax + v[1] * ay + v[2] * az, p1 = v[3] * ax + v[4] * ay + v[5] * az, p2 = v[6] * ax + v[7] * ay + v[8] * az;
+    const r = e[0] * Math.abs(ax) + e[1] * Math.abs(ay) + e[2] * Math.abs(az);
+    return !(Math.min(p0, p1, p2) > r || Math.max(p0, p1, p2) < -r);
+  };
+  const nx = f[1] * f[5] - f[2] * f[4], ny = f[2] * f[3] - f[0] * f[5], nz = f[0] * f[4] - f[1] * f[3];
+  if (!test(nx, ny, nz)) return false;
+  for (let j = 0; j < 3; j++) {
+    const fx = f[j * 3], fy = f[j * 3 + 1], fz = f[j * 3 + 2];
+    if (!test(0, -fz, fy) || !test(fz, 0, -fx) || !test(-fy, fx, 0)) return false;
+  }
+  return true;
+}
+
 // Partial sort so order[mid] is the median by key (quickselect).
 function nthElement(a, lo, hi, n, key) {
   hi--;

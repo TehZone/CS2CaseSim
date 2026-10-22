@@ -1,11 +1,12 @@
 // Grenades: thrown with CS2's throw (Mouse1 full throw, Mouse2 underhand lob, both a medium throw, plus your own
-// movement), bouncing off the world, then: HE explodes, the flashbang blinds whoever looks at it, the smoke grenade fills
-// a cloud you can't see through, the molotov/incendiary sets the ground on fire (a smoke puts it out), the decoy fakes
-// gunfire. Game units (inches, Z up); drawn in the glTF scene.
+// movement), bouncing off the world, then: HE explodes, the flashbang blinds whoever looks at it, the smoke grenade
+// floods the area with CS2's volumetric smoke (smoke.js), the molotov/incendiary sets the ground on fire (a smoke puts it
+// out), the decoy fakes gunfire. Game units (inches, Z up); drawn in the glTF scene.
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { FLAG_GRENADE, FLAG_BULLET } from './collision.js';
 import { toGl } from './world.js';
+import { SmokeSystem } from './smoke.js';
 
 export const NADES = {
   weapon_hegrenade: { kind: 'he', name: 'HE Grenade', short: 'HE', fuse: 1.5, bounce: 'HEGrenade.Bounce', boom: 'BaseGrenade.Explode', pin: 'HEGrenade.PullPin_Grenade', throw: 'HEGrenade.Throw' },
@@ -24,7 +25,7 @@ export const NADE_LIMIT = { total: 4, weapon_flashbang: 2 };
 export const isNade = (id) => !!NADES[id];
 
 const GRAVITY = 800 * 0.4, RESTITUTION = 0.45;
-const SMOKE_RADIUS = 144, SMOKE_TIME = 18, FIRE_RADIUS = 140, FIRE_TIME = 7, FIRE_DPS = 40, HE_RADIUS = 350;
+const FIRE_RADIUS = 140, FIRE_TIME = 7, FIRE_DPS = 40, HE_RADIUS = 350;
 
 // CS2's throw: the aim is raised (pitch -10 + pitch * 80/90), speed 750 x 0.9 scaled by strength, plus 1.25x your velocity.
 export function throwVelocity(pitch, yaw, strength, vel = [0, 0, 0]) {
@@ -69,8 +70,8 @@ export class Grenades {
     this.game = game;
     this.group = new THREE.Group();
     game.scene.add(this.group);
-    this.flying = []; this.smokes = []; this.fires = []; this.decoys = [];
-    this.smokeTex = softTexture('rgba(205,205,200,1)', 'rgba(205,205,200,0)', 128, 0.35);
+    this.flying = []; this.fires = []; this.decoys = [];
+    this.volume = new SmokeSystem(game);
     this.fireTex = softTexture('rgba(255,210,120,1)', 'rgba(255,90,10,0)', 64);
   }
 
@@ -106,13 +107,12 @@ export class Grenades {
       else if (k === 'fire' && (n.landed || age >= n.info.fuse)) this.detonate(n, i);
       else if (age > 20) this.remove(n, i);
     }
-    for (let i = this.smokes.length - 1; i >= 0; i--) {
-      const s = this.smokes[i];
-      if (now > s.until + 2) { this.group.remove(s.obj); s.obj.traverse((o) => o.material?.dispose()); this.smokes.splice(i, 1); }
-    }
+    this.volume.tick(dt);
     for (let i = this.fires.length - 1; i >= 0; i--) {
       const f = this.fires[i];
       if (now > f.until) { this.endFire(f, i); continue; }
+      // A smoke spreading over the flames puts them out.
+      if (this.volume.active && this.smokedOut(f.pos)) { g.sounds.play('Molotov.Extinguish', { pos: f.pos, listener: g }); this.endFire(f, i); continue; }
       // Burning: damage four times a second to anyone standing in it.
       if (now >= f.nextHurt) {
         f.nextHurt = now + 0.25;
@@ -193,6 +193,7 @@ export class Grenades {
   explodeHE(n) {
     const g = this.game;
     g.effects.explosion(n.pos, 0.35);
+    this.volume.blast(n.pos);
     for (const c of g.combatants.slice()) {
       if (!c.alive) continue;
       const p = g.bodyOf(c).chest;
@@ -223,30 +224,9 @@ export class Grenades {
     }
   }
 
-  // Smoke: a cloud ~144 units across that blocks sight for 18 seconds.
-  smoke(n) {
-    const g = this.game;
-    const center = [n.pos[0], n.pos[1], n.pos[2] + 48];
-    const obj = new THREE.Group();
-    for (let i = 0; i < 46; i++) {
-      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.smokeTex, color: 0xcfcfca, transparent: true, depthWrite: false, opacity: 0 }));
-      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * SMOKE_RADIUS * 0.85, h = Math.random() * 120 - 30;
-      const p = toGl([center[0] + Math.cos(a) * r, center[1] + Math.sin(a) * r, center[2] + h]);
-      s.position.copy(p);
-      s.userData = { base: 2.6 + Math.random() * 2.2, phase: Math.random() * 6 };
-      s.scale.setScalar(0.5);
-      s.material.rotation = Math.random() * Math.PI * 2;
-      obj.add(s);
-    }
-    this.group.add(obj);
-    const sm = { pos: center, born: g.now, until: g.now + SMOKE_TIME, obj, radius: SMOKE_RADIUS };
-    this.smokes.push(sm);
-    // A smoke puts out fires it covers.
-    for (let i = this.fires.length - 1; i >= 0; i--) {
-      const f = this.fires[i];
-      if (Math.hypot(f.pos[0] - center[0], f.pos[1] - center[1]) < SMOKE_RADIUS + f.radius * 0.5) { g.sounds.play('Molotov.Extinguish', { pos: f.pos, listener: g }); this.endFire(f, i); }
-    }
-  }
+  // Smoke: CS2's volumetric cloud, flooding the space around where the grenade stopped for 18 seconds.
+  smoke(n) { this.volume.add(n.pos); }
+  smokedOut(p) { return this.volume.densityAt([p[0], p[1], p[2] + 20]) > 0.25; }
 
   // Molotov / incendiary: fire on the ground below where it broke (nothing if it bursts high in the air).
   fire(n) {
@@ -254,7 +234,7 @@ export class Grenades {
     const down = g.collision.raycast(n.pos, [0, 0, -1], 160, FLAG_BULLET);
     if (!down) { g.sounds.play(n.id === 'weapon_molotov' ? 'Molotov.StartFailed' : 'IncGrenade.StartFailed', { pos: n.pos, listener: g }); return; }
     const pos = [n.pos[0], n.pos[1], n.pos[2] - down.t];
-    if (this.smokes.some((s) => Math.hypot(s.pos[0] - pos[0], s.pos[1] - pos[1]) < s.radius && g.now < s.until)) {
+    if (this.smokedOut(pos)) {
       g.sounds.play('Molotov.Extinguish', { pos, listener: g });
       return;
     }
@@ -283,33 +263,15 @@ export class Grenades {
     this.fires.splice(i, 1);
   }
 
-  // Does a line pass through a smoke cloud?
-  smokeBlocks(a, b) {
-    const now = this.game.now;
-    for (const s of this.smokes) {
-      if (now > s.until || now < s.born + 0.6) continue;
-      const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], l = Math.hypot(...d);
-      const f = [s.pos[0] - a[0], s.pos[1] - a[1], (s.pos[2] - a[2]) * 0.8];
-      const t = Math.max(0, Math.min(l, (f[0] * d[0] + f[1] * d[1] + f[2] * d[2]) / l));
-      const c = [a[0] + (d[0] / l) * t - s.pos[0], a[1] + (d[1] / l) * t - s.pos[1], (a[2] + (d[2] / l) * t - s.pos[2]) * 1.2];
-      if (Math.hypot(...c) < s.radius * 0.9) return true;
-    }
-    return false;
-  }
+  // Does a line pass through enough smoke to hide what's behind it?
+  smokeBlocks(a, b) { return this.volume.active && this.volume.blocks(a, b); }
   inFire(p) { return this.fires.some((f) => Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius + 20 && Math.abs(p[2] - f.pos[2]) < 70); }
   fireNear(p, r = 0) { return this.fires.find((f) => Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius + r) || null; }
 
   // Animation of clouds and flames.
   update(dt) {
     const now = this.game.now;
-    for (const s of this.smokes) {
-      const grow = Math.min(1, (now - s.born) / 0.9), fade = Math.max(0, Math.min(1, (s.until + 2 - now) / 2));
-      for (const p of s.obj.children) {
-        p.scale.setScalar(p.userData.base * (0.35 + 0.65 * grow) * (1 + 0.04 * Math.sin(now * 0.6 + p.userData.phase)));
-        p.material.opacity = 0.9 * grow * fade;
-        p.material.rotation += dt * 0.05;
-      }
-    }
+    this.volume.update();
     for (const f of this.fires) {
       const fade = Math.min(1, (f.until - now) / 0.6);
       for (const s of f.flames) {
@@ -324,10 +286,10 @@ export class Grenades {
   clear() {
     for (const n of this.flying) this.group.remove(n.obj);
     for (let i = this.fires.length - 1; i >= 0; i--) this.endFire(this.fires[i], i);
-    for (const s of this.smokes) { this.group.remove(s.obj); s.obj.traverse((o) => o.material?.dispose()); }
+    this.volume.clear();
     for (const d of this.decoys) this.group.remove(d.obj);
-    this.flying = []; this.smokes = []; this.fires = []; this.decoys = [];
+    this.flying = []; this.fires = []; this.decoys = [];
   }
 
-  dispose() { this.clear(); this.group.removeFromParent(); this.smokeTex.dispose(); this.fireTex.dispose(); }
+  dispose() { this.clear(); this.group.removeFromParent(); this.volume.dispose(); this.fireTex.dispose(); }
 }

@@ -4,6 +4,7 @@
 import { CollisionWorld, FLAG_PLAYER, FLAG_BULLET } from '../src/js/play/collision.js';
 import { PlayerMovement, MOVE } from '../src/js/play/movement.js';
 import { Match, Combatant, SHORT_RULES } from '../src/js/play/match.js';
+import { SmokeField } from '../src/js/play/smoke.js';
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) pass++; else { fail++; console.log('FAIL', msg); } };
@@ -217,6 +218,30 @@ function fakeGame() {
   ok(ot1half?.halftime && ot1half.money === 12500 && ot1half.team !== ot1.team, 'overtime halftime: sides swap, $12,500 again');
   ok(ot2?.overtime === 2, 'a tied overtime (11-11) starts overtime 2');
   ok(r.m.phase === 'over' && r.m.winnerSquad() === 'A' && r.m.score.A === 15 && r.m.score.B === 11, 'overtime 2 won at 15: ' + JSON.stringify(r.m.score));
+}
+
+// ---- smoke: fills a room, pours out through the doorway, never through the walls ----
+{
+  // A 256 x 256 room (walls 16 thick, 128 high) with a 64-wide doorway in its +x wall, on a big floor.
+  const S = world([
+    [[-3000, -3000, -64], [3000, 3000, 0]],
+    [[-144, -144, 0], [-128, 144, 128]], [[-144, -144, 0], [144, -128, 128]], [[-144, 128, 0], [144, 144, 128]],
+    [[128, -144, 0], [144, -32, 128]], [[128, 32, 0], [144, 144, 128]],
+    [[-144, -144, 128], [144, 144, 144]], // roof
+  ]);
+  const f = new SmokeField(S, [0, 0, 0], 0, 0);
+  while (!f.done) f.fill();
+  const at = (p) => f.densityAt(p, 3);
+  const cellsOutside = f.cells.filter((k) => f.min[0] + ((k % 32) + 0.5) * 16 > 144).length;
+  ok(at([0, 0, 60]) > 0.9 && at([100, 100, 30]) > 0.9 && at([-100, -100, 100]) > 0.9, 'smoke fills the room: ' + f.cells.length + ' cells');
+  ok(at([-180, 0, 60]) === 0 && at([0, -180, 60]) === 0 && at([0, 0, 160]) === 0, 'not through the walls or the roof');
+  ok(cellsOutside > 50 && at([170, 0, 30]) > 0.5, 'pours out through the doorway: ' + cellsOutside + ' cells outside');
+  ok(f.thickness([-100, 0, 60], [100, 0, 60], 3) > 30 && f.thickness([-100, 0, 60], [100, 0, 60], 0.05) === 0, 'blocks sight once bloomed');
+  f.carve([-120, 0, 60], [1, 0, 0], 300);
+  ok(f.thickness([-100, 0, 60], [100, 0, 60], 3) < 5, 'a bullet tunnel lets you see through');
+  for (let i = 0; i < 40; i++) f.heal(0.05);
+  ok(f.thickness([-100, 0, 60], [100, 0, 60], 3) > 30, 'the tunnel closes again');
+  ok(f.densityAt([0, 0, 60], 18.5) < 0.6 && f.densityAt([0, 0, 60], 21) === 0, 'fades out after 18 seconds');
 }
 
 console.log(`${pass} passed, ${fail} failed`);

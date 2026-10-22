@@ -24,6 +24,7 @@ import { Radar } from './radar.js';
 import { buildCS2Model } from '../cs2/skin.js';
 import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, aimThrow as aimThrowPitch } from './grenades.js';
 import { Drops } from './drops.js';
+import { Post } from './post.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
 export const TICK = 1 / 64;
@@ -79,6 +80,7 @@ export class Game {
     this.renderer.shadowMap.type = quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.shadowMap.autoUpdate = false; // the map's shadows are static: rendered once after loading
     this.renderer.autoClear = false;
+    this.msaa = quality === 'performance' ? 0 : 4;
     this.camera = new THREE.PerspectiveCamera(vfov(FOV), 1, 0.05, 400);
     this.camera.rotation.order = 'YXZ';
     this.vmScene = new THREE.Scene();
@@ -133,6 +135,9 @@ export class Game {
     this.effects = new Effects(this.scene, this.vmScene);
     this.nades = new Grenades(this);
     this.drops = new Drops(this);
+    this.post = new Post(this.renderer, { samples: this.msaa, smoke: this.nades.volume });
+    this.post.setLighting(this.world);
+    this.resize();
     this.sounds = new SoundBank();
     this.stats = await cs2Play('stats');
     this.midSpot = this.findMid();
@@ -168,7 +173,7 @@ export class Game {
     if (map.radar) this.radar = new Radar(this.root, map.radar);
     this.match = new Match(this, this.rules);
     status('Compiling shaders…');
-    this.renderer.compile(this.scene, this.camera);
+    this.post.compile(this.scene, this.camera);
     this.renderer.compile(this.vmScene, this.vmCamera);
     this.renderer.shadowMap.needsUpdate = true;
     this.match.startRound();
@@ -827,7 +832,7 @@ export class Game {
   // Flashbanged: you see white (and hear the ringing); a bot can't see for a while.
   flash(c, secs, by) {
     if (c === this.me) {
-      if (secs > (this.flashUntil || 0) - this.now) { this.flashUntil = this.now + secs; this.flashSecs = secs; }
+      if (secs > (this.flashUntil || 0) - this.now) { this.flashUntil = this.now + secs; this.flashSecs = secs; this.flashCapture = true; }
       this.sounds.play(secs > 3 ? 'Flashbang.Ring.Long' : secs > 1.5 ? 'Flashbang.Ring.Medium' : 'Flashbang.Ring.Short', { volume: 0.5 });
     } else this.botOf(c)?.brain.flashed(this.now + secs * 0.85);
   }
@@ -953,6 +958,7 @@ export class Game {
       travelled += wall.t + thick + 0.5;
       o = exit.map((v, i) => v + dir[i] * 0.5);
     }
+    if (this.nades.volume.active) this.nades.volume.carve(origin, dir, Math.min(lastT, range));
     const end = (t) => [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
     // Bullets flying past your head crack.
     if (shooter !== this.me && this.me.alive && hit?.c !== this.me) {
@@ -1149,8 +1155,14 @@ export class Game {
     this.nades.update(dt);
     this.vmSun.intensity = this.world.sun.intensity * this.sunVis;
 
+    // The world (with the smokes and the flashbang's afterimage), then your weapon on top.
+    const flashLeft = (this.flashUntil || 0) - this.now;
     this.renderer.clear();
-    this.renderer.render(this.scene, this.camera);
+    this.post.render(this.scene, this.camera, {
+      camPos: camEye, captureFlash: this.flashCapture,
+      flashImage: me.alive && flashLeft > 0 ? Math.min(1, flashLeft / Math.max(0.6, this.flashSecs * 0.85)) * 0.9 : 0,
+    });
+    this.flashCapture = false;
     this.renderer.clearDepth();
     if (me.alive) this.renderer.render(this.vmScene, this.vmCamera);
 
@@ -1237,6 +1249,8 @@ export class Game {
   resize() {
     const w = this.root.clientWidth || window.innerWidth, h = this.root.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h, false);
+    const pr = this.renderer.getPixelRatio();
+    this.post?.setSize(Math.round(w * pr), Math.round(h * pr));
     for (const c of [this.camera, this.vmCamera]) { c.aspect = w / h; c.updateProjectionMatrix(); }
   }
 
@@ -1250,6 +1264,7 @@ export class Game {
     this.effects?.dispose();
     this.nades?.dispose();
     this.drops?.dispose();
+    this.post?.dispose();
     this.world?.dispose();
     this.vmEnv?.dispose();
     this.sounds?.dispose();
