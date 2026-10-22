@@ -1,6 +1,8 @@
 // Bots' bodies: CS2 agent models animated with CS2's third-person clips (idle, walk, run and crouch in every direction,
-// blended by how the bot moves; each weapon's own hold pose on the arms; planting, defusing and death), holding CS2's
-// weapon models, with hitboxes on their bones (head, chest, stomach, arms, legs) for CS2's damage rules.
+// blended by how the bot moves; each weapon's own hold pose on the arms; the weapon's draw and reload, pulling a
+// grenade's pin and throwing it, flinching when hit, covering their eyes when flashed; in the air, climbing ladders,
+// planting, defusing and death), holding CS2's weapon models, with hitboxes on their bones (head, chest, stomach,
+// arms, legs) for CS2's damage rules.
 // The bot's brain (where to go, who to shoot) is in ai.js.
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
@@ -25,6 +27,15 @@ const locoPath = (set, gait, dir) => `${set}/_default_${set}/${gait}_${dir}_${se
 const DEATHS = ['shared/death_chest_a', 'shared/death_chest_b', 'shared/death_gut_a', 'shared/death_gut_b', 'shared/death_rknee_a', 'shared/death_rshoulder'];
 const PLANT = 'equipment/c4/planting', DEFUSE = 'shared/defuse/defuse_crouch_loop_rifle';
 const ARMS = /(clavicle|arm_|hand_|finger_|wpn)/;
+const UPPER = /(spine_[123]|neck|head|clavicle|arm_|hand_|finger_|wpn)/;
+// Gestures over the hold pose (arms, or the upper body), shared by every weapon class.
+const SHARED = {
+  pullpin: 'grenade/_default_grenade/pullpin_grenade', throw: 'grenade/_default_grenade/throw_overhand_grenade',
+  lob: 'grenade/_default_grenade/throw_underhand_grenade', flashed: 'shared/flashed',
+  flinchHead: 'shared/flinch_head.vnmclip+non_additive', flinchChest: 'shared/flinch_chest.vnmclip+non_additive',
+  flinchStomach: 'shared/flinch_stomach.vnmclip+non_additive',
+};
+const GRENADE_RE = /^weapon_(hegrenade|flashbang|smokegrenade|molotov|incgrenade|decoy)$/;
 // Each weapon's third-person hold pose (arms), where its folder or clip name doesn't follow the weapon id.
 const HOLD = {
   weapon_ak47: 'rifle/rifle_ak/idle_ak', weapon_m4a1: 'rifle/rifle_m4a4/idle_m4a4', weapon_m4a1_silencer: 'rifle/rifle_m4a1_silencer/idle_m4a1s',
@@ -32,12 +43,22 @@ const HOLD = {
   weapon_c4: 'equipment/c4/idle_c4',
 };
 const PISTOL_RE = /^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/;
-export const setOf = (id) => (/knife|bayonet/.test(id || '') ? 'knife' : PISTOL_RE.test(id || '') ? 'pistol' : 'rifle');
+// Locomotion set: grenades and the Zeus are carried like a pistol or knife (CS2 has no running clips for them).
+export const setOf = (id) => (/knife|bayonet/.test(id || '') || GRENADE_RE.test(id || '') ? 'knife' : PISTOL_RE.test(id || '') || id === 'weapon_taser' ? 'pistol' : 'rifle');
 function holdPath(id) {
   if (/knife|bayonet/.test(id)) return 'knife/_default_knife/idle_knife';
+  if (id === 'weapon_molotov' || id === 'weapon_incgrenade') return 'grenade/grenade_molotov/idle_molotov.vnmclip+non_additive';
+  if (GRENADE_RE.test(id)) return 'grenade/_default_grenade/idle_grenade.vnmclip+non_additive';
+  if (id === 'weapon_taser') return 'pistol/pistol_taser/idle_taser.vnmclip+non_additive';
   if (HOLD[id]) return HOLD[id] + '.vnmclip+non_additive';
   const short = id.replace(/^weapon_/, ''), set = setOf(id);
   return `${set}/${set}_${short}/idle_${short}.vnmclip+non_additive`;
+}
+// The weapon's own draw / reload clip, next to its hold pose (rifle/rifle_ak/idle_ak -> rifle/rifle_ak/reload_ak).
+function weaponClip(id, kind) {
+  if (/knife|bayonet/.test(id)) return kind === 'draw' ? 'knife/_default_knife/draw_knife' : null;
+  const m = /^(.*)\/idle_([a-z0-9_]+)/.exec(holdPath(id));
+  return m ? `${m[1]}/${kind}_${m[2]}` : null;
 }
 
 // Hitbox capsules between bones (radius in game units) and the hit group they count as.
@@ -62,6 +83,7 @@ export class BotAssets {
     this.clips = {};
     this.weapons = new Map(); // weapon id -> Promise<template scene | null>
     this.holds = new Map(); // weapon id -> Promise<arm clip | null>
+    this.gestures = new Map(); // "weapon id:kind" -> Promise<arm clip | null>
     this.lit = new Set();
   }
 
@@ -88,8 +110,9 @@ export class BotAssets {
         } catch (e) { console.warn('agent model failed', vmdl, e); }
       }
     }
-    const loco = SETS.flatMap((s) => [`${s}/_default_${s}/idle_${s}`, `${s}/_default_${s}/idle_crouch_${s}`, ...GAITS.flatMap((g) => DIRS.map((d) => locoPath(s, g, d)))]);
-    const list = [...loco, ...DEATHS, PLANT, DEFUSE, ...holdsFor.map(holdPath)];
+    const loco = SETS.flatMap((s) => [`${s}/_default_${s}/idle_${s}`, `${s}/_default_${s}/idle_crouch_${s}`, `${s}/_default_${s}/inair_stand_${s}`, ...GAITS.flatMap((g) => DIRS.map((d) => locoPath(s, g, d)))]);
+    const ladders = SETS.map((s) => `${s}/_default_${s}/ladder_facing_slow_${s}`);
+    const list = [...loco, ...ladders, ...DEATHS, PLANT, DEFUSE, ...Object.values(SHARED), ...holdsFor.map(holdPath)];
     const urls = await cs2Play('anims', list);
     await Promise.all(Object.entries(urls).map(async ([p, url]) => {
       try { this.clips[p] = (await loadGltf(url)).animations[0]; } catch {}
@@ -100,6 +123,26 @@ export class BotAssets {
       if (c) this.clips[p] = new THREE.AnimationClip(p, c.duration, c.tracks.filter((t) => !ARMS.test(t.name)));
     }
     for (const id of holdsFor) this.holds.set(id, Promise.resolve(this.armsClip(holdPath(id))));
+    // Gestures keep only the tracks they move over the rest of the body.
+    for (const [k, p] of Object.entries(SHARED)) this.clips[k] = this.trackClip(p, /^flinch|flashed/.test(k) ? UPPER : ARMS);
+  }
+
+  trackClip(path, re) {
+    const c = this.clips[path];
+    return c ? new THREE.AnimationClip(path + '#' + re.source, c.duration, c.tracks.filter((t) => re.test(t.name))) : null;
+  }
+  // A weapon's draw or reload as an arms clip (loaded on first use).
+  gesture(id, kind) {
+    const key = id + ':' + kind;
+    if (!this.gestures.has(key)) {
+      const path = weaponClip(id, kind);
+      this.gestures.set(key, !path ? Promise.resolve(null) : cs2Play('anims', [path]).then(async (u) => {
+        if (!u[path]) return null;
+        this.clips[path] ||= (await loadGltf(u[path])).animations[0];
+        return this.trackClip(path, ARMS);
+      }).catch(() => null));
+    }
+    return this.gestures.get(key);
   }
 
   armsClip(path) {
@@ -140,6 +183,7 @@ export class Bot {
     this.yaw = 0; this.pitch = 0; this.ducked = false;
     this.weapons = {}; this.slot = 'secondary';
     this.mode = 'move'; // move | plant | defuse | dead
+    this.time = 0;
     this.setModel(c.team);
   }
 
@@ -163,6 +207,8 @@ export class Bot {
     this.loco = null;
     this.weaponModel = null;
     this.armsAction = null;
+    this.gestureAction = null;
+    this.ladder = null;
   }
 
   // Locomotion actions for a weapon class (all playing; weights blend them).
@@ -171,14 +217,16 @@ export class Bot {
     if (this.loco) for (const a of this.loco.all) a.stop();
     const clip = (p) => this.assets.clips[p];
     const act = (p) => { const c = clip(p); if (!c) return null; const a = this.mixer.clipAction(c); a.setLoop(THREE.LoopRepeat, Infinity); a.setEffectiveWeight(0); a.play(); return a; };
-    const loco = { set, idle: act(`${set}/_default_${set}/idle_${set}`), crouchIdle: act(`${set}/_default_${set}/idle_crouch_${set}`) };
+    const loco = { set, idle: act(`${set}/_default_${set}/idle_${set}`), crouchIdle: act(`${set}/_default_${set}/idle_crouch_${set}`), air: act(`${set}/_default_${set}/inair_stand_${set}`) };
     for (const g of GAITS) loco[g] = DIRS.map((d) => act(locoPath(set, g, d)));
-    loco.all = [loco.idle, loco.crouchIdle, ...GAITS.flatMap((g) => loco[g])].filter(Boolean);
+    loco.ladder = act(`${set}/_default_${set}/ladder_facing_slow_${set}`);
+    loco.all = [loco.idle, loco.crouchIdle, loco.air, loco.ladder, ...GAITS.flatMap((g) => loco[g])].filter(Boolean);
     this.loco = loco;
   }
 
-  // Shows the bot holding a weapon (its CS2 model on the "wpn" bone, its hold pose on the arms).
-  async equip(id) {
+  // Shows the bot holding a weapon (its CS2 model on the "wpn" bone, its hold pose on the arms) and drawing it.
+  async equip(id, { draw = true } = {}) {
+    const changed = this.holding !== id;
     this.holding = id;
     this.setLocomotion(setOf(id));
     const [tpl, arms] = await Promise.all([this.assets.weapon(id), this.assets.hold(id)]);
@@ -206,6 +254,41 @@ export class Bot {
       this.armsAction.setLoop(THREE.LoopRepeat, Infinity);
       this.armsAction.play();
     }
+    if (draw && changed && this.mode === 'move') this.assets.gesture(id, 'draw').then((c) => { if (c && this.holding === id) this.gesture(c); });
+  }
+
+  // A one-off clip over the hold pose (draw, reload, throw, flinch...): the hold pose fades out under it and back after.
+  gesture(clip, { weight = 1, loop = false, duration = null, speed = 1 } = {}) {
+    if (!clip || this.mode === 'dead') return 0;
+    const a = this.mixer.clipAction(clip);
+    if (this.gestureAction && this.gestureAction !== a) this.gestureAction.fadeOut(0.08);
+    a.reset();
+    a.enabled = true;
+    a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+    a.clampWhenFinished = true;
+    a.timeScale = speed;
+    a.setEffectiveWeight(weight);
+    a.fadeIn(0.08);
+    a.play();
+    if (weight >= 1) this.armsAction?.fadeOut(0.08);
+    this.gestureAction = a;
+    const len = duration ?? clip.duration / speed;
+    this.gestureEnd = this.time + len;
+    return len;
+  }
+  endGesture(fade = 0.15) {
+    if (!this.gestureAction) return;
+    this.gestureAction.fadeOut(fade);
+    this.gestureAction = null;
+    const h = this.armsAction;
+    if (h && this.mode !== 'dead') { h.enabled = true; h.play(); h.fadeIn(fade); }
+  }
+  // Shorthands for the shared gestures.
+  reloadGesture(id, secs) { this.assets.gesture(id, 'reload').then((c) => { if (c && this.holding === id) this.gesture(c, { speed: c.duration / Math.max(0.3, secs) }); }); }
+  flashed(secs) { const c = this.assets.clips.flashed; if (c) this.gesture(c, { loop: true, duration: secs }); }
+  flinch(group) {
+    const c = this.assets.clips[group === 'head' ? 'flinchHead' : group === 'stomach' ? 'flinchStomach' : 'flinchChest'];
+    if (c && !this.gestureAction) this.gesture(c, { weight: 0.6, duration: 0.35 });
   }
 
   // Puts the bot somewhere, alive and idle.
@@ -216,8 +299,10 @@ export class Bot {
     this.mode = 'move';
     this.mixer.stopAllAction();
     this.loco = null;
+    this.gestureAction = null;
+    this.climbing = null; this.airborne = false; this.pendingThrow = null;
     this.root.visible = true;
-    if (this.holding) { const h = this.holding; this.holding = null; this.equip(h); }
+    if (this.holding) { const h = this.holding; this.holding = null; this.equip(h, { draw: false }); }
     this.sync();
   }
 
@@ -232,6 +317,8 @@ export class Bot {
     if (mode === 'dead') {
       for (const a of this.loco?.all || []) a.fadeOut(0.1);
       this.armsAction?.fadeOut(0.1);
+      this.gestureAction?.fadeOut(0.1);
+      this.gestureAction = null;
     }
     if (clip) {
       const a = this.mixer.clipAction(clip);
@@ -248,7 +335,20 @@ export class Bot {
   // Blend weights from the bot's velocity relative to where it faces.
   animate(dt) {
     const l = this.loco;
-    if (l && this.mode === 'move') {
+    this.time += dt;
+    if (this.gestureAction && this.time >= this.gestureEnd) this.endGesture();
+    // On a ladder the clip moves the arms too (hands on the rungs): the hold pose steps aside.
+    if (!!this.climbing !== !!this.wasClimbing && this.armsAction && !this.gestureAction) {
+      this.armsAction.enabled = true;
+      if (this.climbing) this.armsAction.fadeOut(0.15); else { this.armsAction.play(); this.armsAction.fadeIn(0.15); }
+    }
+    this.wasClimbing = !!this.climbing;
+    if (l && this.mode === 'move' && (this.climbing || this.airborne)) {
+      // Climbing a ladder (the clip runs with the climbing speed) or in the air (falling off a ledge).
+      const k = this.climbing ? 'ladder' : 'air';
+      for (const a of l.all) a.setEffectiveWeight(a === l[k] ? 1 : 0);
+      if (this.climbing && l.ladder) l.ladder.timeScale = Math.min(1.6, Math.abs(this.vel[2]) / 100);
+    } else if (l && this.mode === 'move') {
       const yr = (this.yaw * Math.PI) / 180;
       const vf = this.vel[0] * Math.cos(yr) + this.vel[1] * Math.sin(yr);
       const vr = this.vel[0] * Math.sin(yr) - this.vel[1] * Math.cos(yr);
@@ -261,9 +361,11 @@ export class Bot {
       for (const g of GAITS) l[g].forEach((act, i) => { if (!act) return; act.setEffectiveWeight(g === gait ? (w[i] / sum) * move : 0); act.timeScale = Math.max(0.4, speed / (g === 'run' ? 230 : g === 'walk' ? 120 : 85)); });
       l.idle?.setEffectiveWeight(this.ducked ? 0 : 1 - move);
       l.crouchIdle?.setEffectiveWeight(this.ducked ? 1 - move : 0);
+      l.air?.setEffectiveWeight(0);
+      l.ladder?.setEffectiveWeight(0);
     }
     this.mixer.update(dt);
-    if (this.mode === 'move') this.bendSpine();
+    if (this.mode === 'move' && !this.climbing) this.bendSpine();
   }
 
   // Leans the spine to aim up and down (CS2 blends aim poses; this bends spine_1..3 by a third each).

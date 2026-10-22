@@ -322,10 +322,11 @@ export class Game {
     if (me.nades[id] > 0) { const g = this.arsenal.guns[slot]; this.arsenal.current = null; this.arsenal.select(slot, t); g.count = me.nades[id]; return; }
     this.arsenal.remove(slot, t); // back to your best gun
   }
-  // A bot throws: aim the arc onto the target (full throw, else medium, else a lob).
+  // A bot throws: aim the arc onto the target (full throw, else medium, else a lob). It takes the grenade out and pulls
+  // the pin first (botThrowing finishes the throw).
   botThrow(b, id, target, preferHigh = false) {
     const c = b.c;
-    if (!(c.nades[id] > 0)) return false;
+    if (!(c.nades[id] > 0) || b.pendingThrow) return false;
     const eye = b.eye();
     const yaw = (Math.atan2(target[1] - eye[1], target[0] - eye[0]) * 180) / Math.PI;
     for (const strength of preferHigh ? [1] : [1, 0.5, 0]) {
@@ -333,12 +334,29 @@ export class Game {
       if (pitch == null || pitch < -89 || pitch > 89) continue;
       c.nades[id]--;
       b.yaw = yaw; b.pitch = pitch;
-      const { fwd } = basis(pitch, yaw);
-      const tr = this.collision.traceBox(eye, eye.map((v, i) => v + fwd[i] * 16), [-2, -2, -2], [2, 2, 2], FLAG_PLAYER);
-      this.nades.throw(c, id, tr.endpos, throwVelocity(pitch, yaw, strength, b.vel));
+      b.pendingThrow = { id, pitch, yaw, strength, at: this.now + 0.55 };
+      b.equip(id, { draw: false });
+      b.gesture(this.botAssets.clips.pullpin);
+      this.sounds.play(NADES[id].pin, { pos: eye, listener: this, volume: 0.5 });
       return true;
     }
     return false;
+  }
+  botThrowing(b) {
+    const p = b.pendingThrow;
+    if (!p) return;
+    b.yaw = p.yaw; b.pitch = p.pitch;
+    if (!p.released && this.now >= p.at) {
+      p.released = true;
+      b.gesture(p.strength >= 0.5 ? this.botAssets.clips.throw : this.botAssets.clips.lob);
+      const eye = b.eye(), { fwd } = basis(p.pitch, p.yaw);
+      const tr = this.collision.traceBox(eye, eye.map((v, i) => v + fwd[i] * 16), [-2, -2, -2], [2, 2, 2], FLAG_PLAYER);
+      this.nades.throw(b.c, p.id, tr.endpos, throwVelocity(p.pitch, p.yaw, p.strength, b.vel));
+      p.done = this.now + 0.45;
+    } else if (p.released && this.now >= p.done) {
+      b.pendingThrow = null;
+      this.botSwitch(b, b.brain.bestSlot(), this.now);
+    }
   }
   openBuyMenu() {
     if (!this.match?.buyOpen || !this.inBuyZone() || !this.me.alive) return;
@@ -437,6 +455,7 @@ export class Game {
   }
   botSwitch(b, slot, t) {
     if (!b.weapons[slot]) return;
+    b.pendingThrow = null;
     b.slot = slot;
     b.weapons[slot].nextAttack = Math.max(b.weapons[slot].nextAttack, t + 0.5);
     b.equip(b.weapons[slot].id);
@@ -633,6 +652,7 @@ export class Game {
     for (const b of this.bots) {
       if (!b.c.alive) continue;
       b.brain.tick(TICK, this.now);
+      this.botThrowing(b);
       const bomb = m.bomb;
       if (bomb?.state === 'dropped' && b.c.team === 'T' && Math.hypot(b.pos[0] - bomb.pos[0], b.pos[1] - bomb.pos[1]) < 50) m.pickupBomb(b.c);
       this.botFootsteps(b);
@@ -834,7 +854,7 @@ export class Game {
     if (c === this.me) {
       if (secs > (this.flashUntil || 0) - this.now) { this.flashUntil = this.now + secs; this.flashSecs = secs; this.flashCapture = true; }
       this.sounds.play(secs > 3 ? 'Flashbang.Ring.Long' : secs > 1.5 ? 'Flashbang.Ring.Medium' : 'Flashbang.Ring.Short', { volume: 0.5 });
-    } else this.botOf(c)?.brain.flashed(this.now + secs * 0.85);
+    } else { this.botOf(c)?.brain.flashed(this.now + secs * 0.85); if (secs > 1) this.botOf(c)?.flashed(secs * 0.85); }
   }
   lineOfSight(a, b) {
     const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], l = Math.hypot(...d);
@@ -1050,6 +1070,7 @@ export class Game {
       if (c.health > 0) this.sounds.play(head ? (armored ? 'Player.DamageHeadShotArmor.Victim' : 'Player.DamageHeadShot.Victim') : armored ? 'Player.DamageBodyArmor.Victim' : 'Player.DamageBody.Victim', { volume: 0.7 });
     } else {
       this.botOf(c)?.brain.hurt(attacker, this.now);
+      if (c.health > 0) this.botOf(c)?.flinch(group);
       if (attacker === this.me && c.health > 0) this.sounds.play(head ? (armored ? 'Player.DamageHeadShotArmor.AttackerFeedback' : 'Player.DamageHeadShot.AttackerFeedback') : armored ? 'Player.DamageBodyArmor.AttackerFeedback' : 'Player.DamageBody.AttackerFeedback', { volume: 0.7 });
     }
     if (c.health <= 0) {

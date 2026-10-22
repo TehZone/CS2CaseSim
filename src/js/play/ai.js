@@ -121,12 +121,13 @@ export class Brain {
       gun.clip += take; gun.reserve -= take; gun.reloading = false;
     }
     const want = this.bestSlot();
-    if (want !== b.slot && !gun?.reloading) this.game.botSwitch(b, want, t);
+    if (want !== b.slot && !gun?.reloading && !b.pendingThrow) this.game.botSwitch(b, want, t);
     if (gun && !gun.melee && !gun.reloading && gun.clip < gun.stats.clip && gun.reserve > 0 && (gun.clip === 0 || (!this.target?.visible && gun.clip < gun.stats.clip * 0.4 && t > (this.target?.lostAt || 0) + 1.5))) {
       gun.reloading = true;
       // CS2's reload time from the weapon data (shotguns: half a second a shell).
       const st = gun.stats;
       gun.reloadEnd = t + (st.bulletsPerReload === 1 ? 0.5 * (st.clip - gun.clip) : st.reloadTime || RELOAD_TIME[st.type] || 2.5);
+      this.bot.reloadGesture(gun.id, gun.reloadEnd - t);
       this.game.botSound(b, gun.prefix + 'Clipout', 0.5);
     }
   }
@@ -202,6 +203,7 @@ export class Brain {
     this.turnTo(p + this.aimErr[0], y + this.aimErr[1], dt, 1);
     const gun = b.weapons[b.slot];
     if (b.slot === 'c4') return true;
+    if (b.pendingThrow) return false; // a grenade in hand: throw it first
     if (!gun || gun.reloading) { b.ducked = false; return tg.dist < 600; }
     if (gun.melee) {
       // Run at them with the knife and slash when close.
@@ -457,6 +459,7 @@ export class Brain {
       if (h < b.pos[2] - 3) { b.vel[2] -= 800 * dt; b.pos[2] = Math.max(h, b.pos[2] + b.vel[2] * dt); if (b.pos[2] === h) b.vel[2] = 0; }
       else { b.pos[2] = h; b.vel[2] = 0; }
     }
+    b.airborne = b.vel[2] < -120; // falling for real (not just a step down)
     // Stuck: find the way again.
     if (moving && this.path && !b.climbing) {
       this.stuckT += dt;
