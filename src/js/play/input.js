@@ -34,7 +34,7 @@ export class Input {
       [document, 'keydown', (e) => this.key(e, true)],
       [document, 'keyup', (e) => this.key(e, false)],
       [document, 'mousemove', (e) => this.move(e)],
-      [document, 'mousedown', (e) => { if (!this.locked) return; this.buttons |= 1 << e.button; this.clicked |= 1 << e.button; e.preventDefault(); }],
+      [document, 'mousedown', (e) => { if (!this.locked) return; this.buttons |= 1 << e.button; this.clicked |= 1 << e.button; if (e.button === 1) this.pinged = true; e.preventDefault(); }],
       [document, 'mouseup', (e) => { this.buttons &= ~(1 << e.button); }],
       [document, 'wheel', (e) => { if (this.locked) { this.wheel += Math.sign(e.deltaY); e.preventDefault(); } }, { passive: false }],
       [document, 'pointerlockchange', () => this.lockChanged()],
@@ -81,6 +81,7 @@ export class Input {
   takePressed() { const p = this.pressed; this.pressed = new Set(); return p; }
   takeClicked() { const c = this.clicked; this.clicked = 0; return c; }
   takeWheel() { const w = this.wheel; this.wheel = 0; return w; }
+  takePing() { const p = this.pinged; this.pinged = false; return p; }
 
   dispose() {
     this.unlock();

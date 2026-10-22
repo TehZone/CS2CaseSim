@@ -1,5 +1,5 @@
 // The radar: CS2's overview image of the map (resource/overviews placement), rotating with your view and centred on
-// you, with your teammates, enemies your team has spotted, and the bomb.
+// you, with your teammates, enemies your team has spotted, the bomb and pings.
 export class Radar {
   constructor(root, info) {
     this.info = info;
@@ -16,7 +16,7 @@ export class Radar {
   // Game position -> overview image pixels (1024 px image).
   toImg(p) { return [(p[0] - this.info.x) / this.info.scale, (this.info.y - p[1]) / this.info.scale]; }
 
-  draw({ center, yaw, mates = [], enemies = [], bomb = null, myTeam }) {
+  draw({ center, yaw, mates = [], enemies = [], bomb = null, pings = [], myTeam }) {
     const ctx = this.ctx, S = this.canvas.width, zoom = 0.9;
     ctx.clearRect(0, 0, S, S);
     ctx.save();
@@ -33,6 +33,11 @@ export class Radar {
     const mine = myTeam === 'CT' ? '#5aa9ff' : '#f2c14e';
     for (const m of mates) if (m.alive) dot(m.pos, mine);
     for (const e of enemies) dot(e.pos, '#ff4040');
+    for (const p of pings) {
+      const [x, y] = this.toImg(p.pos), r = 11 / zoom;
+      ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath();
+      ctx.fillStyle = '#ffd23c'; ctx.fill(); ctx.lineWidth = 2 / zoom; ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.stroke();
+    }
     if (bomb) { const [x, y] = this.toImg(bomb.pos); ctx.fillStyle = bomb.planted ? '#ff3030' : '#ffb000'; ctx.font = `bold ${22 / zoom}px sans-serif`; ctx.textAlign = 'center'; ctx.fillText('C4', x, y + 8 / zoom); }
     ctx.restore();
     // You: an arrow in the middle pointing up.

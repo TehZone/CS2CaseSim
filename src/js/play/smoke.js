@@ -2,7 +2,9 @@
 // pours around corners, through doors and down stairs, but never through walls), blooms over about a second, lasts
 // 18 seconds and thins out from its edges. Bullets punch tunnels through it and an HE grenade blows a hole in it,
 // both of which close up again. Sight lines (yours, the bots') are blocked by how much smoke they pass through, so you
-// can see through a hole or a thin edge. Game units (inches, Z up). Drawn by the composite pass in post.js.
+// can see through a hole or a thin edge. Game units (inches, Z up). Drawn by the composite pass in post.js; each voxel
+// carries its density and its light (sky from above, less under more smoke; the sun through the cloud towards it),
+// worked out here so the shader reads one texel per step.
 import * as THREE from 'three';
 import { FLAG_BULLET } from './collision.js';
 
@@ -13,6 +15,7 @@ const FADE = 3, MAX_CELLS = 2300, MAX_COST = 24, MAX_RISE = 9, BLOOM = 0.075, FI
 // Holes hold seconds until they're refilled: clear until the last REFILL seconds, then filling back in.
 const TUNNEL = 1.15, TUNNEL_SIDE = 0.55, BLAST = 2.4, BLAST_CORE = 1.6, BLAST_RADIUS = 190, REFILL = 0.7;
 const BLOCK = 30; // units of full smoke that hide what's behind
+export const LIGHT_SCALE = 2; // voxel light is stored halved (it goes above 1)
 
 // Binary min-heap of (cost, cell).
 class Heap {
@@ -189,15 +192,38 @@ export class SmokeField {
     return sum;
   }
 
-  // This cloud's voxels into its slot of the shared 3D texture. The floor and ceiling cells next to it get the density
-  // too, so the smoke meets the ground (the depth test, not the voxel, decides where it ends).
-  write(data, now) {
-    const base = this.slot * N;
-    for (const k of this.skin) data[base + k] = 0;
+  // The light at a cell (linear RGB, before LIGHT_SCALE): the sky from above (less deep inside, under more smoke) and
+  // the sun through the cloud towards it. lit = { sunDir, sun, sky, ground } (game space, colours as [r, g, b]).
+  lightAt(k, lit, now, out) {
+    const x = k % NX, y = Math.floor(k / NX) % NY, z = Math.floor(k / (NX * NY));
+    const p = [this.min[0] + (x + 0.5) * VOX, this.min[1] + (y + 0.5) * VOX, this.min[2] + (z + 0.5) * VOX];
+    let toSun = 0, above = 0;
+    if (this.state[k] === 2) {
+      for (const d of [20, 52, 96]) toSun += this.densityAt([p[0] + lit.sunDir[0] * d, p[1] + lit.sunDir[1] * d, p[2] + lit.sunDir[2] * d], now);
+      above = this.densityAt([p[0], p[1], p[2] + 40], now) + this.densityAt([p[0], p[1], p[2] + 90], now);
+    }
+    const up = Math.min(1, Math.max(0, (z - (this.startZ ?? 3)) / 8)), occ = 1 - 0.32 * Math.min(1, above * 0.6), sun = Math.exp(-toSun * 1.8);
+    for (let i = 0; i < 3; i++) out[i] = ((lit.ground[i] + (lit.sky[i] - lit.ground[i]) * (0.3 + 0.7 * up)) * occ + lit.sun[i] * sun) * 0.72;
+    return out;
+  }
+
+  // This cloud's voxels into its slot of the shared RGBA 3D texture: light in RGB, density in A. Empty cells keep the
+  // open-air light (so the edges blend to it); the floor and ceiling cells next to the cloud get its density too, so
+  // the smoke meets the ground (the depth test, not the voxel, decides where it ends).
+  write(data, now, lit) {
+    const base = this.slot * N, rgb = [0, 0, 0];
+    const put = (k, a, light) => {
+      const o = (base + k) * 4;
+      for (let i = 0; i < 3; i++) data[o + i] = Math.min(255, Math.round((light[i] / LIGHT_SCALE) * 255));
+      data[o + 3] = a;
+    };
+    if (!this.airLit) { this.airLit = true; for (let k = 0; k < N; k++) put(k, 0, this.lightAt(k, lit, now, rgb)); }
+    for (const k of this.skin) data[(base + k) * 4 + 3] = 0;
     for (const k of this.cells) {
-      const v = Math.round(this.cellDensity(k, now) * 255);
-      data[base + k] = v;
-      for (const n of [k - NX * NY, k + NX * NY]) if (this.inSkin[n] && data[base + n] < v) data[base + n] = v;
+      const a = Math.round(this.cellDensity(k, now) * 255);
+      this.lightAt(k, lit, now, rgb);
+      put(k, a, rgb);
+      for (const n of [k - NX * NY, k + NX * NY]) if (this.inSkin[n] && data[(base + n) * 4 + 3] < a) put(n, a, rgb);
     }
   }
 }
@@ -220,9 +246,9 @@ export class SmokeSystem {
   constructor(game) {
     this.game = game;
     this.fields = [];
-    this.data = new Uint8Array(N * SLOTS);
+    this.data = new Uint8Array(N * SLOTS * 4);
     this.tex = new THREE.Data3DTexture(this.data, NX, NY, NZ * SLOTS);
-    this.tex.format = THREE.RedFormat;
+    this.tex.format = THREE.RGBAFormat;
     this.tex.minFilter = this.tex.magFilter = THREE.LinearFilter;
     this.tex.wrapS = this.tex.wrapT = this.tex.wrapR = THREE.ClampToEdgeWrapping;
     this.tex.unpackAlignment = 1;
@@ -234,15 +260,18 @@ export class SmokeSystem {
       smokeLife: { value: new Array(SLOTS).fill(0) }, smokeTime: { value: 0 },
     };
     this.dirty = true;
+    this.lighting = { sunDir: [0, 0, 1], sun: [1, 1, 1], sky: [0.5, 0.5, 0.55], ground: [0.4, 0.35, 0.3] };
   }
 
   get active() { return this.fields.length > 0; }
+  // The map's light for the clouds (set once the world is loaded).
+  setLighting(l) { this.lighting = l; }
 
   add(pos) {
     const used = new Set(this.fields.map((f) => f.slot));
     let slot = [...Array(SLOTS).keys()].find((s) => !used.has(s));
     if (slot == null) { const old = this.fields.shift(); slot = old.slot; }
-    this.data.fill(0, slot * N, (slot + 1) * N);
+    this.data.fill(0, slot * N * 4, (slot + 1) * N * 4);
     const f = new SmokeField(this.game.collision, pos, this.game.now, slot);
     f.fill(FILL_PER_TICK);
     this.fields.push(f);
@@ -254,7 +283,7 @@ export class SmokeSystem {
     const now = this.game.now;
     for (let i = this.fields.length - 1; i >= 0; i--) {
       const f = this.fields[i];
-      if (now > f.until) { this.data.fill(0, f.slot * N, (f.slot + 1) * N); this.fields.splice(i, 1); this.dirty = true; continue; }
+      if (now > f.until) { this.data.fill(0, f.slot * N * 4, (f.slot + 1) * N * 4); this.fields.splice(i, 1); this.dirty = true; continue; }
       if (!f.done) f.fill();
       f.heal(dt);
     }
@@ -267,7 +296,7 @@ export class SmokeSystem {
     for (const f of this.fields) {
       const age = now - f.born;
       if (age < 0.1 + f.maxCost * BLOOM + 0.5 || f.until - now < FADE + 1 || f.holes || !f.done || f.wroteHole) {
-        f.write(this.data, now);
+        f.write(this.data, now, this.lighting);
         f.wroteHole = f.holes;
         changed = true;
       }

@@ -113,9 +113,12 @@ export class BotAssets {
     const loco = SETS.flatMap((s) => [`${s}/_default_${s}/idle_${s}`, `${s}/_default_${s}/idle_crouch_${s}`, `${s}/_default_${s}/inair_stand_${s}`, ...GAITS.flatMap((g) => DIRS.map((d) => locoPath(s, g, d)))]);
     const ladders = SETS.map((s) => `${s}/_default_${s}/ladder_facing_slow_${s}`);
     const list = [...loco, ...ladders, ...DEATHS, PLANT, DEFUSE, ...Object.values(SHARED), ...holdsFor.map(holdPath)];
+    // Clips also animate helper bones the agents don't have (attachments, the camera): those tracks are dropped.
+    this.boneNames = new Set();
+    for (const g of [...this.models.T, ...this.models.CT]) g.scene.traverse((o) => { if (o.isBone) this.boneNames.add(o.name); });
     const urls = await cs2Play('anims', list);
     await Promise.all(Object.entries(urls).map(async ([p, url]) => {
-      try { this.clips[p] = (await loadGltf(url)).animations[0]; } catch {}
+      try { this.clips[p] = this.fit((await loadGltf(url)).animations[0]); } catch {}
     }));
     // Legs from the locomotion clips (the arms come from the weapon's hold pose).
     for (const p of loco) {
@@ -127,6 +130,7 @@ export class BotAssets {
     for (const [k, p] of Object.entries(SHARED)) this.clips[k] = this.trackClip(p, /^flinch|flashed/.test(k) ? UPPER : ARMS);
   }
 
+  fit(c) { return c && this.boneNames?.size ? new THREE.AnimationClip(c.name, c.duration, c.tracks.filter((t) => this.boneNames.has(t.name.split('.')[0]))) : c; }
   trackClip(path, re) {
     const c = this.clips[path];
     return c ? new THREE.AnimationClip(path + '#' + re.source, c.duration, c.tracks.filter((t) => re.test(t.name))) : null;
@@ -138,7 +142,7 @@ export class BotAssets {
       const path = weaponClip(id, kind);
       this.gestures.set(key, !path ? Promise.resolve(null) : cs2Play('anims', [path]).then(async (u) => {
         if (!u[path]) return null;
-        this.clips[path] ||= (await loadGltf(u[path])).animations[0];
+        this.clips[path] ||= this.fit((await loadGltf(u[path])).animations[0]);
         return this.trackClip(path, ARMS);
       }).catch(() => null));
     }
@@ -154,7 +158,7 @@ export class BotAssets {
       this.holds.set(id, cs2Play('anims', [holdPath(id)]).then(async (u) => {
         const url = u[holdPath(id)];
         if (!url) return null;
-        this.clips[holdPath(id)] = (await loadGltf(url)).animations[0];
+        this.clips[holdPath(id)] = this.fit((await loadGltf(url)).animations[0]);
         return this.armsClip(holdPath(id));
       }).catch(() => null));
     }

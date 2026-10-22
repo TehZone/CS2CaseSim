@@ -336,6 +336,21 @@ async function runPlaySmoke(win) {
   await js(`(() => { const g = window.__playGame; document.querySelector('.play-pause').classList.add('hidden'); g.paused = false; g.input.locked = true; g.match.time = 0.01; })()`);
   for (const s of [4, 8, 12]) { await wait(4000); console.log('SMOKE play t+' + s + 's', await state()); }
   await shot('live');
+  // A volumetric smoke in front of you: how it looks and what it costs (same view with and without it).
+  await js(`(() => { const g = window.__playGame; const eye = g.player.eye(); let best = 0, by = 0;
+    for (let a = 0; a < 360; a += 10) { const d = [Math.cos(a * Math.PI / 180), Math.sin(a * Math.PI / 180), 0]; const h = g.collision.raycast(eye, d, 2000, 2); const t = h ? h.t : 2000; if (t > best) { best = t; by = a; } }
+    window.__smokeDir = by; g.input.yaw = by; g.input.pitch = 3; g.me.health = 1e6; for (const b of g.bots) b.brain.tick = () => {}; })()`);
+  await wait(3000);
+  const fpsBefore = JSON.parse(await state()).fps;
+  await js(`(() => { const g = window.__playGame, eye = g.player.eye(), yr = window.__smokeDir * Math.PI / 180;
+    const p = [eye[0] + Math.cos(yr) * 350, eye[1] + Math.sin(yr) * 350, eye[2]];
+    const down = g.collision.raycast(p, [0, 0, -1], 400, 2); g.nades.volume.add([p[0], p[1], p[2] - (down ? down.t : 64)]); })()`);
+  await wait(5000);
+  await shot('smoke');
+  const fpsSmoke = JSON.parse(await state()).fps;
+  await js(`window.__playGame.nades.volume.clear()`);
+  await wait(3000);
+  console.log('SMOKE play smoke fps', fpsBefore, '-> with smoke', fpsSmoke, '-> cleared', JSON.parse(await state()).fps, await js(`window.__playGame.renderer.domElement.width + 'x' + window.__playGame.renderer.domElement.height`));
   // Fast-forward: follow a teammate (you stand still) until the round ends.
   await js(`(() => { const g = window.__playGame; g.kill(g.me, null, { name: 'World' }, false); })()`);
   await wait(4000);

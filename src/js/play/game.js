@@ -185,6 +185,11 @@ export class Game {
     }
     this.combatants = [this.me, ...this.bots.map((b) => b.c)];
     this.radio = new Radio(this);
+    // Your own body, seen where you fell while you spectate.
+    this.myBody = new Bot(this.botAssets, this.me, 1);
+    this.myBody.root.visible = false;
+    this.scene.add(this.myBody.root);
+    this.pings = [];
 
     status('Loading weapons and sounds…');
     this.arsenal = new Arsenal(this, {});
@@ -230,7 +235,7 @@ export class Game {
       'c4.keypressquiet', 'Player.PickupC4', 'Player.PickupWeapon', 'Event.BombPlanted', 'Event.BombDefused', 'Event.CTWin', 'Event.TERWin',
       `Music.StartRound.${MUSIC}`, `Music.BombPlanted.${MUSIC}`, `Music.WonRound.${MUSIC}`, `Music.LostRound.${MUSIC}`, `Music.MatchEnd.${MUSIC}`,
       ...NADE_SOUNDS, 'Molotov.Draw', 'HEGrenade.Draw', 'Player.PickupGrenadeAudible', 'Player.PickupWeaponSilent', 'Player.DeathTaser', 'Player.DamageFall',
-      'CT_Ladder.StepLeft', 'CT_Wood_Ladder.StepLeft'];
+      'CT_Ladder.StepLeft', 'CT_Wood_Ladder.StepLeft', 'UI.PlayerPing'];
   }
 
   setupViewmodelLighting() {
@@ -424,6 +429,8 @@ export class Game {
     this.effects.clear();
     this.nades.clear();
     this.drops.clear();
+    for (const p of this.pings) { p.sprite.removeFromParent(); p.sprite.material.dispose(); }
+    this.pings = [];
     this.flashUntil = 0;
     this.removeBomb();
     this.planting = null; this.defusing = false;
@@ -495,6 +502,7 @@ export class Game {
     c.protectUntil = this.now + PROTECT;
     if (c === this.me) {
       this.deathCam = null; this.spectating = null;
+      this.myBody.root.visible = false;
       this.player.teleport(sp.origin);
       this.input.yaw = sp.yaw; this.input.pitch = 0;
       this.prevEye = this.player.eye();
@@ -559,6 +567,7 @@ export class Game {
 
   respawnMe(sp, died) {
     const me = this.me;
+    this.myBody.root.visible = false;
     this.player.teleport(sp.origin);
     this.input.yaw = sp.yaw; this.input.pitch = 0;
     this.prevEye = this.player.eye();
@@ -805,6 +814,7 @@ export class Game {
       this.fallDamage();
       this.footsteps(wasGround);
       this.arsenal.tick(TICK, this.now, inp);
+      if (inp.takePing()) this.ping();
       if (this.arsenal.pressed?.has('drop')) this.dropMine();
       this.useKey();
       const b = m.bomb;
@@ -920,6 +930,42 @@ export class Game {
       if (m.bomb.defuser && m.bomb.defuser !== me) return;
       if (m.startDefuse(me)) this.defusing = true;
     } else if (!near && this.defusing) this.defusing = false;
+  }
+
+  // Middle mouse: CS2's ping. A marker where you aim (seen through walls and on the radar) for a few seconds; your
+  // bots look there.
+  ping() {
+    if (this.now - (this.lastPing ?? -9) < 0.8) return;
+    this.lastPing = this.now;
+    const eye = this.player.eye(), dir = basis(this.input.pitch, this.input.yaw).fwd;
+    const hit = this.collision.raycast(eye, dir, 6000, FLAG_BULLET);
+    const pos = [0, 1, 2].map((k) => eye[k] + dir[k] * (hit ? hit.t - 4 : 2000));
+    if (!this.pingTex) {
+      const c = document.createElement('canvas'); c.width = c.height = 64;
+      const x = c.getContext('2d');
+      x.beginPath(); x.moveTo(32, 4); x.lineTo(60, 32); x.lineTo(32, 60); x.lineTo(4, 32); x.closePath();
+      x.fillStyle = '#ffd23c'; x.fill(); x.lineWidth = 5; x.strokeStyle = 'rgba(0,0,0,.75)'; x.stroke();
+      this.pingTex = new THREE.CanvasTexture(c); this.pingTex.colorSpace = THREE.SRGBColorSpace;
+    }
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.pingTex, depthTest: false, depthWrite: false, sizeAttenuation: false, transparent: true }));
+    sprite.scale.setScalar(0.035);
+    sprite.renderOrder = 999;
+    toGl([pos[0], pos[1], pos[2] + 6], sprite.position);
+    this.scene.add(sprite);
+    this.pings.push({ pos, until: this.now + 4, sprite });
+    if (this.pings.length > 3) { const old = this.pings.shift(); old.sprite.removeFromParent(); old.sprite.material.dispose(); }
+    this.sounds.play('UI.PlayerPing', { volume: 0.5 });
+    const place = this.placeAt(pos);
+    this.hud.chat('You', this.place(), place ? `Pinged ${place.replace(/([a-z])([A-Z])/g, '$1 $2')}` : 'Pinged a spot', this.me.team);
+    for (const b of this.bots) if (b.c.alive && !this.hostile(this.me, b.c)) b.brain.obey('spotted', { pos, target: pos, t: this.now });
+  }
+  updatePings() {
+    for (let i = this.pings.length - 1; i >= 0; i--) {
+      const p = this.pings[i];
+      if (this.now < p.until) continue;
+      p.sprite.removeFromParent(); p.sprite.material.dispose();
+      this.pings.splice(i, 1);
+    }
   }
 
   // Your view of enemies for the radar (anyone in front of you with a clear line).
@@ -1275,7 +1321,15 @@ export class Game {
       this.planting = null; this.defusing = false;
       this.closeBuyMenu();
       this.sounds.play(headshot ? 'Player.DeathHeadShot.Victim' : 'Player.DeathBody.Victim', { volume: 0.8 });
-      this.deathCam = { until: this.now + (this.respawnMode ? 60 : 2.5), killer: attacker, from: this.player.eye() };
+      // Your body falls where you stood; the death cam pulls up and back from it to watch your killer.
+      const body = this.myBody, gunId = this.arsenal.gun?.id;
+      body.spawn(this.player.origin, this.input.yaw);
+      if (gunId && !this.arsenal.gun.nade) body.equip(gunId, { draw: false });
+      body.setMode('dead', { headshot });
+      const eye = this.player.eye(), { fwd } = basis(0, this.input.yaw), back = [-fwd[0] * 0.8, -fwd[1] * 0.8, 0.6], bl = Math.hypot(...back);
+      const hit = this.collision.raycast(eye, back.map((v) => v / bl), 48, FLAG_BULLET);
+      const from = [0, 1, 2].map((k) => eye[k] + (back[k] / bl) * (hit ? Math.max(0, hit.t - 6) : 48));
+      this.deathCam = { until: this.now + (this.respawnMode ? 60 : 2.5), killer: attacker, from };
     } else {
       const b = this.botOf(c);
       b.setMode('dead', { headshot });
@@ -1362,11 +1416,12 @@ export class Game {
     }
     this.vmRoot.quaternion.copy(this.camera.quaternion);
     this.vmCamera.quaternion.copy(this.camera.quaternion);
-    for (const b of this.bots) {
+    for (const b of [...this.bots, this.myBody]) {
       if (!b.root.visible) continue;
       b.sync();
       b.animate(this.paused ? 0 : dt);
     }
+    this.updatePings();
     this.effects.update(dt);
     this.nades.update(dt);
     this.vmSun.intensity = this.world.sun.intensity * this.sunVis;
@@ -1452,7 +1507,7 @@ export class Game {
     const b = m.bomb;
     const bomb = b && (b.state === 'planted' || (b.state === 'dropped' && me.team === 'T')) ? { pos: b.pos, planted: b.state === 'planted' } : null;
     return {
-      center: view.pos, yaw: view.yaw, myTeam: me.team, bomb,
+      center: view.pos, yaw: view.yaw, myTeam: me.team, bomb, pings: this.pings,
       mates: this.combatants.filter((c) => c !== me && !this.hostile(me, c)).map((c) => ({ pos: this.positionOf(c), alive: c.alive })),
       enemies: this.combatants.filter((c) => this.hostile(me, c) && c.alive && c.spottedBy === me.squad && this.now - (c.spottedAt ?? -9) < 1.5).map((c) => ({ pos: this.positionOf(c) })),
     };
@@ -1485,6 +1540,7 @@ export class Game {
     this.input.dispose();
     for (const job of this.vmCache.values()) job.then((x) => x.vm.dispose()).catch(() => {});
     for (const b of this.bots || []) b.dispose();
+    this.myBody?.dispose();
     this.effects?.dispose();
     this.nades?.dispose();
     this.drops?.dispose();
