@@ -1,6 +1,7 @@
 // Rare pattern (paint seed) analysis. Seeds run 0-1000 like CS2's "Pattern Template".
 // Seed lists follow well-known community tiers (blue gems, Fire & Ice, full fades, diamonds...).
 import { seeded } from './util.js';
+import { D } from './data.js';
 
 const set = (...a) => new Set(a);
 
@@ -80,6 +81,21 @@ export function analyzePattern(skin, seed) {
   }
 
   if (fin === 'Marble Fade') {
+    // Measured from CS2's own pattern for this knife (scripts/build-marble.mjs): Fire & Ice is the pattern turned to
+    // the end of its range, where the blade's playside shows only red and blue.
+    const m = D.marble?.[skin.wid]?.[skin.fid];
+    if (m && seed >= 0 && seed < m.t.length) {
+      if (m.ok) {
+        const [y, r, b] = m.c.slice(seed * 3, seed * 3 + 3);
+        out.colors = { yellow: y, red: r, blue: b };
+        out.info.push(['Playside colours', `Red ${Math.round(r)}% · Blue ${Math.round(b)}% · Yellow ${Math.round(y)}%`]);
+      }
+      const tier = +m.t[seed];
+      if (tier === 3) { out.mult = 2.6; out.tier = 't0'; out.label = 'Max Fire & Ice'; }
+      else if (tier === 2) { out.mult = 1.9; out.tier = 't1'; out.label = 'Fire & Ice'; }
+      else if (tier === 1) { out.mult = 1.15; out.tier = 't3'; out.label = 'Fake Fire & Ice'; }
+      return out;
+    }
     if (seed === 412) { out.mult = 2.6; out.tier = 't0'; out.label = 'Max Fire & Ice'; }
     else if (FIRE_ICE.has(seed)) { out.mult = 1.9; out.tier = 't1'; out.label = 'Fire & Ice'; }
     else if (FAKE_FIRE_ICE.has(seed)) { out.mult = 1.15; out.tier = 't3'; out.label = 'Fake Fire & Ice'; }

@@ -52,6 +52,11 @@ function rollInstance(kit, seed) {
     if (i > j && j >= 0) { rolls = [...rolls]; [rolls[i], rolls[j]] = [rolls[j], rolls[i]]; }
   }
   for (const r of rolls) {
+    // CS2 rolls the pattern offset before the rotation even when the kit fixes the offset (Marble Fade, Fade...):
+    // those two draws still happen. (Checked: it ranks Karambit Marble Fade seed 412 first, then the known Fire & Ice.)
+    if (r.alias === 'econ_instance' && r.name === 'g_flPatternTexCoordRotation' && !rolls.some((x) => x.name === 'g_vPatternTexCoordOffset')) {
+      rng.randomFloat(0, 1); rng.randomFloat(0, 1);
+    }
     out[r.alias + '.' + r.name] = r.comps === 1
       ? rng.randomFloat(r.min ?? 0, r.max ?? 0)
       : [rng.randomFloat(r.min?.[0] ?? 0, r.max?.[0] ?? 0), rng.randomFloat(r.min?.[1] ?? 0, r.max?.[1] ?? 0)];

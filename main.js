@@ -666,7 +666,7 @@ function runSmokeTest(win) {
     await win.webContents.executeJavaScript(`(async () => {
       const ui = await import('./js/ui.js'); const I = await import('./js/items.js'); const { D } = await import('./js/data.js');
       const s = Object.values(D.skins).find((x) => x.n === (${JSON.stringify(process.env.CS2SIM_SMOKE_SKIN || 'AK-47 | Case Hardened')}));
-      const it = I.makeSkinItem(s, { stt: true, fl: 0.05, sd: 661 });
+      const it = I.makeSkinItem(s, { stt: true, fl: 0.05, sd: ${Number(process.env.CS2SIM_SMOKE_SEED) || 661} }); // CS2SIM_SMOKE_SEED picks the pattern
       // CS2SIM_SMOKE_STICKERS=1 puts three stickers (holo, foil, gold) on the receiver.
       if (${JSON.stringify(!!process.env.CS2SIM_SMOKE_STICKERS)}) {
         const pick = (fx) => Object.values(D.stickers).find((x) => x.fx === fx && x.sm && !x.so);

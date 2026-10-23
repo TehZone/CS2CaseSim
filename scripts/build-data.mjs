@@ -148,6 +148,8 @@ function skinPools(list) {
 // Non-souvenir packages that hold weapon skins (gift packages and storage units are skipped).
 const PACKAGES = new Set(['X-Ray P250 Package', 'Anubis Collection Package', 'Sealed Genesis Terminal', 'Sealed Dead Hand Terminal']);
 const STICKER_TYPES = new Set(['Sticker Capsule', 'Autograph Capsule']);
+// Contraband weapon skins (the M4A4 | Howl): no case drops them any more, but they trade on the market.
+for (const s of skinsGrouped) if (s.rarity?.id === 'rarity_contraband_weapon') addSkin(s.id);
 const cases = [];
 const stickerIdsInCapsules = new Set();
 for (const c of crates) {
@@ -353,6 +355,9 @@ data.cases = cases.filter((c) => {
   return true;
 });
 
+// Marble Fade patterns measured from CS2 (scripts/build-marble.mjs; kept when present).
+const MARBLE = path.join(ROOT, 'src', 'data', 'marble-fade.json');
+if (fs.existsSync(MARBLE)) data.marble = JSON.parse(fs.readFileSync(MARBLE, 'utf8'));
 data.generatedAt = new Date().toISOString();
 fs.writeFileSync(OUT, JSON.stringify(data));
 const kb = (fs.statSync(OUT).size / 1024).toFixed(0);
