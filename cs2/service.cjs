@@ -5,6 +5,7 @@ const { CS2, findGameDir } = require('./pipeline.cjs');
 const { pickClip, inspectClips, playClips } = require('./firstperson.cjs');
 const { parseKV1 } = require('./kv.cjs');
 const play = require('./play.cjs');
+const png = require('./png.cjs');
 const { nameOf } = require('./vanity.cjs');
 
 // Pixel-shader static combos of csgo_customweapon (feature F_X drives combo S_X).
@@ -46,7 +47,20 @@ function attachment(text, name) {
 const shrunkBadly = (dir) => fs.existsSync(path.join(dir, '.shrunk')) && !fs.existsSync(path.join(dir, SHRUNK));
 
 // CS2's two-layer world materials blend a second layer in with vertex paint; the glTF export keeps the first only.
+// A height map as the world shader reads it: shrunk to 512, red (height) and green (tint mask) kept, opaque (its alpha
+// is empty, which a browser may drop the colour of).
+async function heightMap(file) {
+  await png.shrinkPNGs([file], 512);
+  const img = png.decodePNG(fs.readFileSync(file));
+  const n = img.width * img.height, ch = img.channels, out = new Uint8Array(n * 4);
+  for (let i = 0; i < n; i++) { out[i * 4] = img.data[i * ch]; out[i * 4 + 1] = ch > 1 ? img.data[i * ch + 1] : 255; out[i * 4 + 3] = 255; }
+  fs.writeFileSync(file, png.encodePNG(img.width, img.height, out));
+}
+
 const LAYER_TEXTURES = ['g_tLayer2Color', 'g_tLayer2NormalRoughness', 'g_tBlendModulation'];
+// csgo_environment(_blend)'s: the second and third layers' colour and normal, and every layer's height map (height in
+// red, the colour tint's mask in green).
+const ENV_TEXTURES = ['g_tColor2', 'g_tColor3', 'g_tNormal2', 'g_tNormal3', 'g_tHeight1', 'g_tHeight2', 'g_tHeight3'];
 // Shaders of world geometry (big surfaces seen up close: their textures are kept sharper).
 const WORLD_SHADERS = /lightmappedgeneric|static_overlay|environment_blend|csgo_environment\.vfx/i;
 
@@ -496,13 +510,19 @@ class CS2Service {
         id, name: meta.name, info: meta, nav: await this.playNav(id, vpk, dir), radar: await this.playRadar(id, dir),
         world: this.url(path.join(dir, 'world.glb')), collision: this.url(path.join(dir, 'collision.bin')),
         lightmap: meta.lightmap ? this.url(path.join(dir, 'lightmap.bin')) : null, sky: meta.sky ? this.url(path.join(dir, 'sky.png')) : null,
-        probes: meta.lighting?.probes ? this.url(path.join(dir, 'probes.bin')) : null, lut: meta.lighting?.lut ? this.url(path.join(dir, 'lut.bin')) : null,
+        probes: meta.lighting?.probes ? this.url(path.join(dir, 'probes.bin')) : null, sky3d: meta.sky3d ? this.url(path.join(dir, 'sky3d.glb')) : null, lut: meta.lighting?.lut ? this.url(path.join(dir, 'lut.bin')) : null,
       });
       const say = (m) => { this.progress.set('map:' + id, m); this.log(`[play ${id}] ${m}`); };
       try {
         let meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-        if (meta.version === 2 && meta.stamp === stamp) meta = await this.upgradeMapLighting(id, vpk, dir, meta, say);
-        if (meta.version === play.PLAY_VERSION && meta.stamp === stamp) { this.progress.delete('map:' + id); return result(meta); }
+        // Older exports are brought up to date step by step; a step that fails (no disk space, say) leaves the export as
+        // it was, still playable, rather than exporting the whole map again.
+        if (meta.stamp === stamp && meta.version >= 2) {
+          const steps = { 2: 'upgradeMapLighting', 3: 'upgradeMapHidden', 4: 'upgradeMapLayers', 5: 'upgradeMapDoors', 6: 'upgradeMapSky3d', 7: 'upgradeMapTextureSizes', 8: 'upgradeMapBreakables' };
+          try { while (steps[meta.version]) meta = await this[steps[meta.version]](id, vpk, dir, meta, say); } catch (e) { this.log('map upgrade: ' + e.message); }
+          this.progress.delete('map:' + id);
+          return result(meta);
+        }
       } catch (e) { if (e?.code !== 'ENOENT') this.log('map cache: ' + e.message); }
       fs.rmSync(dir, { recursive: true, force: true });
       const tmp = path.join(dir, 'tmp');
@@ -545,6 +565,11 @@ class CS2Service {
 
       say('Exporting the second texture layers…');
       const { json } = play.readGlb(glb);
+      const hidden = play.disabledNodes(json, ents);
+      const hurts = await this.playHurts(vpk, dir, ents);
+      const doors = play.doorNodes(json, ents), glass = play.glassNodes(json, ents);
+      say('Exporting the map\'s 3D skybox…');
+      const sky3d = await this.playSky3d(dir, ents);
       const layers = await this.playLayers(vpk, dir, json);
 
       say('Optimising textures…');
@@ -568,7 +593,7 @@ class CS2Service {
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(entPhysFile, { force: true });
       const meta = {
-        version: play.PLAY_VERSION, stamp, id, name: nameOf(id), ...info, ...volumes, lightmap, sky, layers, lighting,
+        version: play.PLAY_VERSION, stamp, id, name: nameOf(id), ...info, ...volumes, lightmap, sky, layers, lighting, hidden, hurts, doors, glass, sky3d,
         collision: { tris: col.tris, surfaces: col.surfaces, flags: { player: play.F_PLAYER, bullet: play.F_BULLET, grenade: play.F_GRENADE } },
       };
       fs.writeFileSync(metaFile, JSON.stringify(meta));
@@ -631,7 +656,128 @@ class CS2Service {
     fs.rmSync(tmp, { recursive: true, force: true });
     const info = play.mapInfo(ents);
     const lighting = await this.playLighting(vpk, dir, ents, info);
-    const next = { ...meta, sun: info.sun, exposure: info.exposure, postProcessing: info.postProcessing, lighting, version: play.PLAY_VERSION };
+    const next = { ...meta, sun: info.sun, exposure: info.exposure, postProcessing: info.postProcessing, lighting, version: 3 };
+    fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
+    return next;
+  }
+
+  // The map's trigger_hurt volumes (off the edge of Vertigo's building, a pit...): [{ min, max, damage }], from each
+  // one's brush model.
+  async playHurts(vpk, dir, ents) {
+    const list = ents.filter((e) => e.classname === 'trigger_hurt' && e.model && !/^(true|1)$/i.test(String(e.startdisabled ?? '')) && +e.damage > 0)
+      .map((e) => ({ e, file: String(e.model).replace(/^resource_name:"?|"$/g, '') }));
+    if (!list.length) return [];
+    const tmp = path.join(dir, 'tmp-hurt');
+    try {
+      await this.ensureCS2().run(['-i', vpk, '-f', [...new Set(list.map((x) => x.file + '_c'))].join(','), '-d', '-o', tmp, '--gltf_export_format', 'glb']);
+      return list.map(({ e, file }) => {
+        const glb = path.join(tmp, file.replace(/\.vmdl$/, '_physics.glb'));
+        return fs.existsSync(glb) ? play.hurtVolume(play.readGlb(glb), e.origin, +e.damage) : null;
+      }).filter(Boolean);
+    } catch (err) { this.log('hurt volumes: ' + err.message); return []; }
+    finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // CS2's 3D skybox: the prefab map a skybox_reference names (Inferno's hills and town, Nuke's plant...), drawn around
+  // the map at its sky_camera's scale. Exported as sky3d.glb; { origin (the sky_camera, skybox units), scale, offset
+  // (the skybox_reference's origin) }, or null when the map has none installed.
+  async playSky3d(dir, ents) {
+    const ref = ents.find((e) => e.classname === 'skybox_reference' && e.targetmapname);
+    const vmap = ref && String(ref.targetmapname).replace(/^resource_name:"?|"$/g, '').replace(/\.vmap$/, '');
+    const vpk = vmap && path.join(this.gameDir, vmap + '.vpk');
+    if (!vpk || !fs.existsSync(vpk)) return null;
+    const cs2 = this.ensureCS2();
+    const glb = path.join(dir, 'sky3d.glb'), tmp = path.join(dir, 'tmp-sky3d');
+    // The skybox's textures land next to the world's, some under the same names: those go back to the size the world
+    // export gave them (else full size, gigabytes of them), the skybox's own to 256 (it's far away).
+    const pngSize = (f) => { try { const b = fs.readFileSync(path.join(dir, f)); return Math.max(b.readUInt32BE(16), b.readUInt32BE(20)); } catch { return 0; } };
+    const before = new Map(fs.readdirSync(dir).filter((f) => /\.png$/i.test(f)).map((f) => [f, pngSize(f)]));
+    try {
+      await cs2.run(['-i', vpk, '-f', `${vmap}/world.vwrld_c`, '-d', '-o', glb, '--gltf_export_format', 'glb', '--gltf_export_materials', '--gltf_textures_adapt']);
+      if (!fs.existsSync(glb)) return null;
+      if (this.shrinkImages) {
+        const after = fs.readdirSync(dir).filter((f) => /\.png$/i.test(f) && f !== 'sky.png');
+        for (const [size, files] of [[256, after.filter((f) => !before.has(f))], ...[...new Set(before.values())].map((s) => [s, after.filter((f) => before.get(f) === s)])]) {
+          if (size && files.length) await this.shrinkImages(files.map((f) => path.join(dir, f)), size);
+        }
+      }
+      await cs2.run(['-i', vpk, '-f', `${vmap}/entities/default_ents.vents_c`, '-d', '-o', tmp]).catch(() => {});
+      const entFile = path.join(tmp, vmap, 'entities', 'default_ents.vents');
+      const cam = (fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : []).find((e) => e.classname === 'sky_camera');
+      const vec = (s) => String(s || '').replace(/[[\]]/g, '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
+      return { origin: cam ? vec(cam.origin) : [0, 0, 0], scale: +cam?.scale || 16, offset: vec(ref.origin).length === 3 ? vec(ref.origin) : [0, 0, 0] };
+    } catch (e) { this.log('3d skybox: ' + e.message); return null; }
+    finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // Version 7's 3D skybox export could leave the world's textures at full size (up to 4096, gigabytes of video memory):
+  // none over 1024 any more, and the skybox's own at 256.
+  async upgradeMapTextureSizes(id, vpk, dir, meta, say) {
+    if (this.shrinkImages) {
+      say('Updating the map\'s textures…');
+      const pngs = fs.readdirSync(dir).filter((f) => /\.png$/i.test(f) && f !== 'sky.png');
+      let skyOnly = [];
+      if (meta.sky3d && fs.existsSync(path.join(dir, 'sky3d.glb'))) {
+        const world = new Set((play.readGlb(path.join(dir, 'world.glb')).json.images || []).map((i) => i.uri));
+        skyOnly = (play.readGlb(path.join(dir, 'sky3d.glb')).json.images || []).map((i) => i.uri).filter((u) => u && !world.has(u) && !/^layer_/.test(u));
+      }
+      await this.shrinkImages(skyOnly.map((f) => path.join(dir, f)), 256);
+      await this.shrinkImages(pngs.map((f) => path.join(dir, f)), 1024);
+    }
+    const next = { ...meta, version: 8 };
+    fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
+    return next;
+  }
+
+  // Maps exported as version 6 get version 7's 3D skybox.
+  async upgradeMapSky3d(id, vpk, dir, meta, say) {
+    say('Exporting the map\'s 3D skybox…');
+    const tmp = path.join(dir, 'tmp-ents');
+    await this.ensureCS2().run(['-i', vpk, '-f', `maps/${id}/entities/default_ents.vents_c`, '-d', '-o', tmp]);
+    const entFile = path.join(tmp, 'maps', id, 'entities', 'default_ents.vents');
+    const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
+    fs.rmSync(tmp, { recursive: true, force: true });
+    const next = { ...meta, sky3d: await this.playSky3d(dir, ents), version: 7 };
+    fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
+    return next;
+  }
+
+  // Maps exported as version 8 get version 9's breakable props (with the doors and glass again).
+  upgradeMapBreakables(id, vpk, dir, meta, say) { return this.upgradeMapDoors(id, vpk, dir, meta, say, 9); }
+
+  // Maps exported as version 5 get version 6's doors and breakable glass.
+  async upgradeMapDoors(id, vpk, dir, meta, say, version = 6) {
+    say('Updating the map…');
+    const tmp = path.join(dir, 'tmp-ents');
+    await this.ensureCS2().run(['-i', vpk, '-f', `maps/${id}/entities/default_ents.vents_c`, '-d', '-o', tmp]);
+    const entFile = path.join(tmp, 'maps', id, 'entities', 'default_ents.vents');
+    const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
+    fs.rmSync(tmp, { recursive: true, force: true });
+    const { json } = play.readGlb(path.join(dir, 'world.glb'));
+    const next = { ...meta, doors: play.doorNodes(json, ents), glass: play.glassNodes(json, ents), version };
+    fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
+    return next;
+  }
+
+  // Maps exported as version 4 get version 5's csgo_environment(_blend) layers without exporting everything again.
+  async upgradeMapLayers(id, vpk, dir, meta, say) {
+    say('Updating the map\'s textures…');
+    const layers = await this.playLayers(vpk, dir, play.readGlb(path.join(dir, 'world.glb')).json);
+    const next = { ...meta, layers, version: 5 };
+    fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
+    return next;
+  }
+
+  // Maps exported as version 3 get version 4's list of entities that start switched off (Wingman's barricades...),
+  // from the entity lump and the world's node names, without exporting everything again.
+  async upgradeMapHidden(id, vpk, dir, meta, say) {
+    say('Updating the map…');
+    const tmp = path.join(dir, 'tmp-ents');
+    await this.ensureCS2().run(['-i', vpk, '-f', `maps/${id}/entities/default_ents.vents_c`, '-d', '-o', tmp]);
+    const entFile = path.join(tmp, 'maps', id, 'entities', 'default_ents.vents');
+    const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
+    fs.rmSync(tmp, { recursive: true, force: true });
+    const next = { ...meta, hidden: play.disabledNodes(play.readGlb(path.join(dir, 'world.glb')).json, ents), hurts: await this.playHurts(vpk, dir, ents), version: 4 };
     fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
     return next;
   }
@@ -642,25 +788,33 @@ class CS2Service {
     const want = new Set();
     for (const m of json.materials || []) {
       const v = m.extras?.vmat;
-      if (!v?.IntParams?.F_LAYERS) continue;
-      for (const k of LAYER_TEXTURES) if (v.TextureParams?.[k]) want.add(v.TextureParams[k]);
+      const keys = v?.IntParams?.F_LAYERS ? LAYER_TEXTURES : /csgo_environment/.test(v?.ShaderName || '') ? ENV_TEXTURES : [];
+      for (const k of keys) if (v.TextureParams?.[k]) want.add(v.TextureParams[k]);
     }
     if (!want.size) return {};
     const cs2 = this.ensureCS2();
-    // Most are in the game's VPK; a map can bring its own.
-    const found = await cs2.extract([...want]).catch(() => ({}));
-    const rest = [...want].filter((f) => !found[f + '_c']);
-    const tmp = path.join(dir, 'tmp-layers');
-    for (let i = 0; i < rest.length; i += 40) await cs2.run(['-i', vpk, '-f', rest.slice(i, i + 40).map((f) => f + '_c').join(','), '-d', '-o', tmp]).catch(() => {});
-    const out = {};
-    for (const f of want) {
-      const src = found[f + '_c'] || path.join(tmp, f.replace(/\.vtex$/, '.png'));
-      if (!/\.png$/i.test(src) || !fs.existsSync(src)) continue;
-      const name = 'layer_' + path.basename(src);
-      fs.copyFileSync(src, path.join(dir, name));
-      out[f] = name;
-    }
-    fs.rmSync(tmp, { recursive: true, force: true });
+    // 40 at a time, from the game's VPK or (the rest) the map's own, each shrunk as it lands (a map can have hundreds,
+    // up to 8 MB each in full): colours to 1024, normal, blend and height maps to 512.
+    const tmp = path.join(dir, 'tmp-layers'), list = [...want], out = {};
+    const local = (f) => path.join(tmp, f.replace(/\.vtex$/, '.png'));
+    try {
+      for (let i = 0; i < list.length; i += 40) {
+        const batch = list.slice(i, i + 40);
+        for (const src of [cs2.vpk, vpk]) {
+          const missing = batch.filter((f) => !fs.existsSync(local(f)));
+          if (missing.length) await cs2.run(['-i', src, '-f', missing.map((f) => f + '_c').join(','), '-d', '-o', tmp]).catch(() => {});
+        }
+        for (const f of batch) {
+          if (!fs.existsSync(local(f))) continue;
+          const name = 'layer_' + path.basename(local(f)), file = path.join(dir, name);
+          fs.renameSync(local(f), file);
+          if (/_height/i.test(name)) await heightMap(file);
+          else await png.shrinkPNGs([file], /normal|blendmod/i.test(name) ? 512 : 1024);
+          out[f] = name;
+        }
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
     return out;
   }
 
@@ -698,14 +852,17 @@ class CS2Service {
       const files = ['scripts/weapons.vdata_c', 'soundevents/game_sounds_weapons.vsndevts_c', 'soundevents/game_sounds_player.vsndevts_c',
         'soundevents/game_sounds_physics.vsndevts_c', 'soundevents/game_sounds_footsteps.vsndevts_c', 'soundevents/game_sounds_ui.vsndevts_c',
         'soundevents/vo/announcer/game_sounds_cs2_classic.vsndevts_c', 'soundevents/music/valve_cs2_01/game_sounds_music.vsndevts_c',
-        ...['phoenix', 'leet', 'sas', 'seal'].map((a) => `soundevents/vo/agents/game_sounds_${a}.vsndevts_c`)]; // the bots' voices
-      await cs2.run(['-i', cs2.vpk, '-f', files.join(','), '-d', '-o', tmp]);
+        ...['phoenix', 'leet', 'sas', 'seal'].map((a) => `soundevents/vo/agents/game_sounds_${a}.vsndevts_c`), // the bots' voices
+        ...(await cs2.list()).filter((f) => /^soundevents\/ambience\/[^/]+\.vsndevts_c$/.test(f))]; // the maps' own (Inferno's bells...)
+      await cs2.run(['-i', cs2.vpk, '-f', [...files, 'surfaceproperties/surfaceproperties.vsurf_c'].join(','), '-d', '-o', tmp]);
       const read = (f) => fs.readFileSync(path.join(tmp, f.replace(/_c$/, '')), 'utf8');
       const weapons = play.weaponStats(read(files[0]));
       const sounds = {};
       for (const f of files.slice(1)) { try { Object.assign(sounds, play.soundEventFiles(read(f))); } catch (e) { this.log(`${f}: ${e.message}`); } }
+      let impacts = {};
+      try { impacts = play.surfaceImpacts(read('surfaceproperties/surfaceproperties.vsurf_c')); } catch (e) { this.log('surfaces: ' + e.message); }
       fs.rmSync(tmp, { recursive: true, force: true });
-      const data = { version: play.DATA_VERSION, stamp, weapons, sounds };
+      const data = { version: play.DATA_VERSION, stamp, weapons, sounds, impacts };
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, JSON.stringify(data));
       return data;
@@ -777,6 +934,8 @@ class CS2Service {
 
   // Weapon stats from weapons.vdata: { weapon_id: stats }.
   async playStats() { return (await this.playData()).weapons; }
+  // Each surface's bullet impact sound event: { surface (lower case): event }.
+  async playImpacts() { return (await this.playData()).impacts || {}; }
 
   // The bots' voices (the agents' radio calls and chatter), by agent and line:
   // { phoenix: { enemyspotted: ['phoenix.radio_enemyspotted01', ...], ... }, leet, sas, seal }.

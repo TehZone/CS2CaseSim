@@ -15,8 +15,14 @@ export class CollisionWorld {
     this.surface = new Uint8Array(buffer, tris * 37, tris);
     this.surfaces = surfaces;
     this.ladders = new Set(surfaces.map((s, i) => (/ladder/i.test(s) ? i : -1)).filter((i) => i >= 0));
+    this.dynamic = []; // moving solids (see addDynamic)
     this.build();
   }
+
+  // A solid that moves or goes away (a door, a pane of breakable glass): { tris: Float32Array (9 numbers a triangle,
+  // game units; update them in place as it moves), flags, surface (name), off (true: gone) }. Traces test these after
+  // the static world; a hit on one has tri -1 and its shape.
+  addDynamic(shape) { this.dynamic.push(shape); return shape; }
 
   // Median-split BVH. Nodes: bounds (6 floats) + [left child | first triangle, right child | -count].
   build() {
@@ -90,6 +96,12 @@ export class CollisionWorld {
         if (t >= 0 && t < best) { best = t; hit = tri; }
       }
     }
+    let shape = null, at = 0;
+    for (const sh of this.dynamic) {
+      if (sh.off || !(sh.flags & mask)) continue;
+      for (let i = 0; i < sh.tris.length; i += 9) { const t = rayTri(sh.tris, i, o, d); if (t >= 0 && t < best) { best = t; shape = sh; at = i; } }
+    }
+    if (shape) return { t: best, normal: triNormal(shape.tris, at), tri: -1, surface: shape.surface || 'default', shape };
     if (hit < 0) return null;
     return { t: best, normal: triNormal(P, hit * 9), tri: hit, surface: this.surfaces[this.surface[hit]] || 'default' };
   }
@@ -117,6 +129,14 @@ export class CollisionWorld {
         if (!sweepBoxTri(P, tri * 9, c0, ext, v, best, res)) continue;
         if (res.solid) { startsolid = true; continue; }
         if (res.t < best) { best = res.t; normal = res.n.slice(); hitTri = tri; }
+      }
+    }
+    for (const sh of this.dynamic) {
+      if (sh.off || !(sh.flags & mask) || only) continue;
+      for (let i = 0; i < sh.tris.length; i += 9) {
+        if (!sweepBoxTri(sh.tris, i, c0, ext, v, best, res)) continue;
+        if (res.solid) { startsolid = true; continue; }
+        if (res.t < best) { best = res.t; normal = res.n.slice(); hitTri = -1; }
       }
     }
     // Stop just short of the surface (Source's DIST_EPSILON) so the next move doesn't start inside it.

@@ -496,5 +496,42 @@ function fakeGame() {
   fire.dispose();
 }
 
+// Moving solids (doors, breakable glass) in the collision world, and the map export's entity helpers.
+{
+  const w = world([[[-2000, -2000, -64], [2000, 2000, 0]]]);
+  const door = w.addDynamic({ tris: new Float32Array(boxTris([100, -40, 0], [104, 40, 90]).flat(2)), flags: FLAG_PLAYER | FLAG_BULLET, surface: 'wood' });
+  const shot = w.raycast([0, 0, 40], [1, 0, 0], 500, FLAG_BULLET);
+  ok(shot && near(shot.t, 100, 0.01) && shot.shape === door && shot.surface === 'wood', 'collision: a moving solid stops a bullet and says which it is');
+  const walk = w.traceBox([0, 0, 1], [200, 0, 1], [-16, -16, 0], [16, 16, 72], FLAG_PLAYER);
+  ok(walk.fraction < 1 && walk.endpos[0] < 84.1 && walk.endpos[0] > 83, 'collision: and a player walking into it');
+  door.off = true;
+  ok(!w.raycast([0, 0, 40], [1, 0, 0], 500, FLAG_BULLET) && w.traceBox([0, 0, 1], [200, 0, 1], [-16, -16, 0], [16, 16, 72], FLAG_PLAYER).fraction === 1, 'collision: gone once switched off (broken glass, an open way)');
+  const play = (await import('../cs2/play.cjs')).default;
+  const m = (x, y, z) => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, y * 0.0254, z * 0.0254, x * 0.0254, 1]; // game (x, y, z) -> glTF translation
+  const json = { nodes: [
+    { name: 'brush_blocker_2_1.hammer_mesh_0' }, { name: 'fence_gate.fence_gate_body', matrix: m(100, 200, 0) },
+    { name: 'fence_gate.fence_gate_body', matrix: m(500, 200, 0) }, { name: 'door_metal.door_body', matrix: m(0, 0, 0) }, { name: 'wall_1.hammer_mesh_0' } ] };
+  const ents = [
+    { classname: 'func_brush', startdisabled: 'true', model: 'resource_name:"maps/x/entities/brush_blocker_2_1.vmdl"' },
+    { classname: 'prop_dynamic', startdisabled: 'true', model: 'resource_name:"models/props/fence_gate.vmdl"', origin: '[ 100.0, 200.0, 0.0 ]' },
+    { classname: 'prop_door_rotating', model: 'resource_name:"models/props/door_metal.vmdl"', origin: '[ 0.0, 0.0, 0.0 ]', distance: '89', speed: '200', opendir: '0', returndelay: '-1', soundopenoverride: 'Door.Open' },
+  ];
+  ok(JSON.stringify(play.disabledNodes(json, ents)) === '[0,1]', 'map export: entities that start switched off (a Wingman blocker, one of two fence gates) are found by model and origin');
+  const doors = play.doorNodes(json, ents);
+  ok(doors.length === 1 && doors[0].nodes[0] === 3 && doors[0].distance === 89 && doors[0].away && doors[0].wait === -1 && doors[0].sounds.open === 'Door.Open', 'map export: a prop door, its hinge, swing and sounds');
+  const bjson = { nodes: [{ name: 'pane_1.hammer_mesh_0' }, { name: 'nuke_vent_breakable_c', matrix: m(50, 60, 70) }, { name: 'nuke_vent_breakable_c.body' }, { name: 'wine_bottle_breakable', matrix: m(5, 5, 5) }, { name: 'crate_1', matrix: m(9, 9, 9) }] };
+  const breaks = play.glassNodes(bjson, [
+    { classname: 'func_breakable', material: '0', model: 'resource_name:"maps/x/entities/pane_1.vmdl"' },
+    { classname: 'func_breakable', material: '1', model: 'resource_name:"maps/x/entities/pane_1.vmdl"' }, // wood: not glass
+    { classname: 'prop_dynamic', model: 'resource_name:"models/nuke_vent_breakable_c.vmdl"', origin: '[ 50.0, 60.0, 70.0 ]' },
+    { classname: 'prop_physics_multiplayer', model: 'resource_name:"models/wine_bottle_breakable.vmdl"', origin: '[ 5.0, 5.0, 5.0 ]' },
+    { classname: 'prop_dynamic', model: 'resource_name:"models/crate_1.vmdl"', origin: '[ 9.0, 9.0, 9.0 ]' }, // not a breakable model
+  ]);
+  ok(breaks.length === 3 && breaks[0].surface === 'glass' && breaks[0].solid && JSON.stringify(breaks[1].nodes) === '[1]' && breaks[1].surface === 'metalvent' && breaks[1].solid
+    && breaks[2].surface === 'glassbottle' && breaks[2].sound === 'GlassBottle.Break' && !breaks[2].solid, 'map export: breakable glass and props (a vent cover stops players, a bottle only bullets)');
+  const impacts = play.surfaceImpacts('{ surfacePropertyName = "brass_bell_large" audiosounds = { bulletimpact = "inferno.bell_c" } }, { surfacePropertyName = "Glass" audiosounds = { bulletimpact = "Glass.BulletImpact" } }');
+  ok(impacts.brass_bell_large === 'inferno.bell_c' && impacts.glass === 'Glass.BulletImpact', "map export: every surface's bullet impact sound (Inferno's bells)");
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

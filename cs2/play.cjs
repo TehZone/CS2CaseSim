@@ -9,9 +9,11 @@ const { readEXR } = require('./exr.cjs');
 const { decodePNG, encodePNG } = require('./png.cjs');
 
 const IN = 0.0254; // the exporter writes game inches as metres
-const PLAY_VERSION = 3; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading)
+const PLAY_VERSION = 9; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading;
+// 4: entities that start switched off left out, trigger_hurt volumes; 5: csgo_environment(_blend)'s other layers and height maps;
+// 6: doors and breakable glass; 7: the 3D skybox; 8: no texture over 1024 after it; 9: breakable props too)
 const PROBE_MAX = 8; // probe irradiance is stored as 8-bit sRGB of value / PROBE_MAX
-const DATA_VERSION = 5; // weapon stats + sound events
+const DATA_VERSION = 6; // weapon stats + sound events (6: maps' ambience sounds, every surface's bullet impact sound)
 // Collision flags per triangle: what it stops.
 const F_PLAYER = 1, F_BULLET = 2, F_GRENADE = 4;
 // The irradiance lightmap is stored as 8-bit sRGB of value / IRR_MAX.
@@ -135,6 +137,110 @@ function buildCollision(worldPhys, entityPhys, ents = []) {
     t += n;
   }
   return { buf, tris: count, surfaces };
+}
+
+// Entities CS2 starts switched off, for a game mode to switch on (Wingman's barricades, doors and blocker walls on
+// Vertigo, Nuke, Overpass and Inferno; Retakes' blockers): the glTF nodes of their models, to leave out of the drawn
+// world (their collision is left out by brushSolid). A brush entity's nodes are named after its model
+// ("<model>.hammer_mesh_0"); a prop's after its model too, at the entity's origin.
+function disabledNodes(json, ents) {
+  const brushes = new Set(), props = [];
+  for (const e of ents) {
+    if (!/^(true|1)$/i.test(String(e.startdisabled ?? '')) || !e.model) continue;
+    const base = String(e.model).replace(/^resource_name:"?|"$/g, '').replace(/.*\//, '').replace(/\.vmdl$/, '');
+    if (/^func_/.test(e.classname)) brushes.add(base); else props.push({ base, o: vec(e.origin) });
+  }
+  const out = [];
+  (json.nodes || []).forEach((n, i) => {
+    const base = String(n.name || '').split('.')[0];
+    if (brushes.has(base)) { out.push(i); return; }
+    const near = props.filter((p) => p.base === base);
+    if (!near.length) return;
+    const m = nodeMatrix(n), o = [m[14] / IN, m[12] / IN, m[13] / IN];
+    if (near.some((p) => Math.hypot(p.o[0] - o[0], p.o[1] - o[1], p.o[2] - o[2]) < 2)) out.push(i);
+  });
+  return out;
+}
+
+// The glTF nodes of an entity's model: a brush entity's are named after its model ("<model>.hammer_mesh_0"), a prop's
+// after its model too, at the entity's origin.
+function entityNodes(json) {
+  const byName = new Map();
+  (json.nodes || []).forEach((n, i) => { const k = String(n.name || '').split('.')[0]; if (!byName.has(k)) byName.set(k, []); byName.get(k).push(i); });
+  const base = (e) => String(e.model || '').replace(/^resource_name:"?|"$/g, '').replace(/.*\//, '').replace(/\.vmdl$/, '');
+  return {
+    brush: (e) => byName.get(base(e)) || [],
+    prop: (e) => (byName.get(base(e)) || []).filter((i) => {
+      const m = nodeMatrix(json.nodes[i]), o = vec(e.origin);
+      return Math.hypot(m[14] / IN - o[0], m[12] / IN - o[1], m[13] / IN - o[2]) < 2;
+    }),
+  };
+}
+
+// Doors that swing open: prop_door_rotating, and func_door_rotating with the props on it (Vertigo's portable toilets).
+// Each: its glTF nodes, where it hinges (its origin), how far (degrees) and fast it swings, how long it stays open
+// (-1: until closed), whether it opens away from whoever uses it, and its sounds.
+function doorNodes(json, ents) {
+  const find = entityNodes(json), out = [];
+  for (const e of ents) {
+    if (e.classname !== 'prop_door_rotating' && e.classname !== 'func_door_rotating') continue;
+    const prop = e.classname === 'prop_door_rotating';
+    const nodes = prop ? find.prop(e) : [...find.brush(e), ...ents.filter((c) => c.parentname && c.parentname === e.targetname && c.model).flatMap(find.prop)];
+    if (!nodes.length) continue;
+    out.push({
+      nodes, origin: vec(e.origin), distance: +e.distance || 90, speed: +e.speed || 100,
+      wait: prop ? +(e.returndelay ?? -1) : +(e.wait ?? 4), away: prop && String(e.opendir ?? '0') === '0', reverse: !prop && !!((+e.spawnflags || 0) & 2),
+      sounds: prop ? { open: e.soundopenoverride || '', close: e.soundcloseoverride || '', move: e.soundmoveoverride || '' } : { open: e.noise2 || '', close: e.noise2 || '', move: e.noise1 || '' },
+    });
+  }
+  return out;
+}
+
+// Things a bullet breaks: breakable glass (func_breakable of glass, material 0) and the props whose model is a breakable
+// piece (Inferno's and Poseidon's shop windows, Train's windows and cabinet doors, Nuke's vent covers, Mirage's
+// shutter, bottles, pots...). Each: its glTF nodes, what it's made of (the impact surface), its break sound, and whether
+// it stops players (a bottle or a plant doesn't, only bullets).
+const BREAKS = [
+  [/wood|shutter|crate|fence/i, 'wood', 'Wood_Panel.Break', true], // (before glass: Mirage's shutter_window_l_breakable)
+  [/glass|window/i, 'glass', 'Glass.Break', true],
+  [/bottle/i, 'glassbottle', 'GlassBottle.Break', false],
+  [/vent|enclosure|metal/i, 'metalvent', 'Metal_Box.Break', true],
+  [/vase|pot|planter/i, 'pottery', 'Pottery.Break', false],
+  [/./, 'default', 'Wood.Break', false],
+];
+function glassNodes(json, ents) {
+  const find = entityNodes(json), out = [];
+  for (const e of ents) {
+    if (!e.model || /^(true|1)$/i.test(String(e.startdisabled ?? ''))) continue;
+    const model = String(e.model).replace(/^resource_name:"?|"$/g, '').replace(/.*\//, '').replace(/\.vmdl$/, '');
+    let nodes, kind;
+    if (e.classname === 'func_breakable' && String(e.material ?? '0') === '0') { nodes = find.brush(e); kind = BREAKS.find((k) => k[1] === 'glass'); }
+    else if (/^prop_(dynamic|physics)/.test(e.classname) && /breakable/i.test(model)) { nodes = find.prop(e); kind = BREAKS.find(([re]) => re.test(model)); }
+    else continue;
+    if (nodes.length) out.push({ nodes, health: +e.health || 1, surface: kind[1], sound: kind[2], solid: kind[3] });
+  }
+  return out;
+}
+
+// Every surface's bullet impact sound (surfaceproperties.vsurf): { surface (lower case): sound event }. Inferno's
+// church bells ring when shot this way (brass_bell_large: inferno.bell_c).
+function surfaceImpacts(text) {
+  const out = {};
+  for (const block of String(text).split(/surfacePropertyName\s*=\s*/).slice(1)) {
+    const name = block.match(/^"([^"]+)"/)?.[1], hit = block.match(/bulletimpact\s*=\s*"([^"]+)"/)?.[1];
+    if (name && hit) out[name.toLowerCase()] = hit;
+  }
+  return out;
+}
+
+// A trigger_hurt's volume (game units) from its brush model's physics (in the model's own space, round the entity's
+// origin): { min, max, damage } (damage a second).
+function hurtVolume(glb, origin, damage) {
+  const tris = [];
+  for (const n of glb.json.nodes) if (n.mesh !== undefined) tris.push(...meshTriangles(glb, n.mesh, nodeMatrix(n)));
+  if (!tris.length) return null;
+  const b = bounds(tris), o = vec(origin);
+  return { min: b.min.map((v, i) => v + (o[i] || 0)), max: b.max.map((v, i) => v + (o[i] || 0)), damage };
 }
 
 // Gameplay volumes (bomb sites, buy zones, callout areas) as boxes in game units, named from the entity lump.
@@ -377,6 +483,6 @@ function soundEventFiles(text) {
 
 module.exports = {
   PLAY_VERSION, DATA_VERSION, F_PLAYER, F_BULLET, F_GRENADE, IRR_MAX, readGlb, buildCollision, brushSolid, gameVolumes, mapInfo, bakeLightmap, bakeSky,
-  probeVolumes, bakeProbes, toneMapping,
+  probeVolumes, bakeProbes, toneMapping, disabledNodes, hurtVolume, surfaceImpacts, doorNodes, glassNodes,
   weaponStats, soundEventFiles, parseEntities, compactNav, NAV_VERSION,
 };

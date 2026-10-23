@@ -28,6 +28,7 @@ import { buildCS2Model } from '../cs2/skin.js';
 import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, aimThrow as aimThrowPitch } from './grenades.js';
 import { Drops } from './drops.js';
 import { Balls } from './props.js';
+import { Doors } from './doors.js';
 import { Post } from './post.js';
 import { Radio } from './radio.js';
 import { MODES, WINGMAN_RULES, Deathmatch, ARMS_RACE, PROTECT } from './modes.js';
@@ -170,6 +171,7 @@ export class Game {
     this.nades = new Grenades(this);
     this.drops = new Drops(this);
     this.balls = new Balls(this, this.world.balls);
+    this.doors = new Doors(this, this.world);
     this.post = new Post(this.renderer, { samples: this.msaa, smoke: this.nades.volume });
     this.post.setLighting(this.world);
     // The map's post processing: its tone curve, auto exposure range and colour grading LUT.
@@ -178,6 +180,7 @@ export class Game {
     this.resize();
     this.sounds = new SoundBank();
     this.stats = await cs2Play('stats');
+    this.impacts = await cs2Play('impacts').catch(() => ({}));
     await loadRankArt();
     this.midSpot = this.findMid();
 
@@ -238,12 +241,15 @@ export class Game {
     })();
   }
 
+  // A surface's bullet impact sound: CS2's own for it (Inferno's church bells ring), else one for its kind.
+  impactSound(surface) { return this.impacts?.[String(surface).toLowerCase()] || `${impactName(surface)}.BulletImpact`; }
+
   commonSounds() {
     const surfaces = this.map.info.collision.surfaces;
     const steps = [...new Set(surfaces.map(stepName))].flatMap((s) => [`CT_${s}.StepLeft`, `CT_${s}.StepRight`, `Land_${s}.StepLeft`]);
-    const impacts = [...new Set(surfaces.map(impactName))].map((s) => `${s}.BulletImpact`);
+    const impacts = [...new Set(surfaces.flatMap((s) => [this.impactSound(s), `${impactName(s)}.BulletImpact`]))];
     const guns = BOT_GUNS.map((id) => this.stats[id]?.shootSound).filter(Boolean);
-    return [...steps, ...impacts, ...guns, 'Weapon_M4A1.Silenced', 'Weapon_USP.SilencedShot', 'Default.BulletImpact', 'Flesh.BulletImpact',
+    return [...steps, ...impacts, ...guns, ...this.doors.sounds(), 'Weapon_M4A1.Silenced', 'Weapon_USP.SilencedShot', 'Default.BulletImpact', 'Flesh.BulletImpact',
       'Default.ClipEmpty_Rifle', 'Default.ClipEmpty_Pistol', 'Weapon_AWP.Zoom', 'Weapon_AWP.ZoomOut', 'Weapon_AK47.Clipout', 'Weapon_M4A1.Clipout',
       'Player.DamageBody.AttackerFeedback', 'Player.DamageBodyArmor.AttackerFeedback', 'Player.DamageHeadShot.AttackerFeedback',
       'Player.DamageHeadShotArmor.AttackerFeedback', 'Player.DeathHeadShot.AttackerFeedback', 'Player.DeathHeadShotArmor.AttackerFeedback',
@@ -547,7 +553,7 @@ export class Game {
 
   // ---- rounds (called by the match) -------------------------------------------------------------------------------
   onRoundStart(round, { halftime, pistol, overtime, respawn }) {
-    if (!respawn) this.balls?.reset();
+    if (!respawn) { this.balls?.reset(); this.doors?.reset(); }
     if (respawn) { this.startRespawnMode(); return; }
     this.effects.clear();
     this.nades.clear();
@@ -1003,9 +1009,11 @@ export class Game {
       if (bomb?.state === 'dropped' && b.c.team === 'T' && Math.hypot(b.pos[0] - bomb.pos[0], b.pos[1] - bomb.pos[1]) < 50) m.pickupBomb(b.c);
       this.botFootsteps(b);
     }
+    this.hurtZones();
     this.nades.tick(TICK);
     this.drops.tick(TICK);
     this.balls.tick(TICK);
+    this.doors.tick(TICK, this.now);
     this.input.endTick(); // a mouse wheel notch's +jump (or other + command) lets go
     this.pickups();
     // The planted bomb beeps faster as it gets closer to going off.
@@ -1090,6 +1098,7 @@ export class Game {
         this.pickUp(this.me, it);
         return;
       }
+      if (this.doors.use(this.player.eye(), basis(this.input.pitch, this.input.yaw).fwd)) return; // a door you're looking at
     }
     const m = this.match, me = this.me;
     let near = false;
@@ -1174,6 +1183,25 @@ export class Game {
     pl.origin = this.collision.traceBox(o, o.map((p, k) => p + back[k]), pl.hull.mins, pl.hull.maxs, FLAG_PLAYER).endpos;
     const into = (pl.velocity[0] * back[0] + pl.velocity[1] * back[1] + pl.velocity[2] * back[2]) / l;
     if (into < 0) for (let k = 0; k < 3; k++) pl.velocity[k] -= (back[k] / l) * into;
+  }
+
+  // The map's trigger_hurt volumes (the drop off Vertigo's building, a pit, an elevator shaft): like CS2's, they hurt
+  // the moment you touch one, then every half second, half their damage a second each time. Tested every tick along
+  // the way since the last (a fall crosses the thin kill volume under Vertigo in a tick or two).
+  hurtZones() {
+    const zones = this.map?.info.hurts;
+    if (!zones?.length) return;
+    for (const c of this.combatants) {
+      const p = this.positionOf(c), f = c.hurtFrom;
+      const q = f && Math.hypot(p[0] - f[0], p[1] - f[1], p[2] - f[2]) < 200 ? f : p; // not across a respawn
+      c.hurtFrom = p;
+      if (!c.alive || this.now < (c.hurtAt || 0)) continue;
+      const lo = p.map((v, k) => Math.min(v, q[k])), hi = p.map((v, k) => Math.max(v, q[k]));
+      const z = zones.find((v) => hi[0] + 16 > v.min[0] && lo[0] - 16 < v.max[0] && hi[1] + 16 > v.min[1] && lo[1] - 16 < v.max[1] && hi[2] + 72 > v.min[2] && lo[2] < v.max[2]);
+      if (!z) continue;
+      c.hurtAt = this.now + 0.5;
+      this.damage(c, z.damage * 0.5, { group: 'leg', explosion: true, weapon: { name: 'World' } }); // like a fall: armor doesn't help
+    }
   }
 
   // CS2's fall damage: landing faster than 580 units/s hurts (armor doesn't help), 1024+ is about 125 damage.
@@ -1376,9 +1404,10 @@ export class Game {
       if (!wall) { lastT = range; break; }
       const p = [0, 1, 2].map((i) => o[i] + dir[i] * wall.t);
       this.effects.impact(p, wall.normal, wall.surface);
+      if (this.doors.shot(wall, p)) { travelled += wall.t + 0.5; o = p.map((v, i) => v + dir[i] * 0.5); continue; } // breakable glass: broken, on it goes
       if (wallNo === 0) {
-        const ev = `${impactName(wall.surface)}.BulletImpact`;
-        this.sounds.play(this.sounds.has(ev) ? ev : 'Default.BulletImpact', { pos: p, listener: this, volume: 0.6 });
+        const ev = [this.impactSound(wall.surface), `${impactName(wall.surface)}.BulletImpact`].find((e) => this.sounds.has(e)) || 'Default.BulletImpact';
+        this.sounds.play(ev, { pos: p, listener: this, volume: 0.6 });
         lastT = travelled + wall.t;
       }
       // Through the wall? Find where the bullet comes out by tracing back from the far side.
@@ -1706,8 +1735,18 @@ export class Game {
     // The world (with the smokes and the flashbang's afterimage), then your weapon on top.
     const flashLeft = (this.flashUntil || 0) - this.now;
     this.renderer.clear();
+    // The 3D skybox's camera: looking the same way, from where you are scaled down into the skybox.
+    const s3 = this.world.sky3d;
+    if (s3) {
+      const c = s3.camera;
+      c.fov = this.camera.fov; c.aspect = this.camera.aspect; c.near = 0.01; c.far = 4000;
+      this.camera.getWorldQuaternion(c.quaternion);
+      this.camera.getWorldPosition(c.position).sub(s3.offset).divideScalar(s3.scale).add(s3.origin);
+      c.updateProjectionMatrix();
+      c.updateMatrixWorld();
+    }
     this.post.render(this.scene, this.camera, {
-      camPos: camEye, captureFlash: this.flashCapture, dt: this.paused ? 0 : dt,
+      camPos: camEye, captureFlash: this.flashCapture, dt: this.paused ? 0 : dt, sky3d: s3,
       flashImage: me.alive && flashLeft > 0 ? Math.min(1, flashLeft / Math.max(0.6, this.flashSecs * 0.85)) * 0.9 : 0,
       overlay: (me.alive || this.specVm) && this.cv.r_drawviewmodel ? { scene: this.vmScene, camera: this.vmCamera } : null,
     });

@@ -17,7 +17,8 @@ const portArg = process.argv.indexOf('--port');
 const PORT = Number(portArg > 0 ? process.argv[portArg + 1] : process.env.PORT) || 5178;
 fs.mkdirSync(IMG, { recursive: true });
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.gltf': 'model/gltf+json', '.glb': 'model/gltf-binary', '.bin': 'application/octet-stream', '.exr': 'image/x-exr' };
-const CS2_CACHE = path.join(ROOT, 'cache', 'cs2');
+const cacheArg = process.argv.indexOf('--cache'); // --cache <dir> (or CS2SIM_CACHE): e.g. the app's own map exports
+const CS2_CACHE = (cacheArg > 0 && process.argv[cacheArg + 1]) || process.env.CS2SIM_CACHE || path.join(ROOT, 'cache', 'cs2');
 const TMP = path.join(process.env.LOCALAPPDATA || '', 'Temp');
 const cs2 = new CS2Service({
   cacheDir: CS2_CACHE,
@@ -78,7 +79,7 @@ http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/cs2/play') {
       const calls = { maps: () => cs2.playMaps(), mapImages: () => cs2.playMapImages(), map: (a) => cs2.playMap(a), progress: (a) => cs2.playProgress(a), weapon: (a) => cs2.playWeapon(a),
-        agent: (a) => cs2.playAgent(a), anims: (a) => cs2.playAnims(a), sounds: (a) => cs2.playSounds(a), agentModel: (a) => cs2.agentModel(a), stats: () => cs2.playStats(), voices: () => cs2.playVoices(), icons: () => cs2.playIcons(), ranks: () => cs2.playRanks() };
+        agent: (a) => cs2.playAgent(a), anims: (a) => cs2.playAnims(a), sounds: (a) => cs2.playSounds(a), agentModel: (a) => cs2.agentModel(a), stats: () => cs2.playStats(), impacts: () => cs2.playImpacts(), voices: () => cs2.playVoices(), icons: () => cs2.playIcons(), ranks: () => cs2.playRanks() };
       const fn = url.searchParams.get('fn');
       if (!Object.hasOwn(calls, fn)) return res.writeHead(400).end('Unknown play call');
       try { return json(res, 200, await calls[fn](JSON.parse(url.searchParams.get('arg') || 'null'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
