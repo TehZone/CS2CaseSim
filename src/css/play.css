@@ -134,6 +134,7 @@
 .play-hud .feed .ct { color: var(--ct); }
 .play-hud .feed .t { color: var(--tt); }
 .play-hud .feed .wpn { color: #eceef1; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; padding: 0 2px; }
+.play-hud .feed .wpn.icon { flex: none; height: 20px; width: auto; }
 .play-hud .feed .km { width: 18px; height: 18px; flex: none; color: #fff; }
 
 /* round messages; round-end banners span the screen in the winning team's colour */
@@ -219,6 +220,12 @@
 .play-buy .buy-item kbd { grid-area: k; }
 .play-buy .buy-item span { grid-area: n; font-size: 14px; font-weight: 600; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .play-buy .buy-item em { grid-area: p; justify-self: end; font-style: normal; font-size: 13px; font-weight: 600; color: #a6e07a; font-variant-numeric: tabular-nums; }
+/* with CS2's icon: the white silhouette centred above the name, the hotkey and price in the top corners */
+.play-buy .buy-item.has-icon { position: relative; grid-template-areas: 'i i' 'n n'; padding: 4px 8px; }
+.play-buy .buy-item.has-icon kbd { position: absolute; left: 8px; top: 4px; }
+.play-buy .buy-item.has-icon em { position: absolute; right: 8px; top: 3px; }
+.play-buy .buy-item.has-icon span { line-height: 17px; }
+.play-buy .buy-item img { grid-area: i; justify-self: center; height: 24px; max-width: 100%; margin-bottom: 1px; pointer-events: none; }
 .play-buy .buy-item:hover:not(:disabled) { background: linear-gradient(180deg, rgba(112, 124, 138, .62), rgba(70, 79, 90, .62)); border-color: rgba(255, 255, 255, .65); }
 .play-buy .buy-item:disabled { opacity: .4; cursor: default; }
 .play-buy .buy-item:disabled em { color: #ff6a5f; }

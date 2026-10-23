@@ -21,6 +21,7 @@ import { Hud } from './hud.js';
 import { NavMesh } from './nav.js';
 import { Match, Combatant, RULES, SHORT_RULES, DEFAULT_PISTOL, ITEM_NAMES, slotOf, isGrenade } from './match.js';
 import { BuyMenu } from './buymenu.js';
+import { iconFor } from './icons.js';
 import { Radar } from './radar.js';
 import { buildCS2Model } from '../cs2/skin.js';
 import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, aimThrow as aimThrowPitch } from './grenades.js';
@@ -127,6 +128,8 @@ export class Game {
   async load() {
     const status = (m) => { if (!this.disposed) this.onStatus(m); };
     status('Preparing the map from your CS2 install (the first time takes a couple of minutes)…');
+    // CS2's weapon icons for the buy menu and the kill feed (they show the names until these arrive, or without CS2).
+    cs2Play('icons').then((icons) => { this.icons = icons; }).catch(() => {});
     let done = false;
     (async () => {
       while (!done && !this.disposed) {
@@ -760,7 +763,7 @@ export class Game {
       const p = this.bodyOf(c).chest;
       const d = Math.hypot(p[0] - bomb.pos[0], p[1] - bomb.pos[1], p[2] - bomb.pos[2]);
       const dmg = dmgMax * Math.exp(-(d * d) / (2 * sigma * sigma));
-      if (dmg >= 1) this.damage(c, dmg, { attacker: null, group: 'chest', armorRatio: 1, weapon: { name: 'C4' }, explosion: true });
+      if (dmg >= 1) this.damage(c, dmg, { attacker: null, group: 'chest', armorRatio: 1, weapon: { id: 'planted_c4', name: 'C4' }, explosion: true });
     }
     this.shake = 1;
   }
@@ -1359,7 +1362,7 @@ export class Game {
     const wname = weapon?.id ? (ITEM_NAMES[weapon.id] || (weapon.name || '').split(' | ')[0]) : weapon?.name || 'World';
     const by = attacker && attacker !== c;
     this.hud.kill({
-      killer: attacker?.name || '', victim: c.name, weapon: wname, mine: attacker === this.me || c === this.me, killerTeam: attacker?.team, victimTeam: c.team,
+      killer: attacker?.name || '', victim: c.name, weapon: wname, icon: iconFor(this.icons, weapon?.id, { gun: weapon, kill: true }), mine: attacker === this.me || c === this.me, killerTeam: attacker?.team, victimTeam: c.team,
       headshot, ...how, air: by && this.inAir(attacker), blind: by && this.isBlind(attacker),
     });
     if (c === this.me) {
