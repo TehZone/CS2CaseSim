@@ -37,7 +37,7 @@ function initPaths() {
 
 // Play mode calls from the renderer (one channel, whitelisted).
 const PLAY_CALLS = {
-  maps: () => cs2.playMaps(), map: (id) => cs2.playMap(id), progress: (key) => cs2.playProgress(key), weapon: (id) => cs2.playWeapon(id),
+  maps: () => cs2.playMaps(), mapImages: () => cs2.playMapImages(), map: (id) => cs2.playMap(id), progress: (key) => cs2.playProgress(key), weapon: (id) => cs2.playWeapon(id),
   agent: (vmdl) => cs2.playAgent(vmdl), anims: (list) => cs2.playAnims(list), sounds: (events) => cs2.playSounds(events),
   agentModel: (id) => cs2.agentModel(id), stats: () => cs2.playStats(), voices: () => cs2.playVoices(),
 };

@@ -86,8 +86,8 @@ export class Game {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, powerPreference: 'high-performance' });
     // Quality: high renders at the screen's full resolution with soft shadows; balanced at 1 CSS pixel; performance lower.
     this.renderer.setPixelRatio(quality === 'high' ? Math.min(window.devicePixelRatio, 2) : quality === 'performance' ? 0.75 : 1);
-    this.renderer.toneMapping = THREE.NeutralToneMapping;
-    this.renderer.toneMappingExposure = 0.75;
+    // Tone mapping and colour grading happen in the post pass (post.js), like CS2's.
+    this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.shadowMap.autoUpdate = false; // the map's shadows are static: rendered once after loading
@@ -158,6 +158,9 @@ export class Game {
     this.drops = new Drops(this);
     this.post = new Post(this.renderer, { samples: this.msaa, smoke: this.nades.volume });
     this.post.setLighting(this.world);
+    // The map's post processing: its tone curve, auto exposure range and colour grading LUT.
+    const lut = map.lut ? await fetch(map.lut).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null) : null;
+    this.post.setGrading({ tone: map.info.lighting?.tonemap, exposure: map.info.exposure, lut: lut && { data: new Uint8Array(lut), size: map.info.lighting.lut.size } });
     this.resize();
     this.sounds = new SoundBank();
     this.stats = await cs2Play('stats');
@@ -206,8 +209,7 @@ export class Game {
     this.match = this.respawnMode ? new Deathmatch(this, { minutes: this.minutes, ffa: this.ffa, armsRace: this.armsRace }) : new Match(this, this.rules);
     if (this.respawnMode) await Promise.all((this.armsRace ? ARMS_RACE : [this.dmWeapon('primary'), this.dmWeapon('secondary')]).slice(0, 2).map((id) => this.vmData(id).catch(() => {})));
     status('Compiling shaders…');
-    this.post.compile(this.scene, this.camera);
-    this.renderer.compile(this.vmScene, this.vmCamera);
+    this.post.compile(this.scene, this.camera, { scene: this.vmScene, camera: this.vmCamera });
     this.renderer.shadowMap.needsUpdate = true;
     this.match.startRound();
     this.emit('loaded');
@@ -245,7 +247,10 @@ export class Game {
     this.vmSun.position.copy(w.sun.position).sub(w.sun.target.position).normalize();
     this.vmScene.add(this.vmSun);
     const amb = w.ambient;
-    this.vmScene.add(new THREE.HemisphereLight(amb.sky.value.clone().multiplyScalar(2.2), amb.ground.value.clone().multiplyScalar(2.2), 1));
+    // Your weapon's indirect light: the light probes where you are (updated each frame), else a sky/ground ambient.
+    this.vmHemi = new THREE.HemisphereLight(amb.sky.value.clone().multiplyScalar(2.2), amb.ground.value.clone().multiplyScalar(2.2), 1);
+    this.vmScene.add(this.vmHemi);
+    this.vmCube = new Float32Array(18);
     if (w.sky) {
       const pm = new THREE.PMREMGenerator(this.renderer);
       this.vmEnv = pm.fromEquirectangular(w.sky).texture;
@@ -270,33 +275,35 @@ export class Game {
     return kdef.wid?.startsWith('weapon_') ? kdef.wid : Object.values(D.skins).find((s) => s.w === kdef.w && s.wid.startsWith('weapon_'))?.wid || 'weapon_knife';
   }
   // The viewmodel (with your equipped skin and gloves) for a weapon, built once per match.
-  vmData(wid) {
-    if (!this.vmCache.has(wid)) {
+  // plain: without your skins and gloves (a bot's gun, seen while spectating it).
+  vmData(wid, { plain = false } = {}) {
+    const key = (plain ? 'plain:' : '') + wid;
+    if (!this.vmCache.has(key)) {
       const job = (async () => {
         const vanilla = Object.values(D.skins).find((s) => s.wid === wid);
         let item = null, def;
         if (/knife|bayonet/.test(wid)) {
-          item = equipped('knife');
+          item = plain ? null : equipped('knife');
           def = item ? itemDef(item) : DEFAULT_KNIFE[wid === 'weapon_knife_t' ? 'T' : 'CT'];
         } else if (wid === 'weapon_c4') def = { wid, w: 'C4 Explosive', n: 'C4 Explosive', cat: 'equipment', v: true };
         else if (NADES[wid]) def = { wid, w: NADES[wid].name, n: NADES[wid].name, cat: 'equipment', v: true };
         else {
           const w = vanilla?.w || ITEM_NAMES[wid] || wid;
-          item = equipped('w:' + w);
+          item = plain ? null : equipped('w:' + w);
           def = item ? itemDef(item) : { wid, w, n: w, cat: vanilla?.cat || 'rifle', v: true };
         }
         const data = await cs2Play('weapon', wid);
-        const vm = await buildViewmodel(item || { t: 'skin', fl: 0, sd: 0 }, def, data, { gloves: equipped('gloves'), renderer: this.renderer });
+        const vm = await buildViewmodel(item || { t: 'skin', fl: 0, sd: 0 }, def, data, { gloves: plain ? null : equipped('gloves'), renderer: this.renderer });
         this.sounds.add(data.sounds);
         vm.rig.visible = false;
         this.vmRoot.add(vm.rig);
         const name = wid === 'weapon_c4' ? 'C4 Explosive' : NADES[wid] ? NADES[wid].name : def.v ? def.w : `${def.w} | ${def.n?.split(' | ')[1] || def.n}`;
         return { data, vm, name };
       })();
-      this.vmCache.set(wid, job);
-      job.catch((e) => { console.warn('weapon failed', wid, e); this.vmCache.delete(wid); });
+      this.vmCache.set(key, job);
+      job.catch((e) => { console.warn('weapon failed', wid, e); this.vmCache.delete(key); });
     }
-    return this.vmCache.get(wid);
+    return this.vmCache.get(key);
   }
   // A fresh gun (full ammo) for one of your slots.
   async myGun(slot, wid) {
@@ -389,6 +396,7 @@ export class Game {
     b.yaw = p.yaw; b.pitch = p.pitch;
     if (!p.released && this.now >= p.at) {
       p.released = true;
+      this.specAnim(b, p.strength >= 0.5 ? 'throw' : 'throwUnder');
       b.gesture(p.strength >= 0.5 ? this.botAssets.clips.throw : this.botAssets.clips.lob);
       const eye = b.eye(), { fwd } = basis(p.pitch, p.yaw);
       const tr = this.collision.traceBox(eye, eye.map((v, i) => v + fwd[i] * 16), [-2, -2, -2], [2, 2, 2], FLAG_PLAYER);
@@ -460,7 +468,8 @@ export class Game {
     for (const b of this.bots) { b.brain.roundStart(this.plans[b.c.team]); b.brain.buy(pistol); }
     this.liveAt = Infinity;
     this.hud.message(overtime ? `Overtime ${overtime} · $12,500 each` : halftime ? 'Switching sides' : round === 1 ? 'Match start · Round 1' : `Round ${round}`, 2500);
-    this.sounds.play(`Music.StartRound.${MUSIC}`, { volume: 0.35 * this.musicVolume });
+    this.sounds.stop('voice', 0.2);
+    this.sounds.channel('music', `Music.StartRound.${MUSIC}`, { volume: 0.35 * this.musicVolume }, 0.8);
     this.emit('round', round);
   }
   // ---- Deathmatch / Arms Race: everyone respawns where no enemy is close ------------------------------------------------
@@ -470,7 +479,7 @@ export class Game {
     this.plans = { T: {}, CT: {} };
     for (const c of this.combatants) { c.alive = false; c.resetWeapons = true; this.respawn(c); }
     this.hud.message(this.armsRace ? 'Arms Race · a new weapon every kill, the knife last' : `Deathmatch${this.ffa ? ' · free for all' : ''} · ${this.minutes} minutes`, 3500);
-    this.sounds.play(`Music.StartRound.${MUSIC}`, { volume: 0.35 * this.musicVolume });
+    this.sounds.channel('music', `Music.StartRound.${MUSIC}`, { volume: 0.35 * this.musicVolume }, 0.8);
     this.emit('round', 1);
   }
   // A spawn point away from enemies: the map's spawns and random spots on the nav mesh, the one furthest from (and
@@ -626,13 +635,13 @@ export class Game {
     const why = { elimination: '', bomb: 'The bomb has exploded', defuse: 'The bomb has been defused', time: 'Time ran out' }[reason];
     this.hud.message(`<b class="${winner === 'CT' ? 'ct' : 't'}">${sideName} win</b>${why ? `<small>${why}</small>` : ''}${mvp ? `<small>MVP: ${mvp.name}</small>` : ''}`, 6500, 'banner');
     this.sounds.play(winner === 'CT' ? 'Event.CTWin' : 'Event.TERWin', { volume: 0.9 });
-    this.sounds.play(winner === this.me.team ? `Music.WonRound.${MUSIC}` : `Music.LostRound.${MUSIC}`, { volume: 0.4 * this.musicVolume });
+    this.sounds.channel('music', winner === this.me.team ? `Music.WonRound.${MUSIC}` : `Music.LostRound.${MUSIC}`, { volume: 0.4 * this.musicVolume }, 0.4);
     this.planting = null;
     this.emit('roundEnd', { winner, reason });
   }
   onMatchOver(squad) {
     const won = squad === 'A', draw = squad == null;
-    this.sounds.play(`Music.MatchEnd.${MUSIC}`, { volume: 0.4 * this.musicVolume });
+    this.sounds.channel('music', `Music.MatchEnd.${MUSIC}`, { volume: 0.4 * this.musicVolume }, 0.8);
     this.matchOver = true;
     const lead = this.match.leader;
     const final = this.ffa ? (won ? 'You win' : `${lead?.name || '?'} wins`) + (this.armsRace ? '' : ` · ${lead?.points || 0} points`) : `${this.match.score.A} : ${this.match.score.B}`;
@@ -719,7 +728,7 @@ export class Game {
     this.placeBomb(bomb.pos, c === this.me ? this.input.yaw : this.botOf(c)?.yaw || 0);
     this.sounds.play('c4.plant', { pos: bomb.pos, listener: this, volume: 0.8 });
     this.sounds.play('Event.BombPlanted', { volume: 0.9 });
-    this.sounds.play(`Music.BombPlanted.${MUSIC}`, { volume: 0.35 * this.musicVolume });
+    this.sounds.channel('music', `Music.BombPlanted.${MUSIC}`, { volume: 0.35 * this.musicVolume }, 0.6);
     this.hud.message('The bomb has been planted', 3000, 'bomb');
     bomb.beepAt = this.now + 1;
     for (const b of this.bots) b.brain.nextThink = this.now; // everyone knows where the bomb is
@@ -826,8 +835,8 @@ export class Game {
       const b = m.bomb;
       if (b?.state === 'dropped' && me.team === 'T' && Math.hypot(this.player.origin[0] - b.pos[0], this.player.origin[1] - b.pos[1], this.player.origin[2] - b.pos[2]) < 60) m.pickupBomb(me);
     } else {
-      inp.takePressed(); inp.takeWheel();
-      this.spectateInput();
+      const pressed = inp.takePressed(); inp.takeWheel();
+      this.spectateInput(pressed);
     }
     // Bots
     for (const b of this.bots) {
@@ -849,7 +858,7 @@ export class Game {
     }
     // Is the sun on you? (lights your weapon)
     if ((this.tickCount = (this.tickCount || 0) + 1) % 8 === 0) {
-      this.sunTarget = this.collision.raycast(this.player.eye(), this.world.sunDir, 16000, FLAG_BULLET) ? 0 : 1;
+      this.sunTarget = this.collision.raycast(this.camEye || this.player.eye(), this.world.sunDir, 16000, FLAG_BULLET) ? 0 : 1;
       if (me.alive) this.spotFromMe();
     }
     this.sunVis += ((this.sunTarget ?? 1) - this.sunVis) * 0.2;
@@ -1114,6 +1123,12 @@ export class Game {
     for (const b of this.bots) if (b.c.alive && (!source || this.hostile(b.c, source))) b.brain.hear(pos, loud, this.now);
   }
   botSound(b, event, volume = 1) { this.sounds.play(event, { pos: b.eye(), listener: this, volume }); }
+  // Where you hear from (your eye, or the camera while dead), and whether a wall is between you and a sound.
+  earPos() { return this.camEye || this.player.eye(); }
+  soundBlocked(ear, pos) {
+    const d = [pos[0] - ear[0], pos[1] - ear[1], pos[2] + 8 - ear[2]], l = Math.hypot(...d);
+    return l > 1 && !!this.collision.raycast(ear, d.map((v) => v / l), l - 16, FLAG_BULLET);
+  }
 
   // A bot fires its gun: CS2's inaccuracy and spread, and recoil it partly controls.
   botShoot(b, gun, t, control) {
@@ -1146,12 +1161,14 @@ export class Game {
     gun.recoilIndex++;
     const ev = gun.silenced ? (gun.id === 'weapon_usp_silencer' ? 'Weapon_USP.SilencedShot' : 'Weapon_M4A1.Silenced') : st.shootSound;
     this.sounds.play(ev, { pos: eye, listener: this, volume: 1 });
+    this.specAnim(b, 'shoot');
     this.effects.worldFlash(b.muzzle());
     this.noise(eye, gun.silenced ? 900 : 2600, b.c);
   }
 
   // A bot's knife slash (a backstab from behind).
   botKnife(b, target, gun) {
+    this.specAnim(b, 'lightHit');
     const tp = this.positionOf(target), yaw = target === this.me ? this.input.yaw : this.botOf(target).yaw;
     const to = [tp[0] - b.pos[0], tp[1] - b.pos[1]], l = Math.hypot(...to) || 1;
     const backstab = (Math.cos((yaw * Math.PI) / 180) * to[0] + Math.sin((yaw * Math.PI) / 180) * to[1]) / l > 0.5;
@@ -1370,8 +1387,42 @@ export class Game {
   placeOf(c) { return this.placeAt(this.positionOf(c)); }
 
   // ---- spectating ---------------------------------------------------------------------------------------------------
-  spectateInput() {
+  spectateInput(pressed) {
     if (this.input.takeClicked() & 1 || !this.spectating?.c.alive) this.nextSpectate();
+    if (pressed?.has('jump')) this.specThird = !this.specThird;
+  }
+  // First-person spectating: the bot's own body is hidden and its gun shows as a viewmodel (the default look), drawing,
+  // shooting, reloading and throwing with it.
+  updateSpecView(dt) {
+    const s = !this.me.alive && !this.specThird && !(this.deathCam && this.now < this.deathCam.until) && this.spectating?.c.alive ? this.spectating : null;
+    const show = (b, on) => { b.model.visible = on; if (b.weaponModel) b.weaponModel.visible = on; };
+    if (this.specHidden && this.specHidden !== s) { show(this.specHidden, true); this.specHidden = null; }
+    if (s) { show(s, false); this.specHidden = s; }
+    const wid = s?.holding;
+    if (this.specVm && (this.specVm.bot !== s || this.specVm.wid !== wid)) { this.specVm.vm.rig.visible = false; this.specVm = null; }
+    const key = s && wid ? s.c.name + '|' + wid : null;
+    if (key && !this.specVm && this.specLoading !== key) {
+      this.specLoading = key;
+      this.vmData(wid, { plain: true }).then(({ vm }) => {
+        if (this.specLoading !== key) return;
+        this.specLoading = null;
+        if (this.spectating !== s || s.holding !== wid || this.disposed) return;
+        const draw = vm.has('draw') ? vm.play('draw') : (vm.play('idle', { loop: true }), 0);
+        this.specVm = { bot: s, wid, vm, animEnd: this.now + draw };
+      }).catch(() => { if (this.specLoading === key) this.specLoading = null; });
+    }
+    const v = this.specVm;
+    if (!v) return;
+    v.vm.rig.visible = true;
+    if (v.vm.role !== 'idle' && this.now >= v.animEnd && v.vm.has('idle')) v.vm.play('idle', { loop: true, fade: 0.12 });
+    v.vm.update(this.paused ? 0 : dt);
+    v.vm.rig.position.set(this.vm.x * IN, this.vm.z * IN, -this.vm.y * IN);
+  }
+  // The spectated bot's gun animating: a shot, a reload (over secs), a throw, a knife swing.
+  specAnim(b, role, secs = 0) {
+    const v = this.specVm;
+    if (!v || v.bot !== b || !v.vm.has(role)) return;
+    v.animEnd = this.now + v.vm.play(role, { fade: 0.03, speed: secs ? v.vm.length(role) / secs : 1 });
   }
   nextSpectate() {
     if (this.deathCam && this.now < this.deathCam.until) return;
@@ -1405,7 +1456,12 @@ export class Game {
     } else {
       if (!this.spectating?.c.alive) this.nextSpectate();
       const s = this.spectating;
-      if (s) {
+      if (s && !this.specThird) {
+        // First person (CS2's default): from the bot's eyes, turning with its aim (smoothed a little).
+        camEye = s.eye();
+        const q = new THREE.Quaternion().setFromEuler(new THREE.Euler((-s.pitch * Math.PI) / 180, (s.yaw * Math.PI) / 180 + Math.PI, 0, 'YXZ'));
+        this.camera.quaternion.slerp(q, Math.min(1, 20 * dt));
+      } else if (s) {
         const eye = s.eye(), { fwd } = basis(Math.max(-20, Math.min(40, s.pitch)), s.yaw);
         const back = [-fwd[0], -fwd[1], -fwd[2] * 0.3 + 0.35];
         const bl = Math.hypot(...back);
@@ -1434,12 +1490,25 @@ export class Game {
       this.bob = (this.bob || 0) + dt * (6 + 4 * sp) * (sp > 0.05 ? 1 : 0);
       gun.vm.rig.position.set((this.vm.x + Math.cos(this.bob) * 0.25 * sp) * IN, (this.vm.z - Math.abs(Math.sin(this.bob)) * 0.35 * sp) * IN, -this.vm.y * IN);
     }
+    this.updateSpecView(dt);
     this.vmRoot.quaternion.copy(this.camera.quaternion);
     this.vmCamera.quaternion.copy(this.camera.quaternion);
+    this.frameNo = (this.frameNo || 0) + 1;
+    const probes = this.world.probes;
     for (const b of [...this.bots, this.myBody]) {
       if (!b.root.visible) continue;
       b.sync();
       b.animate(this.paused ? 0 : dt);
+      // Lit by the probes where it stands (a few times a second is plenty).
+      if (probes && (this.frameNo + b.index) % 6 === 0) b.amb.set(probes, [b.pos[0], b.pos[1], b.pos[2] + 36]);
+    }
+    if (probes && this.frameNo % 3 === 0) {
+      const c = probes.cube(camEye, this.vmCube), PI = Math.PI;
+      this.vmHemi.color.setRGB(c[6] * PI, c[7] * PI, c[8] * PI);
+      this.vmHemi.groundColor.setRGB(c[15] * PI, c[16] * PI, c[17] * PI);
+      // The sky's reflections dim indoors with the light.
+      const lum = (c[6] + c[7] + c[8]) / 3;
+      this.vmScene.environmentIntensity = 0.3 * Math.min(1, Math.max(0.1, lum / 0.45));
     }
     this.updatePings();
     this.effects.update(dt);
@@ -1450,12 +1519,11 @@ export class Game {
     const flashLeft = (this.flashUntil || 0) - this.now;
     this.renderer.clear();
     this.post.render(this.scene, this.camera, {
-      camPos: camEye, captureFlash: this.flashCapture,
+      camPos: camEye, captureFlash: this.flashCapture, dt: this.paused ? 0 : dt,
       flashImage: me.alive && flashLeft > 0 ? Math.min(1, flashLeft / Math.max(0.6, this.flashSecs * 0.85)) * 0.9 : 0,
+      overlay: me.alive || this.specVm ? { scene: this.vmScene, camera: this.vmCamera } : null,
     });
     this.flashCapture = false;
-    this.renderer.clearDepth();
-    if (me.alive) this.renderer.render(this.vmScene, this.vmCamera);
 
     this.fps = this.fps ? this.fps * 0.95 + (1 / Math.max(dt, 1e-3)) * 0.05 : 60;
     this.updateHud(dt);
@@ -1490,14 +1558,16 @@ export class Game {
     const s = this.spectating && !me.alive ? this.spectating.c : me;
     hud.vitals(s.health, s.armor, s.helmet);
     hud.money(this.respawnMode ? null : me.money, { buyzone: me.alive && m.buyOpen && this.inBuyZone() && !this.armsRace, c4: me.hasC4, kit: me.defuser });
-    hud.spectate(!me.alive && this.spectating && !(this.deathCam && this.now < this.deathCam.until) ? this.spectating.c.name : null);
-    hud.crosshair(me.alive && !this.buyMenu.isOpen && !gun?.nade);
+    hud.spectate(!me.alive && this.spectating && !(this.deathCam && this.now < this.deathCam.until) ? this.spectating.c.name : null, !this.specThird);
+    hud.crosshair(me.alive ? !this.buyMenu.isOpen && !gun?.nade : !!this.specVm);
     const left = (this.flashUntil || 0) - this.now;
     hud.flashed(left > 0 ? Math.min(1, left / Math.max(0.5, this.flashSecs * 0.6)) : 0);
     hud.nades(me.alive ? NADE_ORDER.filter((id) => me.nades[id] > 0).map((id) => [id, NADES[id].short, me.nades[id]]) : [], gun?.nade ? gun.id : null);
     if (me.alive && gun && !gun.melee) hud.setCrosshair(this.arsenal.inaccuracy(gun));
-    const ammoKey = me.alive && gun ? `${gun.name}|${gun.clip}|${gun.reserve}` : '';
-    if (ammoKey !== this.ammoKey) { this.ammoKey = ammoKey; hud.ammo(me.alive ? gun : null); }
+    const sg = !me.alive && this.specVm ? this.specVm.bot.weapons[this.specVm.bot.slot] : null;
+    const shown = me.alive ? gun : sg && { id: sg.id, name: ITEM_NAMES[sg.id] || sg.id, clip: sg.clip, reserve: sg.reserve, melee: sg.melee, nade: isGrenade(sg.id) };
+    const ammoKey = shown ? `${shown.name}|${shown.clip}|${shown.reserve}` : '';
+    if (ammoKey !== this.ammoKey) { this.ammoKey = ammoKey; hud.ammo(shown || null); }
     // Planting / defusing progress.
     if (this.respawnMode && !me.alive && me.respawnAt != null) hud.progress('Respawning', Math.min(1, 1 - (me.respawnAt - this.now) / 2));
     else if (this.planting) hud.progress('Planting the bomb', Math.min(1, (this.now - this.planting.start) / m.rules.plantTime));

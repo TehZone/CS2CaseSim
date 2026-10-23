@@ -1,7 +1,24 @@
 // Play mode sounds: CS2's sound events (each a set of variations) played through Web Audio. Sounds from the world
-// (bots' guns, impacts) are positioned in 3D; your own weapon plays straight.
+// (bots' guns, impacts) are positioned in 3D; your own weapon plays straight. Music and radio voices play on channels
+// that hold one sound at a time: a new track fades out the last (CS2 cuts the round's music when the next part starts).
 import { cs2Play } from '../cs2/api.js';
 import { S } from '../state.js';
+
+// How far world sounds carry (game units), like CS2's sound levels: gunshots and explosions over much of the map,
+// footsteps about 1100 units, small sounds less. Past that a sound isn't played at all; it fades out towards the edge,
+// and comes through muffled from behind a wall.
+const RANGES = [
+  [/Silenced|SilencedShot/i, 1300],
+  [/Explode|Detonate|BaseGrenade|c4\.explode/i, 5000],
+  [/^Weapon_.*\.(Single|Fire|Shot)/i, 4200],
+  [/Inferno|Molotov\.Start|IncGrenade\.Start|BaseSmokeEffect/i, 1600],
+  [/C4\.PlantSound/i, 1900],
+  [/Step(Left|Right)|^Land_/i, 1100],
+  [/Bounce/i, 1100],
+  [/BulletImpact|Knife|Flesh|DeathTaser/i, 950],
+];
+const DEFAULT_RANGE = 900;
+export const soundRange = (event) => RANGES.find(([re]) => re.test(event))?.[1] ?? DEFAULT_RANGE;
 
 export class SoundBank {
   constructor() {
@@ -11,6 +28,7 @@ export class SoundBank {
     this.events = {}; // event -> [urls]
     this.buffers = new Map(); // url -> Promise<AudioBuffer>
     this.last = new Map();
+    this.channels = new Map(); // name -> { src, gain, token }
     this.setVolume();
   }
 
@@ -35,16 +53,29 @@ export class SoundBank {
 
   has(event) { return !!this.events[event]?.length; }
 
-  // Plays a random variation of an event. opts: { volume, pos (game units), listener (Game), rate }.
-  async play(event, { volume = 1, pos = null, listener = null, rate = 1 } = {}) {
+  // Plays a random variation of an event. opts: { volume, pos (game units), listener (Game: its ear and walls), rate,
+  // range (how far it carries; by event otherwise), startIf (checked once the sound has loaded) }. Resolves to its
+  // source node.
+  async play(event, { volume = 1, pos = null, listener = null, rate = 1, range = null, startIf = null } = {}) {
     const urls = this.events[event];
     if (!urls?.length) return;
+    // Proximity: too far away to hear, or fading out with distance (muffled through walls).
+    let muffled = false;
+    if (pos && listener) {
+      const ear = listener.earPos(), r = range ?? soundRange(event);
+      const d = Math.hypot(pos[0] - ear[0], pos[1] - ear[1], pos[2] - ear[2]);
+      if (d > r) return;
+      const near = Math.min(150, r * 0.15);
+      if (d > near) volume *= Math.pow(1 - (d - near) / (r - near), 2);
+      if (volume < 0.01) return;
+      if (d > 120 && listener.soundBlocked(ear, pos)) { muffled = true; volume *= 0.6; }
+    }
     if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
     let i = Math.floor(Math.random() * urls.length);
     if (urls.length > 1 && i === this.last.get(event)) i = (i + 1) % urls.length;
     this.last.set(event, i);
     const buf = await this.buffer(urls[i]);
-    if (!buf) return;
+    if (!buf || (startIf && !startIf())) return;
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
     src.playbackRate.value = rate;
@@ -52,17 +83,46 @@ export class SoundBank {
     g.gain.value = volume;
     src.connect(g);
     if (pos && listener) {
+      // The panner only gives the direction; distance is in the volume above.
       const p = this.ctx.createPanner();
       p.panningModel = 'HRTF';
-      p.distanceModel = 'inverse';
-      p.refDistance = 120; p.rolloffFactor = 1.1; p.maxDistance = 6000;
+      p.distanceModel = 'linear';
+      p.refDistance = 1; p.maxDistance = 100000; p.rolloffFactor = 0;
       // game units straight in: x/y horizontal, z up -> Web Audio's y up
       p.positionX.value = pos[0]; p.positionY.value = pos[2]; p.positionZ.value = -pos[1];
-      g.connect(p);
+      let last = g;
+      if (muffled) {
+        const lp = this.ctx.createBiquadFilter();
+        lp.type = 'lowpass'; lp.frequency.value = 900;
+        g.connect(lp); last = lp;
+      }
+      last.connect(p);
       p.connect(this.out);
     } else g.connect(this.out);
     src.start();
+    src.gainNode = g;
     return src;
+  }
+
+  // Plays an event on a channel (one sound at a time), fading out whatever it was playing.
+  async channel(name, event, opts = {}, fade = 0.5) {
+    this.stop(name, fade);
+    const ch = this.channels.get(name);
+    const src = await this.play(event, { ...opts, startIf: () => this.channels.get(name) === ch && !ch.src });
+    if (src) { ch.src = src; src.onended = () => { if (ch.src === src) ch.src = null; }; }
+    return src;
+  }
+  // Fades out a channel's sound (and drops one still loading).
+  stop(name, fade = 0.5) {
+    const old = this.channels.get(name);
+    this.channels.set(name, { src: null });
+    const src = old?.src;
+    if (!src) return;
+    const now = this.ctx.currentTime;
+    src.gainNode.gain.cancelScheduledValues(now);
+    src.gainNode.gain.setValueAtTime(src.gainNode.gain.value, now);
+    src.gainNode.gain.linearRampToValueAtTime(0, now + fade);
+    try { src.stop(now + fade + 0.02); } catch {}
   }
 
   // Ears at the player's eye, facing their view (game units).

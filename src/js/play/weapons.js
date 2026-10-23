@@ -183,9 +183,12 @@ export class Arsenal {
     if (cur.nade) { this.grenade(cur, t, input); return; }
     // The bomb: hold fire in a bomb site to plant (the game runs the planting).
     if (cur.id === 'weapon_c4') { this.game.playerPlant(!!(input.buttons & 1), t); return; }
+    // Inspecting works in freeze time too, like CS2 (not while defusing or buying).
+    if (pressed.has('inspect') && !cur.reloading && t >= cur.nextAttack && cur.vm.has('inspect') && !this.game.defusing && !this.game.buyMenu?.isOpen) {
+      cur.zoom = 0; cur.animEnd = t + cur.vm.play('inspect');
+    }
     if (!this.game.canAttack()) { if (pressed.has('reload')) this.reload(cur, t); return; }
     if (pressed.has('reload')) this.reload(cur, t);
-    if (pressed.has('inspect') && !cur.reloading && t >= cur.nextAttack && cur.vm.has('inspect')) { cur.zoom = 0; cur.animEnd = t + cur.vm.play('inspect'); }
     const held = !!(input.buttons & 1), alt = !!(input.buttons & 4);
     if (cur.melee) {
       if ((clicked & 1 || held) && t >= cur.nextAttack) this.knife(cur, t, 'light');

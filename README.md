@@ -77,15 +77,21 @@ What's in a match:
   ladders, falling, planting, defusing, deaths. Standing still they aim around with the upper body and only step round
   when the aim swings far off, like CS2's turn in place.
 - Radar (CS2's overview of the map), kill feed (with CS2's marks for headshots, wallbangs, kills through smoke, jumping,
-  no-scope and blinded kills), scoreboard (Tab), damage direction, death cam and spectating
-  teammates, CS2's announcer, round music and bomb sounds, and an end screen with your K/D/A, ADR, headshots, accuracy,
-  MVPs and multi-kills.
+  no-scope and blinded kills), scoreboard (Tab), damage direction, death cam and spectating teammates (first person
+  with their gun, like CS2; Jump for third person), CS2's announcer, round music and bomb sounds, and an end screen with
+  your K/D/A, ADR, headshots, accuracy, MVPs and multi-kills. You can inspect your weapon during freeze time.
+- Sound carries like CS2's: gunshots over much of the map, footsteps about 1100 units, smaller sounds less, fading with
+  distance and muffled through walls; the round's music and the radio play one at a time.
 - Finished matches pay into your wallet when you play offline: kills, assists, MVPs, rounds won and the win, more
   against harder bots. The lobby shows your record.
+- The lobby shows CS2's own screenshot of each map.
 - Settings in the lobby: your crosshair (classic or static, colour, length, gap, thickness, outline, dot; live preview),
   the viewmodel (field of view, offsets, CS2's presets), every key, music and radio volume, the fps counter.
 - The map is exported from your install the first time (a couple of minutes, cached in `cs2cache/play`): CS2's render
-  world lit with the map's baked lighting (its irradiance lightmap, plus the sun masked by CS2's baked sun shadows),
+  world lit like CS2 lights it: the baked irradiance lightmap plus the sun (its colour and brightness from the map)
+  masked by the baked sun shadows on world surfaces; props, players and your weapon lit by CS2's light probe volumes
+  (the baked light where they are); and the map's post processing (CS2's filmic tone curve with the map's parameters,
+  auto exposure within its range, its colour grading LUT),
   CS2's two-layer surfaces blended like the game does (sand painted over asphalt and tiles, plaster worn down to brick),
   the map's sky, its collision mesh (brushes that only switch on in other modes, like Retakes' blockers, left out), nav
   mesh with ladders, spawns, bomb sites, buy zones and callout areas.

@@ -1,11 +1,13 @@
 // A playable CS2 map in three.js. World surfaces use CS2's baked lighting: the irradiance lightmap (second UV set) plus
-// the sun drawn live and masked by CS2's baked sun shadows (lightmap alpha). Props (CS2 lights those with probes we
-// can't read) get a sky/ground ambient plus the sun with a shadow map rendered once when the map loads. CS2's
+// the sun drawn live and masked by CS2's baked sun shadows (lightmap alpha). Props get the light of CS2's light probe
+// volumes (probes.js; baked into their vertices here) plus the sun with a shadow map rendered once when the map loads;
+// players and weapons are lit by the probes where they stand (ambient cube uniforms). CS2's
 // two-layer materials (sand painted over asphalt, plaster over brick...) blend their second layer in like CS2 does. The
 // exported world is thousands of small meshes, so it's merged by material in large cells to keep draw calls down.
 // Coordinates: the scene stays in the exporter's glTF metres (Y up); gameplay runs in game units.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { ProbeField } from './probes.js';
 
 export const IN = 0.0254;
 // Game (x, y, z; inches, Z up) <-> glTF scene (metres, Y up).
@@ -109,16 +111,44 @@ function lightmapped(m, lightMap, irrMax, layer = null) {
   m.customProgramCacheKey = () => 'cs2lm' + (layer?.key || '');
 }
 
-// Everything else: a sky/ground ambient (by normal) and the shadow-mapped sun.
-export function ambientLit(m, ambient, layer = null) {
+// Everything else: the shadow-mapped sun plus its indirect light, one of: CS2's probe light baked into the vertices
+// (probe: true; attribute cs2Probe), an ambient cube (ambient.cube: 6 colours from +X, +Y, +Z, -X, -Y, -Z in game axes,
+// weighted by the normal like CS2's probes; for players and weapons, updated where they are), or a sky/ground ambient.
+// The probe light is irradiance, as the lightmap's: times PI for three's Lambert.
+export function ambientLit(m, ambient, layer = null, { probe = false } = {}) {
+  const mode = probe ? 'p' : ambient.cube ? 'c' : 'h';
   m.onBeforeCompile = (sh) => {
-    sh.uniforms.cs2Sky = ambient.sky;
-    sh.uniforms.cs2Ground = ambient.ground;
-    sh.fragmentShader = 'uniform vec3 cs2Sky;\nuniform vec3 cs2Ground;\n' + sh.fragmentShader
-      .replace('#include <lights_fragment_maps>', '#include <lights_fragment_maps>\n\t{ vec3 wn = inverseTransformDirection( geometryNormal, viewMatrix );\n\tirradiance += mix( cs2Ground, cs2Sky, wn.y * 0.5 + 0.5 ); }');
+    let add;
+    if (mode === 'p') {
+      sh.vertexShader = 'attribute vec3 cs2Probe;\nvarying vec3 vCs2Probe;\n' + sh.vertexShader.replace('#include <uv_vertex>', '#include <uv_vertex>\n\tvCs2Probe = cs2Probe;');
+      add = 'varying vec3 vCs2Probe;\n';
+    } else if (mode === 'c') {
+      sh.uniforms.cs2Cube = ambient.cube;
+      add = 'uniform vec3 cs2Cube[6];\n';
+    } else {
+      sh.uniforms.cs2Sky = ambient.sky;
+      sh.uniforms.cs2Ground = ambient.ground;
+      add = 'uniform vec3 cs2Sky;\nuniform vec3 cs2Ground;\n';
+    }
+    const light = {
+      p: 'irradiance += vCs2Probe * PI;',
+      // glTF axes (Y up) to game axes (Z up): game = (gl.z, gl.x, gl.y).
+      c: `vec3 gn = inverseTransformDirection( geometryNormal, viewMatrix ).zxy, n2 = gn * gn;
+	irradiance += PI * ( n2.x * ( gn.x >= 0.0 ? cs2Cube[ 0 ] : cs2Cube[ 3 ] ) + n2.y * ( gn.y >= 0.0 ? cs2Cube[ 1 ] : cs2Cube[ 4 ] ) + n2.z * ( gn.z >= 0.0 ? cs2Cube[ 2 ] : cs2Cube[ 5 ] ) );`,
+      h: 'vec3 wn = inverseTransformDirection( geometryNormal, viewMatrix );\n\tirradiance += mix( cs2Ground, cs2Sky, wn.y * 0.5 + 0.5 );',
+    }[mode];
+    sh.fragmentShader = add + sh.fragmentShader.replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
+	{ ${light} }`);
     if (layer) addLayer(sh, layer);
   };
-  m.customProgramCacheKey = () => 'cs2amb' + (layer?.key || '');
+  m.customProgramCacheKey = () => 'cs2amb' + mode + (layer?.key || '');
+}
+
+// An ambient cube uniform (see ambientLit) and a function that sets it from the probes at a point.
+export function ambientCube() {
+  const cube = { value: Array.from({ length: 6 }, () => new THREE.Vector3(0.4, 0.4, 0.4)) };
+  const tmp = new Float32Array(18);
+  return { cube, set(probes, p) { if (!probes) return; probes.cube(p, tmp); for (let k = 0; k < 6; k++) cube.value[k].set(tmp[k * 3], tmp[k * 3 + 1], tmp[k * 3 + 2]); }, values: tmp };
 }
 
 // An attribute's values as a tightly packed Float32Array (plain float arrays are used as they are). Cached: the
@@ -143,10 +173,11 @@ function floats(attr) {
 }
 
 // Merges meshes (placed by `matrix`) into one geometry with position, normal, uv and optionally uv1 (lightmap),
-// tangent and cs2Blend (the second layer's vertex paint, the exporter's _TEXCOORD_4.x). Only the vertices each mesh's
-// triangles use are copied (fragments index into shared buffers).
+// tangent, cs2Blend (the second layer's vertex paint, the exporter's _TEXCOORD_4.x) and cs2Probe (the probe light at
+// each vertex, from probe(gamePos, gameNormal, out)). Only the vertices each mesh's triangles use are copied (fragments
+// index into shared buffers).
 let remap = new Int32Array(0), mark = new Int32Array(0), gen = 0;
-function mergeMeshes(list, { lm, tangents, blend = false }) {
+function mergeMeshes(list, { lm, tangents, blend = false, probe = null }) {
   let nv = 0, ni = 0;
   for (const { geo } of list) {
     const c = geo.index ? geo.index.count : geo.attributes.position.count;
@@ -154,6 +185,8 @@ function mergeMeshes(list, { lm, tangents, blend = false }) {
   }
   let pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), uv = new Float32Array(nv * 2);
   let uv1 = lm ? new Float32Array(nv * 2) : null, tan = tangents ? new Float32Array(nv * 4) : null, bl = blend ? new Float32Array(nv) : null;
+  let pr = probe ? new Float32Array(nv * 3) : null;
+  const gp = [0, 0, 0], gnrm = [0, 0, 1], pv = new Float32Array(3);
   const idx = new Uint32Array(ni);
   const nm = new THREE.Matrix3();
   let vo = 0, io = 0;
@@ -182,6 +215,13 @@ function mergeMeshes(list, { lm, tangents, blend = false }) {
           const l = Math.hypot(X, Y, Z) || 1;
           nor[o] = X / l; nor[o + 1] = Y / l; nor[o + 2] = Z / l;
         }
+        if (pr) {
+          // glTF metres (Y up) to game units (Z up).
+          gp[0] = pos[o + 2] / IN; gp[1] = pos[o] / IN; gp[2] = pos[o + 1] / IN;
+          gnrm[0] = nor[o + 2]; gnrm[1] = nor[o]; gnrm[2] = nor[o + 1];
+          probe(gp, gnrm, pv);
+          pr[o] = pv[0]; pr[o + 1] = pv[1]; pr[o + 2] = pv[2];
+        }
         if (U) { uv[vo * 2] = U[v * 2]; uv[vo * 2 + 1] = U[v * 2 + 1]; }
         if (U1) { uv1[vo * 2] = U1[v * 2]; uv1[vo * 2 + 1] = U1[v * 2 + 1]; }
         if (bl) bl[vo] = B ? B[v * Bk] : 0;
@@ -205,6 +245,7 @@ function mergeMeshes(list, { lm, tangents, blend = false }) {
   if (uv1) uv1 = uv1.slice(0, vo * 2);
   if (tan) tan = tan.slice(0, vo * 4);
   if (bl) bl = bl.slice(0, vo);
+  if (pr) pr = pr.slice(0, vo * 3);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
@@ -212,6 +253,7 @@ function mergeMeshes(list, { lm, tangents, blend = false }) {
   if (uv1) g.setAttribute('uv1', new THREE.BufferAttribute(uv1, 2));
   if (tan) g.setAttribute('tangent', new THREE.BufferAttribute(tan, 4));
   if (bl) g.setAttribute('cs2Blend', new THREE.BufferAttribute(bl, 1));
+  if (pr) g.setAttribute('cs2Probe', new THREE.BufferAttribute(pr, 3));
   g.setIndex(new THREE.BufferAttribute(idx, 1));
   g.computeBoundingBox();
   g.computeBoundingSphere();
@@ -235,10 +277,11 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 export async function loadWorld(map, renderer, { onProgress = () => {}, anisotropy = 8 } = {}) {
   const info = map.info;
   onProgress('Loading the map…');
-  const [gltf, lightMap, sky] = await Promise.all([
+  const [gltf, lightMap, sky, probeData] = await Promise.all([
     new GLTFLoader().loadAsync(map.world, (e) => e.total && onProgress(`Loading the map… ${Math.round((e.loaded / e.total) * 100)}%`)),
     map.lightmap ? loadLightmap(map.lightmap, info.lightmap.size) : null,
     map.sky ? new THREE.TextureLoader().loadAsync(map.sky) : null,
+    map.probes ? fetch(map.probes).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null) : null,
   ]);
   onProgress('Building the world…');
   await tick();
@@ -257,6 +300,19 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     return layerTextures.get(file);
   };
   const ambient = { sky: { value: new THREE.Color(0.42, 0.47, 0.56) }, ground: { value: new THREE.Color(0.46, 0.39, 0.31) } };
+  // CS2's light probes (props, players, weapons); where no volume reaches, a sky above and ground below.
+  const probes = probeData && info.lighting?.probes
+    ? new ProbeField(new Uint8Array(probeData), info.lighting.probes, { up: [0.42, 0.47, 0.56].map((v) => v / Math.PI), down: [0.46, 0.39, 0.31].map((v) => v / Math.PI) })
+    : null;
+  // Props' vertices take the probe light of the 12-unit cell they're in (the probes are 24 units apart).
+  const cells = new Map();
+  const probeAt = probes && ((p, n, out) => {
+    const key = ((Math.floor(p[0] / 12) + 2048) * 4096 + Math.floor(p[1] / 12) + 2048) * 2048 + Math.floor(p[2] / 12) + 1024;
+    let cube = cells.get(key);
+    if (!cube) cells.set(key, (cube = probes.cube([(Math.floor(p[0] / 12) + 0.5) * 12, (Math.floor(p[1] / 12) + 0.5) * 12, (Math.floor(p[2] / 12) + 0.5) * 12])));
+    const kx = n[0] >= 0 ? 0 : 3, ky = n[1] >= 0 ? 1 : 4, kz = n[2] >= 0 ? 2 : 5, wx = n[0] * n[0], wy = n[1] * n[1], wz = n[2] * n[2];
+    for (let c = 0; c < 3; c++) out[c] = cube[kx * 3 + c] * wx + cube[ky * 3 + c] * wy + cube[kz * 3 + c] * wz;
+  });
   const variants = new Map(), groups = new Map(), originals = new Set();
   const center = new THREE.Vector3();
   gltf.scene.traverse((o) => {
@@ -272,7 +328,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
       v.envMap = null;
       if (v.transparent) { v.depthWrite = false; v.polygonOffset = true; v.polygonOffsetFactor = -2; v.polygonOffsetUnits = -4; }
       const layer = v.map ? layerOf(vm, info.layers || {}, loadLayer) : null;
-      if (lm) lightmapped(v, lightMap, info.lightmap.irrMax, layer); else ambientLit(v, ambient, layer);
+      if (lm) lightmapped(v, lightMap, info.lightmap.irrMax, layer); else ambientLit(v, ambient, layer, { probe: !!probes });
       v.userData.lm = lm;
       v.userData.layer = !!layer;
       for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) if (v[k]) v[k].anisotropy = Math.max(v[k].anisotropy, lm ? aniso : Math.min(4, aniso));
@@ -288,7 +344,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   const world = new THREE.Group();
   let n = 0;
   for (const { material, list } of groups.values()) {
-    const mesh = new THREE.Mesh(mergeMeshes(list, { lm: material.userData.lm, tangents: !!material.normalMap, blend: material.userData.layer }), material);
+    const mesh = new THREE.Mesh(mergeMeshes(list, { lm: material.userData.lm, tangents: !!material.normalMap, blend: material.userData.layer, probe: material.userData.lm ? null : probeAt }), material);
     mesh.matrixAutoUpdate = false;
     mesh.castShadow = !material.transparent;
     mesh.receiveShadow = !material.userData.lm;
@@ -304,7 +360,8 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   // The sun: light_environment angles give the direction the light travels.
   const s = info.sun || { angles: [50, 45, 0], color: [255, 240, 220], brightness: 2 };
   const travel = dirGl(angleDir(s.angles[0], s.angles[1]));
-  const sun = new THREE.DirectionalLight(new THREE.Color(s.color[0] / 255, s.color[1] / 255, s.color[2] / 255), s.brightness * Math.PI);
+  // CS2's sun: the colour is sRGB (linearized), times its brightness; times PI for three's Lambert.
+  const sun = new THREE.DirectionalLight(new THREE.Color().setRGB(s.color[0] / 255, s.color[1] / 255, s.color[2] / 255, THREE.SRGBColorSpace), s.brightness * Math.PI);
   // One static shadow map over the whole map, rendered once (the world doesn't move).
   const c = bounds.getCenter(new THREE.Vector3()), r = bounds.getSize(new THREE.Vector3()).length() / 2;
   sun.position.copy(c).addScaledVector(travel, -r - 10);
@@ -325,7 +382,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   } else scene.background = new THREE.Color(0x9cc3e8);
 
   return {
-    scene, world, sun, sky, ambient, bounds,
+    scene, world, sun, sky, ambient, bounds, probes,
     sunDir: [-travel.z, -travel.x, -travel.y], // game-space direction towards the sun
     drawCalls: world.children.length,
     dispose() {

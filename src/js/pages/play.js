@@ -10,7 +10,7 @@ import { settingsHtml, bindSettings, matchSettings, SETTINGS_DEFAULTS } from './
 const MAP_TINT = { de_dust2: '#c9a46a, #7b5a33', de_mirage: '#d8b98a, #8a6a45', de_inferno: '#c98a5a, #6b3f22', de_nuke: '#8fa5b5, #3e4b57',
   de_ancient: '#7fa36a, #3c5a35', de_anubis: '#d6b97a, #6d5a3a', de_overpass: '#9fb0a0, #4a5a4c', de_vertigo: '#a8b8c8, #4c5a6a', de_train: '#9a9a8a, #4a4a40',
   cs_office: '#a0a8b8, #404858', cs_italy: '#d8a878, #7a5030' };
-let mapList = null;
+let mapList = null, mapImages = null; // the installed maps, and CS2's screenshot of each ({ id: url })
 
 const PREFS_KEY = 'cs2sim.play';
 const DEFAULTS = { map: 'de_dust2', mode: 'competitive', site: 'A', ffa: 'ffa', minutes: 10, team: 'CT', teamSize: 5, difficulty: 'normal', length: 'short', overtime: 'on', friendlyFire: 'off', sensitivity: 1.25, quality: 'balanced', ...SETTINGS_DEFAULTS };
@@ -31,12 +31,19 @@ export function render(r) {
       if (bomb.length) { mapList = bomb; if (root === r) render(r); }
     }).catch(() => {});
   }
+  if (!mapImages) {
+    mapImages = {};
+    cs2Play('mapImages').then((imgs) => { mapImages = imgs || {}; if (root === r) render(r); }).catch(() => {});
+  }
+  // A tile's background: the map's screenshot (an absolute URL: relative ones in a custom property resolve against the
+  // stylesheet), over its tint.
+  const tileStyle = (id) => [mapImages[id] && `--img: url('${new URL(mapImages[id], location.href).href}')`, MAP_TINT[id] && `--tint: linear-gradient(160deg, ${MAP_TINT[id]} 70%, #1a1712)`].filter(Boolean).join(';');
   const opts = (list, cur) => list.map(([id, n]) => `<option value="${id}" ${id === cur ? 'selected' : ''}>${esc(n)}</option>`).join('');
   const mode = MODES[p.mode] ? p.mode : 'competitive', rounds = !MODES[mode].respawn;
   r.innerHTML = `<div class="page play-page">
     <div class="page-head"><h1>Play</h1><span class="sub">Offline CS2 against bots, on real CS2 maps from your install, with your equipped skins, gloves and knife.</span></div>
     <div class="play-lobby">
-      <div class="play-maps">${mapList.map(({ id, name }) => `<button class="play-map ${id === p.map ? 'active' : ''}" data-map="${id}" style="${MAP_TINT[id] ? `--tint: linear-gradient(160deg, ${MAP_TINT[id]} 70%, #1a1712)` : ''}">
+      <div class="play-maps">${mapList.map(({ id, name }) => `<button class="play-map ${id === p.map ? 'active' : ''}" data-map="${id}" style="${tileStyle(id)}">
           <span>${esc(name)}</span><small>${id === 'de_dust2' ? 'Recommended' : 'The first match prepares the map (a couple of minutes)'}</small></button>`).join('')}</div>
       <div class="play-setup panel">
         <div class="play-modes">${Object.entries(MODES).map(([id, m]) => `<button class="${id === mode ? 'active' : ''}" data-mode="${id}"><b>${esc(m.name)}</b><small>${esc(m.blurb)}</small></button>`).join('')}</div>

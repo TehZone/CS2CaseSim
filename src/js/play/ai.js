@@ -38,7 +38,8 @@ export class Brain {
     this.path = null; this.pi = 0; this.goal = null;
     this.target = null; this.lastSeen = null; this.heard = null;
     this.nextThink = 0; this.nextScan = (bot.index % 4) * (1 / 64);
-    this.stuckT = 0; this.lastProgress = [0, 0, 0];
+    this.stuckT = 0; this.lastProgress = [0, 0, 0]; this.stuckTries = 0; this.restUntil = 0;
+    this.heading = null; // where it means to go (degrees), which it faces while moving
     this.task = 'idle'; // goto | hold | plant | defuse | pickup | hunt
   }
 
@@ -49,7 +50,7 @@ export class Brain {
     this.blindUntil = 0; this.nadeAt = 0; this.thrown = new Set();
     this.path = null; this.goal = null; this.target = null; this.lastSeen = null; this.heard = null;
     this.task = 'idle';
-    this.holdYaw = null; this.baseYaw = null;
+    this.holdYaw = null; this.baseYaw = null; this.heading = null; this.stuckTries = 0; this.restUntil = 0;
     this.startDelay = rnd(0, 1.5);
     this.walkUntil = 0;
     this.order = null;
@@ -175,6 +176,7 @@ export class Brain {
       const st = gun.stats;
       gun.reloadEnd = t + (st.bulletsPerReload === 1 ? 0.5 * (st.clip - gun.clip) : st.reloadTime || RELOAD_TIME[st.type] || 2.5);
       this.bot.reloadGesture(gun.id, gun.reloadEnd - t);
+      this.game.specAnim?.(this.bot, 'reload', gun.reloadEnd - t);
       this.game.botSound(b, gun.prefix + 'Clipout', 0.5);
     }
   }
@@ -294,8 +296,8 @@ export class Brain {
       this.turnTo(0, this.holdYaw + sweep, dt, 0.25);
       return;
     }
-    const sp = Math.hypot(b.vel[0], b.vel[1]);
-    if (sp > 30) this.turnTo(0, (Math.atan2(b.vel[1], b.vel[0]) * 180) / Math.PI, dt, 0.5);
+    // Moving: face the way it's going (the path, not its velocity, which teammates shoving past and walls jostle).
+    if (this.heading != null && Math.hypot(b.vel[0], b.vel[1]) > 30) this.turnTo(0, this.heading, dt, 0.5);
   }
   // Freeze time: a glance either side of the heading it spawned with.
   lookAround(dt, t) {
@@ -430,7 +432,9 @@ export class Brain {
     const b = this.bot;
     if (task !== 'plant' && task !== 'defuse' && (b.mode === 'plant' || b.mode === 'defuse')) this.game.botCancelObjective(b);
     this.task = task;
-    if (goal && (!this.goal || dist2(goal, this.goal) > 48 || !this.path)) this.goTo(goal);
+    // A bot that couldn't get anywhere waits a moment before trying the same goal again.
+    if (!goal || (this.game.now < this.restUntil && this.goal && dist2(goal, this.goal) <= 48)) return;
+    if (!this.goal || dist2(goal, this.goal) > 48 || !this.path) this.goTo(goal);
   }
 
   // A spot in a bomb site: planting spot for the carrier, a holding spot otherwise (both kept for the round).
@@ -486,6 +490,7 @@ export class Brain {
     if (b.ducked) max *= 0.34;
     else if (this.walking(t)) max *= 0.52;
     let want = [0, 0], wpZ = null;
+    this.heading = null;
     if (moving && this.path && this.pi < this.path.length && this.task !== 'hold') {
       let wp = this.path[this.pi];
       let dx = wp[0] - b.pos[0], dy = wp[1] - b.pos[1];
@@ -504,11 +509,12 @@ export class Brain {
       const dx = b.pos[0] - burning.pos[0], dy = b.pos[1] - burning.pos[1], d = Math.hypot(dx, dy) || 1;
       want = [(dx / d) * max, (dy / d) * max];
     }
-    // Keep apart from teammates and you.
+    if (want[0] || want[1]) this.heading = (Math.atan2(want[1], want[0]) * 180) / Math.PI;
+    // Keep apart from teammates and you (only when actually bumping into them; it doesn't change where it faces).
     for (const o of g.bodies()) {
       if (o.c === this.c || !o.c.alive) continue;
       const dx = b.pos[0] - o.feet[0], dy = b.pos[1] - o.feet[1], d = Math.hypot(dx, dy);
-      if (d < 36 && d > 0.01 && Math.abs(b.pos[2] - o.feet[2]) < 60) { want[0] += (dx / d) * 120; want[1] += (dy / d) * 120; }
+      if (d < 32 && d > 0.01 && Math.abs(b.pos[2] - o.feet[2]) < 60) { const k = 90 * (1 - d / 32) + 30; want[0] += (dx / d) * k; want[1] += (dy / d) * k; }
     }
     const k = 1 - Math.exp(-dt * 9);
     b.vel[0] += (want[0] - b.vel[0]) * k;
@@ -534,11 +540,15 @@ export class Brain {
       else { b.pos[2] = h; b.vel[2] = 0; }
     }
     b.airborne = b.vel[2] < -120; // falling for real (not just a step down)
-    // Stuck: find the way again.
+    // Stuck: find the way again; after a few tries, stand still a moment (rather than turning back and forth between
+    // new paths) and then try again.
     if (moving && this.path && !b.climbing) {
       this.stuckT += dt;
       if (this.stuckT > 1) {
-        if (dist2(b.pos, this.lastProgress) < 20 && this.goal) this.goTo(this.goal);
+        if (dist2(b.pos, this.lastProgress) < 20 && this.goal) {
+          if (++this.stuckTries >= 3) { this.path = null; this.stuckTries = 0; this.restUntil = t + 2 + Math.random() * 2; b.vel[0] = b.vel[1] = 0; }
+          else this.goTo(this.goal);
+        } else this.stuckTries = 0;
         this.lastProgress = b.pos.slice();
         this.stuckT = 0;
       }

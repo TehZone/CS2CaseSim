@@ -414,6 +414,23 @@ class CS2Service {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+// CS2's screenshot of every playable map, for the play menu's tiles (the 360p one, else a bigger one): { id: url }.
+  playMapImages() {
+    return this.playJob('mapImages', async () => {
+      const ids = this.playMaps().map((m) => m.id);
+      if (!ids.length) return {};
+      const cs2 = this.ensureCS2();
+      const all = new Set(await cs2.list());
+      const pick = (id) => ['360p/' + id, '720p/' + id, '360p/' + id + '_1', '720p/' + id + '_1', '1080p/' + id]
+        .map((n) => `panorama/images/map_icons/screenshots/${n}_png.vtex_c`).find((p) => all.has(p));
+      const want = ids.map((id) => [id, pick(id)]).filter(([, p]) => p);
+      const files = await cs2.extract(want.map(([, p]) => p));
+      const out = {};
+      for (const [id, p] of want) if (files[p]) out[id] = this.url(files[p]);
+      return out;
+    });
+  }
+
   // A playable map, exported on first use into play/<id>/: { world, collision, lightmap, sky, info } (URLs + map data).
   playMap(id) {
     id = String(id);
@@ -430,12 +447,14 @@ class CS2Service {
         id, name: meta.name, info: meta, nav: await this.playNav(id, vpk, dir), radar: await this.playRadar(id, dir),
         world: this.url(path.join(dir, 'world.glb')), collision: this.url(path.join(dir, 'collision.bin')),
         lightmap: meta.lightmap ? this.url(path.join(dir, 'lightmap.bin')) : null, sky: meta.sky ? this.url(path.join(dir, 'sky.png')) : null,
+        probes: meta.lighting?.probes ? this.url(path.join(dir, 'probes.bin')) : null, lut: meta.lighting?.lut ? this.url(path.join(dir, 'lut.bin')) : null,
       });
-      try {
-        const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
-        if (meta.version === play.PLAY_VERSION && meta.stamp === stamp) return result(meta);
-      } catch {}
       const say = (m) => { this.progress.set('map:' + id, m); this.log(`[play ${id}] ${m}`); };
+      try {
+        let meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+        if (meta.version === 2 && meta.stamp === stamp) meta = await this.upgradeMapLighting(id, vpk, dir, meta, say);
+        if (meta.version === play.PLAY_VERSION && meta.stamp === stamp) { this.progress.delete('map:' + id); return result(meta); }
+      } catch (e) { if (e?.code !== 'ENOENT') this.log('map cache: ' + e.message); }
       fs.rmSync(dir, { recursive: true, force: true });
       const tmp = path.join(dir, 'tmp');
       fs.mkdirSync(tmp, { recursive: true });
@@ -463,6 +482,8 @@ class CS2Service {
       let lightmap = null;
       const irr = path.join(tmp, 'maps', id, 'lightmaps', 'irradiance.exr');
       if (fs.existsSync(irr)) lightmap = play.bakeLightmap(irr, path.join(tmp, 'maps', id, 'lightmaps', 'direct_light_shadows.png'), path.join(dir, 'lightmap.bin'));
+      say('Reading the light probes and post processing…');
+      const lighting = await this.playLighting(vpk, dir, ents, info);
       let sky = false;
       if (info.sky) {
         try {
@@ -498,13 +519,72 @@ class CS2Service {
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(entPhysFile, { force: true });
       const meta = {
-        version: play.PLAY_VERSION, stamp, id, name: nameOf(id), ...info, ...volumes, lightmap, sky, layers,
+        version: play.PLAY_VERSION, stamp, id, name: nameOf(id), ...info, ...volumes, lightmap, sky, layers, lighting,
         collision: { tris: col.tris, surfaces: col.surfaces, flags: { player: play.F_PLAYER, bullet: play.F_BULLET, grenade: play.F_GRENADE } },
       };
       fs.writeFileSync(metaFile, JSON.stringify(meta));
       this.progress.delete('map:' + id);
       return result(meta);
     });
+  }
+
+// CS2's lighting beyond the lightmap: the light probe atlas everything that isn't lightmapped is lit by
+  // (probes.bin) and the post processing (tone mapping; the colour grading LUT as lut.bin). Returns what map.json keeps.
+  async playLighting(vpk, dir, ents, info) {
+    const cs2 = this.ensureCS2();
+    const tmp = path.join(dir, 'tmp-lighting');
+    const vols = play.probeVolumes(ents);
+    const want = [vols[0]?.texture, vols[0]?.shadows, info.postProcessing].filter(Boolean);
+    // Depth slices of a 3D texture: <name>_zNNN.<ext>.
+    const slices = (vtex, ext) => {
+      const b = path.join(tmp, vtex.replace(/\.vtex$/, '')), d = path.dirname(b), re = new RegExp('^' + path.basename(b).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '_z\\d+\\.' + ext + '$');
+      return fs.existsSync(d) ? fs.readdirSync(d).filter((n) => re.test(n)).sort().map((n) => path.join(d, n)) : [];
+    };
+    const have = (f) => (/\.vtex$/.test(f) ? slices(f, /dlshd/.test(f) ? 'png' : 'exr').length > 0 : fs.existsSync(path.join(tmp, f)));
+    // Files the map made are in its own VPK, the rest in the game's.
+    for (const src of [vpk, cs2.vpk]) {
+      const missing = want.filter((w) => !have(w));
+      if (missing.length) await cs2.run(['-i', src, '-f', missing.map((w) => w + '_c').join(','), '-d', '-o', tmp]).catch(() => {});
+    }
+    const out = { probes: null, tonemap: null, lut: null };
+    try {
+      if (vols.length) {
+        const irr = slices(vols[0].texture, 'exr'), sh = slices(vols[0].shadows, 'png');
+        if (irr.length && sh.length) out.probes = { ...play.bakeProbes(irr, sh, path.join(dir, 'probes.bin')), volumes: vols.map(({ texture, shadows, ...v }) => v) };
+      }
+      if (info.postProcessing && have(info.postProcessing)) {
+        const vpost = path.join(tmp, info.postProcessing);
+        out.tonemap = play.toneMapping(fs.readFileSync(vpost, 'utf8'));
+        const raw = vpost.replace(/\.vpost$/, '.raw'); // the LUT, written next to it (RGB, red fastest)
+        const n = fs.existsSync(raw) ? Math.round(Math.cbrt(fs.statSync(raw).size / 3)) : 0;
+        if (n > 1 && n ** 3 * 3 === fs.statSync(raw).size) { fs.copyFileSync(raw, path.join(dir, 'lut.bin')); out.lut = { size: n }; }
+      }
+    } catch (e) { this.log('lighting: ' + e.message); }
+    fs.rmSync(tmp, { recursive: true, force: true });
+    return out;
+  }
+
+  // Maps exported as version 2 get version 3's lighting without exporting everything again: the lightmap's sun mask
+  // turned round (it held the shadow, not the light), the probes and the post processing.
+  async upgradeMapLighting(id, vpk, dir, meta, say) {
+    say('Updating the map\'s lighting…');
+    const lm = path.join(dir, 'lightmap.bin');
+    if (meta.lightmap && fs.existsSync(lm)) {
+      const b = fs.readFileSync(lm);
+      let masked = false;
+      for (let i = 3; i < b.length && !masked; i += 4) masked = b[i] !== 255;
+      if (masked) { for (let i = 3; i < b.length; i += 4) b[i] = 255 - b[i]; fs.writeFileSync(lm, b); }
+    }
+    const tmp = path.join(dir, 'tmp-ents');
+    await this.ensureCS2().run(['-i', vpk, '-f', `maps/${id}/entities/default_ents.vents_c`, '-d', '-o', tmp]);
+    const entFile = path.join(tmp, 'maps', id, 'entities', 'default_ents.vents');
+    const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
+    fs.rmSync(tmp, { recursive: true, force: true });
+    const info = play.mapInfo(ents);
+    const lighting = await this.playLighting(vpk, dir, ents, info);
+    const next = { ...meta, sun: info.sun, exposure: info.exposure, postProcessing: info.postProcessing, lighting, version: play.PLAY_VERSION };
+    fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
+    return next;
   }
 
   // The second layer of CS2's two-layer world materials (sand painted over asphalt, plaster over brick...): its colour

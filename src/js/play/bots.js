@@ -9,7 +9,7 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2Play } from '../cs2/api.js';
 import { loadGltf } from '../cs2/rig.js';
 import { buildCS2Model } from '../cs2/skin.js';
-import { toGl, fromGl, ambientLit } from './world.js';
+import { toGl, fromGl, ambientLit, ambientCube } from './world.js';
 
 export const AGENTS = {
   T: ['agents/models/tm_phoenix/tm_phoenix.vmdl', 'agents/models/tm_leet/tm_leet_variantb.vmdl'],
@@ -192,6 +192,8 @@ export class Bot {
     this.weapons = {}; this.slot = 'secondary';
     this.mode = 'move'; // move | plant | defuse | dead
     this.time = 0;
+    this.amb = ambientCube(); // the light probes where it stands (set by the game)
+    this.ownMats = new Map();
     this.setModel(c.team);
   }
 
@@ -203,6 +205,7 @@ export class Bot {
     const src = list[this.index % Math.max(1, list.length)];
     this.modelTeam = team;
     this.model = cloneSkinned(src.scene);
+    this.lightOwn(this.model);
     this.model.traverse((o) => {
       if (!o.isMesh) return;
       o.frustumCulled = false; o.castShadow = true; o.receiveShadow = true;
@@ -217,6 +220,15 @@ export class Bot {
     this.armsAction = null;
     this.gestureAction = null;
     this.ladder = null;
+  }
+
+  // Gives a model this bot's own copies of its materials, lit by the bot's ambient cube.
+  lightOwn(root) {
+    const own = (m) => {
+      if (!this.ownMats.has(m)) { const c = m.clone(); ambientLit(c, { cube: this.amb.cube }); this.ownMats.set(m, c); }
+      return this.ownMats.get(m);
+    };
+    root.traverse((o) => { if (o.isMesh) o.material = Array.isArray(o.material) ? o.material.map(own) : own(o.material); });
   }
 
   // Locomotion actions for a weapon class (all playing; weights blend them).
@@ -243,6 +255,7 @@ export class Bot {
     this.weaponModel = null;
     if (tpl && this.bones.wpn) {
       const w = cloneSkinned(tpl);
+      this.lightOwn(w);
       w.position.set(0, 0, 0); w.rotation.set(0, 0, 0); w.scale.set(1, 1, 1);
       w.traverse((o) => { if (o.isMesh) { o.frustumCulled = false; o.castShadow = true; o.receiveShadow = true; } });
       let wb = null;
@@ -458,7 +471,7 @@ export class Bot {
     return best;
   }
 
-  dispose() { this.mixer?.stopAllAction(); this.root.removeFromParent(); }
+  dispose() { this.mixer?.stopAllAction(); this.root.removeFromParent(); for (const m of this.ownMats.values()) m.dispose(); }
 }
 
 // Distance along a ray (o + d t, d unit length) to a capsule (segment a-b, radius r), or null.

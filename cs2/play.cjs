@@ -9,7 +9,8 @@ const { readEXR } = require('./exr.cjs');
 const { decodePNG, encodePNG } = require('./png.cjs');
 
 const IN = 0.0254; // the exporter writes game inches as metres
-const PLAY_VERSION = 2; // map exports (2: second texture layers, sharper world textures, non-solid brushes left out)
+const PLAY_VERSION = 3; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading)
+const PROBE_MAX = 8; // probe irradiance is stored as 8-bit sRGB of value / PROBE_MAX
 const DATA_VERSION = 5; // weapon stats + sound events
 // Collision flags per triangle: what it stops.
 const F_PLAYER = 1, F_BULLET = 2, F_GRENADE = 4;
@@ -171,10 +172,14 @@ const spawnList = (ents, cls) => ents.filter((e) => e.classname === cls && e.ena
 
 function mapInfo(ents) {
   const sun = ents.find((e) => e.classname === 'light_environment');
+  const ppv = ents.filter((e) => e.classname === 'post_processing_volume').sort((a, b) => (b.master === 'true') - (a.master === 'true'))[0];
   const params = ents.find((e) => e.classname === 'info_map_parameters');
   return {
     spawns: { T: spawnList(ents, 'info_player_terrorist'), CT: spawnList(ents, 'info_player_counterterrorist') },
-    sun: sun ? { angles: vec(sun.angles), color: vec(sun.color), brightness: +sun.brightness || 1 } : null,
+    sun: sun ? { angles: vec(sun.angles), color: vec(sun.color), brightness: (+sun.brightness || 1) * (Number.isFinite(+sun.brightnessscale) ? +sun.brightnessscale : 1) } : null,
+    // Auto exposure's range (CS2 keeps the exposure at 1 without it).
+    exposure: ppv && /^(true|1)$/.test(String(ppv.enableexposure)) ? { min: +ppv.minexposure || 0.25, max: +ppv.maxexposure || 8, up: +ppv.exposurespeedup || 1, down: +ppv.exposurespeeddown || 1, compensation: +ppv.exposurecompensation || 0 } : null,
+    postProcessing: String(ppv?.postprocessing || '').replace(/^resource_name:"?|"$/g, ''),
     bombRadius: +params?.bombradius || 500,
     sky: ents.find((e) => e.classname === 'env_sky')?.skyname?.replace(/^resource_name:"?|"$/g, '') || '',
   };
@@ -188,6 +193,8 @@ const toSrgb8 = (v) => {
 
 // CS2's baked lighting packed into one LIGHTMAP_SIZE² RGBA8 file (lightmap.bin): RGB = irradiance (indirect light
 // and baked lights) as sRGB of value / IRR_MAX, A = the sun's baked shadow (direct_light_shadows, red channel).
+// The lightmap file: RGB = irradiance (8-bit sRGB of value / IRR_MAX), A = how much the sun reaches (CS2's
+// direct_light_shadows holds the sun's shadow in its red channel, light_environment's bakedshadowindex 0).
 function bakeLightmap(irradianceExr, shadowPng, outFile) {
   const S = LIGHTMAP_SIZE;
   const out = Buffer.alloc(S * S * 4);
@@ -217,11 +224,62 @@ function bakeLightmap(irradianceExr, shadowPng, outFile) {
     for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
       let s = 0;
       for (let dy = 0; dy < ks; dy++) for (let dx = 0; dx < ks; dx++) s += img.data[((y * ks + dy) * img.width + x * ks + dx) * ch];
-      out[(y * S + x) * 4 + 3] = Math.round(s / (ks * ks));
+      out[(y * S + x) * 4 + 3] = 255 - Math.round(s / (ks * ks));
     }
   }
   fs.writeFileSync(outFile, out);
   return { size: S, irrMax: IRR_MAX };
+}
+
+// CS2's light probe volumes (env_combined_light_probe_volume): boxes of baked lighting for everything that isn't
+// lightmapped (props, players, weapons). All of a map's volumes share one atlas: an "ambient cube" per voxel (the light
+// arriving from +X, +Y, +Z, -X, -Y, -Z, stacked as six blocks along the texture's depth) and the sun's baked shadow.
+// Ordered like CS2 picks them: more indoor first, then smaller.
+function probeVolumes(ents) {
+  const res = (v) => String(v || '').replace(/^resource_name:"?|"$/g, '');
+  const list = ents.filter((e) => /^env(_combined)?_light_probe_volume$/.test(e.classname) && e.light_probe_atlas_x != null && res(e.lightprobetexture) && res(e.lightprobetexture_dlshd))
+    .map((e) => ({
+      origin: vec(e.origin), angles: vec(e.angles), min: vec(e.box_mins), max: vec(e.box_maxs), fade: vec(e.edge_fade_dists),
+      size: [+e.light_probe_size_x, +e.light_probe_size_y, +e.light_probe_size_z], atlas: [+e.light_probe_atlas_x, +e.light_probe_atlas_y, +e.light_probe_atlas_z],
+      level: +e.indoor_outdoor_level || 0, texture: res(e.lightprobetexture), shadows: res(e.lightprobetexture_dlshd),
+    }));
+  const atlas = list[0]?.texture;
+  return list.filter((v) => v.texture === atlas)
+    .sort((a, b) => b.level - a.level || a.size.reduce((t, x) => t + x * x, 0) - b.size.reduce((t, x) => t + x * x, 0));
+}
+
+// The probe atlas (exported as depth slices: name_zNNN.exr for the light, name_dlshd_zNNN.png for the sun's shadow)
+// into one file: RGB 8-bit sRGB of irradiance / PROBE_MAX for every voxel of the six blocks, then one byte per voxel of
+// how much the sun reaches (255 - the shadow). Returns { size: [w, h, depth of one block], max }.
+function bakeProbes(irrSlices, shadowSlices, outFile) {
+  const first = readEXR(irrSlices[0]);
+  const w = first.width, h = first.height, depth = shadowSlices.length;
+  if (irrSlices.length !== depth * 6) throw new Error(`probe atlas: ${irrSlices.length} light slices for ${depth} shadow slices`);
+  const out = Buffer.alloc(w * h * depth * 6 * 3 + w * h * depth);
+  irrSlices.forEach((file, z) => {
+    const { rgba } = z ? readEXR(file) : first;
+    const o = z * w * h * 3;
+    for (let i = 0; i < w * h; i++) for (let c = 0; c < 3; c++) out[o + i * 3 + c] = toSrgb8(rgba[i * 4 + c] / PROBE_MAX);
+  });
+  const so = w * h * depth * 6 * 3;
+  shadowSlices.forEach((file, z) => {
+    const img = decodePNG(fs.readFileSync(file));
+    for (let i = 0; i < w * h; i++) out[so + z * w * h + i] = 255 - img.data[i * img.channels];
+  });
+  fs.writeFileSync(outFile, out);
+  return { size: [w, h, depth], max: PROBE_MAX };
+}
+
+// The map's tone mapping from its post processing file (CToneMappingLayer), or null.
+function toneMapping(vpostText) {
+  const layers = parseKV3(vpostText)?.m_layers || [];
+  const p = layers.find((l) => l?._class === 'CToneMappingLayer' && l.m_bVisible !== false)?.m_params;
+  if (!p) return null;
+  const k = (n, d) => (Number.isFinite(+p[n]) ? +p[n] : d);
+  return {
+    exposureBias: k('m_flExposureBias', 0), shoulder: k('m_flShoulderStrength', 0.15), linear: k('m_flLinearStrength', 0.5), angle: k('m_flLinearAngle', 0.1),
+    toe: k('m_flToeStrength', 0.2), toeNum: k('m_flToeNum', 0.02), toeDenom: k('m_flToeDenom', 0.3), white: k('m_flWhitePoint', 4),
+  };
 }
 
 // The map's sky (exported by Source 2 Viewer as an equirectangular EXR) as an 8-bit sRGB PNG.
@@ -319,5 +377,6 @@ function soundEventFiles(text) {
 
 module.exports = {
   PLAY_VERSION, DATA_VERSION, F_PLAYER, F_BULLET, F_GRENADE, IRR_MAX, readGlb, buildCollision, brushSolid, gameVolumes, mapInfo, bakeLightmap, bakeSky,
+  probeVolumes, bakeProbes, toneMapping,
   weaponStats, soundEventFiles, parseEntities, compactNav, NAV_VERSION,
 };

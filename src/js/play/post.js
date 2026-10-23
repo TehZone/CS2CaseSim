@@ -1,8 +1,9 @@
-// The world is drawn into an HDR render target (with its depth). The volumetric smokes are ray-marched against that
-// depth (so walls in front hide them and they end at walls) at half resolution, like CS2 does, then a full-screen pass
-// puts it all on screen: it blends the smoke back in (depth-aware, so it doesn't bleed over edges in front of it), adds
-// the flashbang's afterimage, then tone-maps like the renderer would. The first-person weapon is drawn on top
-// afterwards.
+// The world is drawn into an HDR render target (with its depth), and the first-person weapon into one of its own. The
+// volumetric smokes are ray-marched against the world's depth (so walls in front hide them and they end at walls) at
+// half resolution, like CS2 does, then a full-screen pass puts it all on screen: it blends the smoke back in
+// (depth-aware, so it doesn't bleed over edges in front of it), adds the flashbang's afterimage, lays the weapon over
+// it, and finishes like CS2's post processing: the exposure (auto exposure within the map's range), CS2's filmic tone
+// curve with the map's parameters, sRGB, then the map's colour grading LUT.
 import * as THREE from 'three';
 import { VOX, NX, NY, NZ, SLOTS, LIGHT_SCALE } from './smoke.js';
 
@@ -92,12 +93,27 @@ uniform sampler2D tColor;
 uniform sampler2D tDepth;
 uniform sampler2D tFlash;
 uniform sampler2D tSmokeRT;
+uniform sampler2D tVm;
 uniform vec2 smokeSize;
 uniform bool smokeOn;
+uniform bool vmOn;
 uniform float flashImage;
 uniform float cameraNear;
 uniform float cameraFar;
+uniform float exposure;
+uniform vec4 tmCurve; // shoulder, linear strength, linear angle, toe strength
+uniform vec4 tmToe; // toe numerator, toe denominator, white point, 1 / curve(white point)
+uniform sampler3D tLut;
+uniform bool lutOn;
+uniform vec2 lutRange;
 varying vec2 vUv;
+
+// CS2's tone curve (Hable's filmic curve with the map's parameters, after a 2.8x pre-scale clamped at the white point).
+vec3 cs2Curve(vec3 x) {
+  vec3 n = x * (tmCurve.x * x + tmCurve.y * tmCurve.z) + tmToe.x * tmCurve.w;
+  vec3 d = x * (tmCurve.x * x + tmCurve.y) + tmToe.y * tmCurve.w;
+  return n / d - tmToe.x / tmToe.y;
+}
 
 float viewZ(float d) { return cameraNear * cameraFar / (cameraFar - d * (cameraFar - cameraNear)); }
 
@@ -124,10 +140,29 @@ void main() {
   vec4 col = texture(tColor, vUv);
   if (flashImage > 0.0) col.rgb = mix(col.rgb, texture(tFlash, vUv).rgb * 1.4, flashImage);
   if (smokeOn) { vec4 s = smokeHere(); col.rgb = col.rgb * s.a + s.rgb; }
-  gl_FragColor = col;
-  #include <tonemapping_fragment>
-  #include <colorspace_fragment>
+  if (vmOn) { vec4 v = texture(tVm, vUv); col.rgb = col.rgb * (1.0 - v.a) + v.rgb; }
+  vec3 c = cs2Curve(min(max(col.rgb, 0.0) * exposure * 2.8, vec3(tmToe.z))) * tmToe.w;
+  c = sRGBTransferOETF(vec4(clamp(c, 0.0, 1.0), 1.0)).rgb;
+  if (lutOn) c = texture(tLut, c * lutRange.x + lutRange.y).rgb;
+  gl_FragColor = vec4(c, 1.0);
 }`;
+
+// Average log luminance of the HDR image, 32x18 cells of 4x4 samples (read back for the auto exposure).
+const lumShader = /* glsl */ `
+uniform sampler2D tColor;
+varying vec2 vUv;
+void main() {
+  float sum = 0.0;
+  for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) {
+    vec3 c = texture(tColor, vUv + (vec2(float(i), float(j)) - 1.5) / vec2(128.0, 72.0)).rgb;
+    sum += log(max(dot(c, vec3(0.2125, 0.7154, 0.0721)), 1e-4));
+  }
+  gl_FragColor = vec4(sum / 16.0, 0.0, 0.0, 1.0);
+}`;
+
+// CS2's default curve where a map gives none (nearly linear).
+const LINEAR_CURVE = { exposureBias: 0, shoulder: 0, linear: 0.001, angle: 0.001, toe: 1, toeNum: 1, toeDenom: 1, white: 1.5 };
+const curve = (t, x) => (x * (t.shoulder * x + t.linear * t.angle) + t.toeNum * t.toe) / (x * (t.shoulder * x + t.linear) + t.toeDenom * t.toe) - t.toeNum / t.toeDenom;
 
 export class Post {
   constructor(renderer, { samples = 4, smoke }) {
@@ -136,6 +171,11 @@ export class Post {
     this.rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples, depthTexture });
     this.flashRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
     this.smokeRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
+    this.vmRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples });
+    this.lumRT = new THREE.WebGLRenderTarget(32, 18, { type: THREE.FloatType, depthBuffer: false });
+    this.lumPixels = new Float32Array(32 * 18 * 4);
+    this.exposure = 1; this.lumAt = 0;
+    this.lut = null;
     this.smoke = smoke;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
@@ -149,7 +189,10 @@ export class Post {
       vertexShader, fragmentShader: compositeShader, depthTest: false, depthWrite: false,
       uniforms: {
         ...shared, tColor: { value: this.rt.texture }, tFlash: { value: this.flashRT.texture }, tSmokeRT: { value: this.smokeRT.texture },
+        tVm: { value: this.vmRT.texture }, vmOn: { value: false },
         smokeOn: { value: false }, flashImage: { value: 0 }, cameraNear: { value: 0.05 }, cameraFar: { value: 400 },
+        exposure: { value: 1 }, tmCurve: { value: new THREE.Vector4() }, tmToe: { value: new THREE.Vector4() },
+        tLut: { value: null }, lutOn: { value: false }, lutRange: { value: new THREE.Vector2(1, 0) },
       },
     });
     this.smokeScene = pass(this.smokeMat);
@@ -162,12 +205,70 @@ export class Post {
       fragmentShader: 'uniform sampler2D tColor; varying vec2 vUv; void main() { gl_FragColor = texture(tColor, vUv); }',
     });
     this.copyScene = pass(this.copyMat);
+    this.lumMat = new THREE.ShaderMaterial({ vertexShader, fragmentShader: lumShader, depthTest: false, depthWrite: false, toneMapped: false, uniforms: { tColor: { value: this.rt.texture } } });
+    this.lumScene = pass(this.lumMat);
+    this.setGrading({});
+  }
+
+  // The map's post processing: tone (its curve), lut ({ data: RGB bytes, red fastest; size }), exposure (auto
+  // exposure's { min, max, up, down, compensation }; none: a fixed exposure of 1, like CS2).
+  setGrading({ tone = null, lut = null, exposure = null }) {
+    const t = { ...LINEAR_CURVE, ...(tone || {}) }, u = this.material.uniforms;
+    const white = Math.pow(2, t.white);
+    u.tmCurve.value.set(t.shoulder, t.linear, t.angle, t.toe);
+    u.tmToe.value.set(t.toeNum, t.toeDenom, white, 1 / curve(t, white));
+    this.tone = t; this.white = white;
+    this.bias = Math.pow(2, t.exposureBias || 0);
+    this.auto = exposure;
+    this.exposure = exposure ? Math.min(exposure.max, Math.max(exposure.min, 1)) : 1;
+    // Where middle grey comes out: the scene value the curve shows as 0.18 (for the auto exposure's target).
+    let lo = 0, hi = white / 2.8;
+    for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (curve(t, Math.min(m * 2.8, white)) / curve(t, white) < 0.18) lo = m; else hi = m; }
+    this.middle = (lo + hi) / 2;
+    this.lut?.dispose();
+    this.lut = null;
+    if (lut?.data) {
+      const n = lut.size, rgba = new Uint8Array(n * n * n * 4);
+      for (let i = 0; i < n * n * n; i++) { rgba[i * 4] = lut.data[i * 3]; rgba[i * 4 + 1] = lut.data[i * 3 + 1]; rgba[i * 4 + 2] = lut.data[i * 3 + 2]; rgba[i * 4 + 3] = 255; }
+      const tex = new THREE.Data3DTexture(rgba, n, n, n);
+      tex.format = THREE.RGBAFormat; tex.type = THREE.UnsignedByteType;
+      tex.minFilter = tex.magFilter = THREE.LinearFilter;
+      tex.wrapS = tex.wrapT = tex.wrapR = THREE.ClampToEdgeWrapping;
+      tex.unpackAlignment = 1;
+      tex.needsUpdate = true;
+      this.lut = tex;
+      u.lutRange.value.set(1 - 1 / n, 0.5 / n);
+    }
+    u.tLut.value = this.lut;
+    u.lutOn.value = !!this.lut;
+  }
+
+  // Auto exposure: a few times a second, the image's average (log) luminance sets where the exposure heads, within the
+  // map's range, at its speeds.
+  updateExposure(dt) {
+    const a = this.auto;
+    if (!a) { this.exposure = 1; return; }
+    const r = this.renderer;
+    if ((this.lumAt -= dt) <= 0) {
+      this.lumAt = 0.2;
+      r.setRenderTarget(this.lumRT);
+      r.render(this.lumScene, this.cam);
+      r.readRenderTargetPixels(this.lumRT, 0, 0, 32, 18, this.lumPixels);
+      let sum = 0;
+      for (let i = 0; i < 32 * 18; i++) sum += this.lumPixels[i * 4];
+      const avg = Math.exp(sum / (32 * 18));
+      this.target = Math.min(a.max, Math.max(a.min, this.middle / Math.max(avg, 1e-4)));
+    }
+    if (this.target == null) return;
+    const speed = this.target > this.exposure ? a.up : a.down;
+    this.exposure += (this.target - this.exposure) * (1 - Math.exp(-dt * 1.5 * speed));
   }
 
   setSize(w, h) {
     this.rt.setSize(w, h);
     this.flashRT.setSize(Math.max(1, w >> 1), Math.max(1, h >> 1));
     this.smokeRT.setSize(Math.max(1, w >> 1), Math.max(1, h >> 1));
+    this.vmRT.setSize(w, h);
     this.material.uniforms.smokeSize.value.set(Math.max(1, w >> 1), Math.max(1, h >> 1));
   }
 
@@ -178,23 +279,37 @@ export class Post {
     this.smoke.setLighting({ sunDir: sunDir.map((v) => v / l), sun: c(sun.color, sun.intensity * 0.075), sky: c(ambient.sky.value, 0.95), ground: c(ambient.ground.value, 0.55) });
   }
 
-  // Compiles the world's shaders for drawing into the render target, and the passes.
-  compile(scene, camera) {
+  // Compiles the world's shaders (and the overlay's: { scene, camera }) for drawing into their render targets, and
+  // the passes.
+  compile(scene, camera, overlay = null) {
     const r = this.renderer;
     r.setRenderTarget(this.rt);
     r.compile(scene, camera);
+    if (overlay) { r.setRenderTarget(this.vmRT); r.compile(overlay.scene, overlay.camera); }
     r.setRenderTarget(this.smokeRT);
     r.compile(this.smokeScene, this.cam);
     r.setRenderTarget(null);
     r.compile(this.scene, this.cam);
   }
 
-  // Draws the world, the smokes and the composite onto the screen. captureFlash keeps this frame as the afterimage.
-  render(scene, camera, { camPos, flashImage = 0, captureFlash = false }) {
+  // Draws the world, the smokes, the weapon (overlay: { scene, camera } or null) and the composite onto the screen.
+  // captureFlash keeps this frame as the afterimage.
+  render(scene, camera, { camPos, flashImage = 0, captureFlash = false, overlay = null, dt = 0 }) {
     const r = this.renderer, u = this.material.uniforms, su = this.smokeMat.uniforms;
     r.setRenderTarget(this.rt);
     r.clear();
     r.render(scene, camera);
+    if (overlay) {
+      const alpha = r.getClearAlpha();
+      r.setRenderTarget(this.vmRT);
+      r.setClearAlpha(0);
+      r.clear();
+      r.render(overlay.scene, overlay.camera);
+      r.setClearAlpha(alpha);
+    }
+    u.vmOn.value = !!overlay;
+    this.updateExposure(dt);
+    u.exposure.value = this.exposure * this.bias;
     if (captureFlash) { r.setRenderTarget(this.flashRT); r.render(this.copyScene, this.cam); }
     const smokes = this.smoke.active;
     if (smokes) {
@@ -214,8 +329,9 @@ export class Post {
 
   dispose() {
     this.rt.depthTexture?.dispose();
-    for (const t of [this.rt, this.flashRT, this.smokeRT]) t.dispose();
-    for (const m of [this.material, this.smokeMat, this.copyMat]) m.dispose();
+    for (const t of [this.rt, this.flashRT, this.smokeRT, this.vmRT, this.lumRT]) t.dispose();
+    for (const m of [this.material, this.smokeMat, this.copyMat, this.lumMat]) m.dispose();
+    this.lut?.dispose();
     this.geo.dispose();
   }
 }

@@ -132,7 +132,7 @@ export class Hud {
     if (show) { this.set('[data-progress-label]', label); this.q('[data-progress-bar]').style.width = `${Math.round(frac * 100)}%`; }
   }
 
-  spectate(name) { this.toggle('[data-spec]', !!name); if (name) this.set('[data-spec]', `Spectating ${name}  ·  Mouse1 next`); }
+  spectate(name, firstPerson = true) { this.toggle('[data-spec]', !!name); if (name) this.set('[data-spec]', `Spectating ${name}  ·  Mouse1 next  ·  Jump ${firstPerson ? 'third' : 'first'} person`); }
 
   // A red flash, and an arrow pointing to where the shot came from (angle in degrees, 0 = in front).
   hurt(angle, amount) {
