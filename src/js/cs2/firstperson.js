@@ -52,6 +52,10 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
   root.position.set(0, 0, 0); root.rotation.set(0, 0, 0); root.scale.set(1, 1, 1);
   rebind(root, bones, weaponRoot || skel);
   view.add(root);
+  // A StatTrak™ counter moves onto the animated bone of the same name.
+  const riders = [];
+  root.traverse((o) => { if (o.userData.statTrak && o.parent?.isBone) riders.push(o); });
+  for (const o of riders) bones[o.parent.name]?.add(o);
 
   // Stickers ride on the bone that moves the surface they're on (the magazine's for one on the mag, so it comes out
   // with it on a reload), else the weapon's main bone.

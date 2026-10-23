@@ -27,6 +27,8 @@ With CS2 installed the inspect also offers:
   equipped in your **loadout** are worn on the hands, like in game. Gloves themselves can be
   seen in first person too: worn, inspecting your equipped knife (or the default knife).
 - **Sticker effects**: Holo, Foil, Gold, Glitter, Lenticular and Embroidered stickers use CS2's own sticker materials.
+- **StatTrak™ counters**: StatTrak™ guns carry CS2's orange counter module where the game puts it, and StatTrak™ knives
+  have the count etched into the blade, showing the item's kills (in the inspect, first person and Play).
 
 Opening a case also plays CS2's own crate: the case's 3D model drops in, lands and unlocks with the game's "fall" and
 "open" animations and sounds before the roulette (weapon cases and recent souvenir packages; containers without a 3D
@@ -87,6 +89,8 @@ What's in a match:
 - Finished matches pay into your wallet when you play offline: kills, assists, MVPs, rounds won and the win, more
   against harder bots. The lobby shows your record.
 - The lobby shows CS2's own screenshot of each map.
+- Kills with your StatTrak™ guns and knives count on them (enemies only), like CS2: the counter on the weapon goes up
+  and the item keeps the count (online too).
 - CS2's special inspects and draws come up now and then in matches too (F again during an inspect for one; the console's
   cl_inspect_rare 1 always, -1 never).
 - The developer console (~): CS2's console commands and variables, with completion (Tab), history and find/help.

@@ -1453,6 +1453,7 @@ export class Game {
     c.alive = false;
     c.health = 0;
     this.match.onKill(c, attacker, weapon?.stats || weapon, { headshot });
+    if (attacker === this.me && c !== this.me && (this.ffa || c.team !== this.me.team)) this.countStatTrak(weapon?.id);
     if (!this.ffa) this.killChatter(c, attacker);
     const wname = weapon?.id ? (ITEM_NAMES[weapon.id] || (weapon.name || '').split(' | ')[0]) : weapon?.name || 'World';
     const by = attacker && attacker !== c;
@@ -1478,6 +1479,19 @@ export class Game {
       b.setMode('dead', { headshot });
       b.vel = [0, 0, 0];
     }
+  }
+
+  // A kill with your StatTrak™ gun or knife counts on its counter: saved on the item and shown on the weapon.
+  async countStatTrak(wid) {
+    if (!wid || NADES[wid]) return;
+    const item = /knife|bayonet/.test(wid) ? equipped('knife')
+      : equipped('w:' + (Object.values(D.skins).find((s) => s.wid === wid)?.w || ITEM_NAMES[wid] || wid));
+    if (!item?.stt) return;
+    try {
+      const { kills } = await act('play.stattrak', { uid: item.uid });
+      const held = await this.vmCache.get(wid);
+      held?.vm.model.userData.statTrak?.set(kills);
+    } catch (e) { console.warn('StatTrak count', e); }
   }
 
   // Your teammates call out kills and how many enemies are left.

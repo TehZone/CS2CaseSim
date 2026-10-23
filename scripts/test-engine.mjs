@@ -258,6 +258,16 @@ function tierFreq(box, n) {
     let e = null; try { ACT.runAction(ctx, 'case.open', { id: box.id, n: 3 }); } catch (x) { e = x; }
     check('failed actions change nothing (all-or-nothing)', e?.code === 'full' && st.money === m && st.inv.length === n && st.stats.opened === opened);
   }
+  {
+    // StatTrak™ kills from Play count on the item (and only on StatTrak™ items).
+    const stt = { uid: 'st1', t: 'skin', id: box.rare[0][0], fl: 0.1, sd: 1, stt: true, kills: 41, stk: [] };
+    const plain = { ...stt, uid: 'st2', stt: false, kills: undefined };
+    st.inv.push(stt, plain);
+    const { r: k, d } = run('play.stattrak', { uid: 'st1' });
+    let e = null; try { run('play.stattrak', { uid: 'st2' }); } catch (x) { e = x; }
+    check('StatTrak™ kills count on the item and sync as an update', k.kills === 42 && stt.kills === 42 && d.upd[0]?.kills === 42 && e instanceof ACT.GameError && plain.kills === undefined);
+    st.inv = st.inv.filter((i) => i !== stt && i !== plain);
+  }
   run('item.lock', { uid: r.items[1].uid, lk: true });
   threw = false; try { run('item.sell', { uids: [r.items[1].uid] }); } catch { threw = true; }
   check('locked items cannot be sold', threw);

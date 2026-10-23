@@ -6,7 +6,7 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
 import { imgUrl, loadImage } from '../util.js';
 import { UniformRandomStream } from './rng.js';
-import { cs2Prepare, cs2GloveClip } from './api.js';
+import { cs2Prepare, cs2GloveClip, cs2StatTrak } from './api.js';
 import { gloveMaterials } from './glove.js';
 import { loadGltf as loadRig, rebind, bonesByName, forearmTwist } from './rig.js';
 import { loadSource, texture, whiteTex } from './textures.js';
@@ -414,7 +414,8 @@ async function buildGloveModel(item, def, renderer) {
 }
 
 // Returns a THREE.Group with the item on its real model, centred, barrel along +X, or null if unsupported.
-export async function buildCS2Model(item, def, renderer) {
+// statTrak: false leaves a StatTrak™ item's counter off (the sticker editor's side view).
+export async function buildCS2Model(item, def, renderer, { statTrak = true } = {}) {
   if (def.cat === 'gloves') return buildGloveModel(item, def, renderer);
   const paint = def.v ? null : def.fid;
   // Vanilla knives carry a HUD id instead of the weapon id; borrow it from a finished skin of the same knife.
@@ -480,6 +481,9 @@ export async function buildCS2Model(item, def, renderer) {
   wrap.userData.unitScale = 4 / longest; // scene units per glTF metre (lines up CS2 inspect backdrops)
   wrap.userData.weapon = wid; // for the first-person inspect
   wrap.userData.root = root;
+  if (item.stt && statTrak) {
+    try { wrap.userData.statTrak = await addStatTrak(root, wid, prep, item.kills || 0); } catch (e) { console.warn('StatTrak counter failed', e); }
+  }
   if (item.stk?.length) {
     try { await addStickerDecals(wrap, item, def); } catch (e) { console.warn('sticker decals failed', e); }
     // Where the decals sit relative to the bones that move them, so they can follow in first person: each decal's own
@@ -497,6 +501,67 @@ export async function buildCS2Model(item, def, renderer) {
     });
   }
   return wrap;
+}
+
+// ---------------------------------------------------------------------------------------------
+// StatTrak™: CS2's orange counter module on guns (on knives, digits etched into the blade), at the model's "stattrak"
+// attachment, showing the item's kills.
+// ---------------------------------------------------------------------------------------------
+// The exporter turns a model's CS2 axes (+X forward, +Y left, +Z up) into glTF's +Z, +X, +Y, while bones keep CS2's
+// axes (in metres): this turns a separately exported model back into a bone's axes.
+const GLTF_TO_BONE = new THREE.Quaternion(0.5, 0.5, 0.5, 0.5);
+const INCH = 0.0254;
+
+// Shows a count on a counter's display. Each digit's quad carries its slot in the integer part of U (1-6, 6 the ones)
+// and the place of the atlas cell it shows by default in the fraction; the cells along the atlas's first row are a
+// leading zero (dim on the module, blank on knives) and then the digits 0-9, so each quad slides to its digit's cell.
+function showKills(geo, kills) {
+  const src = geo.userData.uv0, uv = geo.attributes.uv;
+  const n = Math.max(0, Math.min(999999, Math.floor(kills) || 0));
+  for (let i = 0; i < uv.count; i++) {
+    const u = src[i * 2], v = src[i * 2 + 1];
+    const slot = Math.floor(u), place = 6 - slot;
+    const cell = place > 0 && n < 10 ** place ? 0 : 1 + (Math.floor(n / 10 ** place) % 10);
+    uv.setXY(i, u - slot + (cell - (slot - 1)) * 0.0625, v - Math.floor(v));
+  }
+  uv.needsUpdate = true;
+}
+
+// Puts the counter on its bone in a weapon model's scene (it rides along in first person, see assembleViewmodel).
+// Returns { set(kills) } for updating the count, or null when the model has no StatTrak™ attachment.
+async function addStatTrak(root, wid, prep, kills) {
+  const st = await cs2StatTrak(wid);
+  const at = (/legacy/.test(prep.mesh) && st.legacy) || st.attach;
+  if (!at) return null;
+  let bone = null;
+  root.traverse((o) => { if (!bone && o.isBone && o.name === at.bone) bone = o; });
+  if (!bone) return null;
+  const knife = /knife|bayonet/.test(wid);
+  const counter = (await loadGltf(knife ? st.knife : st.module)).scene.clone();
+  const displays = [];
+  counter.traverse((o) => {
+    if (!o.isMesh) return;
+    o.frustumCulled = false;
+    if (!/display/.test(o.material?.name || '')) return;
+    // Its own copy of the display (the count is in its UVs) and of the material.
+    const geo = o.geometry = o.geometry.clone();
+    geo.userData.uv0 = Float32Array.from(geo.attributes.uv.array);
+    const m = o.material = o.material.clone();
+    if (knife) Object.assign(m, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }); // etched into the blade's surface
+    else { m.emissive = new THREE.Color(0xffffff); m.emissiveMap = m.map; m.emissiveIntensity = 1.1; } // the lit display
+    displays.push(geo);
+  });
+  if (!displays.length) return null;
+  const holder = new THREE.Group();
+  holder.name = 'stattrak';
+  holder.userData.statTrak = true;
+  holder.position.set(at.offset[0] * INCH, at.offset[1] * INCH, at.offset[2] * INCH);
+  holder.quaternion.set(...at.rotation).multiply(GLTF_TO_BONE);
+  holder.add(counter);
+  bone.add(holder);
+  const set = (n) => { for (const g of displays) showKills(g, n); };
+  set(kills);
+  return { set };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -651,7 +716,7 @@ async function placeDecal(wrap, targets, ray, box, sd, s, x, y, width, hit = nul
 // Orthographic side view of the item on its real model, framed exactly to the model's visible bounding
 // box, so normalised image coordinates equal the model-space sticker coordinates used by decals.
 export async function renderSideView(item, def, renderer, env, size = 1400) {
-  const model = await buildCS2Model(item, def, renderer);
+  const model = await buildCS2Model(item, def, renderer, { statTrak: false });
   if (!model) return null;
   model.updateMatrixWorld(true);
   const box = new THREE.Box3();

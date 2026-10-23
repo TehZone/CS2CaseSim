@@ -30,6 +30,19 @@ const STICKER_META_VERSION = 1;
 // Folders whose textures were made smaller carry this stamp. Version 1 was written by Electron's resizer, which
 // premultiplied alpha (textures keeping a mask in alpha came out dark or black), so those folders are exported again.
 const SHRUNK = '.shrunk2';
+
+// A model attachment from Source2Viewer's dump of the model's MDAT block: { bone, offset: [x, y, z] (inches),
+// rotation: [x, y, z, w] } in the bone's space, or null.
+function attachment(text, name) {
+  const at = text.indexOf(`m_name = "${name}"`);
+  if (at < 0) return null;
+  const rest = text.slice(at, at + 2000);
+  const bone = rest.match(/m_influenceNames\s*=\s*\[\s*"([^"]+)"/)?.[1];
+  const nums = (key) => rest.match(new RegExp(key + '\\s*=\\s*\\[\\s*\\[([^\\]]*)\\]'))?.[1].split(',').map(Number);
+  const rotation = nums('m_vInfluenceRotations'), offset = nums('m_vInfluenceOffsets');
+  if (!bone || rotation?.length !== 4 || offset?.length !== 3 || [...rotation, ...offset].some((v) => !Number.isFinite(v))) return null;
+  return { bone, offset, rotation };
+}
 const shrunkBadly = (dir) => fs.existsSync(path.join(dir, '.shrunk')) && !fs.existsSync(path.join(dir, SHRUNK));
 
 // CS2's two-layer world materials blend a second layer in with vertex paint; the glTF export keeps the first only.
@@ -117,6 +130,33 @@ class CS2Service {
     const armsFile = await cs2.exportGltf('weapons/models/shared/arms/weapon_arms.vmdl', 'fp/arms/weapon_arms.gltf', { materials: true });
     const clips = files.map((f) => this.url(f));
     return { clip: clips[0], clips, arms: this.url(armsFile), name: list[0].split('/').pop().replace(/.vnmclip_c$/, '') };
+  }
+
+  // StatTrak™: CS2's counter models (the module on guns, the digits etched into knife blades) and where the counter sits
+  // on a weapon's model (its "stattrak" attachment, and "stattrak_legacy" for the legacy model): { module, knife,
+  // attach, legacy } (see attachment()).
+  statTrak(weapon) {
+    weapon = String(weapon);
+    return this.playJob('stattrak:' + weapon, async () => {
+      const cs2 = this.ensureCS2();
+      const index = await this.ensureIndex();
+      const w = index.weapons[weapon] || (EXTRA_MODELS[weapon] && { model: EXTRA_MODELS[weapon] });
+      if (!w) throw new Error('Unknown weapon ' + weapon);
+      const urls = {};
+      for (const name of ['stattrak_module', 'stattrak_module_knife']) {
+        urls[name] = this.url(await cs2.exportGltf(`weapons/models/shared/stattrak/${name}.vmdl`, `stattrak/${name}/${name}.gltf`, { materials: true }));
+      }
+      const file = path.join(this.cacheDir, 'stattrak', 'attach', weapon + '.json');
+      let at = null;
+      try { at = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+      if (at?.model !== w.model) {
+        const text = String(await cs2.run(['-i', cs2.vpk, '-f', w.model + '_c', '--block', 'MDAT']));
+        at = { model: w.model, attach: attachment(text, 'stattrak'), legacy: attachment(text, 'stattrak_legacy') };
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(at));
+      }
+      return { module: urls.stattrak_module, knife: urls.stattrak_module_knife, attach: at.attach, legacy: at.legacy };
+    });
   }
 
   // CS2's glove inspect animation (both hands posed on the viewmodel skeleton): { clip } glTF URL.

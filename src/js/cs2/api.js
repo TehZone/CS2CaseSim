@@ -80,6 +80,18 @@ export function cs2FirstPerson(weapon) {
   return firstPersons.get(weapon);
 }
 
+// StatTrak™ for a weapon id: { module, knife, attach, legacy } (the counter models and where it sits on the weapon).
+const statTraks = new Map();
+export function cs2StatTrak(weapon) {
+  if (!statTraks.has(weapon)) {
+    const p = window.native?.cs2StatTrak ? window.native.cs2StatTrak(weapon)
+      : fetch(`api/cs2/stattrak?weapon=${encodeURIComponent(weapon)}`).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); });
+    statTraks.set(weapon, p);
+    p.catch(() => statTraks.delete(weapon));
+  }
+  return statTraks.get(weapon);
+}
+
 // A container's 3D crate model (CS2's "fall" and "open" animations included), or null: { model, name }.
 const crates = new Map();
 export function cs2Crate(id) {

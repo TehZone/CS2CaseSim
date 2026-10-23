@@ -252,6 +252,14 @@ export const ACTIONS = {
     s.playEarned = round2((s.playEarned || 0) + earned);
     return { earned };
   },
+  // A kill in Play with a StatTrak™ gun or knife counts on its counter (online too: it changes nothing but the count).
+  'play.stattrak'(ctx, { uid, kills = 1 }) {
+    const it = findOwned(ctx, String(uid));
+    if (!it.stt) fail(`${I.itemName(it)} isn't StatTrak™`);
+    it.kills = Math.min(999999, (it.kills || 0) + int(kills, 1, 50, 'kills'));
+    touch(ctx, it);
+    return { kills: it.kills };
+  },
   'upgrade.buy'(ctx, { id }) {
     const u = E.UPGRADES.find((x) => x.id === id);
     if (!u) fail('Unknown upgrade');

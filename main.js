@@ -179,6 +179,7 @@ function registerIpc() {
   ipcMain.handle('cs2:vanity', (_e, id) => cs2.vanity(id));
   ipcMain.handle('cs2:gloveClip', () => cs2.gloveClip());
   ipcMain.handle('cs2:firstPerson', (_e, weapon) => cs2.firstPerson(weapon));
+  ipcMain.handle('cs2:statTrak', (_e, weapon) => cs2.statTrak(weapon));
   ipcMain.handle('cs2:crate', (_e, id) => cs2.crate(id));
   ipcMain.handle('cs2:play', (_e, fn, arg) => playCall(fn, arg));
   ipcMain.handle('cs2:clear', () => {
@@ -324,6 +325,34 @@ async function runPlaySmoke(win) {
   const js = (code) => win.webContents.executeJavaScript(code);
   const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `play-${name}.png`), (await win.webContents.capturePage()).toPNG());
   await wait(4000);
+  // A StatTrak™ AK-47 with 41 kills in the loadout: its counter in the 3D inspect (a close-up of it in play-stattrak-inspect.png),
+  // then a kill with it in the match (below).
+  console.log('SMOKE play stattrak inspect', await js(`(async () => { try {
+    const THREE = await import('three'), { S } = await import('./js/state.js'), I = await import('./js/items.js'), { D } = await import('./js/data.js'), { act } = await import('./js/backend.js');
+    const ui = await import('./js/ui.js'), { inspectView } = await import('./js/inspect.js');
+    const it = I.makeSkinItem(Object.values(D.skins).find((s) => s.wid === 'weapon_ak47' && /Redline/.test(s.n)), { stt: true, fl: 0.1, sd: 5 });
+    it.uid = 'smoke-st'; it.kills = 41; S.inv.unshift(it); await act('loadout.equip', { uid: it.uid });
+    ui.openInspect(it);
+    for (let i = 0; i < 240 && document.querySelector('.inspect .loading'); i++) await new Promise((r) => setTimeout(r, 250));
+    const st = inspectView.state; st.anim = null; st.yaw = 0; st.pitch = 0; st.vy = st.vp = 0; st.lastInput = performance.now() + 1e9;
+    await new Promise((r) => setTimeout(r, 500));
+    let counter = null; inspectView.scene.traverse((o) => { if (o.name === 'stattrak') counter = o; });
+    if (!counter) return 'no counter on the model';
+    const p = counter.getWorldPosition(new THREE.Vector3()), W = 640, H = 360, cam = new THREE.PerspectiveCamera(6, W / H, 0.01, 100);
+    cam.position.copy(inspectView.camera.position); cam.lookAt(p);
+    const r = inspectView.renderer, rt = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.SRGBColorSpace, samples: 4 });
+    r.setRenderTarget(rt); r.render(inspectView.scene, cam); r.setRenderTarget(null);
+    const px = new Uint8Array(W * H * 4); r.readRenderTargetPixels(rt, 0, 0, W, H, px); rt.dispose();
+    const c = document.createElement('canvas'); c.id = 'smoke-closeup'; c.width = W; c.height = H; c.style.cssText = 'position:fixed;left:0;top:0;z-index:99999';
+    const ctx = c.getContext('2d'), img = ctx.createImageData(W, H);
+    for (let y = 0; y < H; y++) img.data.set(px.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4);
+    ctx.putImageData(img, 0, 0); document.body.appendChild(c);
+    return 'counter on ' + counter.parent.name + ', ' + it.kills + ' kills';
+  } catch (e) { return 'failed: ' + e.message; } })()`));
+  await wait(800);
+  await shot('stattrak-inspect');
+  await js(`document.getElementById('smoke-closeup')?.remove(); document.querySelector('.inspect [data-a=close]')?.click(); 1`);
+  await wait(500);
   const t0 = Date.now();
   await js(`window.__cs2Debug = true; document.querySelector('#nav [data-page=play]').click(); setTimeout(() => document.querySelector('[data-start]').click(), 300); 1`);
   let last = '';
@@ -392,6 +421,23 @@ async function runPlaySmoke(win) {
     }
     return JSON.stringify(out);
   } catch (e) { return 'failed: ' + e.message; } })()`));
+  // A kill with the StatTrak™ AK-47 counts on the item and on the gun's counter (a teamkill doesn't).
+  await js(`(async () => { const g = window.__playGame; await g.giveMe('primary', 'weapon_ak47'); g.input.pressed.add('slot1'); })()`);
+  await wait(1500);
+  console.log('SMOKE play stattrak kill', await js(`(async () => { try {
+    const g = window.__playGame, { S } = await import('./js/state.js'), kills = () => S.inv.find((i) => i.uid === 'smoke-st')?.kills;
+    const gun = g.arsenal.gun, before = kills();
+    const enemy = g.combatants.find((c) => c.alive && c.team !== g.me.team), mate = g.combatants.find((c) => c.alive && c !== g.me && c.team === g.me.team);
+    g.kill(enemy, g.me, gun, true);
+    if (mate) g.kill(mate, g.me, gun, false);
+    await new Promise((r) => setTimeout(r, 600));
+    let display = 'none';
+    gun.vm.rig.traverse((o) => { const src = o.geometry?.userData.uv0; if (!src) return; const uv = o.geometry.attributes.uv, cell = {};
+      for (let i = 0; i < uv.count; i++) cell[Math.floor(src[i * 2])] = Math.floor(uv.getX(i) / 0.0625 + 0.01);
+      display = [1, 2, 3, 4, 5, 6].map((k) => (cell[k] ? cell[k] - 1 : '.')).join(''); });
+    return JSON.stringify({ gun: gun.id, before, after: kills(), display });
+  } catch (e) { return 'failed: ' + e.message; } })()`));
+  await shot('stattrak-play');
   // The Deagle's spin in the match: bought, drawn and inspected with cl_inspect_rare 1.
   await js(`(async () => { const g = window.__playGame; g.cv.cl_inspect_rare = 1; await g.giveMe('secondary', 'weapon_deagle'); g.input.pressed.add('slot2'); })()`);
   await wait(1500);
