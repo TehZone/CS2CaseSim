@@ -96,6 +96,9 @@ function defaults(style) {
     g_flWearTexCoordScale: 1, g_flWearTexCoordRotation: 0, g_vWearTexCoordOffset: [0, 0],
     g_flGrungeTexCoordScale: 1, g_flGrungeTexCoordRotation: 0, g_vGrungeTexCoordOffset: [0, 0],
     g_bIgnoreWeaponSizeScale: 0,
+    g_fOverlayStrength: 1, g_fOverlayMaterialStrength: 1, g_fOverlayBrightness: 1, g_fOverlayDurability: 0,
+    g_fOverlayRoughness: 0.6, g_fOverlayMetalness: 0, g_fOverlayPearlescentMask: 0,
+    g_flOverlayTexCoordScale: 1, g_flOverlayTexCoordRotation: 0, g_vOverlayTexCoordOffset: [0, 0],
   };
 }
 
@@ -127,6 +130,8 @@ function globalValueRaw(name, p) {
     case 'bSpraypaintHalftone': return p.F_SPRAYPAINT_HALFTONE ? 1 : 0;
     case 'g_bRoughnessPerColor': return p.F_ROUGHNESS_PER_COLOR ? 1 : 0;
     case 'g_fColorBoostFactor': return 63;
+    case 'nOverlayBlendMode': return p.F_OVERLAY_BLEND_MODE | 0;
+    case 'nOverlayMaskMode': return p.F_OVERLAY_MASK | 0;
   }
   const halftone = name.match(/^g_vPatternTexCoordXformHalftone([ABC])([01])$/);
   if (halftone) return p.$halftone[halftone[1]][+halftone[2]];
@@ -142,13 +147,15 @@ function globalValueRaw(name, p) {
 const BAKE_VS = `
 precision highp float;
 in vec3 position;
-uniform vec4 uPat0, uPat1, uWear0, uWear1, uGrunge0, uGrunge1;
+uniform vec4 uPat0, uPat1, uWear0, uWear1, uGrunge0, uGrunge1, uOverlay0, uOverlay1;
 out highp vec4 input_1;
 out highp vec4 input_2;
+out highp vec2 input_3; // overlay UVs (variants with an overlay texture)
 void main() {
   vec2 uv = position.xy * 0.5 + 0.5;
   input_1 = vec4(uv, dot(uv, uPat0.xy) + uPat0.w, dot(uv, uPat1.xy) + uPat1.w);
   input_2 = vec4(dot(uv, uWear0.xy) + uWear0.w, dot(uv, uWear1.xy) + uWear1.w, dot(uv, uGrunge0.xy) + uGrunge0.w, dot(uv, uGrunge1.xy) + uGrunge1.w);
+  input_3 = vec2(dot(uv, uOverlay0.xy) + uOverlay0.w, dot(uv, uOverlay1.xy) + uOverlay1.w);
   gl_Position = vec4(position.xy, 0.0, 1.0);
 }`;
 
@@ -233,10 +240,19 @@ async function bakeSkin(renderer, prep, item) {
   });
   p.$halftone = {};
   for (const k of ['A', 'B', 'C']) p.$halftone[k] = xform(p.g_flPatternTexCoordRotation + p['g_flHalftoneRotationOffset' + k], p.g_flPatternTexCoordScale, p.g_vPatternTexCoordOffset, sizeScale);
+  // Overlay UVs, as csgo_customweapon's vertex shader picks them: the model's own UVs, the pattern's, or (with
+  // unique UVs) the overlay's own transform.
+  const [ov0, ov1] = !p.g_bOverlayUsesPatternUVs ? [new THREE.Vector4(1, 0, 0, 0), new THREE.Vector4(0, 1, 0, 0)]
+    : p.g_bOverlayUsesUniqueUVs ? xform(p.g_flOverlayTexCoordRotation, p.g_flOverlayTexCoordScale, p.g_vOverlayTexCoordOffset, sizeScale)
+      : [pat0, pat1];
+  Object.assign(p, { g_vOverlayTexCoordXform0: ov0, g_vOverlayTexCoordXform1: ov1 });
 
   const src = shader.source;
   const patternSrgb = ![1, 2, 4, 5].includes(style) && !p.F_USE_ALL_MASKS;
-  const uniforms = { uPat0: { value: pat0 }, uPat1: { value: pat1 }, uWear0: { value: wear0 }, uWear1: { value: wear1 }, uGrunge0: { value: gr0 }, uGrunge1: { value: gr1 } };
+  const uniforms = {
+    uPat0: { value: pat0 }, uPat1: { value: pat1 }, uWear0: { value: wear0 }, uWear1: { value: wear1 },
+    uGrunge0: { value: gr0 }, uGrunge1: { value: gr1 }, uOverlay0: { value: ov0 }, uOverlay1: { value: ov1 },
+  };
   const globals = {};
   for (const { name, type } of parseGlobals(src)) globals[name] = globalValue(name, p, type);
   uniforms._Globals_ = { value: globals };
@@ -433,11 +449,12 @@ export async function buildCS2Model(item, def, renderer, { statTrak = true } = {
       prep.materials[prep.material]?.normal ? texture(prep.materials[prep.material].normal) : null,
       prep.materials[prep.material]?.orm ? texture(prep.materials[prep.material].orm) : null,
     ]);
-    const override = prep.kit.final?.g_tNormal?.value;
-    const normalMap = override && prep.textures[override] ? await texture(prep.textures[override]) : normal;
+    // Some kits replace the model's normal map and ambient occlusion in the final material.
+    const finalTex = (name) => { const v = prep.kit.final?.[name]?.value; return v && prep.textures[v] ? texture(prep.textures[v]) : null; };
+    const [normalOverride, aoOverride] = await Promise.all([finalTex('g_tNormal'), finalTex('g_tAmbientOcclusion')]);
     skin = new THREE.MeshPhysicalMaterial({
       map: baked.colorRT.texture, roughnessMap: baked.rmRT.texture, metalnessMap: baked.rmRT.texture,
-      roughness: 1, metalness: 1, normalMap, aoMap: orm, clearcoat: 0.08, clearcoatRoughness: 0.4,
+      roughness: 1, metalness: 1, normalMap: normalOverride || normal, aoMap: aoOverride || orm, clearcoat: 0.08, clearcoatRoughness: 0.4,
     });
     skin.userData.dispose = () => { baked.colorRT.dispose(); baked.rmRT.dispose(); };
     const pearl = prep.kit.final?.g_flPearlescentScale?.value ?? baked.params.g_flPearlescentScale ?? 0;
