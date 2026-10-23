@@ -16,7 +16,7 @@ const IMG = path.join(ROOT, 'cache', 'img');
 const portArg = process.argv.indexOf('--port');
 const PORT = Number(portArg > 0 ? process.argv[portArg + 1] : process.env.PORT) || 5178;
 fs.mkdirSync(IMG, { recursive: true });
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.gltf': 'model/gltf+json', '.glb': 'model/gltf-binary', '.bin': 'application/octet-stream', '.exr': 'image/x-exr' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.gltf': 'model/gltf+json', '.glb': 'model/gltf-binary', '.bin': 'application/octet-stream', '.exr': 'image/x-exr' };
 const CS2_CACHE = path.join(ROOT, 'cache', 'cs2');
 const TMP = path.join(process.env.LOCALAPPDATA || '', 'Temp');
 const cs2 = new CS2Service({

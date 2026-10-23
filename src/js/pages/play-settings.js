@@ -20,7 +20,7 @@ export function settingsHtml(p) {
     <input type="range" min="${min}" max="${max}" step="${step}" value="${val}" data-s="${group}.${k}"></label>`;
   const check = (k, label, val, group) => `<label class="ps-check"><input type="checkbox" data-s="${group}.${k}" ${val ? 'checked' : ''}> ${label}</label>`;
   const binds = Object.keys(BINDS).map((a) => `<div class="ps-bind"><span>${esc(ACTION_NAMES[a] || a)}</span><button class="btn ghost sm" data-bind="${a}">${esc(listening === a ? 'Press a key…' : (p.binds?.[a] ? keyName(p.binds[a]) : keyNames(BINDS[a])))}</button></div>`).join('');
-  return `<details class="play-settings card" ${open ? 'open' : ''}><summary>Settings: crosshair, viewmodel, keys and sound</summary>
+  return `<details class="play-settings panel" ${open ? 'open' : ''}><summary>Settings: crosshair, viewmodel, keys and sound</summary>
     <div class="ps-grid">
       <section><h4>Crosshair</h4>
         <div class="ps-xhair-preview"><div class="ps-xhair">${crosshairHtml(c)}</div></div>

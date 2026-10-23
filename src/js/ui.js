@@ -89,7 +89,10 @@ export function itemCard(item, { selectable = false, selected = false, extra = '
   const r = I.rarityInfo(item);
   const np = I.nameParts(item);
   const pat = I.patternInfo(item);
-  const wear = item.t === 'skin' && item.fl != null ? `${wearOf(item.fl)} · ${item.fl.toFixed(4)}` : item.t === 'chicken' ? `${HAT[item.hat].n}` : r.n;
+  // Skins show the wear abbreviation (coloured like its stretch of the wear bar) and the float, like CS2's inventory.
+  const wk = item.t === 'skin' && item.fl != null ? wearOf(item.fl) : null;
+  const wear = wk ? `<b class="wk" style="--wc:${WEAR_BY_KEY[wk].c}" title="${WEAR_BY_KEY[wk].n}">${wk}</b>${item.fl.toFixed(4)}`
+    : esc(item.t === 'chicken' ? HAT[item.hat].n : r.n);
   const stk = item.stk?.length ? `<div class="stickers">${item.stk.map((s) => `<img src="${imgUrl(D.stickers[s.id]?.img, 's')}">`).join('')}</div>` : '';
   return `<div class="card ${selected ? 'selected' : ''} ${extra}" data-uid="${item.uid}" style="--rc:${r.c}">
     ${selectable ? '<div class="sel"></div>' : ''}
@@ -100,7 +103,7 @@ export function itemCard(item, { selectable = false, selected = false, extra = '
     <div class="meta">
       <div class="n1 ${item.stt ? 'stt' : item.sv ? 'sv' : ''}">${esc(np.top)}</div>
       <div class="n2">${esc(np.bottom)}</div>
-      <div class="row"><span class="wear">${esc(wear)}</span><span class="val">${money(I.itemValue(item))}</span></div>
+      <div class="row"><span class="wear">${wear}</span><span class="val">${money(I.itemValue(item))}</span></div>
       ${item.t === 'chicken' ? `<div class="income">🥚 ${money(chickenIncome(item))}/s egg rate</div>` : ''}
     </div>
   </div>`;

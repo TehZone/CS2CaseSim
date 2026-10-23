@@ -211,7 +211,7 @@ function renderCollection(root, col) {
     <div class="case-hero">
       <img class="ci" src="${imgUrl(colTopSkin(col).img, 'm')}" alt="">
       <div>
-        <div class="muted" style="text-transform:uppercase;letter-spacing:1.5px;font-size:12px">Collection${col.rel ? ' · ' + col.rel.slice(0, 4) : ''}</div>
+        <div class="kicker">Collection${col.rel ? ' · ' + col.rel.slice(0, 4) : ''}</div>
         <h2>${esc(col.n)}</h2>
         <div class="muted" style="line-height:1.6;max-width:720px">${caseBox ? 'Drops from the ' + esc(caseBox.n) + ' (case odds there). Odds below are for souvenir packages' : 'Not in any weapon case: get it from the Armory when it’s featured, souvenir packages or trade-ups. Odds below are for Armory drops and souvenir packages'} (each rarity is 5× rarer than the one below).
           Trade up ten skins of one rarity from this collection to get the next rarity.${caseBox ? ' Five Covert skins from it can be traded up into a knife or gloves from the ' + esc(caseBox.n) + '.' : ''}</div>
@@ -292,7 +292,7 @@ function renderCase(root, c) {
     <div class="case-hero">
       <img class="ci" src="${caseImage(c)}" alt="">
       <div>
-        <div class="muted" style="text-transform:uppercase;letter-spacing:1.5px;font-size:12px">${({ case: 'Weapon case', agents: 'Agent locker', chickens: 'Chicken crate', autograph: 'Autograph capsule', capsule: 'Sticker capsule', souvenir: 'Souvenir package', package: 'Package' })[c.kind] || ''}</div>
+        <div class="kicker">Unlock container · ${({ case: 'Weapon case', agents: 'Agent locker', chickens: 'Chicken crate', autograph: 'Autograph capsule', capsule: 'Sticker capsule', souvenir: 'Souvenir package', package: 'Package' })[c.kind] || ''}</div>
         <h2>${esc(c.n)}</h2>
         ${c.kind === 'souvenir' ? `<div class="muted" style="margin:-4px 0 10px">${esc(D.events[c.ev]?.n || '')} · every drop is a Souvenir with that Major's team stickers${D.events[c.ev] && Object.keys(D.events[c.ev].mvp).length ? ' and a gold MVP autograph' : ''}${c.col && D.colById[c.col] ? ` · <a href="#" data-col="${c.col}">${esc(D.colById[c.col].n)}</a>` : ''}</div>` : ''}
         ${c.kind === 'package' && c.col && D.colById[c.col] ? `<div class="muted" style="margin:-4px 0 10px"><a href="#" data-col="${c.col}">${esc(D.colById[c.col].n)}</a></div>` : ''}
@@ -315,7 +315,7 @@ function renderCase(root, c) {
           : rarityOddsHTML(c, tiers)}</div>
       </div>
     </div>
-    <div class="section-title">Contains</div>
+    <div class="section-title">Contains one of the following</div>
     <div class="grid">${contents}${c.rare ? `<div class="card rare-tile" style="--rc:#e4ae39" data-scroll-rare><div class="img"><img class="rare-icon" src="img/rare-item.png" alt=""></div><div class="rbar"></div><div class="meta"><div class="n1">Exceedingly rare</div><div class="n2">★ Rare Special Item</div><div class="row"><span class="wear">${c.rareKind === 'gloves' ? 'Gloves' : c.rareKind === 'mixed' ? 'Knives & gloves' : 'Knives'}</span><span class="dim">${(rareW * 100).toFixed(2)}%</span></div></div></div>` : ''}</div>
     ${c.rare ? `<div class="section-title" id="rare-list">Rare special items (${c.rare.length})</div><div class="grid">${rareTiles}</div>` : ''}
     <p class="dim" style="margin-top:22px;font-size:12px">Tip: click any item for prices, odds and a 3D inspect.</p>

@@ -38,7 +38,7 @@ export function render(r) {
     <div class="play-lobby">
       <div class="play-maps">${mapList.map(({ id, name }) => `<button class="play-map ${id === p.map ? 'active' : ''}" data-map="${id}" style="${MAP_TINT[id] ? `--tint: linear-gradient(160deg, ${MAP_TINT[id]} 70%, #1a1712)` : ''}">
           <span>${esc(name)}</span><small>${id === 'de_dust2' ? 'Recommended' : 'The first match prepares the map (a couple of minutes)'}</small></button>`).join('')}</div>
-      <div class="play-setup card">
+      <div class="play-setup panel">
         <div class="play-modes">${Object.entries(MODES).map(([id, m]) => `<button class="${id === mode ? 'active' : ''}" data-mode="${id}"><b>${esc(m.name)}</b><small>${esc(m.blurb)}</small></button>`).join('')}</div>
         ${mode !== 'armsrace' && !(mode === 'deathmatch' && p.ffa === 'ffa') ? `<label>Side<select class="input" data-k="team"><option value="CT" ${p.team === 'CT' ? 'selected' : ''}>Counter-Terrorists</option><option value="T" ${p.team === 'T' ? 'selected' : ''}>Terrorists</option></select></label>` : ''}
         ${mode === 'wingman' ? `<label>Bomb site<select class="input" data-k="site">${opts([['A', 'A'], ['B', 'B']], p.site)}</select></label>`
