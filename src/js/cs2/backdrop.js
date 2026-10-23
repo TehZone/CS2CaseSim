@@ -124,8 +124,9 @@ export class BlurredBackdrop {
     this.texel = new THREE.Vector2(1 / bw, 1 / bh);
   }
 
-  // Renders the backdrop from `camera`, blurs it `strength` times, and draws it as the frame's background.
-  render(renderer, backdrop, camera, strength = 3) {
+  // Renders the backdrop from `camera`, blurs it `strength` times, and draws it as the frame's background (times
+  // `dim`: darker behind a first-person weapon).
+  render(renderer, backdrop, camera, strength = 3, dim = 1) {
     const prev = renderer.getRenderTarget();
     renderer.setRenderTarget(this.a);
     renderer.clear();
@@ -143,6 +144,7 @@ export class BlurredBackdrop {
       renderer.render(this.quadScene, this.orth);
     }
     renderer.setRenderTarget(prev);
+    this.showMat.color.setScalar(dim);
     renderer.render(this.showScene, this.orth);
   }
 

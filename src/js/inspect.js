@@ -438,19 +438,19 @@ class InspectView {
     }
     this.shadow.visible = !bd && !this.fp;
     for (const l of this.studioLights) l.intensity = l.userData.base ?? (l.userData.base = l.intensity);
-    for (const [l, k] of this.fpLights) l.intensity = this.fp ? k : 0;
-    // First person tone maps the weapon with AgX, which rolls highlights off and keeps the shadows open (ACES's punchier
-    // curve, right for the inspect's studio, made the viewmodel look over-contrasted): as bright, no clipped highlights.
-    // A map backdrop keeps ACES (see render).
-    this.renderer.toneMapping = this.fp ? THREE.AgXToneMapping : THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = this.fp ? 1.2 : 1.08;
+    // First person: a little under the inspect's exposure (its own lights are brighter than the studio's), lower still in
+    // front of a map, where the map's sun lights it too and its own lights are turned down: blades keep their colour
+    // (a Doppler stays deep pink, not pastel) and stand out against the map (dimmed in render).
+    const k = bd ? 0.7 : 1;
+    for (const [l, base] of this.fpLights) l.intensity = this.fp ? base * k : 0;
+    this.renderer.toneMappingExposure = this.fp ? (bd ? 0.9 : 0.95) : 1.08;
     if (this.fp) {
       // First person: the weapon's own lights and a bright, neutral room to reflect (metal blades show what they
       // reflect, and a map's or the studio's dark surroundings turned them dark), plus a map backdrop's sun.
       for (const l of this.studioLights) l.intensity = 0;
       this.scene.environment = this.envRoom;
-      this.scene.environmentIntensity = 1.0;
-      this.sunLight.intensity = bd ? Math.min(1.6, bd.sun.intensity * 0.45) : 0;
+      this.scene.environmentIntensity = bd ? 0.8 : 0.9;
+      this.sunLight.intensity = bd ? Math.min(0.8, bd.sun.intensity * 0.25) : 0;
       if (bd) { this.sunLight.color.copy(bd.sun.color); this.sunLight.position.copy(bd.sun.dir).multiplyScalar(-10); }
       return;
     }
@@ -693,11 +693,12 @@ class InspectView {
       const r = this.renderer;
       r.autoClear = false;
       r.clear();
-      // The map keeps the inspect's ACES look (first person tone maps only the weapon its softer way: applyLighting).
-      const tone = r.toneMapping, exposure = r.toneMappingExposure;
-      r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.08;
-      this.blurBg.render(r, this.backdrop, cam, this.fp ? 2 : 3);
-      r.toneMapping = tone; r.toneMappingExposure = exposure;
+      // The map at the inspect's exposure (first person sets its own for the weapon: applyLighting), dimmed behind a
+      // first-person weapon so that reads clearly, like CS2's inspect depth of field (a bright map washed it out).
+      const exposure = r.toneMappingExposure;
+      r.toneMappingExposure = 1.08;
+      this.blurBg.render(r, this.backdrop, cam, this.fp ? 2 : 3, this.fp ? 0.55 : 1);
+      r.toneMappingExposure = exposure;
       r.clearDepth();
       r.render(this.scene, cam);
       r.autoClear = true;

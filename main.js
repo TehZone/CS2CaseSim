@@ -370,24 +370,38 @@ async function runPlaySmoke(win) {
     renderer.dispose();
     return JSON.stringify(out);
   } catch (e) { return 'failed: ' + e.message; } })()`));
-  // First person's softer light: a Karambit | Fade (the weapon's pixels: shadows, middle, highlights, clipped).
-  console.log('SMOKE first person light', await js(`(async () => { try {
+  // First person's light: a Karambit | Fade in the studio, then an M9 Bayonet | Doppler (Phase 2) in front of Anubis's
+  // bright map (play-first-person-map.png): the weapon's shadows, middle and highlights, how colourful it is, and how
+  // bright the (dimmed) map behind it is.
+  const fpLook = (name, phase, backdrop) => js(`(async () => { try {
     const ui = await import('./js/ui.js'), I = await import('./js/items.js'), { D } = await import('./js/data.js'), { inspectView: v } = await import('./js/inspect.js');
-    ui.openInspect(I.makeSkinItem(Object.values(D.skins).find((x) => x.n === '★ Karambit | Fade'), { stt: false, fl: 0.03, sd: 7 }));
+    document.querySelector('.inspect [data-a=close]')?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    ui.openInspect(I.makeSkinItem(Object.values(D.skins).find((x) => x.n === ${JSON.stringify(name)} && (!${JSON.stringify(phase)} || x.ph === ${JSON.stringify(phase)})), { stt: false, fl: 0.02, sd: 7 }));
     for (let i = 0; i < 240 && document.querySelector('.inspect .loading'); i++) await new Promise((r) => setTimeout(r, 250));
+    await v.setBackdrop(${JSON.stringify(backdrop)});
     await v.enterFirstPerson();
     const fp = v.fp; fp.play(false); fp.update(0); fp.update(2); fp.mixer.timeScale = 0; v.applyLighting();
     const r = v.renderer, gl = r.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
-    const grab = () => { r.setRenderTarget(null); r.render(v.scene, v.fpCamera); const px = new Uint8Array(W * H * 4); gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px); return px; };
-    const a = grab(); fp.rig.visible = false; const b = grab(); fp.rig.visible = true;
-    const lum = [];
-    for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) >= 12) lum.push((0.2126 * a[i] + 0.7152 * a[i + 1] + 0.0722 * a[i + 2]) / 255);
-    lum.sort((x, y) => x - y);
-    const q = (p) => Math.round(lum[Math.floor(lum.length * p)] * 100) / 100;
-    return JSON.stringify({ toneMapping: r.toneMapping === 6 ? 'AgX' : r.toneMapping, shadows: q(0.05), middle: q(0.5), highlights: q(0.95), clippedPct: Math.round((lum.filter((x) => x > 0.97).length / lum.length) * 1000) / 10 });
-  } catch (e) { return 'failed: ' + e.message; } })()`));
+    const read = () => { const px = new Uint8Array(W * H * 4); gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px); return px; };
+    r.setRenderTarget(null); r.render(v.scene, v.fpCamera); const a = read(); fp.rig.visible = false; r.render(v.scene, v.fpCamera); const b = read(); fp.rig.visible = true;
+    v.frame(); const all = read();
+    const lum = [], map = []; let chroma = 0;
+    for (let i = 0; i < a.length; i += 4) {
+      const l = (0.2126 * all[i] + 0.7152 * all[i + 1] + 0.0722 * all[i + 2]) / 255;
+      if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) >= 12) { lum.push(l); chroma += (Math.max(all[i], all[i + 1], all[i + 2]) - Math.min(all[i], all[i + 1], all[i + 2])) / 255; }
+      else if (i % 16 === 0) map.push(l);
+    }
+    lum.sort((x, y) => x - y); map.sort((x, y) => x - y);
+    const q = (arr, p) => Math.round(arr[Math.floor(arr.length * p)] * 100) / 100;
+    return JSON.stringify({ exposure: r.toneMappingExposure, shadows: q(lum, 0.05), middle: q(lum, 0.5), highlights: q(lum, 0.95), clippedPct: Math.round((lum.filter((x) => x > 0.97).length / lum.length) * 1000) / 10, colour: Math.round((chroma / lum.length) * 1000) / 1000, ...(${JSON.stringify(backdrop)} === 'studio' ? {} : { map: q(map, 0.5) }) });
+  } catch (e) { return 'failed: ' + e.message; } })()`);
+  console.log('SMOKE first person light', await fpLook('★ Karambit | Fade', null, 'studio'));
   await wait(1500);
   await shot('first-person-light');
+  console.log('SMOKE first person on a map', await fpLook('★ M9 Bayonet | Doppler', 'Phase 2', 'de_anubis'));
+  await wait(1500);
+  await shot('first-person-map');
   await js(`document.querySelector('.inspect [data-a=close]')?.click(); 1`);
   await wait(500);
   const t0 = Date.now();
