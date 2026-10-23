@@ -244,20 +244,23 @@ export class Post {
   }
 
   // Auto exposure: a few times a second, the image's average (log) luminance sets where the exposure heads, within the
-  // map's range, at its speeds.
+  // map's range, at its speeds. Read back when the GPU has it (waiting for it stalled the frame).
   updateExposure(dt) {
     const a = this.auto;
     if (!a) { this.exposure = 1; return; }
     const r = this.renderer;
-    if ((this.lumAt -= dt) <= 0) {
+    if ((this.lumAt -= dt) <= 0 && !this.lumReading) {
       this.lumAt = 0.2;
       r.setRenderTarget(this.lumRT);
       r.render(this.lumScene, this.cam);
-      r.readRenderTargetPixels(this.lumRT, 0, 0, 32, 18, this.lumPixels);
-      let sum = 0;
-      for (let i = 0; i < 32 * 18; i++) sum += this.lumPixels[i * 4];
-      const avg = Math.exp(sum / (32 * 18));
-      this.target = Math.min(a.max, Math.max(a.min, this.middle / Math.max(avg, 1e-4)));
+      this.lumReading = true;
+      r.readRenderTargetPixelsAsync(this.lumRT, 0, 0, 32, 18, this.lumPixels).then(() => {
+        if (this.disposed || this.auto !== a) return;
+        let sum = 0;
+        for (let i = 0; i < 32 * 18; i++) sum += this.lumPixels[i * 4];
+        const avg = Math.exp(sum / (32 * 18));
+        this.target = Math.min(a.max, Math.max(a.min, this.middle / Math.max(avg, 1e-4)));
+      }).catch(() => {}).finally(() => { this.lumReading = false; });
     }
     if (this.target == null) return;
     const speed = this.target > this.exposure ? a.up : a.down;
@@ -336,6 +339,7 @@ export class Post {
   }
 
   dispose() {
+    this.disposed = true;
     this.rt.depthTexture?.dispose();
     for (const t of [this.rt, this.flashRT, this.smokeRT, this.vmRT, this.lumRT]) t.dispose();
     for (const m of [this.material, this.smokeMat, this.copyMat, this.lumMat]) m.dispose();

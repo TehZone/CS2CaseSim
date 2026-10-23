@@ -7,6 +7,7 @@
 // Coordinates: the scene stays in the exporter's glTF metres (Y up); gameplay runs in game units.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { TextureArrays, slotsOf, batchMaterial, materialTable, SLOTS, SRGB } from './batch.js';
 import { ProbeField } from './probes.js';
 
 export const IN = 0.0254;
@@ -29,7 +30,9 @@ const BALL = /soccer_?ball/i;
 // CS2's newer csgo_environment(_blend), whose second set is a second texture UV and the lightmap UV the third.
 const LIGHTMAPPED = /lightmappedgeneric|static_overlay|environment_blend|csgo_environment\.vfx/i;
 const lightmapUv = (shader) => (/csgo_environment/i.test(shader || '') ? 'uv2' : 'uv1');
-const CELL = 3000; // merge cell size, game units
+// Merge cell size (game units) for see-through surfaces, drawn back to front cell by cell. The rest is merged map-wide,
+// a draw per material: a cell rarely leaves the view on a CS2 map, so splitting them only multiplied the draws.
+const CELL = 3000;
 
 // The lightmap file (RGBA8: sRGB irradiance / irrMax, alpha = sun visibility) as a texture on UV set 1.
 async function loadLightmap(url, size) {
@@ -139,10 +142,11 @@ function envOf(vm, textures, load) {
 const envUv = (set, i, raw) => (set === 0 ? raw : `( ${set === 2 ? 'vCs2Uv2' : 'vCs2Uv0'} * cs2EnvUv[ ${i} ].xy + cs2EnvUv[ ${i} ].zw )`);
 
 function addEnv(sh, E) {
+  const flat = (list) => Float32Array.from(list.flatMap((v) => v.toArray())); // (three re-flattens arrays of vectors at every material switch)
   Object.assign(sh.uniforms, {
     cs2Color2: { value: E.color2 }, cs2Normal2: { value: E.normal2 }, cs2Color3: { value: E.color3 }, cs2Normal3: { value: E.normal3 },
     cs2Height1: { value: E.height[0] }, cs2Height2: { value: E.height[1] }, cs2Height3: { value: E.height[2] },
-    cs2EnvH: { value: E.h }, cs2EnvAdj: { value: E.adj }, cs2EnvTint: { value: E.tint }, cs2EnvMask: { value: E.mask }, cs2EnvUv: { value: E.uv },
+    cs2EnvH: { value: flat(E.h) }, cs2EnvAdj: { value: flat(E.adj) }, cs2EnvTint: { value: flat(E.tint) }, cs2EnvMask: { value: flat(E.mask) }, cs2EnvUv: { value: flat(E.uv) },
     cs2ColorTint: { value: E.colorTint },
   });
   sh.vertexShader = 'attribute vec2 cs2Uv2;\nattribute vec4 cs2Env;\nattribute vec4 cs2Tint;\nvarying vec2 vCs2Uv0;\nvarying vec2 vCs2Uv2;\nvarying vec4 vCs2Env;\nvarying vec4 vCs2Tint;\n'
@@ -304,6 +308,13 @@ const REFLECT_AROUND = `
 		radiance += irradiance * RECIPROCAL_PI;
 	#endif`;
 
+// One material for every prop that uses it, however each is tinted (Dust II's window frames come in 40 colours; the
+// exporter gives each colour a copy of the material): each one's colour (its glTF base colour) per vertex instead.
+function addFactor(sh) {
+  sh.vertexShader = 'attribute vec3 cs2Factor;\nvarying vec3 vCs2Factor;\n' + sh.vertexShader.replace('#include <uv_vertex>', '#include <uv_vertex>\n\tvCs2Factor = cs2Factor;');
+  sh.fragmentShader = 'varying vec3 vCs2Factor;\n' + sh.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n\tdiffuseColor.rgb *= vCs2Factor;');
+}
+
 // Lightmapped surfaces: the sun's direct light is multiplied by the baked sun visibility in the lightmap's alpha.
 function lightmapped(m, lightMap, irrMax, layer = null) {
   m.lightMap = lightMap;
@@ -315,8 +326,9 @@ function lightmapped(m, lightMap, irrMax, layer = null) {
         'getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= cs2SunMask;'));
     sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_maps>', '#include <lights_fragment_maps>' + REFLECT_AROUND);
     if (layer) (layer.kind === 'env' ? addEnv : addLayer)(sh, layer);
+    if (m.userData.tinted) addFactor(sh);
   };
-  m.customProgramCacheKey = () => 'cs2lm' + (layer?.key || '');
+  m.customProgramCacheKey = () => 'cs2lm' + (layer?.key || '') + (m.userData.tinted ? 'f' : '');
 }
 
 // Everything else: the shadow-mapped sun plus its indirect light, one of: CS2's probe light baked into the vertices
@@ -348,8 +360,9 @@ export function ambientLit(m, ambient, layer = null, { probe = false } = {}) {
     sh.fragmentShader = add + sh.fragmentShader.replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
 	{ ${light} }${REFLECT_AROUND}`);
     if (layer) (layer.kind === 'env' ? addEnv : addLayer)(sh, layer);
+    if (m.userData.tinted) addFactor(sh);
   };
-  m.customProgramCacheKey = () => 'cs2amb' + mode + (layer?.key || '');
+  m.customProgramCacheKey = () => 'cs2amb' + mode + (layer?.key || '') + (m.userData.tinted ? 'f' : '');
 }
 
 // An ambient cube uniform (see ambientLit) and a function that sets it from the probes at a point.
@@ -381,11 +394,14 @@ function floats(attr) {
 }
 
 // Merges meshes (placed by `matrix`) into one geometry with position, normal, uv and optionally uv1 (lightmap),
-// tangent, cs2Blend (the second layer's vertex paint, the exporter's _TEXCOORD_4.x) and cs2Probe (the probe light at
-// each vertex, from probe(gamePos, gameNormal, out)). Only the vertices each mesh's triangles use are copied (fragments
-// index into shared buffers).
+// tangent, cs2Blend (the second layer's vertex paint, the exporter's _TEXCOORD_4.x), cs2Probe (the probe light at
+// each vertex, from probe(gamePos, gameNormal, out)), cs2Factor (each mesh's `color`: see addFactor) and cs2Mat (its `mat`,
+// a batched material's number: see batch.js) and cs2Piece (its `piece`, a breakable's number; each piece's bounds in
+// userData.pieceBoxes). Only the
+// vertices each mesh's triangles use are copied (fragments index into shared buffers).
 let remap = new Int32Array(0), mark = new Int32Array(0), gen = 0;
-function mergeMeshes(list, { lm, lmUv = 'uv1', tangents, blend = false, env = false, probe = null }) {
+const _p = new THREE.Vector3();
+function mergeMeshes(list, { lm, lmUv = 'uv1', tangents, blend = false, env = false, probe = null, factor = false, mats = false, pieces = false }) {
   let nv = 0, ni = 0;
   for (const { geo } of list) {
     const c = geo.index ? geo.index.count : geo.attributes.position.count;
@@ -393,15 +409,19 @@ function mergeMeshes(list, { lm, lmUv = 'uv1', tangents, blend = false, env = fa
   }
   let pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), uv = new Float32Array(nv * 2);
   let uv1 = lm ? new Float32Array(nv * 2) : null, tan = tangents ? new Float32Array(nv * 4) : null, bl = blend ? new Float32Array(nv) : null;
-  let pr = probe ? new Float32Array(nv * 3) : null;
+  let pr = probe ? new Float32Array(nv * 3) : null, fa = factor ? new Uint16Array(nv * 3) : null, mt = mats ? new Float32Array(nv) : null;
+  let pc = pieces ? new Float32Array(nv) : null;
+  const pieceBoxes = new Map();
   // csgo_environment(_blend) (see addEnv): the second UV set, the vertex paint and the vertex tint.
   let eu = env ? new Float32Array(nv * 2) : null, eb = env ? new Float32Array(nv * 4) : null, et = env ? new Float32Array(nv * 4) : null;
   const gp = [0, 0, 0], gnrm = [0, 0, 1], pv = new Float32Array(3);
   const idx = new Uint32Array(ni);
   const nm = new THREE.Matrix3();
   let vo = 0, io = 0;
-  for (const { geo, matrix } of list) {
+  for (const { geo, matrix, color, mat = 0, piece = 0 } of list) {
+    const pbox = pc && piece ? pieceBoxes.get(piece) || pieceBoxes.set(piece, new THREE.Box3()).get(piece) : null;
     const a = geo.attributes, count = a.position.count;
+    const u16 = (c) => Math.round(Math.min(1, Math.max(0, c ?? 1)) * 65535), fr = u16(color?.r), fg = u16(color?.g), fb = u16(color?.b);
     const P = floats(a.position), N = floats(a.normal), U = floats(a.uv), U1 = uv1 && floats(a[lmUv]), T = tan && floats(a.tangent);
     const B = bl && floats(a._texcoord_4), Bk = a._texcoord_4?.itemSize || 1;
     const EU = eu && floats(a.uv1), EB = eb && floats(a._texcoord_4), EBk = a._texcoord_4?.itemSize || 4, EC = et && floats(a.color), ECk = a.color?.itemSize || 4;
@@ -410,7 +430,7 @@ function mergeMeshes(list, { lm, lmUv = 'uv1', tangents, blend = false, env = fa
     gen++;
     const ix = geo.index ? geo.index.array : null, ic = geo.index ? geo.index.count : count;
     const flip = (matrix.determinant() < 0) !== !!geo.userData.mirrored; // a mirrored transform flips the winding
-  for (let i = 0; i < ic; i++) {
+    for (let i = 0; i < ic; i++) {
       const j = flip && i % 3 ? (i % 3 === 1 ? i + 1 : i - 1) : i;
       const v = ix ? ix[j] : j;
       if (mark[v] !== gen) {
@@ -436,6 +456,10 @@ function mergeMeshes(list, { lm, lmUv = 'uv1', tangents, blend = false, env = fa
         if (U) { uv[vo * 2] = U[v * 2]; uv[vo * 2 + 1] = U[v * 2 + 1]; }
         if (U1) { uv1[vo * 2] = U1[v * 2]; uv1[vo * 2 + 1] = U1[v * 2 + 1]; }
         if (bl) bl[vo] = B ? B[v * Bk] : 0;
+        if (fa) { fa[o] = fr; fa[o + 1] = fg; fa[o + 2] = fb; }
+        if (mt) mt[vo] = mat;
+        if (pc) pc[vo] = piece;
+        if (pbox) pbox.expandByPoint(_p.set(pos[o], pos[o + 1], pos[o + 2]));
         if (eu) {
           if (EU) { eu[vo * 2] = EU[v * 2]; eu[vo * 2 + 1] = EU[v * 2 + 1]; }
           for (let c = 0; c < 4; c++) eb[vo * 4 + c] = EB && c < EBk ? EB[v * EBk + c] : 0;
@@ -463,6 +487,9 @@ function mergeMeshes(list, { lm, lmUv = 'uv1', tangents, blend = false, env = fa
   if (tan) tan = tan.slice(0, vo * 4);
   if (bl) bl = bl.slice(0, vo);
   if (pr) pr = pr.slice(0, vo * 3);
+  if (fa) fa = fa.slice(0, vo * 3);
+  if (mt) mt = mt.slice(0, vo);
+  if (pc) pc = pc.slice(0, vo);
   if (eu) { eu = eu.slice(0, vo * 2); eb = eb.slice(0, vo * 4); et = et.slice(0, vo * 4); }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -472,6 +499,9 @@ function mergeMeshes(list, { lm, lmUv = 'uv1', tangents, blend = false, env = fa
   if (tan) g.setAttribute('tangent', new THREE.BufferAttribute(tan, 4));
   if (bl) g.setAttribute('cs2Blend', new THREE.BufferAttribute(bl, 1));
   if (pr) g.setAttribute('cs2Probe', new THREE.BufferAttribute(pr, 3));
+  if (fa) g.setAttribute('cs2Factor', new THREE.BufferAttribute(fa, 3, true));
+  if (mt) g.setAttribute('cs2Mat', new THREE.BufferAttribute(mt, 1));
+  if (pc) { g.setAttribute('cs2Piece', new THREE.BufferAttribute(pc, 1)); g.userData.pieceBoxes = pieceBoxes; }
   if (eu) { g.setAttribute('cs2Uv2', new THREE.BufferAttribute(eu, 2)); g.setAttribute('cs2Env', new THREE.BufferAttribute(eb, 4)); g.setAttribute('cs2Tint', new THREE.BufferAttribute(et, 4)); }
   g.setIndex(new THREE.BufferAttribute(idx, 1));
   g.computeBoundingBox();
@@ -539,10 +569,11 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   await tick();
   gltf.scene.updateMatrixWorld(true);
   // The second layers' textures, next to the map's glTF.
-  const base = map.world.replace(/[^/]*$/, ''), layerTextures = new Map(), aniso = Math.min(anisotropy, renderer.capabilities.getMaxAnisotropy());
+  const base = map.world.replace(/[^/]*$/, ''), layerTextures = new Map(), layerLoads = [], aniso = Math.min(anisotropy, renderer.capabilities.getMaxAnisotropy());
   const loadLayer = (file, srgb) => {
     if (!layerTextures.has(file)) {
-      const t = new THREE.TextureLoader().load(base + encodeURIComponent(file));
+      let t;
+      layerLoads.push(new Promise((done) => { t = new THREE.TextureLoader().load(base + encodeURIComponent(file), done, undefined, done); }));
       t.flipY = false; // glTF's texture convention
       t.wrapS = t.wrapT = THREE.RepeatWrapping;
       t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
@@ -570,6 +601,17 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     for (let c = 0; c < 3; c++) out[c] = cube[kx * 3 + c] * wx + cube[ky * 3 + c] * wy + cube[kz * 3 + c] * wz;
   });
   const variants = new Map(), groups = new Map(), originals = new Set(), props = [];
+  const layerData = new Map(); // variant -> its other layers (layerOf, envOf), for batching
+  // What a glTF material looks like apart from its colour: the exporter makes a copy for each colour a prop is tinted.
+  const looks = new Map();
+  const looksOf = (m) => {
+    if (!looks.has(m)) {
+      const t = (x) => x?.uuid || '';
+      looks.set(m, JSON.stringify([m.userData?.vmat || m.name, t(m.map), t(m.normalMap), t(m.roughnessMap), t(m.metalnessMap), t(m.aoMap), t(m.emissiveMap),
+        m.emissive.getHex(), m.emissiveIntensity, m.opacity, m.transparent, m.alphaTest, m.side, m.roughness, m.metalness, m.normalScale.x, m.normalScale.y, m.aoMapIntensity]));
+    }
+    return looks.get(m);
+  };
   const center = new THREE.Vector3();
   // Entities CS2 starts switched off (Wingman's barricades, doors and blocker walls...: see disabledNodes): left out.
   const off = new Set(info.hidden || []), offNodes = new Set();
@@ -593,20 +635,24 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     if (BALL.test(o.name) || BALL.test(o.parent?.name || '')) { props.push(o); return; }
     const lmUv = lightmapUv(vm.ShaderName);
     const lm = !!(lightMap && o.geometry.attributes[lmUv] && LIGHTMAPPED.test(vm.ShaderName || ''));
-    const key = m.uuid + (lm ? ':lm' : ':amb');
+    // Decals, glass and water keep a material each; the rest share one per look, whatever their colour (addFactor).
+    const shader = vm.ShaderName || '', own = /static_overlay|csgo_glass|csgo_water/.test(shader);
+    const key = (own ? m.uuid : looksOf(m)) + (lm ? ':lm' : ':amb');
     if (!variants.has(key)) {
-      const overlay = (vm.ShaderName || '').includes('static_overlay') ? vm.IntParams?.F_BLEND_MODE | 0 : -1;
-      const shader = vm.ShaderName || '';
+      const overlay = shader.includes('static_overlay') ? vm.IntParams?.F_BLEND_MODE | 0 : -1;
       if (overlay === 2 || overlay === 3) variants.set(key, overlayMaterial(m, vm, overlay)); // a decal that multiplies or adds: unlit
       else if (shader.includes('csgo_glass') || shader.includes('csgo_water')) variants.set(key, clearMaterial(m, vm, sky, shader.includes('csgo_water')));
       if (variants.has(key)) originals.add(m);
     }
     if (!variants.has(key)) {
       const v = m.clone();
+      if (!own) v.color.setRGB(1, 1, 1); // each prop's colour is its vertices' (addFactor)
+      v.userData.tinted = false;
       v.vertexColors = false; // CS2 uses vertex colours for layer blending, not tint
       v.envMap = null;
       if (v.transparent) { v.depthWrite = false; v.polygonOffset = true; v.polygonOffsetFactor = -2; v.polygonOffsetUnits = -4; }
       const layer = v.map ? layerOf(vm, info.layers || {}, loadLayer) || envOf(vm, info.layers || {}, loadLayer) : null;
+      layerData.set(v, layer);
       if (lm) lightmapped(v, lightMap, info.lightmap.irrMax, layer); else ambientLit(v, ambient, layer, { probe: !!probes });
       v.userData.lm = lm;
       v.userData.lmUv = lmUv;
@@ -616,21 +662,94 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
       variants.set(key, v);
       originals.add(m);
     }
+    // A see-through two-sided surface in one pass, as CS2 draws it (three draws it twice, back then front, and has to
+    // look its shader up again each time).
+    variants.get(key).forceSinglePass = true;
     const geo = o.isSkinnedMesh ? bakeSkin(o) : o.geometry, matrix = o.isSkinnedMesh ? IDENTITY : o.matrixWorld;
     fragmentCenter(geo, center).applyMatrix4(matrix);
-    const cell = `${Math.floor(center.x / (CELL * IN))},${Math.floor(center.z / (CELL * IN))}`;
+    const cell = variants.get(key).transparent ? `${Math.floor(center.x / (CELL * IN))},${Math.floor(center.z / (CELL * IN))}` : 'all';
     const mover = moverOf(o);
     const gk = key + '|' + (mover || cell);
     if (!groups.has(gk)) groups.set(gk, { material: variants.get(key), list: [], mover });
-    groups.get(gk).list.push({ geo, matrix: matrix.clone() });
+    groups.get(gk).list.push({ geo, matrix: matrix.clone(), color: own ? null : m.color });
+    if (!own && (m.color.r !== 1 || m.color.g !== 1 || m.color.b !== 1)) variants.get(key).userData.tinted = true;
   });
+  // Batching (see batch.js): materials that compile to the same shader and use textures of the same sizes become one,
+  // their textures layers of shared texture arrays. A breakable's pieces go in too (its number per vertex, cs2Piece, and
+  // a texture of which are broken, which the shader hides); doors keep their own (they turn).
+  onProgress('Batching the world…');
+  await Promise.all(layerLoads);
+  const arrays = new TextureArrays(renderer, aniso), slotsFor = new Map(), byKind = new Map();
+  for (const [gk, g] of groups) {
+    const v = g.material;
+    if (g.mover?.[0] === 'd' || v.transparent || v.alphaTest > 0 || v.userData.basic || v.emissiveMap || v.emissive.getHex()) continue;
+    if (!slotsFor.has(v)) {
+      const L = layerData.get(v), slots = slotsOf(v, L);
+      slotsFor.set(v, slots && { slots, key: [v.userData.lm, v.userData.lmUv, L?.key || '', v.normalScale.x, v.normalScale.y, v.roughness, v.metalness, v.aoMapIntensity, v.side, !!v.aoMap,
+        ...SLOTS.map((k) => (slots[k] ? TextureArrays.kind(slots[k], SRGB.has(k)) : '-'))].join('|') });
+    }
+    const p = slotsFor.get(v);
+    if (!p) continue;
+    if (!byKind.has(p.key)) byKind.set(p.key, { members: [], groups: [] });
+    const k = byKind.get(p.key);
+    if (!k.members.includes(v)) k.members.push(v);
+    k.groups.push([gk, g]);
+  }
+  // Their textures into the arrays; a batch is then the members whose textures landed in the same arrays (an array that
+  // got too big is split).
+  const batches = new Map(), at = new Map();
+  for (const [key, k] of byKind) {
+    if (k.members.length < 2) continue; // nothing to gain
+    for (const v of k.members) {
+      const s2 = slotsFor.get(v).slots, where = {};
+      for (const slot of SLOTS) if (s2[slot]) where[slot] = arrays.add(s2[slot], SRGB.has(slot));
+      at.set(v, where);
+      const bk = key + '#' + SLOTS.map((slot) => where[slot]?.array ?? '-').join(',');
+      if (!batches.has(bk)) batches.set(bk, { members: [], groups: [] });
+      batches.get(bk).members.push(v);
+    }
+    for (const [gk, g] of k.groups) for (const bt of batches.values()) if (bt.members.includes(g.material)) { bt.groups.push([gk, g]); break; }
+  }
+  arrays.build();
+  // Which breakables are broken (a batch hides those pieces): one texel each, piece i + 1 for glass[i].
+  const broken = new THREE.DataTexture(new Uint8Array(((info.glass || []).length + 1) * 4), (info.glass || []).length + 1, 1);
+  broken.needsUpdate = true;
+  const batchMats = [];
+  for (const [key, b] of batches) {
+    const first = b.members[0], L = layerData.get(first), at0 = at.get(first);
+    const slots = Object.fromEntries(Object.entries(at0).map(([k, a]) => [k, a.array]));
+    const table = materialTable(b.members.map((v) => ({ layers: Object.fromEntries(Object.entries(at.get(v)).map(([k, a]) => [k, a.layer])), L: layerData.get(v) })));
+    const B = batchMaterial(first, slots, arrays, table, (m) => (first.userData.lm ? lightmapped(m, lightMap, info.lightmap.irrMax, L) : ambientLit(m, ambient, L, { probe: !!probes })),
+      b.groups.some(([, g]) => g.mover) ? broken : null);
+    B.userData.tinted = b.members.some((v) => v.userData.tinted);
+    B.forceSinglePass = true;
+    batchMats.push({ material: B, table });
+    const list = [];
+    for (const [gk, g] of b.groups) {
+      const mat = b.members.indexOf(g.material), piece = g.mover ? +g.mover.slice(1) + 1 : 0;
+      for (const e of g.list) list.push({ ...e, mat, piece });
+      groups.delete(gk);
+    }
+    groups.set('batch|' + key, { material: B, list, mover: null, batched: true });
+  }
+  // The batched materials' own textures are in the arrays now: free them (unless something else still draws them).
+  const keep = new Set();
+  for (const { material: m } of groups.values()) {
+    for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) if (m[k]) keep.add(m[k]);
+    const L = layerData.get(m);
+    if (L) for (const t of [L.color, L.normal, L.blendMod, L.color2, L.normal2, L.color3, L.normal3, ...(L.height || [])]) if (t) keep.add(t);
+  }
+  for (const t of arrays.placed.keys()) if (!keep.has(t)) { t.dispose(); t.image?.close?.(); }
+  for (const [file, t] of layerTextures) if (!keep.has(t)) layerTextures.delete(file);
+
   const world = new THREE.Group();
   let n = 0;
   const doors = (info.doors || []).map((d) => ({ ...d, pivot: new THREE.Group(), box: new THREE.Box3() }));
-  const glass = (info.glass || []).map((g) => ({ ...g, meshes: [], box: new THREE.Box3() }));
+  const glass = (info.glass || []).map((g, i) => ({ ...g, meshes: [], box: new THREE.Box3(), piece: i + 1 }));
   for (const d of doors) { toGl(d.origin, d.pivot.position); world.add(d.pivot); }
   for (const { material, list, mover } of groups.values()) {
-    const mesh = new THREE.Mesh(mergeMeshes(list, { lm: material.userData.lm, lmUv: material.userData.lmUv, tangents: !!material.normalMap, blend: material.userData.layer, env: material.userData.env, probe: material.userData.lm || material.userData.basic ? null : probeAt }), material);
+    const mesh = new THREE.Mesh(mergeMeshes(list, { lm: material.userData.lm, lmUv: material.userData.lmUv, tangents: !!material.normalMap, blend: material.userData.layer, env: material.userData.env, probe: material.userData.lm || material.userData.basic ? null : probeAt, factor: !!material.userData.tinted, mats: !!material.userData.batched,
+      pieces: !!material.userData.pieces }), material);
     mesh.matrixAutoUpdate = false;
     if (material.userData.animated) mesh.onBeforeRender = () => { CS2_TIME.value = performance.now() / 1000; };
     mesh.castShadow = !material.transparent;
@@ -650,6 +769,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
       g.meshes.push(mesh);
       world.add(mesh);
     } else world.add(mesh);
+    for (const [piece, box] of mesh.geometry.userData.pieceBoxes || []) glass[piece - 1].box.union(box);
     if (++n % 200 === 0) { onProgress(`Building the world… ${Math.round((n / groups.size) * 100)}%`); await tick(); }
   }
   // The soccer ball (a physics prop, exported in place) stays a mesh of its own, to be kicked about (see props.js).
@@ -719,26 +839,69 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
           v.normalMap = v.roughnessMap = v.metalnessMap = v.aoMap = null; // far away: its colour is all that shows
           v.metalness = 0; // (glTF's factor is 1 under a metalness map: all metal without it)
           if (v.transparent) v.depthWrite = false;
+          v.forceSinglePass = true;
           ambientLit(v, ambient);
           mats.set(m, v);
         }
         o.material = mats.get(m);
-        o.castShadow = o.receiveShadow = false;
       });
-      skyScene.add(g3.scene);
+      // One mesh per material, like the map (it's hundreds of little ones, each a draw).
+      g3.scene.updateMatrixWorld(true);
+      const byMat = new Map(), merged = new THREE.Group(), drawn = new Set(mats.values());
+      g3.scene.traverse((o) => {
+        if (!o.isMesh || !o.visible || !drawn.has(o.material)) return;
+        if (!byMat.has(o.material)) byMat.set(o.material, []);
+        byMat.get(o.material).push(o.isSkinnedMesh ? { geo: bakeSkin(o), matrix: IDENTITY } : { geo: o.geometry, matrix: o.matrixWorld });
+      });
+      // And the opaque ones batched like the map's (see batch.js): its colour textures in arrays, a draw per size.
+      const skyArrays = new TextureArrays(renderer, Math.min(4, aniso)), kinds = new Map(), skyBatches = [];
+      for (const [mat, list] of byMat) {
+        const slots = !mat.transparent && !(mat.alphaTest > 0) && slotsOf(mat, null);
+        if (!slots || Object.keys(slots).length !== 1) continue;
+        const k = TextureArrays.kind(slots.map, true) + '|' + mat.side;
+        if (!kinds.has(k)) kinds.set(k, []);
+        kinds.get(k).push(mat);
+      }
+      for (const members of kinds.values()) {
+        if (members.length < 2) continue;
+        const at = members.map((m) => skyArrays.add(m.map, true)), list = [];
+        members.forEach((m, i) => { for (const e of byMat.get(m)) list.push({ ...e, mat: i }); byMat.delete(m); });
+        skyBatches.push({ members, at, list });
+      }
+      skyArrays.build();
+      const skyTables = [], skyBatchMats = [];
+      for (const { members, at, list } of skyBatches) {
+        const table = materialTable(at.map((a) => ({ layers: { map: a.layer }, L: null })));
+        skyTables.push(table);
+        byMat.set(batchMaterial(members[0], { map: at[0].array }, skyArrays, table, (m) => ambientLit(m, ambient)), list);
+        for (const m of members) if (m.map) { m.map.dispose(); m.map.image?.close?.(); }
+      }
+      for (const [mat, list] of byMat) {
+        const mesh = new THREE.Mesh(mergeMeshes(list, { lm: false, tangents: false, mats: !!mat.userData.batched }), mat);
+        mesh.matrixAutoUpdate = false;
+        merged.add(mesh);
+        if (mat.userData.batched) skyBatchMats.push(mat);
+      }
+      g3.scene.traverse((o) => o.geometry?.dispose());
+      skyScene.add(merged);
       const t = info.sky3d;
-      sky3d = { scene: skyScene, camera: new THREE.PerspectiveCamera(), origin: toGl(t.origin), offset: toGl(t.offset), scale: t.scale || 16, materials: mats };
+      sky3d = { scene: skyScene, camera: new THREE.PerspectiveCamera(), origin: toGl(t.origin), offset: toGl(t.offset), scale: t.scale || 16, materials: mats,
+        dispose() { skyArrays.dispose(); for (const tb of skyTables) tb.dispose(); for (const m of skyBatchMats) m.dispose(); } };
       for (const m of mats.keys()) m.dispose();
     } catch (e) { console.warn('3D skybox unavailable:', e); }
   }
 
   return {
     scene, world, sun, sky, ambient, bounds, probes, balls, doors, glass, sky3d,
+    // A breakable's batched pieces shown or hidden (its own meshes, if it has any, are glass[i].meshes).
+    setBroken(piece, on) { broken.image.data[piece * 4] = on ? 255 : 0; broken.needsUpdate = true; },
+    layerTextures: [...layerTextures.values()], // (in the shaders' own uniforms)
     sunDir: [-travel.z, -travel.x, -travel.y], // game-space direction towards the sun
     drawCalls: world.children.length,
     dispose() {
       if (sky3d) {
         sky3d.scene.traverse((o) => o.geometry?.dispose());
+        sky3d.dispose();
         for (const v of sky3d.materials.values()) { for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) v[k]?.dispose(); v.dispose(); }
       }
       for (const v of variants.values()) {
@@ -751,6 +914,9 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
         for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) mesh.material[k]?.dispose();
         mesh.material.dispose();
       }
+      for (const { material, table } of batchMats) { material.dispose(); table.dispose(); }
+      broken.dispose();
+      arrays.dispose();
       lightMap?.dispose();
       for (const t of layerTextures.values()) t.dispose();
       sky?.dispose();

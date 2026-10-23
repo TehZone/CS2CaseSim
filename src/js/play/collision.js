@@ -233,43 +233,43 @@ function triNormal(P, i) {
 
 // Swept AABB (centre c, half extents e, moving by v over t in [0,1]) against one triangle, by the separating axis
 // theorem with time of impact: the box face normals, the triangle normal and the 9 edge cross products.
-// Writes { t, n, solid } into out and returns true on a hit before maxT.
-const AX = new Float32Array(13 * 3);
+// Writes { t, n, solid } into out and returns true on a hit before maxT. Allocates nothing (bots call it thousands of
+// times a tick), and an axis isn't normalised until it's the one hit: the times don't depend on its length.
+const AX = new Float64Array(13 * 3);
+AX.set([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 function sweepBoxTri(P, i, c, e, v, maxT, out) {
   const ax = P[i] - c[0], ay = P[i + 1] - c[1], az = P[i + 2] - c[2];
   const bx = P[i + 3] - c[0], by = P[i + 4] - c[1], bz = P[i + 5] - c[2];
   const cx = P[i + 6] - c[0], cy = P[i + 7] - c[1], cz = P[i + 8] - c[2];
-  const f0 = [bx - ax, by - ay, bz - az], f1 = [cx - bx, cy - by, cz - bz], f2 = [ax - cx, ay - cy, az - cz];
-  let k = 0;
-  const push = (x, y, z) => { AX[k++] = x; AX[k++] = y; AX[k++] = z; };
-  push(1, 0, 0); push(0, 1, 0); push(0, 0, 1);
-  const nx = f0[1] * f1[2] - f0[2] * f1[1], ny = f0[2] * f1[0] - f0[0] * f1[2], nz = f0[0] * f1[1] - f0[1] * f1[0];
-  push(nx, ny, nz);
-  for (const f of [f0, f1, f2]) { push(0, -f[2], f[1]); push(f[2], 0, -f[0]); push(-f[1], f[0], 0); }
-  let tEnter = -Infinity, tExit = Infinity, nEnter = null, minPen = Infinity, nPen = null;
+  const ex = e[0], ey = e[1], ez = e[2], vx = v[0], vy = v[1], vz = v[2];
+  // Nowhere near the box's whole move (most triangles a trace looks at): out.
+  if (Math.min(ax, bx, cx) > ex + Math.max(vx, 0) || Math.max(ax, bx, cx) < Math.min(vx, 0) - ex
+    || Math.min(ay, by, cy) > ey + Math.max(vy, 0) || Math.max(ay, by, cy) < Math.min(vy, 0) - ey
+    || Math.min(az, bz, cz) > ez + Math.max(vz, 0) || Math.max(az, bz, cz) < Math.min(vz, 0) - ez) return false;
+  const f0x = bx - ax, f0y = by - ay, f0z = bz - az, f1x = cx - bx, f1y = cy - by, f1z = cz - bz, f2x = ax - cx, f2y = ay - cy, f2z = az - cz;
+  AX[9] = f0y * f1z - f0z * f1y; AX[10] = f0z * f1x - f0x * f1z; AX[11] = f0x * f1y - f0y * f1x;
+  AX[12] = 0; AX[13] = -f0z; AX[14] = f0y; AX[15] = f0z; AX[16] = 0; AX[17] = -f0x; AX[18] = -f0y; AX[19] = f0x; AX[20] = 0;
+  AX[21] = 0; AX[22] = -f1z; AX[23] = f1y; AX[24] = f1z; AX[25] = 0; AX[26] = -f1x; AX[27] = -f1y; AX[28] = f1x; AX[29] = 0;
+  AX[30] = 0; AX[31] = -f2z; AX[32] = f2y; AX[33] = f2z; AX[34] = 0; AX[35] = -f2x; AX[36] = -f2y; AX[37] = f2x; AX[38] = 0;
+  let tEnter = -Infinity, tExit = Infinity, hit = -1, hitSign = 0;
   for (let j = 0; j < 13; j++) {
     const lx = AX[j * 3], ly = AX[j * 3 + 1], lz = AX[j * 3 + 2];
-    const len = Math.hypot(lx, ly, lz);
-    if (len < 1e-6) continue;
-    const pa = (ax * lx + ay * ly + az * lz) / len, pb = (bx * lx + by * ly + bz * lz) / len, pc = (cx * lx + cy * ly + cz * lz) / len;
+    const len2 = lx * lx + ly * ly + lz * lz;
+    if (len2 < 1e-12) continue;
+    const pa = ax * lx + ay * ly + az * lz, pb = bx * lx + by * ly + bz * lz, pc = cx * lx + cy * ly + cz * lz;
     const tmin = Math.min(pa, pb, pc), tmax = Math.max(pa, pb, pc);
-    const r = (e[0] * Math.abs(lx) + e[1] * Math.abs(ly) + e[2] * Math.abs(lz)) / len;
-    const vel = (v[0] * lx + v[1] * ly + v[2] * lz) / len;
+    const r = ex * Math.abs(lx) + ey * Math.abs(ly) + ez * Math.abs(lz);
+    const vel = vx * lx + vy * ly + vz * lz;
     // Box interval on this axis at time t: [vel*t - r, vel*t + r]; triangle: [tmin, tmax].
-    if (Math.abs(vel) < 1e-9) {
+    if (vel * vel < 1e-18 * len2) {
       if (r < tmin || -r > tmax) return false; // separated for the whole move
-      const pen = Math.min(r - tmin, tmax + r);
-      if (pen < minPen) { minPen = pen; nPen = [lx / len, ly / len, lz / len, r - tmin < tmax + r ? -1 : 1]; }
       continue;
     }
     let t0 = (tmin - r) / vel, t1 = (tmax + r) / vel;
-    let sign = -1; // the normal opposes the motion
     if (t0 > t1) { const t = t0; t0 = t1; t1 = t; }
-    if (t0 > tEnter) { tEnter = t0; nEnter = [lx / len, ly / len, lz / len, vel > 0 ? sign : -sign]; }
+    if (t0 > tEnter) { tEnter = t0; hit = j; hitSign = vel > 0 ? -1 : 1; } // the normal opposes the motion
     if (t1 < tExit) tExit = t1;
     if (tEnter > tExit || tExit < 0 || tEnter > maxT) return false;
-    const pen = Math.min(r - tmin, tmax + r);
-    if (pen < minPen) { minPen = pen; nPen = [lx / len, ly / len, lz / len, r - tmin < tmax + r ? -1 : 1]; }
   }
   if (tEnter < 0) {
     // Already touching/overlapping at the start: only block motion that goes further into the triangle.
@@ -280,8 +280,9 @@ function sweepBoxTri(P, i, c, e, v, maxT, out) {
     out.t = 0; out.n[0] = nn[0]; out.n[1] = nn[1]; out.n[2] = nn[2]; out.solid = false;
     return true;
   }
-  if (!nEnter) return false;
+  if (hit < 0) return false;
+  const lx = AX[hit * 3], ly = AX[hit * 3 + 1], lz = AX[hit * 3 + 2], s = hitSign / Math.sqrt(lx * lx + ly * ly + lz * lz);
   out.t = tEnter; out.solid = false;
-  out.n[0] = nEnter[0] * nEnter[3]; out.n[1] = nEnter[1] * nEnter[3]; out.n[2] = nEnter[2] * nEnter[3];
+  out.n[0] = lx * s; out.n[1] = ly * s; out.n[2] = lz * s;
   return true;
 }

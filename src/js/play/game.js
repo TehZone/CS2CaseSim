@@ -90,7 +90,9 @@ export class Game {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'play-canvas';
     root.appendChild(this.canvas);
-    this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, powerPreference: 'high-performance' });
+    // No multisampling on the screen itself: only the full-screen post pass draws there (the world is anti-aliased in its
+    // own target, see post.js).
+    this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, powerPreference: 'high-performance' });
     // Quality: high renders at the screen's full resolution with soft shadows; balanced at 1 CSS pixel; performance lower.
     this.renderer.setPixelRatio(quality === 'high' ? Math.min(window.devicePixelRatio, 2) : quality === 'performance' ? 0.75 : 1);
     // Tone mapping and colour grading happen in the post pass (post.js), like CS2's.
@@ -99,6 +101,19 @@ export class Game {
     this.renderer.shadowMap.type = quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.renderer.shadowMap.autoUpdate = false; // the map's shadows are static: rendered once after loading
     this.renderer.autoClear = false;
+    // Everything drawn with the same shader together, then by material, then near to far: switching shaders costs three
+    // far more than switching materials (hundreds of each a frame on a CS2 map).
+    const shaders = new Map(), shaderOf = (m) => {
+      if (m.userData.shader === undefined) {
+        const k = [m.type, m.customProgramCacheKey?.() ?? '', !!m.map, !!m.normalMap, !!m.roughnessMap, !!m.metalnessMap, !!m.aoMap, !!m.lightMap, !!m.emissiveMap,
+          !!m.envMap, m.transparent, m.side, m.alphaTest > 0, m.vertexColors].join();
+        if (!shaders.has(k)) shaders.set(k, shaders.size);
+        m.userData.shader = shaders.get(k);
+      }
+      return m.userData.shader;
+    };
+    this.renderer.setOpaqueSort((a, b) => a.groupOrder - b.groupOrder || a.renderOrder - b.renderOrder || shaderOf(a.material) - shaderOf(b.material)
+      || a.material.id - b.material.id || a.z - b.z || a.id - b.id);
     this.msaa = quality === 'performance' ? 0 : 4;
     this.anisotropy = quality === 'high' ? 16 : quality === 'performance' ? 4 : 8;
     this.camera = new THREE.PerspectiveCamera(vfov(FOV), 1, 0.05, 400);
@@ -228,6 +243,10 @@ export class Game {
     if (this.respawnMode) await Promise.all((this.armsRace ? ARMS_RACE : [this.dmWeapon('primary'), this.dmWeapon('secondary')]).slice(0, 2).map((id) => this.vmData(id).catch(() => {})));
     status('Compiling shaders…');
     this.post.compile(this.scene, this.camera, { scene: this.vmScene, camera: this.vmCamera });
+    // Every texture on the GPU now, not the first time it comes into view (a hitch turning round).
+    const textures = new Set(this.world.layerTextures);
+    for (const sc of [this.scene, this.world.sky3d?.scene]) sc?.traverse((o) => { if (o.material) for (const v of Object.values(o.material)) if (v?.isTexture) textures.add(v); });
+    for (const t of textures) this.renderer.initTexture(t);
     this.renderer.shadowMap.needsUpdate = true;
     this.match.startRound();
     for (const c of this.combatants) if (c !== this.me) this.hud.chatLine({ system: true, text: `${c.name} has joined the ${this.ffa ? 'game' : c.team === 'CT' ? 'Counter-Terrorists' : 'Terrorists'}` });
@@ -236,9 +255,22 @@ export class Game {
     (async () => {
       const pause = () => new Promise((r) => setTimeout(r, 400));
       await new Promise((r) => setTimeout(r, 1500));
-      for (const id of BOT_GUNS) { if (this.disposed) return; await this.botAssets.weapon(id); await pause(); }
-      for (const id of PRELOAD) { if (this.disposed) return; await this.vmData(id).catch(() => {}); await pause(); }
+      for (const id of BOT_GUNS) { if (this.disposed) return; await this.precompile(await this.botAssets.weapon(id), this.scene); await pause(); }
+      for (const id of PRELOAD) { if (this.disposed) return; const d = await this.vmData(id).catch(() => null); await this.precompile(d?.vm.rig, this.vmScene); await pause(); }
     })();
+  }
+
+  // A model's shaders compiled while the game goes on (the browser links them alongside) before it's first drawn: a gun
+  // loaded mid-match (one a bot buys, or yours the first time you switch to it) used to stall the frame it showed up in.
+  async precompile(obj, scene) {
+    if (!obj || this.disposed) return;
+    const r = this.renderer, prev = r.getRenderTarget(), vm = scene === this.vmScene, shown = obj.visible;
+    obj.visible = true; // (hidden things aren't compiled)
+    r.setRenderTarget(vm ? this.post.vmRT : this.post.rt);
+    const done = r.compileAsync(obj, vm ? this.vmCamera : this.camera, scene);
+    r.setRenderTarget(prev);
+    obj.visible = shown;
+    await done.catch(() => {});
   }
 
   // A surface's bullet impact sound: CS2's own for it (Inferno's church bells ring), else one for its kind.

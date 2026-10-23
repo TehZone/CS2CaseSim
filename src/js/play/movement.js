@@ -85,7 +85,9 @@ export class PlayerMovement {
       // Never faster than the weapon's speed on the ground.
       const sp = this.speed2d();
       if (sp > maxSpeed && sp > 0) { this.velocity[0] *= maxSpeed / sp; this.velocity[1] *= maxSpeed / sp; }
-      this.walkMove(dt);
+      // Source's WalkMove: under 1 unit/s it stops dead and doesn't move (nor trace: bots holding an angle cost nothing).
+      if (sp < 1) this.velocity[0] = this.velocity[1] = 0;
+      else this.walkMove(dt);
     } else {
       this.velocity[2] -= MOVE.gravity * dt * 0.5;
       this.fallVelocity = -this.velocity[2]; // before the move: landing clips it to zero

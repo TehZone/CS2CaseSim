@@ -20,6 +20,7 @@ function boxTris(c, out) {
 export class Doors {
   constructor(game, world) {
     this.game = game;
+    this.world = world;
     this.list = (world.doors || []).filter((d) => !d.box.isEmpty()).map((d) => {
       const door = { ...d, angle: 0, target: 0, closeAt: Infinity };
       door.shape = game.collision.addDynamic({ tris: new Float32Array(12 * 9), flags: SOLID, surface: 'wood', door });
@@ -112,6 +113,7 @@ export class Doors {
     pane.broken = true;
     pane.shape.off = true;
     for (const m of pane.meshes) m.visible = false;
+    this.world.setBroken?.(pane.piece, true); // (in a batch of the map's surfaces: see world.js)
     this.game.sounds.play(pane.sound || 'Glass.Break', { pos: p, listener: this.game });
     this.game.effects.impact?.(p, [0, 0, 1], pane.surface || 'glass');
     return true;
@@ -144,6 +146,6 @@ export class Doors {
   // Back as the map starts (each round).
   reset() {
     for (const d of this.list) { d.angle = d.target = 0; d.closeAt = Infinity; this.place(d); }
-    for (const p of this.panes) { p.broken = false; p.shape.off = false; for (const m of p.meshes) m.visible = true; }
+    for (const p of this.panes) { p.broken = false; p.shape.off = false; for (const m of p.meshes) m.visible = true; this.world.setBroken?.(p.piece, false); }
   }
 }

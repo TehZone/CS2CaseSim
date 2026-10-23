@@ -136,6 +136,11 @@ What's in a match:
   sounds; bots open them too), breakable glass and props break when shot (windows, Nuke's vent covers, bottles), every
   surface sounds like CS2's when shot (Inferno's church bells ring), and the map's trigger_hurt volumes hurt the moment
   you touch one (falling off Vertigo kills you as you reach the street).
+- Drawn lean: the map's surfaces batched, every texture of a size in one texture array and the materials that share a
+  shader drawn as one (their own values in a small table: a few dozen draws for a map, not hundreds), breakables and
+  the 3D skybox too; props tinted differently share a material (each one's colour per vertex); every texture uploaded
+  and new guns' shaders compiled before they're seen; the radar moved by the page's compositor, not redrawn. Bots move with your movement code on a collision test that allocates
+  nothing. `CS2SIM_SMOKE=perf` measures each map's frame rate with the bots playing.
 - Movement ported from Source's: CS2's acceleration, friction, air strafing, 18-unit steps, jumping (no auto bunny
   hop), crouching, crouch-jumps, walking and ladders, with the weapon's own speed; footsteps by surface.
 - Weapons use CS2's data from `scripts/weapons.vdata` (damage, range falloff, armor penetration, fire rate,

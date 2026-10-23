@@ -231,6 +231,8 @@ function createWindow() {
 // `CS2SIM_SMOKE=1 electron .` loads the game hidden, opens a case preview in 3D, screenshots it and quits.
 const SMOKE = !!process.env.CS2SIM_SMOKE;
 if (SMOKE) app.setPath('userData', path.join(app.getPath('temp'), 'cs2sim-smoke'));
+// (A perf run measures as fast as Play goes: no vsync, no frame rate cap.)
+if (process.env.CS2SIM_SMOKE === 'perf') { app.commandLine.appendSwitch('disable-frame-rate-limit'); app.commandLine.appendSwitch('disable-gpu-vsync'); }
 
 // `CS2SIM_SMOKE=features`: opens a souvenir package and a player pack, plays a bot battle and a team match, signs
 // a trade-up, then screenshots every page into userData/smoke-<page>.png.
@@ -297,11 +299,10 @@ async function runFeatureSmoke(win) {
 // { map: [{ name, pos: [x, y, z], yaw, pitch }] }) into userData/maps-<map>-<view>[-CS2SIM_SMOKE_TAG].png, without the
 // HUD or the weapon, logging each view's average brightness, the auto exposure and the material in the middle; then
 // checks the map's moving parts (a door opens, a breakable breaks, the bells' sound, a kill volume kills a fall).
-async function runMapsSmoke(win) {
+// The Play maps a smoke run goes through: CS2SIM_SMOKE_MAPS (de_nuke,de_vertigo...), or every one in the list.
+async function smokeMapIds(win) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const js = (code) => win.webContents.executeJavaScript(code);
-  const tag = process.env.CS2SIM_SMOKE_TAG ? '-' + process.env.CS2SIM_SMOKE_TAG : '';
-  const extra = process.env.CS2SIM_SMOKE_VIEWS ? JSON.parse(process.env.CS2SIM_SMOKE_VIEWS) : {};
   await wait(3000);
   await js(`document.querySelector('#nav [data-page=play]').click(); 1`);
   let ids = (process.env.CS2SIM_SMOKE_MAPS || '').split(',').filter(Boolean);
@@ -310,21 +311,33 @@ async function runMapsSmoke(win) {
     const all = JSON.parse(await js(`JSON.stringify([...document.querySelectorAll('[data-map]')].map((b) => b.dataset.map))`));
     if (all.length > 1) ids = all;
   }
-  for (const id of ids) {
-    await js(`window.__cs2Debug = true; window.__playGame = null; document.querySelector('[data-map="${id}"]')?.click();
-      setTimeout(() => document.querySelector('[data-start]').click(), 400); 1`);
-    let ok = false;
-    for (let i = 0; i < 900 && !ok; i++) {
-      await wait(1000);
-      ok = await js(`!!window.__playGame?.raf`);
-      if (!ok && i > 2 && !(await js(`!!document.querySelector('.play-root')`))) break; // it gave up (the error is in a toast)
-      if (i % 30 === 29) console.log('SMOKE maps', id, 'loading', await js(`document.querySelector('.play-root [data-status]')?.textContent || ''`));
-    }
-    if (!ok) {
-      console.log('SMOKE maps', id, 'did not load:', await js(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' / ')`));
-      await js(`document.querySelector('.play-root [data-cancel]')?.click(); 1`);
-      continue;
-    }
+  return ids;
+}
+
+// Starts a competitive match on a map (exporting it first if needed): whether it's running (window.__playGame).
+async function smokeStartMap(win, id, label) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  await js(`window.__cs2Debug = true; window.__playGame = null; document.querySelector('[data-map="${id}"]')?.click();
+    setTimeout(() => document.querySelector('[data-start]').click(), 400); 1`);
+  for (let i = 0; i < 900; i++) {
+    await wait(1000);
+    if (await js(`!!window.__playGame?.raf`)) return true;
+    if (i > 2 && !(await js(`!!document.querySelector('.play-root')`))) break; // it gave up (the error is in a toast)
+    if (i % 30 === 29) console.log('SMOKE', label, id, 'loading', await js(`document.querySelector('.play-root [data-status]')?.textContent || ''`));
+  }
+  console.log('SMOKE', label, id, 'did not load:', await js(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' / ')`));
+  await js(`document.querySelector('.play-root [data-cancel]')?.click(); 1`);
+  return false;
+}
+
+async function runMapsSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const tag = process.env.CS2SIM_SMOKE_TAG ? '-' + process.env.CS2SIM_SMOKE_TAG : '';
+  const extra = process.env.CS2SIM_SMOKE_VIEWS ? JSON.parse(process.env.CS2SIM_SMOKE_VIEWS) : {};
+  for (const id of await smokeMapIds(win)) {
+    if (!(await smokeStartMap(win, id, 'maps'))) continue;
     const views = JSON.parse(await js(`(() => { const g = window.__playGame, i = g.map.info;
       document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
       g.god = true; g.cv.bot_stop = 1; g.match.time = 9999; g.console.run('cl_drawhud 0; r_drawviewmodel 0');
@@ -391,6 +404,142 @@ async function runMapsSmoke(win) {
     await js(`document.querySelector('.play-root [data-leave]')?.click(); 1`);
     await wait(2000);
   }
+  app.quit();
+}
+
+// `CS2SIM_SMOKE=perf` measures Play's frame rate (vsync off, so as fast as it goes) on each map
+// (CS2SIM_SMOKE_MAPS) in a live round with the bots playing, from both spawns and both bomb sites
+// (CS2SIM_SMOKE_SECONDS each, default 5): frames a second, the slowest frames, where a frame's CPU time goes (the
+// simulation, drawing) and the GPU's (when the driver can time it), draw calls and triangles.
+async function runPerfSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const secs = +process.env.CS2SIM_SMOKE_SECONDS || 5;
+  const all = [];
+  for (const id of await smokeMapIds(win)) {
+    const t0 = Date.now();
+    if (!(await smokeStartMap(win, id, 'perf'))) continue;
+    const load = (Date.now() - t0) / 1000;
+    const views = JSON.parse(await js(`(() => { const g = window.__playGame, i = g.map.info;
+      document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
+      g.god = true; g.match.time = 0; // straight into the live round: the bots go
+      const yawTo = (a, b) => Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+      const sites = i.bombsites.map((s) => ({ name: 'site' + s.site.toLowerCase(), pos: [(s.min[0] + s.max[0]) / 2, (s.min[1] + s.max[1]) / 2, s.max[2] + 40] }));
+      const t = i.spawns.T[0]?.origin, ct = i.spawns.CT[0]?.origin, mid = sites.length ? [0, 1].map((k) => sites.reduce((s, x) => s + x.pos[k], 0) / sites.length) : [0, 0];
+      // Measuring: each frame's time, its simulation and drawing, and (EXT_disjoint_timer_query_webgl2) the GPU's.
+      const P = window.__perf = { frames: [], cur: null };
+      const gl = g.renderer.getContext(), tq = gl.getExtension('EXT_disjoint_timer_query_webgl2'), pending = [];
+      P.gpuTimer = !!tq;
+      g.renderer.info.autoReset = false;
+      const frame = g.frame, tick = g.tick, render = g.post.render;
+      g.frame = function (dt) {
+        P.cur = { dt, sim: 0, draw: 0 };
+        g.renderer.info.reset();
+        const t = performance.now(); frame.call(this, dt); P.cur.cpu = performance.now() - t;
+        P.cur.calls = g.renderer.info.render.calls; P.cur.tris = g.renderer.info.render.triangles;
+        P.frames.push(P.cur);
+        while (pending.length && gl.getQueryParameter(pending[0].q, gl.QUERY_RESULT_AVAILABLE)) {
+          const p = pending.shift();
+          if (!gl.getParameter(tq.GPU_DISJOINT_EXT)) p.f.gpu = gl.getQueryParameter(p.q, gl.QUERY_RESULT) / 1e6;
+          gl.deleteQuery(p.q);
+        }
+      };
+      g.tick = function () { const t = performance.now(); tick.call(this); if (P.cur) P.cur.sim += performance.now() - t; };
+      g.post.render = function (...a) {
+        const q = tq && pending.length < 8 ? gl.createQuery() : null;
+        if (q) gl.beginQuery(tq.TIME_ELAPSED_EXT, q);
+        const t = performance.now(); render.apply(this, a); P.cur.draw += performance.now() - t;
+        if (q) { gl.endQuery(tq.TIME_ELAPSED_EXT); pending.push({ q, f: P.cur }); }
+      };
+      ${process.env.CS2SIM_SMOKE_SETUP || ''}; // CS2SIM_SMOKE_SETUP: JS run first (g: the game), e.g. to measure without something
+      return JSON.stringify([
+        t && { name: 'tspawn', pos: t, yaw: yawTo(t, mid) }, ct && { name: 'ctspawn', pos: ct, yaw: yawTo(ct, mid) },
+        ...sites.map((s) => ({ ...s, yaw: t ? yawTo(s.pos, t) : 0 })),
+      ].filter(Boolean)); })()`));
+    for (const v of views) {
+      await js(`(() => { const g = window.__playGame, v = ${JSON.stringify(v)};
+        if (!g.me.alive) { g.me.alive = true; g.me.health = 100; g.deathCam = null; }
+        g.player.teleport([v.pos[0], v.pos[1], g.floorAt(v.pos, 400) ?? v.pos[2]]); g.input.yaw = v.yaw; g.input.pitch = 3; })()`);
+      await wait(v === views[0] ? +process.env.CS2SIM_SMOKE_SETTLE || 1000 : 1000); // settle (shaders, textures in view; CS2SIM_SMOKE_SETTLE ms before the first)
+      await js(`window.__perf.frames = []; 1`);
+      // CS2SIM_SMOKE_PROFILE: a CPU profile of the first view, its functions by their own time.
+      const prof = process.env.CS2SIM_SMOKE_PROFILE && v === views[0] ? win.webContents.debugger : null;
+      if (prof) { if (!prof.isAttached()) prof.attach('1.3'); await prof.sendCommand('Profiler.enable'); await prof.sendCommand('Profiler.setSamplingInterval', { interval: 200 }); await prof.sendCommand('Profiler.start'); }
+      await wait(secs * 1000);
+      if (prof) {
+        const { profile } = await prof.sendCommand('Profiler.stop');
+        const self = new Map(), dt = new Map();
+        profile.samples.forEach((id, k) => dt.set(id, (dt.get(id) || 0) + (profile.timeDeltas[k] || 0)));
+        let total = 0;
+        for (const n of profile.nodes) {
+          const t = (dt.get(n.id) || 0) / 1000, f = n.callFrame, key = `${f.functionName || '(anon)'} ${f.url.replace(/.*\//, '')}:${f.lineNumber + 1}`;
+          self.set(key, (self.get(key) || 0) + t); total += t;
+        }
+        console.log('SMOKE perf', id, 'profile (ms of', Math.round(total), 'ms)\n' + [...self].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([k, t]) => `  ${t.toFixed(0).padStart(6)} ${(t / total * 100).toFixed(1).padStart(5)}%  ${k}`).join('\n'));
+        // And by total time (with what they call; a recursive call counted once).
+        const byId = new Map(profile.nodes.map((n) => [n.id, n])), incl = new Map();
+        const keyOf = (n) => `${n.callFrame.functionName || '(anon)'} ${n.callFrame.url.replace(/.*\//, '')}:${n.callFrame.lineNumber + 1}`;
+        const walk = (n, open) => {
+          const k = keyOf(n);
+          let t = (dt.get(n.id) || 0) / 1000;
+          const fresh = !open.has(k);
+          if (fresh) open.add(k);
+          for (const c of n.children || []) t += walk(byId.get(c), open);
+          if (fresh) { open.delete(k); incl.set(k, (incl.get(k) || 0) + t); }
+          return t;
+        };
+        walk(profile.nodes[0], new Set());
+        // CS2SIM_SMOKE_CALLERS (a regex): who calls the matching functions (four levels up), by time.
+        if (process.env.CS2SIM_SMOKE_CALLERS) {
+          const re = new RegExp(process.env.CS2SIM_SMOKE_CALLERS), parent = new Map(), chains = new Map();
+          for (const n of profile.nodes) for (const c of n.children || []) parent.set(c, n);
+          const sub = (n) => (dt.get(n.id) || 0) / 1000 + (n.children || []).reduce((s, c) => s + sub(byId.get(c)), 0);
+          for (const n of profile.nodes) {
+            if (!re.test(keyOf(n))) continue;
+            const up = [];
+            for (let p = parent.get(n.id); p && up.length < 4; p = parent.get(p.id)) up.push(keyOf(p));
+            const k = keyOf(n) + ' <- ' + up.join(' <- ');
+            chains.set(k, (chains.get(k) || 0) + sub(n));
+          }
+          console.log('SMOKE perf', id, 'callers\n' + [...chains].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, t]) => `  ${t.toFixed(0).padStart(6)}  ${k}`).join('\n'));
+        }
+        console.log('SMOKE perf', id, 'profile, total time\n' + [...incl].filter(([k]) => /\.js:/.test(k)).sort((a, b) => b[1] - a[1]).slice(0, 50).map(([k, t]) => `  ${t.toFixed(0).padStart(6)} ${(t / total * 100).toFixed(1).padStart(5)}%  ${k}`).join('\n'));
+      }
+      const r = JSON.parse(await js(`(() => { const P = window.__perf, f = P.frames.slice(1), n = f.length || 1, g = window.__playGame;
+        const avg = (k) => f.reduce((s, x) => s + (x[k] || 0), 0) / n, ms = f.map((x) => x.dt * 1000).sort((a, b) => a - b);
+        const gpu = f.filter((x) => x.gpu != null);
+        return JSON.stringify({ fps: Math.round(n / ${secs}), p99: +(ms[Math.floor(n * 0.99)] || 0).toFixed(1), worst: +(ms[n - 1] || 0).toFixed(1), hitches: ms.filter((x) => x > 50).length,
+          cpu: +avg('cpu').toFixed(2), sim: +avg('sim').toFixed(2), draw: +avg('draw').toFixed(2),
+          gpu: gpu.length ? +(gpu.reduce((s, x) => s + x.gpu, 0) / gpu.length).toFixed(2) : null,
+          calls: Math.round(avg('calls')), tris: Math.round(avg('tris') / 1000) + 'k', bots: g.bots.filter((b) => b.c.alive).length,
+          // The slowest frames: how long since the one before, and that frame's own time (simulation, drawing).
+          slowest: f.slice().sort((a, b) => b.dt - a.dt).slice(0, 3).map((x) => [Math.round(x.dt * 1000), Math.round(x.cpu), Math.round(x.sim), Math.round(x.draw)].join('/')) }); })()`));
+      all.push({ map: id, view: v.name, ...r });
+      console.log('SMOKE perf', id, v.name, JSON.stringify(r));
+      // CS2SIM_SMOKE_VARIANTS ([[name, js], ...], at the first view): each applied on top of the last, measured again,
+      // to see what each part costs.
+      if (v !== views[0] || !process.env.CS2SIM_SMOKE_VARIANTS) continue;
+      for (const [name, code] of JSON.parse(process.env.CS2SIM_SMOKE_VARIANTS)) {
+        await js(`(() => { const g = window.__playGame; ${code}; })(); 1`);
+        await wait(800);
+        await js(`window.__perf.frames = []; 1`);
+        await wait(secs * 1000);
+        console.log('SMOKE perf', id, v.name, '+' + name, await js(`(() => { const P = window.__perf, f = P.frames.slice(1), n = f.length || 1;
+          const avg = (k) => f.reduce((s, x) => s + (x[k] || 0), 0) / n, gpu = f.filter((x) => x.gpu != null);
+          return JSON.stringify({ fps: Math.round(n / ${secs}), cpu: +avg('cpu').toFixed(2), sim: +avg('sim').toFixed(2), draw: +avg('draw').toFixed(2),
+            gpu: gpu.length ? +(gpu.reduce((s, x) => s + x.gpu, 0) / gpu.length).toFixed(2) : null, calls: Math.round(avg('calls')), tris: Math.round(avg('tris') / 1000) + 'k' }); })()`));
+      }
+    }
+    console.log('SMOKE perf', id, 'info', await js(`(() => { const g = window.__playGame, m = g.renderer.info.memory;
+      const gl = g.renderer.getContext(), di = gl.getExtension('WEBGL_debug_renderer_info');
+      return JSON.stringify({ load: ${load.toFixed(1)}, programs: g.renderer.info.programs?.length, geometries: m.geometries, textures: m.textures, gpuTimer: window.__perf.gpuTimer,
+        gpuName: di ? gl.getParameter(di.UNMASKED_RENDERER_WEBGL) : '?',
+        size: [g.canvas.width, g.canvas.height], quality: { pixelRatio: g.renderer.getPixelRatio(), msaa: g.msaa } }); })()`));
+    await js(`document.querySelector('.play-root [data-leave]')?.click(); 1`);
+    await wait(2000);
+  }
+  const avg = (k) => all.reduce((s, x) => s + (x[k] || 0), 0) / (all.length || 1);
+  console.log('SMOKE perf all', JSON.stringify({ fps: Math.round(avg('fps')), cpu: +avg('cpu').toFixed(2), sim: +avg('sim').toFixed(2), draw: +avg('draw').toFixed(2), gpu: +avg('gpu').toFixed(2), worstFps: all.reduce((m, x) => (x.fps < m.fps ? x : m), all[0] || {}) }));
   app.quit();
 }
 
@@ -822,6 +971,7 @@ function runSmokeTest(win) {
   win.webContents.on('console-message', (e, level, message) => console.log('[renderer]', e.message ?? message));
   if (process.env.CS2SIM_SMOKE === 'features') { win.webContents.once('did-finish-load', () => runFeatureSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'play') { win.webContents.once('did-finish-load', () => runPlaySmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'perf') { win.webContents.once('did-finish-load', () => runPerfSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'maps') { win.webContents.once('did-finish-load', () => runMapsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'crate') { win.webContents.once('did-finish-load', () => runCrateSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   win.webContents.once('did-finish-load', async () => {
