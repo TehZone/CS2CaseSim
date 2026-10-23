@@ -482,12 +482,19 @@ export async function buildCS2Model(item, def, renderer) {
   wrap.userData.root = root;
   if (item.stk?.length) {
     try { await addStickerDecals(wrap, item, def); } catch (e) { console.warn('sticker decals failed', e); }
-    // Where the decals sit relative to the weapon's main bone, so they can follow it in first person.
+    // Where the decals sit relative to the bones that move them, so they can follow in first person: each decal's own
+    // bone (the one skinning the surface under it, like the magazine's), else the weapon's main bone.
     wrap.updateMatrixWorld(true);
     let bone = null;
     root.traverse((o) => { if (!bone && o.isBone && o.name === 'weapon_offset') bone = o; });
     root.traverse((o) => { if (!bone && o.isBone && o.name === 'weapon') bone = o; });
     if (bone) wrap.userData.decalBone = { name: bone.name, matrixWorld: bone.matrixWorld.clone() };
+    const bones = {};
+    root.traverse((o) => { if (o.isBone && !bones[o.name]) bones[o.name] = o; });
+    wrap.traverse((o) => {
+      const b = o.userData.decal && bones[o.userData.boneName];
+      if (b) o.userData.bone = { name: b.name, matrixWorld: b.matrixWorld.clone() };
+    });
   }
   return wrap;
 }
@@ -585,6 +592,18 @@ async function addStickerDecals(wrap, item, def) {
   }
 }
 
+// The bone that moves the surface a ray hit (the strongest skin weight over the hit triangle's corners), e.g. the
+// magazine's for a sticker on the mag; null for an unskinned mesh.
+function skinningBone(hit) {
+  const o = hit?.object, face = hit?.face, si = o?.geometry?.attributes.skinIndex, sw = o?.geometry?.attributes.skinWeight;
+  if (!o?.isSkinnedMesh || !face || !si || !sw) return null;
+  const sum = new Map();
+  for (const v of [face.a, face.b, face.c]) for (let k = 0; k < 4; k++) { const w = sw.getComponent(v, k); if (w > 0) sum.set(si.getComponent(v, k), (sum.get(si.getComponent(v, k)) || 0) + w); }
+  let best = null, bw = 0;
+  for (const [i, w] of sum) if (w > bw) { bw = w; best = i; }
+  return best == null ? null : o.skeleton.bones[best]?.name || null;
+}
+
 async function placeDecal(wrap, targets, ray, box, sd, s, x, y, width, hit = null) {
   const W = box.max.x - box.min.x;
   for (let i = 0; i < 60 && !hit; i++) {
@@ -624,6 +643,7 @@ async function placeDecal(wrap, targets, ray, box, sd, s, x, y, width, hit = nul
     const decal = new THREE.Mesh(geo, mat);
     decal.renderOrder = 2;
     decal.userData.decal = true;
+    decal.userData.boneName = skinningBone(hit);
     wrap.add(decal);
   }
 }

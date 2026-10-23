@@ -21,8 +21,10 @@ icon-based 3D view. Without CS2 installed, everything falls back to that view.
 With CS2 installed the inspect also offers:
 - **Backdrops**: the same map scenes CS2 shows behind the menu and item inspect (Dust II, Mirage, Inferno, Ancient,
   Anubis, Nuke, Overpass, Train, Vertigo, Italy, Office...), placed where CS2 shows items and blurred like the game.
-- **First person** (V): CS2's own inspect animation for that weapon or knife, on CS2's first-person arms, with your skin
-  and stickers. Gloves equipped in your **loadout** are worn on the hands, like in game. Gloves themselves can be
+- **First person** (V): CS2's own inspect animation for that weapon or knife (now and then one of CS2's special inspects,
+  like the Deagle's spin or the Falchion's and Skeleton's tricks; F again during an inspect plays one), on CS2's first-person arms, with your skin
+  and stickers (each riding on the part it's on: a sticker on the magazine comes out with it on a reload). Gloves
+  equipped in your **loadout** are worn on the hands, like in game. Gloves themselves can be
   seen in first person too: worn, inspecting your equipped knife (or the default knife).
 - **Sticker effects**: Holo, Foil, Gold, Glitter, Lenticular and Embroidered stickers use CS2's own sticker materials.
 
@@ -85,6 +87,14 @@ What's in a match:
 - Finished matches pay into your wallet when you play offline: kills, assists, MVPs, rounds won and the win, more
   against harder bots. The lobby shows your record.
 - The lobby shows CS2's own screenshot of each map.
+- CS2's special inspects and draws come up now and then in matches too (F again during an inspect for one; the console's
+  cl_inspect_rare 1 always, -1 never).
+- The developer console (~): CS2's console commands and variables, with completion (Tab), history and find/help.
+  sv_cheats 1 unlocks the cheats (god, noclip, give, impulse 101, host_timescale, sv_gravity, sv_infinite_ammo,
+  bot_stop, bot_dont_shoot); the rest work anyway (mp_restartgame, mp_roundtime, mp_freezetime, mp_buytime,
+  mp_buy_anywhere, mp_startmoney, mp_maxmoney, bot_difficulty, bot_kill, viewmodel_*, cl_crosshair*, sensitivity,
+  volume, fps_max, cl_drawhud, r_drawviewmodel, status...).
+- CS2's weapon list on the right when you switch weapons, with CS2's icons (also in the buy menu and kill feed).
 - Settings in the lobby: your crosshair (classic or static, colour, length, gap, thickness, outline, dot; live preview),
   the viewmodel (field of view, offsets, CS2's presets), every key, music and radio volume, the fps counter.
 - The map is exported from your install the first time (a couple of minutes, cached in `cs2cache/play`): CS2's render

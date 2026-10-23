@@ -21,6 +21,7 @@ import { Hud } from './hud.js';
 import { NavMesh } from './nav.js';
 import { Match, Combatant, RULES, SHORT_RULES, DEFAULT_PISTOL, ITEM_NAMES, slotOf, isGrenade } from './match.js';
 import { BuyMenu } from './buymenu.js';
+import { DevConsole } from './console.js';
 import { iconFor } from './icons.js';
 import { Radar } from './radar.js';
 import { buildCS2Model } from '../cs2/skin.js';
@@ -114,6 +115,10 @@ export class Game {
     this.hud = new Hud(root);
     this.hud.setCrosshairStyle(settings.crosshair);
     this.buyMenu = new BuyMenu(root, this);
+    // The developer console (~) and the console variables the game reads (set there).
+    this.cv = { sv_cheats: 0, host_timescale: 1, sv_infinite_ammo: 0, mp_buy_anywhere: 0, bot_stop: 0, bot_dont_shoot: 0, r_drawviewmodel: 1, fps_max: 0, cl_inspect_rare: 0 };
+    this.god = false; this.noclip = false;
+    this.console = new DevConsole(root, this);
     this.vmCache = new Map();
     this.resize = this.resize.bind(this);
     this.resizer = new ResizeObserver(this.resize);
@@ -328,7 +333,7 @@ export class Game {
 
   // ---- buying -----------------------------------------------------------------------------------------------------
   inBuyZone(c = this.me) {
-    if (this.respawnMode) return true; // Deathmatch: buy anywhere
+    if (this.respawnMode || this.cv.mp_buy_anywhere) return true; // Deathmatch (or mp_buy_anywhere): buy anywhere
     const p = this.positionOf(c);
     return (this.map.info.buyzones || []).some((z) => z.team === c.team && p[0] >= z.min[0] && p[0] <= z.max[0] && p[1] >= z.min[1] && p[1] <= z.max[1] && p[2] >= z.min[2] - 64 && p[2] <= z.max[2] + 64);
   }
@@ -417,12 +422,57 @@ export class Game {
     this.buyMenu.open();
     this.input.unlock();
   }
+  // The console takes your keys and shows the cursor while it's open; the match keeps running.
+  toggleConsole(open = !this.console.isOpen) {
+    if (open === this.console.isOpen) return;
+    if (open) {
+      this.closeBuyMenu();
+      this.radio?.close();
+      this.input.menu = true;
+      this.input.keys.clear(); this.input.buttons = 0;
+      this.input.unlock();
+      this.console.open();
+    } else {
+      this.console.close();
+      this.input.lock().finally(() => { this.input.menu = false; });
+    }
+  }
+  // give <item> (console): a weapon, grenade, armor or kit. Returns false for an unknown item.
+  giveItem(id) {
+    const me = this.me;
+    id = String(id).toLowerCase();
+    if (!me.alive) return true;
+    if (id === 'item_kevlar' || id === 'vest') { me.armor = 100; return true; }
+    if (id === 'item_assaultsuit' || id === 'item_heavyassaultsuit' || id === 'vesthelm') { me.armor = 100; me.helmet = true; return true; }
+    if (id === 'item_defuser' || id === 'item_cutters' || id === 'defuser') { me.defuser = true; return true; }
+    if (!id.startsWith('weapon_')) id = 'weapon_' + id;
+    if (isGrenade(id)) { me.nades[id] = (me.nades[id] || 0) + 1; this.syncMyNades(id); return true; }
+    if (!this.stats[id] && !ITEM_NAMES[id]) return false;
+    if (/knife|bayonet/.test(id)) return true; // your equipped knife is the one you hold
+    this.giveMe(slotOf(id), id).catch(() => {});
+    return true;
+  }
+  setViewmodelFov(fov) { this.vmCamera.fov = vfov(fov); this.vmCamera.updateProjectionMatrix(); }
+  // mp_restartgame: a fresh match (scores, money and stats back to the start; the sides stay as they are).
+  restartMatch() {
+    const m = this.match;
+    this.restartAt = null;
+    this.matchOver = false;
+    for (const c of this.combatants) {
+      Object.assign(c, { kills: 0, deaths: 0, assists: 0, damage: 0, mvps: 0, score: 0, hsKills: 0, points: 0, level: 0, money: this.rules.startMoney, armor: 0, helmet: false, defuser: false, nades: {}, resetWeapons: true, alive: false });
+    }
+    if (!this.respawnMode) { m.round = 0; m.score = { A: 0, B: 0 }; m.lossStreak = { T: 0, CT: 0 }; m.history = []; }
+    this.hud.message('The match restarted', 2500);
+    m.startRound();
+  }
+
   closeBuyMenu() {
     if (!this.buyMenu.isOpen) return;
     this.buyMenu.close();
     this.input.lock().finally(() => { this.input.menu = false; });
   }
   menuKey(code, down) {
+    if (code === 'Backquote') { if (down) this.toggleConsole(true); return true; }
     if (!down) return false;
     // Radio: Z commands, X reports, V responses; a number picks a line.
     const radioMenu = ['radio1', 'radio2', 'radio3'].findIndex((a) => this.input.is(a, code));
@@ -438,6 +488,18 @@ export class Game {
       return this.buyMenu.key(code);
     }
     return false;
+  }
+
+  // Your slots for the HUD's weapon list: 1 primary, 2 pistol, 3 knife and Zeus, 4 grenades, 5 the bomb.
+  showWeaponList() {
+    const a = this.arsenal, cur = a.gun, rows = new Map();
+    const SLOT = { primary: 1, secondary: 2, knife: 3, taser: 3, c4: 5 };
+    for (const sl of a.order()) {
+      const g = a.guns[sl], n = SLOT[sl] ?? 4;
+      if (!rows.has(n)) rows.set(n, []);
+      rows.get(n).push({ name: ITEM_NAMES[g.id] || (g.name || '').split(' | ')[0] || g.id, icon: iconFor(this.icons, g.id, { gun: g }), active: g === cur });
+    }
+    this.hud.weaponList([...rows.entries()].sort((x, y) => x[0] - y[0]).map(([slot, items]) => ({ slot, items })));
   }
 
   // ---- rounds (called by the match) -------------------------------------------------------------------------------
@@ -803,6 +865,7 @@ export class Game {
     const frame = (now) => {
       if (this.disposed) return;
       this.raf = requestAnimationFrame(frame);
+      if (this.cv.fps_max > 0 && now - this.last < 1000 / this.cv.fps_max - 1) return; // fps_max
       const dt = Math.min(0.1, (now - this.last) / 1000);
       this.last = now;
       this.frame(dt);
@@ -822,6 +885,7 @@ export class Game {
   tick() {
     const inp = this.input, m = this.match, me = this.me;
     this.now += TICK;
+    if (this.restartAt != null && this.now >= this.restartAt) this.restartMatch();
     this.prevEye = this.player.eye();
     m.tick(TICK);
     // You
@@ -834,12 +898,17 @@ export class Game {
     };
     if (me.alive) {
       const wasGround = this.player.onGround;
-      this.player.tick(TICK, cmd);
+      if (this.noclip) this.flyNoclip(cmd); else this.player.tick(TICK, cmd);
       this.pushOutOfBots();
       if (this.player.origin[2] < -3000) this.kill(me, null, { name: 'World' }, false);
       this.fallDamage();
       this.footsteps(wasGround);
       this.arsenal.tick(TICK, this.now, inp);
+      // sv_infinite_ammo: 1 keeps the magazine full, 2 the reserve.
+      const held = this.arsenal.gun;
+      if (this.cv.sv_infinite_ammo && held && !held.melee && !held.nade && held.stats?.clip) {
+        if (this.cv.sv_infinite_ammo === 1) held.clip = held.stats.clip; else held.reserve = held.stats.reserve ?? held.reserve;
+      }
       if (inp.takePing()) this.ping();
       if (this.arsenal.pressed?.has('drop')) this.dropMine();
       this.useKey();
@@ -852,6 +921,7 @@ export class Game {
     // Bots
     for (const b of this.bots) {
       if (!b.c.alive) continue;
+      if (this.cv.bot_stop) { b.vel = [0, 0, 0]; continue; }
       b.brain.tick(TICK, this.now);
       this.botThrowing(b);
       const bomb = m.bomb;
@@ -1306,6 +1376,7 @@ export class Game {
     if (!c.alive) return;
     // Teammates: no damage without friendly fire; with it, CS2's reductions (bullets a third, grenades 85%, fire 40%).
     if (c.protectUntil > this.now && attacker && attacker !== c) return; // just respawned
+    if (c === this.me && this.god) return;
     if (attacker && attacker !== c && !this.hostile(attacker, c)) {
       if (!this.ff) return;
       dmg *= /molotov|incgrenade/.test(weapon?.id || '') ? 0.4 : explosion ? 0.85 : 0.33;
@@ -1445,6 +1516,7 @@ export class Game {
   // ---- the frame ------------------------------------------------------------------------------------------------------
   frame(dt) {
     if (!this.scene) return;
+    dt *= this.cv.host_timescale || 1;
     if (!this.paused) {
       this.acc += dt;
       let steps = 0;
@@ -1532,7 +1604,7 @@ export class Game {
     this.post.render(this.scene, this.camera, {
       camPos: camEye, captureFlash: this.flashCapture, dt: this.paused ? 0 : dt,
       flashImage: me.alive && flashLeft > 0 ? Math.min(1, flashLeft / Math.max(0.6, this.flashSecs * 0.85)) * 0.9 : 0,
-      overlay: me.alive || this.specVm ? { scene: this.vmScene, camera: this.vmCamera } : null,
+      overlay: (me.alive || this.specVm) && this.cv.r_drawviewmodel ? { scene: this.vmScene, camera: this.vmCamera } : null,
     });
     this.flashCapture = false;
 
@@ -1575,6 +1647,9 @@ export class Game {
     hud.flashed(left > 0 ? Math.min(1, left / Math.max(0.5, this.flashSecs * 0.6)) : 0);
     hud.nades(me.alive ? NADE_ORDER.filter((id) => me.nades[id] > 0).map((id) => [id, NADES[id].short, me.nades[id]]) : [], gun?.nade ? gun.id : null);
     if (me.alive && gun && !gun.melee) hud.setCrosshair(this.arsenal.inaccuracy(gun));
+    // The weapon list on the right whenever what you hold or carry changes.
+    const listKey = me.alive && gun ? this.arsenal.order().map((sl) => sl + ':' + this.arsenal.guns[sl].id).join(',') + '|' + gun.slot + '|' + !!this.icons : '';
+    if (listKey !== this.listKey) { if (listKey && this.listKey !== undefined) this.showWeaponList(); this.listKey = listKey; }
     const sg = !me.alive && this.specVm ? this.specVm.bot.weapons[this.specVm.bot.slot] : null;
     const shown = me.alive ? gun : sg && { id: sg.id, name: ITEM_NAMES[sg.id] || sg.id, clip: sg.clip, reserve: sg.reserve, melee: sg.melee, nade: isGrenade(sg.id) };
     const ammoKey = shown ? `${shown.name}|${shown.clip}|${shown.reserve}` : '';
@@ -1634,8 +1709,18 @@ export class Game {
     for (const c of [this.camera, this.vmCamera]) { c.aspect = w / h; c.updateProjectionMatrix(); }
   }
 
+  // noclip: fly where you look (Jump up, Crouch down, Walk slow), through everything.
+  flyNoclip(cmd) {
+    const p = this.player, { fwd, right } = basis(cmd.pitch, cmd.yaw), speed = cmd.walk ? 250 : 1000;
+    const up = (this.input.held('jump') ? 1 : 0) - (this.input.held('duck') ? 1 : 0);
+    for (let i = 0; i < 3; i++) p.origin[i] += (fwd[i] * cmd.forward + right[i] * cmd.side + (i === 2 ? up : 0)) * speed * TICK;
+    p.velocity = [0, 0, 0];
+    p.onGround = false;
+  }
+
   dispose() {
     this.disposed = true;
+    this.console?.dispose();
     cancelAnimationFrame(this.raf);
     this.resizer.disconnect();
     this.input.dispose();

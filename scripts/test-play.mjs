@@ -300,6 +300,21 @@ function fakeGame() {
   let lo = Infinity, hi = -Infinity;
   for (let t = 0; t < 15; t += 1 / 144) { brain.lookAround(1 / 144, t); lo = Math.min(lo, bot.yaw); hi = Math.max(hi, bot.yaw); }
   ok(lo >= 29.5 && hi <= 50.5, `freeze time: a bot glances a little either side of its heading (${lo.toFixed(1)}..${hi.toFixed(1)}), not round`);
+
+  // Holding an angle for 30 seconds: steady, with the odd small glance (it used to sweep 25° either way nonstop).
+  const holder = { yaw: 30, pitch: 0, index: 2, vel: [0, 0, 0] };
+  const hb = Object.assign(Object.create(Brain.prototype), { bot: holder, d: { turn: 380 } });
+  Brain.prototype.roundStart.call(hb, {});
+  Object.assign(hb, { task: 'hold', holdYaw: 30 });
+  let turned = 0, movingFrames = 0, frames = 0, prev = holder.yaw, far = 0;
+  for (let t = 0; t < 30; t += 1 / 60) {
+    hb.look(1 / 60, t);
+    const d = Math.abs(holder.yaw - prev); prev = holder.yaw;
+    turned += d; frames++; if (d > 0.01) movingFrames++;
+    far = Math.max(far, Math.abs(holder.yaw - 30));
+  }
+  ok(far <= 15.5 && movingFrames / frames < 0.35 && turned < 160,
+    `holding an angle: steady with the odd glance (${Math.round((movingFrames / frames) * 100)}% of the time turning, ${Math.round(turned)}° in 30 s, at most ${far.toFixed(1)}° off)`);
 }
 
 // ---- CS2's equipment icons: weapon ids map to the icon files the service extracts (a set like CS2's own) ----

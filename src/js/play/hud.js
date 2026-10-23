@@ -40,6 +40,7 @@ export class Hud {
         </div>
         <div class="ammo"><div class="nades" data-nades></div><div class="weapon-name" data-wn></div><div class="rounds"><span data-clip>0</span><small>/ <span data-res>0</span></small>${ICONS.bullets}</div></div>
       </div>
+      <div class="wsel" data-wsel></div>
       <div class="scoreboard hidden" data-scores></div>
       <div class="endscreen hidden" data-end></div>`;
     root.appendChild(this.el);
@@ -93,6 +94,22 @@ export class Hud {
     this.set('[data-res]', melee ? '' : String(gun.reserve));
   }
   // Your grenades (the one in your hand highlighted).
+  // CS2's weapon list on the right when you switch weapons: a row per slot (primary, pistol, knife and Zeus, the
+  // grenades side by side, the bomb) with CS2's icons, the one in your hands lit up with its name; it fades out after a
+  // moment. rows: [{ slot, items: [{ name, icon, active }] }].
+  weaponList(rows) {
+    const el = this.q('[data-wsel]');
+    const item = (it) => (it.icon ? `<img class="${it.active ? 'on' : ''}" src="${esc(it.icon)}" alt="${esc(it.name)}" draggable="false">` : `<em class="${it.active ? 'on' : ''}">${esc(it.name)}</em>`);
+    const html = rows.map((r) => {
+      const on = r.items.find((it) => it.active);
+      return `<div class="ws${on ? ' on' : ''}${r.slot === 4 ? ' nades' : ''}">${on ? `<span class="name">${esc(on.name)}</span>` : ''}<div class="icons">${r.items.map(item).join('')}</div><b>${r.slot}</b></div>`;
+    }).join('');
+    if (html !== this.cache.wsel) el.innerHTML = this.cache.wsel = html;
+    el.classList.add('show');
+    clearTimeout(this.wselTimer);
+    this.wselTimer = setTimeout(() => el.classList.remove('show'), 2200);
+  }
+
   nades(list, current) {
     const html = list.map(([id, short, n]) => (id === current ? `<b>${short}${n > 1 ? ' ×' + n : ''}</b>` : `${short}${n > 1 ? ' ×' + n : ''}`)).join(' · ');
     if (this.cache.nades !== html) { this.cache.nades = html; this.q('[data-nades]').innerHTML = html; }

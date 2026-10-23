@@ -376,11 +376,13 @@ export class Bot {
       const vr = this.vel[0] * Math.sin(yr) - this.vel[1] * Math.cos(yr);
       const speed = Math.hypot(vf, vr);
       const move = Math.min(1, speed / 60);
-      const gait = this.ducked ? 'crouch' : speed > 150 ? 'run' : 'walk';
+      // Walking and running cross-fade by speed (switching at one speed popped from one clip to the other).
+      const run = this.ducked ? 0 : Math.min(1, Math.max(0, (speed - 120) / 70));
+      const gaitW = { crouch: this.ducked ? 1 : 0, run, walk: this.ducked ? 0 : 1 - run };
       const a = Math.atan2(vr, vf);
       const w = [Math.max(0, Math.cos(a)), Math.max(0, Math.sin(a)), Math.max(0, -Math.cos(a)), Math.max(0, -Math.sin(a))];
       const sum = w.reduce((s, x) => s + x, 0) || 1;
-      for (const g of GAITS) l[g].forEach((act, i) => { if (!act) return; act.setEffectiveWeight(g === gait ? (w[i] / sum) * move : 0); act.timeScale = Math.max(0.4, speed / (g === 'run' ? 230 : g === 'walk' ? 120 : 85)); });
+      for (const g of GAITS) l[g].forEach((act, i) => { if (!act) return; act.setEffectiveWeight(gaitW[g] * (w[i] / sum) * move); act.timeScale = Math.max(0.4, speed / (g === 'run' ? 230 : g === 'walk' ? 120 : 85)); });
       l.idle?.setEffectiveWeight(this.ducked ? 0 : 1 - move);
       l.crouchIdle?.setEffectiveWeight(this.ducked ? 1 - move : 0);
       l.air?.setEffectiveWeight(0);
@@ -398,7 +400,8 @@ export class Bot {
     const moving = this.mode !== 'move' || this.climbing || this.airborne || Math.hypot(this.vel[0], this.vel[1]) > 20;
     if (moving || Math.abs(d) > TURN_LIMIT) this.turning = true;
     if (!this.turning) return;
-    const step = (moving ? 720 : 300) * dt;
+    // Faster the further the aim is off, so the twist never reaches 180° (past it, it would flip round the other way).
+    const step = (moving ? 720 : Math.max(300, Math.abs(d) * 5)) * dt;
     this.bodyYaw = wrap(this.bodyYaw + Math.max(-step, Math.min(step, d)));
     if (!moving && Math.abs(wrap(this.yaw - this.bodyYaw)) < 3) this.turning = false;
   }
@@ -409,7 +412,7 @@ export class Bot {
     const yr = (this.yaw * Math.PI) / 180;
     const axis = new THREE.Vector3(-Math.cos(yr), 0, Math.sin(yr)); // the bot's right, in glTF axes
     const angle = (-this.pitch * Math.PI) / 180 / 3;
-    const twist = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ((wrap(this.yaw - this.bodyYaw) * Math.PI) / 180) / 3);
+    const twist = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ((Math.max(-80, Math.min(80, wrap(this.yaw - this.bodyYaw))) * Math.PI) / 180) / 3);
     const pq = new THREE.Quaternion(), q = new THREE.Quaternion().setFromAxisAngle(axis, angle).multiply(twist);
     for (const n of ['spine_1', 'spine_2', 'spine_3']) {
       const b = this.bones[n];

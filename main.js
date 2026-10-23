@@ -338,7 +338,67 @@ async function runPlaySmoke(win) {
   const state = () => js(`(() => { const g = window.__playGame; if (!g) return 'no game'; const m = g.match;
     return JSON.stringify({ round: m.round, phase: m.phase, time: Math.round(m.time), score: m.score, fps: Math.round(g.fps || 0), bomb: m.bomb?.state,
       alive: g.combatants.filter((c) => c.alive).map((c) => c.team[0]).join(''), feed: document.querySelector('.feed')?.innerText.split(String.fromCharCode(10)).join(' | ') }); })()`);
-  await js(`(() => { const g = window.__playGame; document.querySelector('.play-pause').classList.add('hidden'); g.paused = false; g.input.locked = true; g.match.time = 0.01; })()`);
+  // The bots standing still: on the floor and not turning round, idle in spawn through a 30 s freeze time, then for 35 s
+  // of the round (bots holding angles), with you in god mode and the bots not shooting.
+  await js(`(() => { const g = window.__playGame; document.querySelector('.play-pause').classList.add('hidden'); g.paused = false; g.input.locked = true;
+    g.god = true; g.cv.bot_dont_shoot = 1; g.match.time = 31;
+    const wrap = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
+    const mates = g.bots.filter((b) => b.c.team === g.me.team), c = [0, 1].map((k) => mates.reduce((s, b) => s + b.pos[k], 0) / Math.max(1, mates.length));
+    const o = g.player.origin; g.input.yaw = Math.atan2(c[1] - o[1], c[0] - o[0]) * 180 / Math.PI; g.input.pitch = 8;
+    const rec = window.__stillRec = { gap: 0, freezeSec: 0, freezeAim: 0, freezeBody: 0, stillSec: 0, stillAim: 0, stillBody: 0, maxStillBodyRate: 0, stillTurningFrames: 0, stillFrames: 0 };
+    const last = new Map(g.bots.map((b) => [b, [b.yaw, b.bodyYaw]]));
+    g.on((type, dt) => { if (type !== 'frame' || !dt) return;
+      for (const b of g.bots) { if (!b.c.alive) continue;
+        const [ly, lb] = last.get(b), da = Math.abs(wrap(b.yaw - ly)), db = Math.abs(wrap(b.bodyYaw - lb)); last.set(b, [b.yaw, b.bodyYaw]);
+        if (g.match.phase === 'freeze') { rec.freezeSec += dt; rec.freezeAim += da; rec.freezeBody += db; const f = g.floorAt(b.pos, 300); if (f != null) rec.gap = Math.max(rec.gap, Math.abs(b.pos[2] - f)); }
+        else if (Math.hypot(b.vel[0], b.vel[1]) < 20 && !b.airborne && !b.brain.target?.visible) {
+          rec.stillSec += dt; rec.stillAim += da; rec.stillBody += db; rec.stillFrames++; if (da > 0.05) rec.stillTurningFrames++;
+          rec.maxStillBodyRate = Math.max(rec.maxStillBodyRate, db / dt);
+        } } }); })()`);
+  await wait(3000);
+  await shot('spawn');
+  await wait(29000);
+  await wait(35000);
+  console.log('SMOKE play standing still', await js(`(() => { const r = window.__stillRec, g = window.__playGame; g.god = false; g.cv.bot_dont_shoot = 0;
+    return JSON.stringify({ floorGap: Math.round(r.gap * 10) / 10,
+      freeze: { botSeconds: Math.round(r.freezeSec), aimDegPerSec: Math.round((r.freezeAim / Math.max(1, r.freezeSec)) * 100) / 100, bodyDegPerSec: Math.round((r.freezeBody / Math.max(1, r.freezeSec)) * 100) / 100 },
+      holding: { botSeconds: Math.round(r.stillSec), aimDegPerSec: Math.round((r.stillAim / Math.max(1, r.stillSec)) * 100) / 100, bodyDegPerSec: Math.round((r.stillBody / Math.max(1, r.stillSec)) * 100) / 100,
+        turningPct: Math.round((r.stillTurningFrames / Math.max(1, r.stillFrames)) * 100), maxBodyDegPerSec: Math.round(r.maxStillBodyRate) } }); })()`));
+  // Stickers on the magazine come out with it: an AK-47 with one on the mag and one on the receiver, a third into a reload.
+  console.log('SMOKE play mag sticker', await js(`(async () => { try {
+    const THREE = await import('three'), { D } = await import('./js/data.js'), { buildViewmodel } = await import('./js/play/viewmodel.js'), { cs2Play } = await import('./js/cs2/api.js');
+    const g = window.__playGame, def = Object.values(D.skins).find((s) => s.wid === 'weapon_ak47' && /Redline/.test(s.n)), st = Object.values(D.stickers)[0];
+    const item = { t: 'skin', id: def.id, fl: 0.1, sd: 1, uid: 'smoke-mag', stk: [{ id: st.id, x: 0.55, y: 0.7, s: 0.6, r: 0, slot: 0 }, { id: st.id, x: 0.3, y: 0.55, s: 0.6, r: 0, slot: 1 }] };
+    const vm = await buildViewmodel(item, def, await cs2Play('weapon', 'weapon_ak47'), { renderer: g.renderer });
+    const decals = []; vm.rig.traverse((o) => { if (o.isMesh && o.renderOrder === 2 && o.parent?.isBone) decals.push(o); });
+    const at = (o) => { o.updateWorldMatrix(true, false); o.geometry.computeBoundingBox(); return o.geometry.boundingBox.getCenter(new THREE.Vector3()).applyMatrix4(o.matrixWorld); };
+    const before = decals.map(at), len = vm.play('reload');
+    for (let t = 0; t < len * 0.35; t += 1 / 60) vm.update(1 / 60);
+    const res = decals.map((d, i) => d.parent.name + ' moved ' + Math.round(at(d).distanceTo(before[i]) * 1000) + 'mm').join(', ');
+    vm.dispose();
+    return res;
+  } catch (e) { return 'failed: ' + e.message; } })()`));
+  // CS2's special inspects (the Deagle's spin, the Falchion's and Skeleton's): how far the weapon turns in each.
+  console.log('SMOKE play special inspects', await js(`(async () => { try {
+    const THREE = await import('three'), { buildViewmodel } = await import('./js/play/viewmodel.js'), { cs2Play } = await import('./js/cs2/api.js');
+    const g = window.__playGame, out = {};
+    for (const wid of ['weapon_deagle', 'weapon_knife_falchion', 'weapon_knife_skeleton']) {
+      const vm = await buildViewmodel({ t: 'skin', fl: 0, sd: 0 }, { wid, w: wid, n: wid, cat: /knife/.test(wid) ? 'knife' : 'pistol', v: true }, await cs2Play('weapon', wid), { renderer: g.renderer });
+      const turn = (role) => { const len = vm.play(role, { fade: 0 }); vm.update(0); const b = vm.bones.weapon_offset; let prev = b.getWorldQuaternion(new THREE.Quaternion()), total = 0;
+        for (let t = 0; t < len; t += 1 / 30) { vm.update(1 / 30); const q = b.getWorldQuaternion(new THREE.Quaternion()); total += (prev.angleTo(q) * 180) / Math.PI; prev = q; }
+        return Math.round(len * 10) / 10 + 's ' + Math.round(total) + 'deg'; };
+      out[wid.replace('weapon_', '')] = vm.has('inspectRare') ? { usual: turn('inspect'), special: turn('inspectRare') } : 'no special inspect';
+      vm.dispose();
+    }
+    return JSON.stringify(out);
+  } catch (e) { return 'failed: ' + e.message; } })()`));
+  // The Deagle's spin in the match: bought, drawn and inspected with cl_inspect_rare 1.
+  await js(`(async () => { const g = window.__playGame; g.cv.cl_inspect_rare = 1; await g.giveMe('secondary', 'weapon_deagle'); g.input.pressed.add('slot2'); })()`);
+  await wait(1500);
+  await js(`window.__playGame.input.pressed.add('inspect')`);
+  await wait(2300);
+  await shot('deagle-spin');
+  console.log('SMOKE play deagle inspect', await js(`(() => { const g = window.__playGame; const r = g.arsenal.gun?.vm.role; g.cv.cl_inspect_rare = 0; return g.arsenal.gun?.id + ' ' + r; })()`));
   for (const s of [4, 8, 12]) { await wait(4000); console.log('SMOKE play t+' + s + 's', await state()); }
   await shot('live');
   // A volumetric smoke in front of you: how it looks and what it costs (same view with and without it).

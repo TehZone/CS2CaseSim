@@ -4,7 +4,7 @@
 // its aim error shrinking as it tracks, stops to shoot, controls part of the recoil and fires in bursts.
 // Bots buy by their money like CS2's bots (eco, force, full buy, an AWP now and then). Your teammates follow your
 // radio commands (radio.js): go to a site, rush, follow you, hold, regroup, fall back, cover you.
-import { FLAG_BULLET } from './collision.js';
+import { FLAG_BULLET, FLAG_PLAYER } from './collision.js';
 import { Gun } from './weapons.js';
 import { setOf } from './bots.js';
 
@@ -50,7 +50,7 @@ export class Brain {
     this.blindUntil = 0; this.nadeAt = 0; this.thrown = new Set();
     this.path = null; this.goal = null; this.target = null; this.lastSeen = null; this.heard = null;
     this.task = 'idle';
-    this.holdYaw = null; this.baseYaw = null; this.heading = null; this.stuckTries = 0; this.restUntil = 0;
+    this.holdYaw = null; this.baseYaw = null; this.heading = null; this.stuckTries = 0; this.restUntil = 0; this.glanceAt = 0; this.glanceOff = 0;
     this.startDelay = rnd(0, 1.5);
     this.walkUntil = 0;
     this.order = null;
@@ -205,7 +205,10 @@ export class Brain {
       const inView = to[0] * fwd[0] + to[1] * fwd[1] > Math.cos(((this.d.fov / 2) * Math.PI) / 180) || d < 220 || this.hurtBy === e;
       if (!inView) continue;
       const seen = [body.head, body.chest].find((p) => g.canSee(eye, p));
-      if (seen && d < bestD) { best = { c: e, point: seen }; bestD = d; }
+      // Stick with the enemy it's fighting unless another is clearly closer (two at about the same distance would
+      // otherwise swap every scan, the aim flicking between them).
+      const dd = this.target?.c === e && this.target.visible ? d * 0.7 : d;
+      if (seen && dd < bestD) { best = { c: e, point: seen, d }; bestD = dd; }
     }
     if (best) {
       g.spot(best.c, this.c);
@@ -214,11 +217,11 @@ export class Brain {
         const a = Math.random() * Math.PI * 2;
         this.aimErr = [Math.sin(a) * this.d.aimErr, Math.cos(a) * this.d.aimErr * 1.4];
         this.aimHead = Math.random() < this.d.head;
-        this.crouchFight = Math.random() < 0.25 && bestD > 900;
+        this.crouchFight = Math.random() < 0.25 && best.d > 900;
       }
       if (!this.target.visible && t - (this.target.calledAt ?? -99) > 6) { this.target.calledAt = t; g.radio.chatter(this.c, 'spotted', { where: g.placeOf(best.c) ? 'at ' + g.placeOf(best.c).replace(/([a-z])([A-Z])/g, '$1 $2') : '' }); }
       this.target.visible = true;
-      this.target.dist = bestD;
+      this.target.dist = best.d;
       this.lastSeen = { pos: g.bodyOf(best.c).feet.slice(), t };
       g.callout(this.c, best.c);
     } else if (this.target?.visible) {
@@ -263,7 +266,7 @@ export class Brain {
     b.ducked = this.crouchFight;
     const tol = Math.max(0.6, Math.min(5, (Math.atan(10 / Math.max(1, tg.dist)) * 180) / Math.PI));
     const onTarget = Math.abs(wrap(b.yaw - y)) < tol + Math.abs(this.aimErr[1]) && Math.abs(b.pitch - p) < tol + Math.abs(this.aimErr[0]);
-    if (t >= tg.react && t >= tg.pauseUntil && onTarget && t >= gun.nextAttack && gun.clip > 0 && !g.teammateInLine(b, aimAt)) {
+    if (t >= tg.react && t >= tg.pauseUntil && onTarget && t >= gun.nextAttack && gun.clip > 0 && !g.teammateInLine(b, aimAt) && !g.cv?.bot_dont_shoot) {
       const auto = gun.stats.fullAuto;
       const burst = tg.dist < 600 ? this.d.burst * 3 : tg.dist < 1500 ? this.d.burst : Math.max(1, Math.round(this.d.burst / 2));
       g.botShoot(b, gun, t, this.d.control);
@@ -291,18 +294,23 @@ export class Brain {
     if (t < this.blindUntil) { this.turnTo(8 + Math.sin(t * 9) * 3, (this.blindYaw ?? b.yaw) + Math.sin(t * 3.1 + b.index) * 35, dt, 0.4); return; }
     if (this.lastSeen && t - this.lastSeen.t < 4) { const [p, y] = angleTo(b.eye(), [this.lastSeen.pos[0], this.lastSeen.pos[1], this.lastSeen.pos[2] + 60]); this.turnTo(p, y, dt, 0.7); return; }
     if (this.heard && t - this.heard.t < 3) { const [p, y] = angleTo(b.eye(), [this.heard.pos[0], this.heard.pos[1], this.heard.pos[2] + 60]); this.turnTo(p, y, dt, 0.6); return; }
-    if (this.task === 'hold' && this.holdYaw != null && Math.hypot(b.vel[0], b.vel[1]) < 20) {
-      const sweep = Math.sin(t * 0.7 + b.index) * 25;
-      this.turnTo(0, this.holdYaw + sweep, dt, 0.25);
-      return;
-    }
+    if (this.task === 'hold' && this.holdYaw != null && Math.hypot(b.vel[0], b.vel[1]) < 20) { this.glance(dt, t, this.holdYaw, 15, 0.2); return; }
     // Moving: face the way it's going (the path, not its velocity, which teammates shoving past and walls jostle).
     if (this.heading != null && Math.hypot(b.vel[0], b.vel[1]) > 30) this.turnTo(0, this.heading, dt, 0.5);
   }
-  // Freeze time: a glance either side of the heading it spawned with.
+  // Freeze time: still, the odd glance either side of the heading it spawned with.
   lookAround(dt, t) {
     this.baseYaw ??= this.bot.yaw;
-    this.turnTo(0, this.baseYaw + Math.sin(t * 0.5 + this.bot.index) * 10, dt, 0.1);
+    this.glance(dt, t, this.baseYaw, 8, 0.1);
+  }
+  // Standing still like a player: aim steady at an angle, and every few seconds maybe a small glance to one side (eased,
+  // then still again), not a constant sweep.
+  glance(dt, t, base, spread, rate) {
+    if (t >= this.glanceAt) {
+      this.glanceAt = t + 3 + Math.random() * 4;
+      this.glanceOff = Math.random() < 0.5 ? 0 : (Math.random() * 2 - 1) * spread;
+    }
+    this.turnTo(0, base + this.glanceOff, dt, rate);
   }
 
   // ---- objectives -------------------------------------------------------------------------------------------------
@@ -492,11 +500,13 @@ export class Brain {
     let want = [0, 0], wpZ = null;
     this.heading = null;
     if (moving && this.path && this.pi < this.path.length && this.task !== 'hold') {
+      if (t >= (this.smoothAt || 0)) { this.smoothAt = t + 0.2; this.skipAhead(); }
       let wp = this.path[this.pi];
       let dx = wp[0] - b.pos[0], dy = wp[1] - b.pos[1];
       let d = Math.hypot(dx, dy);
       while (d < 24 && !wp.ladder && this.pi < this.path.length - 1) { this.pi++; wp = this.path[this.pi]; dx = wp[0] - b.pos[0]; dy = wp[1] - b.pos[1]; d = Math.hypot(dx, dy); }
-      if (d > 8) { want = [(dx / d) * max, (dy / d) * max]; wpZ = wp[2]; } else if (this.pi >= this.path.length - 1) this.path = null;
+      const last = this.pi >= this.path.length - 1;
+      if (d > (last ? 32 : 8)) { want = [(dx / d) * max, (dy / d) * max]; wpZ = wp[2]; } else if (last) this.path = null;
     } else if (this.target?.visible && b.weapons[b.slot]?.melee && moving) {
       const e = g.bodyOf(this.target.c).feet, dx = e[0] - b.pos[0], dy = e[1] - b.pos[1], d = Math.hypot(dx, dy);
       if (d > 30) want = [(dx / d) * max, (dy / d) * max];
@@ -509,7 +519,8 @@ export class Brain {
       const dx = b.pos[0] - burning.pos[0], dy = b.pos[1] - burning.pos[1], d = Math.hypot(dx, dy) || 1;
       want = [(dx / d) * max, (dy / d) * max];
     }
-    if (want[0] || want[1]) this.heading = (Math.atan2(want[1], want[0]) * 180) / Math.PI;
+    // Face where it's going, unless that's only a few units away (pushed around a point, it would swing round it).
+    if ((want[0] || want[1]) && (!this.path || Math.hypot(this.path[this.pi][0] - b.pos[0], this.path[this.pi][1] - b.pos[1]) > 24 || burning)) this.heading = (Math.atan2(want[1], want[0]) * 180) / Math.PI;
     // Keep apart from teammates and you (only when actually bumping into them; it doesn't change where it faces).
     for (const o of g.bodies()) {
       if (o.c === this.c || !o.c.alive) continue;
@@ -560,6 +571,37 @@ export class Brain {
       }
     }
   }
+  // String pulling: the path runs through the middles of the nav areas' shared edges (a zig-zag), so head for the
+  // furthest of the next waypoints the bot can walk straight to (its body fits all the way, the ground is there with no
+  // drop or gap). It then walks, and faces, in straight lines and turns at real corners. Never past a ladder.
+  skipAhead() {
+    const b = this.bot, g = this.game, p = this.path;
+    let best = this.pi;
+    for (let k = this.pi + 1; k < Math.min(p.length, this.pi + 6); k++) {
+      if (p[k].ladder || p[k - 1].ladder || p[k + 1]?.ladder) break;
+      if (!this.walkable(b.pos, p[k])) break;
+      best = k;
+    }
+    this.pi = best;
+  }
+  walkable(from, to) {
+    const g = this.game, nav = g.nav;
+    const d = Math.hypot(to[0] - from[0], to[1] - from[1]);
+    if (d < 1) return true;
+    if (Math.abs(to[2] - from[2]) > 64) return false;
+    // The ground all the way, without drops or gaps (every 24 units).
+    let z = from[2];
+    for (let s = 24; s < d; s += 24) {
+      const x = from[0] + ((to[0] - from[0]) * s) / d, y = from[1] + ((to[1] - from[1]) * s) / d;
+      const h = nav.heightAt(x, y, z + 20);
+      if (h === null || Math.abs(h - z) > 20) return false;
+      z = h;
+    }
+    // The body fits (from knee to head height, so steps and stairs don't count).
+    const tr = g.collision.traceBox([from[0], from[1], from[2] + 20], [to[0], to[1], Math.max(from[2], to[2]) + 20], [-15, -15, 0], [15, 15, 40], FLAG_PLAYER);
+    return tr.fraction >= 1 && !tr.startsolid;
+  }
+
   // Ladders: at the foot (or the top) of one on the path, go straight up (or down) the rungs at CS2's climbing
   // speed, facing the ladder. Returns true while the bot is on a ladder.
   climb(dt, moving) {

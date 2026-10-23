@@ -53,18 +53,18 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
   rebind(root, bones, weaponRoot || skel);
   view.add(root);
 
-  // Stickers ride on the weapon's main bone.
+  // Stickers ride on the bone that moves the surface they're on (the magazine's for one on the mag, so it comes out
+  // with it on a reload), else the weapon's main bone.
   const db = model.userData.decalBone;
-  if (db && bones[db.name]) {
-    const toBone = db.matrixWorld.clone().invert();
-    model.traverse((o) => {
-      if (!o.userData.decal) return;
-      const d = new THREE.Mesh(o.geometry.clone().applyMatrix4(toBone), o.material);
-      d.renderOrder = o.renderOrder;
-      d.frustumCulled = false;
-      bones[db.name].add(d);
-    });
-  }
+  model.traverse((o) => {
+    if (!o.userData.decal) return;
+    const on = o.userData.bone && bones[o.userData.bone.name] ? o.userData.bone : db && bones[db.name] ? db : null;
+    if (!on) return;
+    const d = new THREE.Mesh(o.geometry.clone().applyMatrix4(on.matrixWorld.clone().invert()), o.material);
+    d.renderOrder = o.renderOrder;
+    d.frustumCulled = false;
+    bones[on.name].add(d);
+  });
 
   // Keeps the forearms twisting with the hands and the weapon merged onto them.
   const pose = () => {
@@ -88,19 +88,32 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
   return { rig, skel, bones, pose, dispose };
 }
 
-// The first-person inspect for an inspect model made by buildCS2Model. Returns { rig, mixer, action, duration }.
+// The first-person inspect for an inspect model made by buildCS2Model: { rig, mixer, action, actions, play(rare),
+// update, duration }. actions[0] is the usual inspect, the rest CS2's special ones (play(true) picks one of them).
 export async function buildFirstPerson(model, { gloves = null, renderer = null } = {}) {
   const weapon = model.userData.weapon;
   if (!weapon || !model.userData.root) throw new Error('First person needs the real CS2 model');
-  const { clip, arms } = await cs2FirstPerson(weapon);
-  const clipG = load(clip);
-  const vm = await assembleViewmodel(model, clipG.then((g) => g.scene), arms, { gloves, renderer });
-  const anim = (await clipG).animations[0];
+  const { clip, clips = [clip], arms } = await cs2FirstPerson(weapon);
+  const loads = clips.map((u) => load(u));
+  const vm = await assembleViewmodel(model, loads[0].then((g) => g.scene), arms, { gloves, renderer });
   const mixer = new THREE.AnimationMixer(vm.skel);
-  const action = mixer.clipAction(anim);
-  action.setLoop(THREE.LoopOnce, 1);
-  action.clampWhenFinished = true;
-  const update = (dt) => { mixer.update(dt); vm.pose(); };
-  update(0);
-  return { rig: vm.rig, mixer, action, update, dispose: vm.dispose, duration: anim.duration };
+  const actions = (await Promise.all(loads.map((p) => p.catch(() => null)))).map((g) => g?.animations[0]).filter(Boolean).map((anim) => {
+    const a = mixer.clipAction(anim);
+    a.setLoop(THREE.LoopOnce, 1);
+    a.clampWhenFinished = true;
+    return a;
+  });
+  const fp = { rig: vm.rig, mixer, actions, action: actions[0], dispose: vm.dispose, duration: actions[0].getClip().duration };
+  fp.hasRare = actions.length > 1;
+  // Plays the usual inspect, or one of the special ones.
+  fp.play = (rare = false) => {
+    const a = rare && fp.hasRare ? actions[1 + Math.floor(Math.random() * (actions.length - 1))] : actions[0];
+    for (const o of actions) if (o !== a) o.stop();
+    fp.action = a;
+    fp.duration = a.getClip().duration;
+    a.reset().play();
+  };
+  fp.update = (dt) => { mixer.update(dt); vm.pose(); };
+  fp.update(0);
+  return fp;
 }

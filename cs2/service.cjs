@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { CS2, findGameDir } = require('./pipeline.cjs');
-const { pickClip, playClips } = require('./firstperson.cjs');
+const { pickClip, inspectClips, playClips } = require('./firstperson.cjs');
 const { parseKV1 } = require('./kv.cjs');
 const play = require('./play.cjs');
 const { nameOf } = require('./vanity.cjs');
@@ -104,15 +104,19 @@ class CS2Service {
     return clips;
   }
 
-  // First-person inspect for a weapon id: CS2's inspect clip (skeleton + animation) and the first-person arms.
+  // First-person inspect for a weapon id: CS2's inspect clips (skeleton + animation; the usual one, then the special
+  // ones) and the first-person arms: { clip, clips: [urls], arms, name }.
   async firstPerson(weapon) {
     const cs2 = this.ensureCS2();
-    const clip = pickClip(String(weapon), await this.viewmodelClips());
-    if (!clip) throw new Error('No first-person inspect for ' + weapon);
-    const name = clip.split('/').pop().replace(/.vnmclip_c$/, '');
-    const clipFile = await cs2.exportGltf(clip, `fp/clips/${name}.glb`, { glb: true });
+    const all = await this.viewmodelClips();
+    const list = inspectClips(String(weapon), all);
+    if (!list.length) { const one = pickClip(String(weapon), all); if (one) list.push(one); }
+    if (!list.length) throw new Error('No first-person inspect for ' + weapon);
+    const files = [];
+    for (const clip of list) files.push(await cs2.exportGltf(clip, `fp/clips/${clip.split('/').pop().replace(/.vnmclip_c$/, '')}.glb`, { glb: true }));
     const armsFile = await cs2.exportGltf('weapons/models/shared/arms/weapon_arms.vmdl', 'fp/arms/weapon_arms.gltf', { materials: true });
-    return { clip: this.url(clipFile), arms: this.url(armsFile), name };
+    const clips = files.map((f) => this.url(f));
+    return { clip: clips[0], clips, arms: this.url(armsFile), name: list[0].split('/').pop().replace(/.vnmclip_c$/, '') };
   }
 
   // CS2's glove inspect animation (both hands posed on the viewmodel skeleton): { clip } glTF URL.

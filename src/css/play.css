@@ -272,3 +272,62 @@
 .ps-bind { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
 .ps-bind .btn { min-width: 92px; }
 .play-pause-box .hidden { display: none !important; }
+
+/* ---------- Play: the developer console (~), CS2's look ---------- */
+.dev-console {
+  position: absolute; left: 50%; top: 7%; transform: translateX(-50%); width: min(900px, 94%); height: 54%; z-index: 60;
+  display: flex; flex-direction: column; background: rgba(26, 28, 32, .97); border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 3px; box-shadow: 0 14px 44px rgba(0, 0, 0, .65); pointer-events: auto;
+  font-family: Consolas, 'Cascadia Mono', 'Courier New', monospace; font-size: 13px; color: #d7dbe0;
+}
+.dev-console.hidden { display: none; }
+.dev-console .con-head {
+  display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: rgba(255, 255, 255, .05);
+  border-bottom: 1px solid rgba(255, 255, 255, .08); font-family: var(--font-cond, sans-serif); font-size: 13px; letter-spacing: .1em; text-transform: uppercase;
+}
+.dev-console .con-x { background: none; border: 0; color: #a9b0ba; cursor: pointer; font-size: 14px; padding: 0 4px; }
+.dev-console .con-x:hover { color: #fff; }
+.dev-console .con-log { flex: 1; overflow-y: auto; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; line-height: 1.45; user-select: text; }
+.dev-console .con-log .cmd { color: #9fb7d9; }
+.dev-console .con-log .err { color: #ff7a6b; }
+.dev-console .con-log .dim { color: #8b929c; }
+.dev-console .con-suggest {
+  position: absolute; left: 8px; bottom: 46px; min-width: 320px; max-width: 70%; background: #23262b;
+  border: 1px solid rgba(255, 255, 255, .16); border-radius: 2px; box-shadow: 0 6px 18px rgba(0, 0, 0, .5);
+}
+.dev-console .con-suggest.hidden { display: none; }
+.dev-console .con-suggest div { padding: 3px 8px; cursor: pointer; }
+.dev-console .con-suggest div:hover { background: rgba(255, 255, 255, .08); }
+.dev-console .con-suggest span { color: #8fe39a; }
+.dev-console .con-suggest i { color: #ffae5a; font-style: normal; font-size: 11px; }
+.dev-console .con-row { display: flex; gap: 6px; padding: 8px; border-top: 1px solid rgba(255, 255, 255, .08); }
+.dev-console .con-input {
+  flex: 1; background: #121417; border: 1px solid rgba(255, 255, 255, .14); color: #e8ebef; padding: 6px 8px;
+  font: inherit; border-radius: 2px; outline: none;
+}
+.dev-console .con-input:focus { border-color: rgba(255, 255, 255, .4); }
+.dev-console .con-go {
+  background: #3a3f46; border: 1px solid rgba(255, 255, 255, .14); color: #dfe3e8; padding: 0 14px; border-radius: 2px; cursor: pointer;
+  font-family: var(--font-cond, sans-serif); text-transform: uppercase; letter-spacing: .08em; font-size: 12px;
+}
+.dev-console .con-go:hover { background: #4a5059; }
+
+/* ---------- Play: CS2's weapon list on the right when you switch weapons ---------- */
+.play-hud .wsel {
+  position: absolute; right: 18px; bottom: 132px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+  opacity: 0; transition: opacity .35s ease; pointer-events: none;
+}
+.play-hud .wsel.show { opacity: 1; transition: opacity .08s ease; }
+.play-hud .wsel .ws { display: flex; align-items: center; gap: 10px; padding: 4px 8px 4px 14px; background: linear-gradient(270deg, rgba(0, 0, 0, .55), rgba(0, 0, 0, .25) 70%, transparent); position: relative; }
+.play-hud .wsel .ws .icons { display: flex; align-items: center; gap: 8px; }
+.play-hud .wsel .ws img { height: 30px; max-width: 150px; object-fit: contain; opacity: .38; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .6)); }
+.play-hud .wsel .ws.nades img { height: 24px; }
+.play-hud .wsel .ws img.on { opacity: 1; }
+.play-hud .wsel .ws em { font-style: normal; font-family: var(--font-cond); font-size: 15px; letter-spacing: .06em; text-transform: uppercase; color: rgba(255, 255, 255, .45); }
+.play-hud .wsel .ws em.on { color: #fff; }
+.play-hud .wsel .ws b { min-width: 14px; text-align: center; font-family: var(--font-cond); font-size: 15px; color: rgba(255, 255, 255, .45); }
+.play-hud .wsel .ws.on b { color: #e8c565; }
+.play-hud .wsel .ws .name {
+  position: absolute; right: 30px; top: -15px; font-family: var(--font-cond); font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
+  color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .8); white-space: nowrap;
+}

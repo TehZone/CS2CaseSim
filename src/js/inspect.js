@@ -482,10 +482,14 @@ class InspectView {
     if (this.pivot) this.pivot.visible = true;
     if (this.model) this.applyLighting();
   }
+  // The first-person inspect: now and then (about one in four) one of CS2's special inspects (the Deagle's spin, the
+  // Falchion's and Skeleton's tricks); inspecting again while one plays always shows a special one.
   playFirstPerson() {
-    if (!this.fp) return;
-    this.fp.action.reset();
-    this.fp.action.play();
+    const fp = this.fp;
+    if (!fp) return;
+    if (!fp.play) { fp.action.reset(); fp.action.play(); return; }
+    const playing = fp.action.isRunning() && fp.action.time < fp.duration - 0.05;
+    fp.play(fp.hasRare && (playing || Math.random() < 0.25));
   }
 
   // Shows a CS2 map behind the item ('studio' for the plain inspect room). Resolves when it's ready.
