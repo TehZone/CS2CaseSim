@@ -5,6 +5,25 @@ import { assembleViewmodel } from '../cs2/firstperson.js';
 import { loadGltf } from '../cs2/rig.js';
 import { buildCS2Model } from '../cs2/skin.js';
 
+// The weapon's reflections, stronger than the map's sky alone gives: metal (blades, the Molotov's lighter) shows only
+// what it reflects, and in the shade, without the sun, it went near black. CS2's own reflections come from bright
+// captures of the map around you.
+const REFLECT = 3;
+function strongerReflections(m) {
+  if (!m?.isMeshStandardMaterial || m.userData.vmReflect) return;
+  m.userData.vmReflect = true;
+  const prev = m.onBeforeCompile, key = m.customProgramCacheKey;
+  m.onBeforeCompile = (sh, r) => {
+    prev?.call(m, sh, r);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
+	#if defined( RE_IndirectSpecular )
+		radiance *= ${REFLECT.toFixed(1)};
+	#endif`);
+  };
+  m.customProgramCacheKey = () => (key?.call(m) || '') + 'vmreflect';
+  m.needsUpdate = true;
+}
+
 // data: cs2Play('weapon', id) -> { clips: { role: url | [urls] }, arms }.
 export async function buildViewmodel(item, def, data, { gloves = null, renderer }) {
   const model = await buildCS2Model(item, def, renderer);
@@ -14,6 +33,7 @@ export async function buildViewmodel(item, def, data, { gloves = null, renderer 
   const base = loaded[entries.findIndex(([r]) => r === 'idle')] || loaded[0];
   const vm = await assembleViewmodel(model, base.scene, data.arms, { gloves, renderer });
   vm.rig.traverse((o) => { if (o.isMesh) { o.frustumCulled = false; o.castShadow = false; o.receiveShadow = true; } });
+  model.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) strongerReflections(m); });
 
   const mixer = new THREE.AnimationMixer(vm.skel);
   const clips = {};

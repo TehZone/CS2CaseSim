@@ -52,7 +52,9 @@ skins, gloves and knife. Four modes:
 
 What's in a match:
 - Grenades: HE (up to 99 damage over 350 units), flashbangs (blind by how directly you look and how close you are, with
-  CS2's burned-in afterimage), molotovs and incendiaries (7 seconds of fire), decoys (fake gunfire), and CS2's
+  CS2's burned-in afterimage), molotovs and incendiaries (7 seconds of fire spreading along the ground from where it
+  breaks, not through walls: licking flame tongues, embers, dark smoke, a scorch and glow on the ground and orange
+  light on the walls and players around it), decoys (fake gunfire), and CS2's
   volumetric smoke: it floods the space it lands in (around corners, through doors, never through walls), bullets punch
   tunnels through it and HE grenades blow holes that refill; sight lines (yours and the bots') go by how much smoke they
   cross, and a smoke puts out fires. Thrown like CS2: Mouse1 full throw, Mouse2 underhand, both a medium throw, plus
@@ -107,7 +109,10 @@ What's in a match:
   sv_cheats 1 unlocks the cheats (god, noclip, give, impulse 101, host_timescale, sv_gravity, sv_infinite_ammo,
   bot_stop, bot_dont_shoot); the rest work anyway (mp_restartgame, mp_roundtime, mp_freezetime, mp_buytime,
   mp_buy_anywhere, mp_startmoney, mp_maxmoney, bot_difficulty, bot_kill, viewmodel_*, cl_crosshair*, sensitivity,
-  volume, fps_max, cl_drawhud, r_drawviewmodel, status...).
+  volume, fps_max, cl_drawhud, r_drawviewmodel, status...), and CS2's binds: bind <key> <command> (bind key alone
+  shows it), unbind, unbindall, binddefaults, key_listboundkeys. Any key, mouse button or the mouse wheel; a wheel
+  notch on a + command presses and releases it in one tick, so `bind mwheeldown +jump` scroll-jumps (bunny hops) like
+  CS2. Binds are saved with your settings.
 - CS2's weapon list on the right when you switch weapons, with CS2's icons (also in the buy menu and kill feed).
 - Settings in the lobby: your crosshair (classic or static, colour, length, gap, thickness, outline, dot; live preview),
   the viewmodel (field of view, offsets, CS2's presets), every key, music and radio volume, the fps counter.
@@ -126,7 +131,7 @@ What's in a match:
   punch and view punch), CS2's viewmodel animations (draw, idle, shoot, reload, inspect, silencer, knife slashes and
   stabs) and CS2's sounds. Scoped rifles zoom with CS2's zoom levels.
 - Bots are CS2 agent models with per-bone hitboxes (head, chest, stomach, arms, legs) and armor.
-- Keys (rebindable): WASD, Space, Ctrl (or C) crouch, Shift walk, Mouse1/Mouse2, R, F inspect, B buy, E defuse/pick up,
+- Keys (rebindable in the settings, or with bind in the console): WASD, Space, Ctrl (or C) crouch, Shift walk, Mouse1/Mouse2, R, F inspect, B buy, E defuse/pick up,
   G drop, 1/2/3 (3 again for the Zeus), 4 (grenades), 5 (the bomb: hold Mouse1 in a site to plant), Q and the mouse
   wheel switch weapons, Z/X/V radio, Tab scores, Esc pause. Mouse sensitivity uses CS2's scale, so your CS2 sensitivity
   feels the same.

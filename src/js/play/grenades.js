@@ -7,6 +7,7 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { FLAG_GRENADE, FLAG_BULLET } from './collision.js';
 import { toGl } from './world.js';
 import { SmokeSystem } from './smoke.js';
+import { FireArt, GroundFire } from './fire.js';
 
 export const NADES = {
   weapon_hegrenade: { kind: 'he', name: 'HE Grenade', short: 'HE', fuse: 1.5, bounce: 'HEGrenade.Bounce', boom: 'BaseGrenade.Explode', pin: 'HEGrenade.PullPin_Grenade', throw: 'HEGrenade.Throw' },
@@ -26,6 +27,7 @@ export const isNade = (id) => !!NADES[id];
 
 const GRAVITY = 800 * 0.4, RESTITUTION = 0.45;
 const FIRE_RADIUS = 140, FIRE_TIME = 7, FIRE_DPS = 40, HE_RADIUS = 350;
+const FIRE_LIGHT = 6; // the fire's light (candela) on the walls and players around it
 
 // CS2's throw: the aim is raised (pitch -10 + pitch * 80/90), speed 750 x 0.9 scaled by strength, plus 1.25x your velocity.
 export function throwVelocity(pitch, yaw, strength, vel = [0, 0, 0]) {
@@ -48,23 +50,6 @@ export function aimThrow(from, to, strength, preferHigh = false) {
   return ((10 - (angle * 180) / Math.PI) * 90) / 80;
 }
 
-function softTexture(inner, outer, size = 128, noise = 0) {
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  const g = c.getContext('2d');
-  const r = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  r.addColorStop(0, inner); r.addColorStop(0.55, inner.replace(/[\d.]+\)$/, '0.55)')); r.addColorStop(1, outer);
-  g.fillStyle = r; g.fillRect(0, 0, size, size);
-  if (noise) {
-    const img = g.getImageData(0, 0, size, size);
-    for (let i = 0; i < img.data.length; i += 4) img.data[i + 3] *= 1 - noise + Math.random() * noise;
-    g.putImageData(img, 0, 0);
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
 export class Grenades {
   constructor(game) {
     this.game = game;
@@ -72,7 +57,13 @@ export class Grenades {
     game.scene.add(this.group);
     this.flying = []; this.fires = []; this.decoys = [];
     this.volume = new SmokeSystem(game);
-    this.fireTex = softTexture('rgba(255,210,120,1)', 'rgba(255,90,10,0)', 64);
+    this.fireArt = new FireArt();
+    // One light for the fire nearest you, there from the start (adding a light later recompiles every material).
+    this.fireLight = new THREE.PointLight(0xff7a2a, 0, 12, 2);
+    this.group.add(this.fireLight);
+    // A fire with nothing to show, so its shaders compile with the map's (taken out on the first frame).
+    this.warmFire = new GroundFire(this.fireArt, new THREE.Vector3(0, -1000, 0), [[0, -1000, 0, 0]], 1, -10);
+    this.group.add(this.warmFire.obj);
   }
 
   // A grenade leaves someone's hand.
@@ -241,26 +232,25 @@ export class Grenades {
       g.sounds.play('Molotov.Extinguish', { pos, listener: g });
       return;
     }
-    const obj = new THREE.Group();
-    const flames = [];
-    for (let i = 0; i < 34; i++) {
+    // Where the flames stand: on whatever is below (the ground, a box, the stairs), spread along it from where it
+    // broke (not through walls), and not up or down a drop.
+    const spots = [], from = [pos[0], pos[1], pos[2] + 24];
+    for (let i = 0; i < 200 && spots.length < 84; i++) {
       const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * FIRE_RADIUS * 0.95;
-      const x = pos[0] + Math.cos(a) * r, y = pos[1] + Math.sin(a) * r;
-      const h = g.nav.heightAt(x, y, pos[2] + 30);
-      if (h === null || Math.abs(h - pos[2]) > 40) continue;
-      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.fireTex, color: 0xffb060, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
-      s.position.copy(toGl([x, y, h + 14]));
-      s.userData = { base: 0.6 + Math.random() * 0.7, phase: Math.random() * 10, y: s.position.y };
-      obj.add(s);
-      flames.push(s);
+      const dx = Math.cos(a), dy = Math.sin(a);
+      if (r > 8 && g.collision.raycast(from, [dx, dy, 1e-6], r, FLAG_BULLET)) continue;
+      const x = pos[0] + dx * r, y = pos[1] + dy * r;
+      const hit = g.collision.raycast([x, y, pos[2] + 40], [0, 0, -1], 90, FLAG_BULLET);
+      if (!hit || Math.abs(40 - hit.t) > 40) continue;
+      spots.push([...toGl([x, y, pos[2] + 40 - hit.t]).toArray(), r / FIRE_RADIUS]);
     }
-    this.group.add(obj);
+    const art = new GroundFire(this.fireArt, toGl(pos), spots, FIRE_TIME, g.now);
+    this.group.add(art.obj);
     const loop = g.sounds.play('Inferno.Loop', { pos, listener: g, volume: 0.6 });
-    this.fires.push({ c: n.c, id: n.id, pos, radius: FIRE_RADIUS, until: g.now + FIRE_TIME, nextHurt: g.now, obj, flames, loop });
+    this.fires.push({ c: n.c, id: n.id, pos, radius: FIRE_RADIUS, until: g.now + FIRE_TIME, nextHurt: g.now, art, loop });
   }
   endFire(f, i) {
-    this.group.remove(f.obj);
-    f.obj.traverse((o) => o.material?.dispose());
+    f.art.dispose();
     Promise.resolve(f.loop).then((src) => { try { src?.stop(); } catch {} });
     this.game.sounds.play('Inferno.FadeOut', { pos: f.pos, listener: this.game, volume: 0.5 });
     this.fires.splice(i, 1);
@@ -269,21 +259,23 @@ export class Grenades {
   // Does a line pass through enough smoke to hide what's behind it?
   smokeBlocks(a, b) { return this.volume.active && this.volume.blocks(a, b); }
   inFire(p) { return this.fires.some((f) => Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius + 20 && Math.abs(p[2] - f.pos[2]) < 70); }
-  fireNear(p, r = 0) { return this.fires.find((f) => Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius + r) || null; }
+  // A fire on your level (not one on a ledge above or a floor below).
+  fireNear(p, r = 0) { return this.fires.find((f) => Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius + r && Math.abs(p[2] - f.pos[2]) < 70) || null; }
 
-  // Animation of clouds and flames.
+  // Animation of clouds and flames, and the light of the fire nearest you (flickering).
   update(dt) {
-    const now = this.game.now;
+    const g = this.game, now = g.now;
     this.volume.update();
+    this.warmFire?.obj.removeFromParent();
+    let lit = null, best = Infinity;
     for (const f of this.fires) {
-      const fade = Math.min(1, (f.until - now) / 0.6);
-      for (const s of f.flames) {
-        const k = 0.75 + 0.35 * Math.sin(now * 13 + s.userData.phase) * Math.sin(now * 7.3 + s.userData.phase * 2);
-        s.scale.set(s.userData.base * k * 0.8, s.userData.base * k * 1.25, 1);
-        s.position.y = s.userData.y + 0.08 * k;
-        s.material.opacity = 0.85 * fade;
-      }
+      f.art.update(now);
+      const d = f.art.center.distanceToSquared(g.camera.position);
+      if (d < best) { best = d; lit = f; }
     }
+    const L = this.fireLight;
+    L.intensity = lit ? FIRE_LIGHT * lit.art.level(now) * (0.85 + 0.15 * Math.sin(now * 17) * Math.sin(now * 7.7 + 1)) : 0;
+    if (lit) { L.position.copy(lit.art.center); L.position.y += 1.1; }
   }
 
   clear() {
@@ -294,5 +286,5 @@ export class Grenades {
     this.flying = []; this.fires = []; this.decoys = [];
   }
 
-  dispose() { this.clear(); this.group.removeFromParent(); this.volume.dispose(); this.fireTex.dispose(); }
+  dispose() { this.clear(); this.group.removeFromParent(); this.volume.dispose(); this.warmFire.dispose(); this.fireArt.dispose(); }
 }

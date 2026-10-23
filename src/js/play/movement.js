@@ -47,7 +47,8 @@ export class PlayerMovement {
     this.categorize();
   }
 
-  // One movement tick. cmd: { forward, side (-1..1, +side = right), yaw, pitch (degrees), jump, duck, walk, maxSpeed }.
+  // One movement tick. cmd: { forward, side (-1..1, +side = right), yaw, pitch (degrees), jump, jumpPress, duck, walk, maxSpeed }.
+  // jumpPress: a fresh press this tick even though jump was down the tick before (a mouse wheel notch, see Input).
   tick(dt, cmd) {
     this.duck(dt, cmd.duck);
     if (this.ladderMove(cmd)) {
@@ -69,8 +70,8 @@ export class PlayerMovement {
     const wishSpeed = wl > 0 ? maxSpeed * Math.min(1, wl) : 0;
     if (wl > 0) wish = [wish[0] / wl, wish[1] / wl, 0];
 
-    // Jump (needs a fresh press: CS2 has no auto bunny hop)
-    if (cmd.jump && !this.jumpHeld && this.onGround) {
+    // Jump (needs a fresh press: CS2 has no auto bunny hop, but every mouse wheel notch is one)
+    if ((cmd.jumpPress || (cmd.jump && !this.jumpHeld)) && this.onGround) {
       this.velocity[2] = MOVE.jumpImpulse;
       this.onGround = false;
       this.jumped = true;
@@ -122,7 +123,7 @@ export class PlayerMovement {
     const n = tr.normal;
     this.ladderNormal = n;
     const onFloor = this.onGround;
-    if (cmd.jump && !this.jumpHeld) {
+    if (cmd.jumpPress || (cmd.jump && !this.jumpHeld)) {
       this.onLadder = false;
       this.velocity = n.map((v) => v * MOVE.ladderJump);
       this.onGround = false;

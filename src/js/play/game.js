@@ -10,7 +10,7 @@ import { D } from '../data.js';
 import { CollisionWorld, FLAG_BULLET, FLAG_PLAYER } from './collision.js';
 import { PlayerMovement, HULL_STAND as BOT_HULL } from './movement.js';
 import { loadWorld, toGl } from './world.js';
-import { Input } from './input.js';
+import { Input, bindTable } from './input.js';
 import { SoundBank } from './sound.js';
 import { buildViewmodel } from './viewmodel.js';
 import { Arsenal, Gun, basis } from './weapons.js';
@@ -113,8 +113,9 @@ export class Game {
     this.vmRoot = new THREE.Group();
     this.vmRoot.rotation.order = 'YXZ';
     this.vmScene.add(this.vmRoot);
-    this.input = new Input(this.canvas, { sensitivity, binds: settings.binds, onLockChange: (locked) => this.lockChanged(locked) });
+    this.input = new Input(this.canvas, { sensitivity, binds: bindTable(settings), onLockChange: (locked) => this.lockChanged(locked) });
     this.input.onKey = (code, down) => this.menuKey(code, down);
+    this.input.onCommand = (c) => this.command(c);
     this.baseSensitivity = sensitivity;
     this.hud = new Hud(root);
     this.hud.setCrosshairStyle(settings.crosshair);
@@ -498,8 +499,22 @@ export class Game {
     this.buyMenu.close();
     this.input.lock().finally(() => { this.input.menu = false; });
   }
+  // Your binds changed (the console's bind, unbind...): used at once and saved with your settings.
+  setBinds(table) {
+    this.input.setBinds(table);
+    this.settings.onBinds?.(table);
+  }
+  // A bound command the game runs itself (see Input): the console, the buy menu, chat, the radio, any console command.
+  command(c) {
+    if (c === 'console') { this.toggleConsole(); return; }
+    if (!this.me || this.console.isOpen) return;
+    if (c === 'chatAll' || c === 'chatTeam') { if (!this.buyMenu.isOpen) this.openChat(c === 'chatTeam'); return; }
+    if (/^radio\d$/.test(c)) { if (this.radio && this.me.alive && !this.buyMenu.isOpen && !this.ffa) this.radio.open(['KeyZ', 'KeyX', 'KeyV'][c[5] - 1]); return; }
+    if (c === 'buy') { if (this.me.alive && this.match) { if (this.buyMenu.isOpen) this.closeBuyMenu(); else this.openBuyMenu(); } return; }
+    this.console.run(c);
+  }
   menuKey(code, down) {
-    if (code === 'Backquote') { if (down) this.toggleConsole(true); return true; }
+    if (code === 'Backquote' || this.input.is('console', code)) { if (down) this.toggleConsole(true); return true; }
     if (!down) return false;
     if ((this.input.is('chatAll', code) || this.input.is('chatTeam', code)) && this.me && !this.buyMenu.isOpen) { this.openChat(this.input.is('chatTeam', code)); return true; }
     // Radio: Z commands, X reports, V responses; a number picks a line.
@@ -951,7 +966,7 @@ export class Game {
     const cmd = frozen ? { forward: 0, side: 0, yaw: inp.yaw, pitch: inp.pitch, jump: false, duck: inp.held('duck') && me.alive, walk: false, maxSpeed: this.arsenal.maxSpeed() } : {
       forward: (inp.held('forward') ? 1 : 0) - (inp.held('back') ? 1 : 0),
       side: (inp.held('right') ? 1 : 0) - (inp.held('left') ? 1 : 0),
-      yaw: inp.yaw, pitch: inp.pitch, jump: inp.held('jump'), duck: inp.held('duck'), walk: inp.held('walk'),
+      yaw: inp.yaw, pitch: inp.pitch, jump: inp.held('jump'), jumpPress: inp.notched('jump'), duck: inp.held('duck'), walk: inp.held('walk'),
       maxSpeed: this.arsenal.maxSpeed(),
     };
     if (me.alive) {
@@ -991,6 +1006,7 @@ export class Game {
     this.nades.tick(TICK);
     this.drops.tick(TICK);
     this.balls.tick(TICK);
+    this.input.endTick(); // a mouse wheel notch's +jump (or other + command) lets go
     this.pickups();
     // The planted bomb beeps faster as it gets closer to going off.
     if (m.phase === 'planted' && this.now >= m.bomb.beepAt) {
@@ -1676,9 +1692,10 @@ export class Game {
       const c = probes.cube(camEye, this.vmCube), PI = Math.PI;
       this.vmHemi.color.setRGB(c[6] * PI, c[7] * PI, c[8] * PI);
       this.vmHemi.groundColor.setRGB(c[15] * PI, c[16] * PI, c[17] * PI);
-      // The sky's reflections dim indoors with the light.
+      // The sky's reflections dim indoors with the light. Metal (a blade, the Molotov's lighter) only shows what it
+      // reflects, so they're strong enough for it to read as metal, not black.
       const lum = (c[6] + c[7] + c[8]) / 3;
-      this.vmScene.environmentIntensity = 0.3 * Math.min(1, Math.max(0.1, lum / 0.45));
+      this.vmScene.environmentIntensity = 0.5 * Math.min(1, Math.max(0.15, lum / 0.45));
     }
     this.balls.update(this.paused ? 1 : this.acc / TICK, probes);
     this.updatePings();

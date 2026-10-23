@@ -124,7 +124,7 @@ async function start() {
   overlay.querySelector('[data-cancel]').addEventListener('click', leave);
   overlay.querySelector('[data-leave]').addEventListener('click', leave);
   overlay.querySelector('[data-resume]').addEventListener('click', () => session?.game.resume());
-  const game = new Game(overlay, { map: p.map, mode: p.mode, site: p.site, ffa: p.ffa !== 'team', minutes: p.minutes, team: p.team, teamSize: p.teamSize, difficulty: p.difficulty, length: p.length, overtime: p.overtime !== 'off', friendlyFire: p.friendlyFire === 'on', sensitivity: p.sensitivity, quality: p.quality, settings: matchSettings(p), onStatus: (m) => { statusEl.textContent = m; } });
+  const game = new Game(overlay, { map: p.map, mode: p.mode, site: p.site, ffa: p.ffa !== 'team', minutes: p.minutes, team: p.team, teamSize: p.teamSize, difficulty: p.difficulty, length: p.length, overtime: p.overtime !== 'off', friendlyFire: p.friendlyFire === 'on', sensitivity: p.sensitivity, quality: p.quality, settings: { ...matchSettings(p), onBinds: (t) => { const q = prefs(); q.keybinds = t; savePrefs(q); } }, onStatus: (m) => { statusEl.textContent = m; } });
   session = { game, overlay };
   const showStats = () => {
     const me = game.me, m = game.match;

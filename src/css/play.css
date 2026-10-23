@@ -371,3 +371,10 @@
 @keyframes rankFlag { from { opacity: 0; transform: translateX(-30%); } }
 @keyframes rankHalo { 0% { opacity: 0; scale: .4; } 30% { opacity: 1; scale: 1.15; } 100% { opacity: .75; scale: 1; } }
 @keyframes rankPop { from { scale: .2; opacity: 0; } }
+
+/* The settings' keys: every key bound to an action as a chip (✕ unbinds it), then + to add one. */
+.ps-bind .ps-keys { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.ps-key { padding: 2px 7px; border: 1px solid rgba(255, 255, 255, .18); background: rgba(255, 255, 255, .06); color: inherit; font: inherit; font-size: 12px; cursor: pointer; border-radius: 3px; }
+.ps-key i { font-style: normal; opacity: .55; margin-left: 2px; }
+.ps-key:hover { border-color: #ff5a4f; } .ps-key:hover i { opacity: 1; color: #ff5a4f; }
+.ps-bind .ps-add { min-width: 28px; }

@@ -513,10 +513,10 @@ async function runPlaySmoke(win) {
     const out = {};
     if (!g.me.alive) { g.me.alive = true; g.me.health = 100; g.deathCam = null; } // shot by then: back on your feet to walk
     g.balls.reset(); stand(-70);
-    g.input.keys.add('KeyW');
+    g.input.keys.add('w');
     let kicked = 0;
     for (let i = 0; i < 192; i++) { g.tick(); kicked = Math.max(kicked, speed()); }
-    g.input.keys.delete('KeyW');
+    g.input.keys.delete('w');
     out.walk = { kickedTo: kicked, ballAt: rel(), youAt: Math.round(g.player.origin[0] - b.spawn[0]), gap: Math.round(b.pos[0] - g.player.origin[0]) };
     g.balls.reset(); stand(-200);
     const eye = g.player.eye(), d = b.pos.map((v, k) => v - eye[k]), l = Math.hypot(...d);
@@ -568,6 +568,45 @@ async function runPlaySmoke(win) {
   await js(`window.__playGame.nades.volume.clear()`);
   await wait(3000);
   console.log('SMOKE play smoke fps', fpsBefore, '-> with smoke', fpsSmoke, '-> cleared', JSON.parse(await state()).fps, await js(`window.__playGame.renderer.domElement.width + 'x' + window.__playGame.renderer.domElement.height`));
+  // Scroll jump, bound from the console like CS2: every wheel notch (what the wheel listener calls) is a jump, so
+  // spinning it hops again on each landing; binddefaults puts the wheel back on the weapon switch. Your saved binds
+  // are put back afterwards.
+  console.log('SMOKE play scroll jump', await js(`(() => { const saved = localStorage.getItem('cs2sim.play'); try {
+    const g = window.__playGame, p = g.player, gun = g.arsenal.gun?.id;
+    g.console.run('bind mwheelup +jump; bind mwheeldown +jump');
+    const bound = [g.input.actionOf('mwheelup'), g.input.actionOf('mwheeldown')];
+    for (let i = 0; i < 64 && !p.onGround; i++) g.tick();
+    let hops = 0, was = p.onGround;
+    for (let i = 0; i < 64 * 4; i++) { if (i % 2 === 0) g.input.notch(i % 4 ? 'mwheelup' : 'mwheeldown'); g.tick(); if (was && !p.onGround && p.velocity[2] > 0) hops++; was = p.onGround; }
+    const sameGun = g.arsenal.gun?.id === gun;
+    g.console.run('binddefaults');
+    for (let i = 0; i < 64 && !p.onGround; i++) g.tick();
+    g.input.notch('mwheeldown'); g.tick();
+    return JSON.stringify({ bound, hopsIn4s: hops, sameGun, afterDefaults: { wheel: g.input.actionOf('mwheeldown'), jumped: p.velocity[2] > 0 } });
+  } catch (e) { return 'failed: ' + e.message; } finally { if (saved === null) localStorage.removeItem('cs2sim.play'); else localStorage.setItem('cs2sim.play', saved); } })()`));
+  // A molotov in your hand (the bottle in the right hand, not inside the camera) and its fire in front of you.
+  await js(`window.__playGame.giveItem('weapon_molotov')`);
+  await wait(2500);
+  console.log('SMOKE play molotov in hand', await js(`(async () => { try {
+    const THREE = await import('three'); const g = window.__playGame, gun = g.arsenal.gun;
+    if (gun?.id !== 'weapon_molotov') return 'holding ' + gun?.id;
+    gun.vm.rig.updateMatrixWorld(true);
+    const eye = new THREE.Vector3(); g.vmCamera.getWorldPosition(eye);
+    const cm = (n) => gun.vm.bones[n] ? Math.round(gun.vm.bones[n].getWorldPosition(new THREE.Vector3()).distanceTo(eye) * 100) : null;
+    let bottle = null; gun.vm.rig.traverse((o) => { if (!bottle && o.isSkinnedMesh && /molotov/i.test(o.name)) bottle = o; });
+    const bone = bottle?.skeleton.bones.find((b) => /^molotov(_\\d+)?$/.test(b.name))?.name;
+    return JSON.stringify({ bottleBone: bone, bottleCm: cm(bone), handCm: cm('hand_R') });
+  } catch (e) { return 'failed: ' + e.message; } })()`));
+  await shot('molotov-hand');
+  await js(`(() => { const g = window.__playGame, eye = g.player.eye(), yr = window.__smokeDir * Math.PI / 180;
+    g.input.yaw = window.__smokeDir; g.input.pitch = 12;
+    g.nades.fire({ pos: [eye[0] + Math.cos(yr) * 260, eye[1] + Math.sin(yr) * 260, eye[2]], c: g.me, id: 'weapon_molotov', info: { name: 'Molotov' } }); })()`);
+  await wait(2500);
+  await shot('molotov-fire');
+  console.log('SMOKE play molotov fire', await js(`(() => { const g = window.__playGame, f = g.nades.fires[0];
+    return f ? JSON.stringify({ flames: f.art.obj.children[0].geometry.instanceCount, light: +g.nades.fireLight.intensity.toFixed(1) }) : 'no fire'; })()`), 'fps', JSON.parse(await state()).fps);
+  await wait(6000);
+  console.log('SMOKE play molotov burnt out', await js(`(() => { const n = window.__playGame.nades; return JSON.stringify({ fires: n.fires.length, light: n.fireLight.intensity, left: n.group.children.length }); })()`));
   // Fast-forward: follow a teammate (you stand still) until the round ends.
   await js(`(() => { const g = window.__playGame; g.kill(g.me, null, { name: 'World' }, false); })()`);
   await wait(4000);

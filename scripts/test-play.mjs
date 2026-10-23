@@ -6,6 +6,8 @@ import { PlayerMovement, MOVE } from '../src/js/play/movement.js';
 import { Match, Combatant, SHORT_RULES } from '../src/js/play/match.js';
 import { SmokeField } from '../src/js/play/smoke.js';
 import { Deathmatch, ARMS_RACE } from '../src/js/play/modes.js';
+import * as THREE from 'three';
+import { flameAtlas, GroundFire, FireArt } from '../src/js/play/fire.js';
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) pass++; else { fail++; console.log('FAIL', msg); } };
@@ -420,6 +422,34 @@ function fakeGame() {
   ok(always && never && !Arsenal.prototype.rare.call({ game: { cv: { cl_inspect_rare: 1 } } }, { vm: { has: () => false } }, 'inspectRare'), 'special inspects: cl_inspect_rare 1 always, -1 never (and none for a weapon without one)');
 }
 
+// ---- CS2's binds: key names, older saves' keys, scroll jump, mouse buttons, console commands -------------------------
+{
+  const { Input, keyName, bindTable, DEFAULT_BINDS } = await import('../src/js/play/input.js');
+  ok(['KeyW', 'Space', 'ControlLeft', 'Numpad1', 'F5', 'Digit3', 'Backquote'].map(keyName).join(' ') === 'w space ctrl kp_end f5 3 `', 'binds: CS2 key names');
+  const old = bindTable({ binds: { jump: 'KeyJ' } });
+  ok(old.j === '+jump' && !old.space && old.w === '+forward', "binds: an older save's keys carry over (jump on J instead of Space)");
+  // An Input without the page's events: the binds, the held keys and the wheel.
+  const make = (binds) => { const i = Object.create(Input.prototype); Object.assign(i, { keys: new Set(), pressed: new Set(), pulses: new Set(), buttons: 0, clicked: 0, wheel: 0 }); i.setBinds(binds); return i; };
+  const inp = make({ ...DEFAULT_BINDS, mwheelup: '+jump', mwheeldown: '+jump', f1: 'say gg' });
+  inp.notch('mwheeldown');
+  const during = inp.held('jump'); inp.endTick();
+  const after = inp.held('jump');
+  inp.notch('mwheelup');
+  ok(during && !after && inp.held('jump'), 'binds: a wheel notch on +jump is one tick of jump (press and release), so it bunny hops');
+  inp.endTick();
+  inp.down('space'); const sp = inp.held('jump'); inp.up('space');
+  ok(sp && !inp.held('jump'), 'binds: space still holds +jump while it is down');
+  inp.down('mouse1'); const fire = inp.buttons & 1; inp.up('mouse1');
+  const cmds = []; inp.onCommand = (c) => cmds.push(c); inp.down('f1'); inp.down('b');
+  ok(fire && !(inp.buttons & 1) && inp.takeClicked() & 1 && cmds.join() === 'say gg,buy', 'binds: mouse1 fires (+attack), F1 runs a console command (say gg), B the buy menu');
+  // Scroll jumping: a notch every tick jumps again on every landing; holding the jump key jumps once.
+  const hop = (jumpPress) => { const p = new PlayerMovement(W, [0, 1400, 0]); let n = 0; for (let i = 0; i < 64 * 3; i++) { const g0 = p.onGround; p.tick(1 / 64, { forward: 1, side: 0, yaw: 0, jump: true, jumpPress, maxSpeed: 250 }); if (g0 && p.velocity[2] > 250) n++; } return n; };
+  const spun = hop(true), heldKey = hop(false);
+  ok(spun >= 4 && heldKey === 1, `binds: scroll jumping bunny hops (${spun} jumps in 3 s), holding jump doesn't (${heldKey})`);
+  const wheel = make(DEFAULT_BINDS); wheel.notch('mwheeldown'); wheel.notch('mwheeldown'); wheel.notch('mwheelup');
+  ok(wheel.takeWheel() === 1 && !wheel.held('jump'), 'binds: by default the wheel changes weapon (invnext / invprev)');
+}
+
 // ---- nav links and what bots can climb ------------------------------------------------------------------------------
 {
   const { NavMesh } = await import('../src/js/play/nav.js');
@@ -440,6 +470,30 @@ function fakeGame() {
   ok(nav.path([50, 150, 80], [50, 50, 0]) !== null, 'nav: but you can drop down from it');
   ok(nav.groundAt(150, 50, 0) === null && nav.groundAt(150, 50, 0, 74) === 50 && nav.groundAt(50, 150, 0, 74) === null && nav.groundAt(-50, 50, 0) === 16,
     'nav: the ground a step (or a jump) up from where you are');
+}
+
+// Molotov fire: the flame flipbook and a fire's life.
+{
+  const a = flameAtlas(), W = a.width, CH = a.height / 4, CW = W / 8;
+  let edges = 0, lit = 0;
+  for (let cy = 0; cy < 4; cy++) for (let x = 0; x < W; x++) { // the root and tip rows hidden
+    edges = Math.max(edges, a.data[((cy * CH) * W + x) * 4 + 1], a.data[((cy * CH + CH - 1) * W + x) * 4 + 1]);
+  }
+  for (let i = 0; i < a.data.length; i += 4) if (a.data[i] > 128) lit++;
+  ok(edges < 16, 'fire: flipbook cells fade out at the root and the tip (no bleeding between frames)');
+  ok(lit > W * a.height * 0.03 && lit < W * a.height * 0.4, 'fire: flipbook frames have flames in them (' + (lit / (W * a.height) * 100).toFixed(1) + '% hot)');
+  const diff = (f0, f1) => { let d = 0; for (let y = 0; y < CH; y++) for (let x = 0; x < CW; x++) {
+    const p = (fy, fx) => a.data[(((Math.floor(fy / 8) * CH) + y) * W + (fy % 8) * CW + x) * 4];
+    d += Math.abs(p(f0, 0) - p(f1, 0)); } return d / (CW * CH); };
+  ok(diff(31, 0) < diff(0, 16) * 0.6, 'fire: the flipbook loops (last frame runs into the first)');
+  const art = { flames: null, puff: null, material: FireArt.prototype.material };
+  const spots = Array.from({ length: 40 }, (_, i) => [Math.cos(i) * 2, 0, Math.sin(i) * 2, i / 40]);
+  const fire = new GroundFire(art, new THREE.Vector3(), spots, 7, 100);
+  ok(fire.obj.children.length === 5 && fire.obj.children[0].geometry.instanceCount === 40, 'fire: flames, scorch, glow, embers and smoke, one draw each');
+  ok(fire.level(100) === 0 && fire.level(103) === 1 && fire.level(107) === 0, 'fire: catches, burns, dies down');
+  fire.update(103);
+  ok(fire.u.uAge.value === 3 && fire.u.uRemain.value === 4, 'fire: shaders get its age and time left');
+  fire.dispose();
 }
 
 console.log(`${pass} passed, ${fail} failed`);

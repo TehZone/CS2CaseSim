@@ -54,6 +54,7 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
   // The weapon: a copy of the inspect model's glTF scene (same skin materials), without its inspect framing.
   const root = cloneSkinned(model.userData.root);
   root.position.set(0, 0, 0); root.rotation.set(0, 0, 0); root.scale.set(1, 1, 1);
+  matchDuplicateBones(root, bones);
   const fixes = retargetWeapon(root, bones); // e.g. the USP-S on the P2000's clips
   rebind(root, bones, weaponRoot || skel);
   view.add(root);
@@ -103,6 +104,20 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
     });
   };
   return { rig, skel, bones, pose, dispose };
+}
+
+// A clip's skeleton can have two bones of one name, the exporter calling the second name_1: the Molotov's has the
+// viewmodel's own "molotov" (under wpn, at the eye) and the bottle's "molotov" in the right hand. Each of the weapon's
+// bones takes the one under a parent of the same name (else the bottle sat inside the camera and the hand was empty).
+function matchDuplicateBones(root, bones) {
+  const base = (n) => String(n).replace(/_\d+$/, '');
+  root.traverse((b) => {
+    if (!b.isBone || !b.parent) return;
+    const same = [b.name, b.name + '_1', b.name + '_2'].map((n) => bones[n]).filter(Boolean);
+    if (same.length < 2) return;
+    const pick = same.find((c) => c.parent && base(c.parent.name) === base(b.parent.name));
+    if (pick) b.name = pick.name;
+  });
 }
 
 // The first-person inspect for an inspect model made by buildCS2Model: { rig, mixer, action, actions, play(rare),

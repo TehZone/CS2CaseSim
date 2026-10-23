@@ -5,6 +5,7 @@ import { esc } from '../util.js';
 import { MOVE } from './movement.js';
 import { DIFFICULTY } from './ai.js';
 import { ITEM_NAMES } from './match.js';
+import { DEFAULT_BINDS, isKeyName } from './input.js';
 
 const MOVE_DEFAULTS = { ...MOVE };
 const BOT_LEVELS = ['easy', 'normal', 'hard', 'expert'];
@@ -31,6 +32,7 @@ function commands(g, con) {
     set: (v) => { const n = num(v, key === 'fov' ? 54 : -2.5, key === 'fov' ? 68 : 2.5); if (n == null) return false; g.vm[key] = n; if (key === 'fov') g.setViewmodelFov?.(n); return true; },
   });
   const me = () => g.me;
+  const unq = (t) => String(t).replace(/^"(.*)"$/, '$1');
   return {
     // ---- console --------------------------------------------------------------------------------------------------
     help: { help: 'Lists the commands, or describes one: help <command>', run: ([n]) => {
@@ -49,6 +51,24 @@ function commands(g, con) {
     status: { help: 'Lists the players', run: () => {
       for (const c of g.combatants) con.print(`${c.team.padEnd(3)} ${c.name.padEnd(16)} ${c.alive ? String(Math.max(0, Math.round(c.health))).padStart(3) + ' hp' : ' dead '}  $${c.money}  ${c.kills} / ${c.deaths}`);
     } },
+    // ---- binds (saved with your settings) -------------------------------------------------------------------------
+    bind: { help: 'Binds a key to a command: bind <key> <command> (e.g. bind mwheeldown +jump); bind <key> shows its bind', run: (a) => {
+      const key = unq(a[0] || '').toLowerCase(), cmd = unq(a.slice(1).join(' '));
+      if (!key) { con.print('Usage: bind <key> [command]', 'err'); return; }
+      if (!isKeyName(key)) { con.print(`"${key}" isn't a valid key`, 'err'); return; }
+      if (!cmd) { const c = g.input.binds[key]; con.print(c ? `"${key}" = "${c}"` : `"${key}" is not bound`); return; }
+      g.setBinds({ ...g.input.binds, [key]: cmd });
+    } },
+    unbind: { help: "Removes a key's bind: unbind <key>", run: ([k = '']) => {
+      const key = unq(k).toLowerCase();
+      if (!g.input.binds[key]) { con.print(`"${key}" is not bound`, 'dim'); return; }
+      const t = { ...g.input.binds };
+      delete t[key];
+      g.setBinds(t);
+    } },
+    unbindall: { help: 'Removes every bind (binddefaults puts the defaults back; ~ still opens the console)', run: () => g.setBinds({}) },
+    binddefaults: { help: 'Puts back the default binds', run: () => g.setBinds({ ...DEFAULT_BINDS }) },
+    key_listboundkeys: { help: 'Lists the bound keys', run: () => { for (const [k, c] of Object.entries(g.input.binds).sort(([x], [y]) => x.localeCompare(y))) con.print(`"${k}" = "${c}"`); } },
     // ---- the server -----------------------------------------------------------------------------------------------
     sv_cheats: { help: 'Allows cheat commands (1) or not (0)', get: () => g.cv.sv_cheats, set: (v) => {
       const n = num(v, 0, 1); if (n == null) return false;
@@ -124,6 +144,18 @@ function commands(g, con) {
   };
 }
 
+// A console line's commands: split at semicolons outside quotes.
+function splitLine(line) {
+  const out = [];
+  let cur = '', quoted = false;
+  for (const ch of String(line)) {
+    if (ch === '"') quoted = !quoted;
+    if (ch === ';' && !quoted) { out.push(cur); cur = ''; } else cur += ch;
+  }
+  out.push(cur);
+  return out.map((p) => p.trim()).filter(Boolean);
+}
+
 export class DevConsole {
   constructor(root, game) {
     this.game = game;
@@ -186,13 +218,15 @@ export class DevConsole {
     this.history = [line, ...this.history.filter((h) => h !== line)].slice(0, 50);
     this.hi = -1;
     this.print('] ' + line, 'cmd');
-    for (const part of line.split(';')) this.run(part.trim());
+    this.run(line);
   }
 
-  // Runs one command: "name", "name value" (variables) or "name args...".
+  // Runs a line: commands separated by semicolons (not inside quotes, so bind k "say a; say b" is one), each one
+  // "name", "name value" (variables) or "name args...".
   run(line) {
-    if (!line) return;
-    const [name, ...args] = line.split(/\s+/);
+    const parts = splitLine(line);
+    if (parts.length !== 1) { for (const p of parts) this.run(p); return; }
+    const [name, ...args] = parts[0].split(/\s+/);
     const c = this.cmds[name.toLowerCase()];
     if (!c) { this.print(`Unknown command "${name}"`, 'err'); return; }
     if (c.cheat && !this.game.cv.sv_cheats) { this.print(CHEAT_MSG(name), 'err'); return; }

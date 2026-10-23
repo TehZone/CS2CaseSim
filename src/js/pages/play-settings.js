@@ -2,15 +2,13 @@
 // radio volume and the fps counter. Saved with the other Play preferences; a match reads them when it starts.
 import { esc } from '../util.js';
 import { CROSSHAIR, crosshairHtml } from '../play/hud.js';
-import { BINDS, ACTION_NAMES } from '../play/input.js';
+import { ACTIONS, COMMANDS, bindTable, keyName, keyLabel } from '../play/input.js';
 
-export const SETTINGS_DEFAULTS = { crosshair: { ...CROSSHAIR }, viewmodel: { fov: 68, x: 1, y: 1, z: -1 }, binds: {}, musicVolume: 1, voiceVolume: 1, showFps: true };
+// keybinds: your binds (CS2 key name -> command), null for the defaults; binds: older saves' per-action keys.
+export const SETTINGS_DEFAULTS = { crosshair: { ...CROSSHAIR }, viewmodel: { fov: 68, x: 1, y: 1, z: -1 }, keybinds: null, binds: {}, musicVolume: 1, voiceVolume: 1, showFps: true };
 const COLORS = [['#32fa32', 'Green'], ['#ffff32', 'Yellow'], ['#32ffff', 'Cyan'], ['#ffffff', 'White'], ['#ff3232', 'Red'], ['#ff64ff', 'Pink']];
 // CS2's viewmodel presets.
 const PRESETS = { desktop: { fov: 68, x: 1, y: 1, z: -1 }, couch: { fov: 68, x: 0, y: 0, z: -1.5 }, classic: { fov: 68, x: 2.5, y: 0, z: -1.5 } };
-const keyName = (code) => (code || '').replace(/^Key|^Digit|^Numpad/, '').replace(/^Control(Left|Right)$/, 'Ctrl').replace(/^(Shift|Alt|Meta)(Left|Right)$/, '$1')
-  .replace(/^Arrow/, '') || '—';
-const keyNames = (codes) => [...new Set(codes.map(keyName))].join(' / ');
 
 let open = false, listening = null;
 
@@ -19,7 +17,13 @@ export function settingsHtml(p) {
   const range = (k, label, min, max, step, val, group) => `<label class="ps-range">${label} <b data-out="${group}.${k}">${val}</b>
     <input type="range" min="${min}" max="${max}" step="${step}" value="${val}" data-s="${group}.${k}"></label>`;
   const check = (k, label, val, group) => `<label class="ps-check"><input type="checkbox" data-s="${group}.${k}" ${val ? 'checked' : ''}> ${label}</label>`;
-  const binds = Object.keys(BINDS).map((a) => `<div class="ps-bind"><span>${esc(ACTION_NAMES[a] || a)}</span><button class="btn ghost sm" data-bind="${a}">${esc(listening === a ? 'Press a key…' : (p.binds?.[a] ? keyName(p.binds[a]) : keyNames(BINDS[a])))}</button></div>`).join('');
+  // Every action with the keys bound to it (as many as you like: ✕ takes one off, + adds one).
+  const table = bindTable(p);
+  const binds = ACTIONS.map(([a, label]) => {
+    const keys = Object.keys(table).filter((k) => COMMANDS[table[k]] === a);
+    return `<div class="ps-bind"><span>${esc(label)}</span><span class="ps-keys">${keys.map((k) => `<button class="ps-key" data-unbind="${esc(k)}" title="Unbind ${esc(keyLabel(k))}">${esc(keyLabel(k))} <i>✕</i></button>`).join('')}
+      <button class="btn ghost sm ps-add" data-bind="${a}">${listening === a ? 'Press a key…' : '+'}</button></span></div>`;
+  }).join('');
   return `<details class="play-settings panel" ${open ? 'open' : ''}><summary>Settings: crosshair, viewmodel, keys and sound</summary>
     <div class="ps-grid">
       <section><h4>Crosshair</h4>
@@ -39,7 +43,7 @@ export function settingsHtml(p) {
         ${check('showFps', 'Show fps', p.showFps !== false, 'root')}
       </section>
       <section class="ps-binds"><h4>Keys <button class="btn ghost sm" data-resetbinds>Defaults</button></h4>${binds}
-        <div class="muted">Click a key, then press the new one (Esc cancels).</div></section>
+        <div class="muted">+ adds a key: press it (a mouse button or the mouse wheel too; Esc cancels). In a match the console (~) has CS2's bind: bind mwheeldown +jump.</div></section>
     </div></details>`;
 }
 
@@ -61,30 +65,34 @@ export function bindSettings(el, prefs, savePrefs, rerender) {
     write(input.dataset.s, input.type === 'checkbox' ? input.checked : input.type === 'range' ? Number(input.value) : input.value);
   }));
   el.querySelectorAll('[data-preset]').forEach((b) => b.addEventListener('click', () => { const q = prefs(); q.viewmodel = { ...PRESETS[b.dataset.preset] }; savePrefs(q); rerender(); }));
-  el.querySelector('[data-resetbinds]')?.addEventListener('click', (e) => { e.preventDefault(); const q = prefs(); q.binds = {}; savePrefs(q); rerender(); });
-  el.querySelectorAll('[data-bind]').forEach((b) => b.addEventListener('click', () => {
+  el.querySelector('[data-resetbinds]')?.addEventListener('click', (e) => { e.preventDefault(); const q = prefs(); q.keybinds = null; q.binds = {}; savePrefs(q); rerender(); });
+  const saveTable = (change) => { const q = prefs(); const t = bindTable(q); change(t); q.keybinds = t; savePrefs(q); rerender(); };
+  el.querySelectorAll('[data-unbind]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); saveTable((t) => { delete t[b.dataset.unbind]; }); }));
+  el.querySelectorAll('[data-bind]').forEach((b) => b.addEventListener('click', (e) => {
+    e.preventDefault();
     listening = b.dataset.bind;
     b.textContent = 'Press a key…';
-    const onKey = (e) => {
-      e.preventDefault(); e.stopPropagation();
+    const cmd = ACTIONS.find(([a]) => a === listening)[2];
+    // The next key, mouse button or wheel notch gets the action's command (a key does one thing: its old bind goes).
+    const done = (key) => {
       document.removeEventListener('keydown', onKey, true);
-      const action = listening;
+      document.removeEventListener('mousedown', onMouse, true);
+      document.removeEventListener('wheel', onWheel, true);
       listening = null;
-      if (e.code !== 'Escape') {
-        const q = prefs();
-        q.binds = { ...(q.binds || {}) };
-        // A key does one thing: take it off any other action first.
-        for (const [a, code] of Object.entries(q.binds)) if (code === e.code) delete q.binds[a];
-        q.binds[action] = e.code;
-        savePrefs(q);
-      }
-      rerender();
+      if (key) saveTable((t) => { t[key] = cmd; }); else rerender();
     };
-    document.addEventListener('keydown', onKey, true);
+    const onKey = (ev) => { ev.preventDefault(); ev.stopPropagation(); done(ev.code === 'Escape' ? null : keyName(ev.code)); };
+    const onMouse = (ev) => { ev.preventDefault(); ev.stopPropagation(); done(['mouse1', 'mouse3', 'mouse2', 'mouse4', 'mouse5'][ev.button]); };
+    const onWheel = (ev) => { ev.preventDefault(); ev.stopPropagation(); done(ev.deltaY < 0 ? 'mwheelup' : 'mwheeldown'); };
+    setTimeout(() => {
+      document.addEventListener('keydown', onKey, true);
+      document.addEventListener('mousedown', onMouse, true);
+      document.addEventListener('wheel', onWheel, { capture: true, passive: false });
+    }, 0);
   }));
 }
 
 // What a match gets from the saved preferences.
 export function matchSettings(p) {
-  return { crosshair: p.crosshair, viewmodel: p.viewmodel, binds: p.binds, musicVolume: p.musicVolume ?? 1, voiceVolume: p.voiceVolume ?? 1, showFps: p.showFps !== false };
+  return { crosshair: p.crosshair, viewmodel: p.viewmodel, keybinds: bindTable(p), musicVolume: p.musicVolume ?? 1, voiceVolume: p.voiceVolume ?? 1, showFps: p.showFps !== false };
 }
