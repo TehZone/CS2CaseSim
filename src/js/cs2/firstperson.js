@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2FirstPerson } from './api.js';
-import { loadGltf as load, rebind, bonesByName, forearmTwist } from './rig.js';
+import { loadGltf as load, rebind, bonesByName, forearmTwist, retargetWeapon } from './rig.js';
 import { buildGloveScene } from './skin.js';
 import { itemDef } from '../items.js';
 
@@ -50,12 +50,19 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
   // The weapon: a copy of the inspect model's glTF scene (same skin materials), without its inspect framing.
   const root = cloneSkinned(model.userData.root);
   root.position.set(0, 0, 0); root.rotation.set(0, 0, 0); root.scale.set(1, 1, 1);
+  const fixes = retargetWeapon(root, bones); // e.g. the USP-S on the P2000's clips
   rebind(root, bones, weaponRoot || skel);
   view.add(root);
   // A StatTrak™ counter moves onto the animated bone of the same name.
   const riders = [];
   root.traverse((o) => { if (o.userData.statTrak && o.parent?.isBone) riders.push(o); });
-  for (const o of riders) bones[o.parent.name]?.add(o);
+  for (const o of riders) {
+    const b = bones[o.parent.name];
+    if (!b) continue;
+    const f = fixes.get(o.parent.name);
+    if (f) o.applyMatrix4(f);
+    b.add(o);
+  }
 
   // Stickers ride on the bone that moves the surface they're on (the magazine's for one on the mag, so it comes out
   // with it on a reload), else the weapon's main bone.
@@ -64,7 +71,9 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
     if (!o.userData.decal) return;
     const on = o.userData.bone && bones[o.userData.bone.name] ? o.userData.bone : db && bones[db.name] ? db : null;
     if (!on) return;
-    const d = new THREE.Mesh(o.geometry.clone().applyMatrix4(on.matrixWorld.clone().invert()), o.material);
+    const geo = o.geometry.clone().applyMatrix4(on.matrixWorld.clone().invert());
+    if (fixes.has(on.name)) geo.applyMatrix4(fixes.get(on.name));
+    const d = new THREE.Mesh(geo, o.material);
     d.renderOrder = o.renderOrder;
     d.frustumCulled = false;
     bones[on.name].add(d);
