@@ -83,7 +83,10 @@ function commands(g, con) {
     kill: { help: 'Kills you', run: () => { if (me().alive) g.kill(me(), null, { name: 'World' }, false); } },
     explode: { help: 'Kills you', run: () => { if (me().alive) g.kill(me(), null, { name: 'World' }, false); } },
     buy: { help: 'Buys an item if you can: buy weapon_ak47', run: ([id]) => { if (id) g.buy(id.startsWith('weapon_') || ITEM_NAMES[id] ? id : 'weapon_' + id); } },
-    say: { help: 'Says something in the chat', run: (a) => g.hud.chat('You', g.placeOf?.(me()) || '', a.join(' '), me().team) },
+    say: { help: 'Says something to everyone in the chat: say <text>', run: (a) => { if (a.length) g.say(me(), a.join(' ').slice(0, 127)); } },
+    say_team: { help: 'Says something to your team in the chat: say_team <text>', run: (a) => { if (a.length) g.say(me(), a.join(' ').slice(0, 127), !g.ffa); } },
+    messagemode: { help: 'Opens the chat (Y)', run: () => { g.toggleConsole(false); g.openChat(false); } },
+    messagemode2: { help: 'Opens the team chat (U)', run: () => { g.toggleConsole(false); g.openChat(true); } },
     disconnect: { help: 'Leaves the match', run: () => g.root.querySelector('[data-leave]')?.click() },
     quit: { help: 'Leaves the match', run: () => g.root.querySelector('[data-leave]')?.click() },
     // ---- bots -----------------------------------------------------------------------------------------------------

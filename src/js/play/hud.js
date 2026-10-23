@@ -26,7 +26,7 @@ export class Hud {
       <div class="modeline" data-mode></div>
       <div class="fps"></div>
       <div class="feed"></div>
-      <div class="chat" data-chat></div>
+      <div class="chat" data-chat><div class="chat-lines" data-chat-lines></div><form class="chat-say hidden" data-chat-say><span data-chat-label>Say :</span><input maxlength="127" spellcheck="false" autocomplete="off"></form></div>
       <div class="radio hidden" data-radio></div>
       <div class="msg" data-msg></div>
       <div class="progress hidden" data-progress><span data-progress-label></span><i><b data-progress-bar></b></i></div>
@@ -202,14 +202,38 @@ export class Hud {
   }
 
   // A radio call in the chat: name @ place: text (fades after a while).
-  chat(name, place, text, team) {
+  // A radio call in the chat (name @ place: text).
+  chat(name, place, text, team) { this.chatLine({ name, team, text, place, radio: true }); }
+  // A chat line like CS2's: *DEAD* and (Terrorist) / (Counter-Terrorist) for team messages, the name in its side's
+  // colour, @ place on team messages, then the text; or a system line. Lines fade after 10 s; all of the recent ones
+  // show while you're typing.
+  chatLine({ name = '', team = null, text, teamOnly = false, dead = false, place = '', system = false, radio = false }) {
     const row = document.createElement('div');
-    row.innerHTML = `<span class="${team === 'CT' ? 'ct' : 't'}">${esc(name)}</span>${place ? ` <small>@ ${esc(place.replace(/([a-z])([A-Z])/g, '$1 $2'))}</small>` : ''}: ${esc(text)}`;
-    const box = this.q('[data-chat]');
+    const side = team === 'CT' ? 'ct' : 't';
+    const where = place ? ` <small>@ ${esc(place.replace(/([a-z])([A-Z])/g, '$1 $2'))}</small>` : '';
+    row.innerHTML = system ? `<span class="sys">${esc(text)}</span>`
+      : `${dead ? '<em class="dead">*DEAD*</em> ' : ''}${teamOnly ? `<em class="${side}">(${team === 'CT' ? 'Counter-Terrorist' : 'Terrorist'})</em> ` : ''}<span class="${side}">${esc(name)}</span>${where}${radio ? '' : ' '}: ${esc(text)}`;
+    const box = this.q('[data-chat-lines]');
     box.appendChild(row);
-    while (box.children.length > 6) box.firstChild.remove();
-    setTimeout(() => row.classList.add('old'), 9000);
-    setTimeout(() => row.remove(), 10000);
+    while (box.children.length > 16) box.firstChild.remove();
+    setTimeout(() => row.classList.add('old'), 10000);
+  }
+  // The Say line (Y: all chat, U: team chat); onSend(text) gets what you typed. Closed with null.
+  chatInput(teamOnly, onSend) {
+    const form = this.q('[data-chat-say]'), input = form.querySelector('input'), box = this.q('[data-chat]');
+    if (teamOnly == null) { form.classList.add('hidden'); box.classList.remove('open'); input.blur(); return; }
+    this.q('[data-chat-label]').textContent = teamOnly ? 'Say (Team) :' : 'Say :';
+    form.classList.remove('hidden');
+    box.classList.add('open');
+    input.value = '';
+    if (!form.dataset.wired) {
+      form.dataset.wired = '1';
+      // The chat's keys stay in the chat (the game listens on the document).
+      for (const type of ['keydown', 'keyup']) input.addEventListener(type, (e) => { e.stopPropagation(); if (type === 'keydown' && e.code === 'Escape') { e.preventDefault(); this.onChatSend?.(null); } });
+      form.addEventListener('submit', (e) => { e.preventDefault(); this.onChatSend?.(input.value); });
+    }
+    this.onChatSend = onSend;
+    setTimeout(() => input.focus(), 0);
   }
   // The radio menu (Z / X / V), or null to hide it.
   radio(menu) {

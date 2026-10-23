@@ -235,8 +235,18 @@
 
 /* radio chat (bottom left, above health) and the radio menu (Z / X / V) */
 .play-hud .chat { position: absolute; left: 18px; bottom: 96px; display: flex; flex-direction: column; gap: 3px; max-width: 46%; }
-.play-hud .chat div { background: rgba(0, 0, 0, .45); padding: 3px 9px; font-size: 13px; transition: opacity .8s; }
-.play-hud .chat div.old { opacity: 0; }
+.play-hud .chat .chat-lines { display: flex; flex-direction: column; gap: 3px; }
+.play-hud .chat .chat-lines div { background: rgba(0, 0, 0, .45); padding: 3px 9px; font-size: 13px; transition: opacity .8s; }
+.play-hud .chat .chat-lines div.old { opacity: 0; }
+.play-hud .chat.open .chat-lines div.old { opacity: .85; transition: none; }
+.play-hud .chat em { font-style: normal; font-weight: 600; }
+.play-hud .chat em.dead { color: #c8c8c8; }
+.play-hud .chat em.ct { color: var(--ct); } .play-hud .chat em.t { color: var(--tt); }
+.play-hud .chat .sys { color: #d7dbe0; opacity: .85; }
+.play-hud .chat .chat-say { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 4px 8px; background: rgba(0, 0, 0, .65); border: 1px solid rgba(255, 255, 255, .18); pointer-events: auto; }
+.play-hud .chat .chat-say.hidden { display: none; }
+.play-hud .chat .chat-say span { font-size: 13px; font-weight: 600; color: #e9ecf2; white-space: nowrap; }
+.play-hud .chat .chat-say input { flex: 1; min-width: 260px; background: transparent; border: 0; outline: none; color: #fff; font: inherit; font-size: 13px; }
 .play-hud .chat small { opacity: .75; }
 .play-hud .chat .ct { color: var(--ct); font-weight: 600; }
 .play-hud .chat .t { color: var(--tt); font-weight: 600; }

@@ -220,6 +220,7 @@ export class Game {
     this.post.compile(this.scene, this.camera, { scene: this.vmScene, camera: this.vmCamera });
     this.renderer.shadowMap.needsUpdate = true;
     this.match.startRound();
+    for (const c of this.combatants) if (c !== this.me) this.hud.chatLine({ system: true, text: `${c.name} has joined the ${this.ffa ? 'game' : c.team === 'CT' ? 'Counter-Terrorists' : 'Terrorists'}` });
     this.emit('loaded');
     // Background, a little at a time so the game stays smooth: the bots' gun models, then the guns people buy.
     (async () => {
@@ -422,6 +423,25 @@ export class Game {
     this.buyMenu.open();
     this.input.unlock();
   }
+// Text chat (Y all, U team): typing takes your keys (the mouse still looks around); Enter sends, Esc closes.
+  openChat(teamOnly) {
+    this.input.keys.clear(); this.input.buttons = 0;
+    this.chatOpen = true;
+    this.hud.chatInput(!!teamOnly && !this.ffa, (text) => {
+      this.chatOpen = false;
+      this.hud.chatInput(null);
+      if (text != null && text.trim()) this.say(this.me, text.trim().slice(0, 127), !!teamOnly && !this.ffa);
+    });
+  }
+  // A chat message from someone: team messages only reach their team, and like CS2's competitive the dead only talk
+  // among the dead (you see the living's and, while dead yourself, the dead's).
+  say(c, text, teamOnly = false) {
+    const me = this.me;
+    if (teamOnly && c.team !== me.team) return;
+    if (!c.alive && c !== me && me.alive && !this.respawnMode) return;
+    this.hud.chatLine({ name: c === me ? c.name || 'You' : c.name, team: c.team, text, teamOnly, dead: !c.alive && !this.respawnMode, place: teamOnly ? this.placeOf?.(c) || '' : '' });
+  }
+
   // The console takes your keys and shows the cursor while it's open; the match keeps running.
   toggleConsole(open = !this.console.isOpen) {
     if (open === this.console.isOpen) return;
@@ -474,6 +494,7 @@ export class Game {
   menuKey(code, down) {
     if (code === 'Backquote') { if (down) this.toggleConsole(true); return true; }
     if (!down) return false;
+    if ((this.input.is('chatAll', code) || this.input.is('chatTeam', code)) && this.me && !this.buyMenu.isOpen) { this.openChat(this.input.is('chatTeam', code)); return true; }
     // Radio: Z commands, X reports, V responses; a number picks a line.
     const radioMenu = ['radio1', 'radio2', 'radio3'].findIndex((a) => this.input.is(a, code));
     if (radioMenu >= 0 && this.radio && this.me?.alive && !this.buyMenu.isOpen && !this.ffa) { this.radio.open(['KeyZ', 'KeyX', 'KeyV'][radioMenu]); return true; }
@@ -713,6 +734,9 @@ export class Game {
     this.emit('roundEnd', { winner, reason });
   }
   onMatchOver(squad) {
+    // A couple of the bots say gg.
+    const bots = this.combatants.filter((c) => c !== this.me).sort(() => Math.random() - 0.5).slice(0, 2);
+    bots.forEach((c, i) => setTimeout(() => { if (!this.disposed) this.say(c, ['gg', 'gg wp', 'ggwp'][Math.floor(Math.random() * 3)]); }, 1200 + i * 900));
     const won = squad === 'A', draw = squad == null;
     this.sounds.channel('music', `Music.MatchEnd.${MUSIC}`, { volume: 0.4 * this.musicVolume }, 0.8);
     this.matchOver = true;

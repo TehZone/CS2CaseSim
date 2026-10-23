@@ -4,13 +4,13 @@ export const BINDS = {
   forward: ['KeyW'], back: ['KeyS'], left: ['KeyA'], right: ['KeyD'], jump: ['Space'], duck: ['ControlLeft', 'ControlRight', 'KeyC'],
   walk: ['ShiftLeft', 'ShiftRight'], reload: ['KeyR'], inspect: ['KeyF'], slot1: ['Digit1'], slot2: ['Digit2'], slot3: ['Digit3'],
   slot4: ['Digit4'], slot5: ['Digit5'], lastWeapon: ['KeyQ'], scores: ['Tab'], use: ['KeyE'], drop: ['KeyG'], buy: ['KeyB'],
-  radio1: ['KeyZ'], radio2: ['KeyX'], radio3: ['KeyV'],
+  radio1: ['KeyZ'], radio2: ['KeyX'], radio3: ['KeyV'], chatAll: ['KeyY'], chatTeam: ['KeyU'],
 };
 // Names for the settings screen.
 export const ACTION_NAMES = { forward: 'Forward', back: 'Back', left: 'Left', right: 'Right', jump: 'Jump', duck: 'Crouch', walk: 'Walk',
   reload: 'Reload', inspect: 'Inspect', slot1: 'Primary', slot2: 'Pistol', slot3: 'Knife / Zeus', slot4: 'Grenades', slot5: 'Bomb',
   lastWeapon: 'Last weapon', scores: 'Scoreboard', use: 'Use / defuse', drop: 'Drop weapon', buy: 'Buy menu', radio1: 'Radio: commands',
-  radio2: 'Radio: reports', radio3: 'Radio: responses' };
+  radio2: 'Radio: reports', radio3: 'Radio: responses', chatAll: 'Chat (all)', chatTeam: 'Chat (team)' };
 // Your binds over the defaults: { action: code } replaces that action's keys.
 export const bindsWith = (custom = {}) => Object.fromEntries(Object.entries(BINDS).map(([a, codes]) => [a, custom[a] ? [custom[a]] : codes]));
 
