@@ -9,6 +9,10 @@ import { loadGltf as load, rebind, bonesByName, forearmTwist, retargetWeapon } f
 import { buildGloveScene } from './skin.js';
 import { itemDef } from '../items.js';
 
+// CS2's special inspects and draws (the Deagle's spin, the Falchion's and Skeleton's tricks...) come up now and then:
+// about one in nine, and never twice in a row (Play and the inventory's first-person inspect alike).
+export const RARE_CHANCE = 1 / 9;
+
 // Puts arms and weapon on a clip's skeleton (clipScene may be a promise). Returns { rig, skel, bones, pose, dispose }:
 // the rig is in game metres with the eye at the origin, looking down -Z; run pose() after each animation step (forearm
 // twist, weapon merge). `gloves` (an inventory item) replaces CS2's default arms with that glove model and its skin,

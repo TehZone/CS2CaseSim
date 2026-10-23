@@ -527,6 +527,9 @@ export async function buildCS2Model(item, def, renderer, { statTrak = true } = {
 // The exporter turns a model's CS2 axes (+X forward, +Y left, +Z up) into glTF's +Z, +X, +Y, while bones keep CS2's
 // axes (in metres): this turns a separately exported model back into a bone's axes.
 const GLTF_TO_BONE = new THREE.Quaternion(0.5, 0.5, 0.5, 0.5);
+// The knives' etched counter sits upside down at their attachment (its top towards the edge): turned round in its own
+// plane (about its normal), it reads the right way up with the back of the blade, on the same side of it.
+const KNIFE_TURN = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
 const INCH = 0.0254;
 
 // Shows a count on a counter's display. Each digit's quad carries its slot in the integer part of U (1-6, 6 the ones)
@@ -574,6 +577,7 @@ async function addStatTrak(root, wid, prep, kills) {
   holder.userData.statTrak = true;
   holder.position.set(at.offset[0] * INCH, at.offset[1] * INCH, at.offset[2] * INCH);
   holder.quaternion.set(...at.rotation).multiply(GLTF_TO_BONE);
+  if (knife) holder.quaternion.multiply(KNIFE_TURN);
   holder.add(counter);
   bone.add(holder);
   const set = (n) => { for (const g of displays) showKills(g, n); };

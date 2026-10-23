@@ -21,8 +21,9 @@ icon-based 3D view. Without CS2 installed, everything falls back to that view.
 With CS2 installed the inspect also offers:
 - **Backdrops**: the same map scenes CS2 shows behind the menu and item inspect (Dust II, Mirage, Inferno, Ancient,
   Anubis, Nuke, Overpass, Train, Vertigo, Italy, Office...), placed where CS2 shows items and blurred like the game.
-- **First person** (V): CS2's own inspect animation for that weapon or knife (now and then one of CS2's special inspects,
-  like the Deagle's spin or the Falchion's and Skeleton's tricks; F again during an inspect plays one), on CS2's first-person arms, with your skin
+- **First person** (V): CS2's own inspect animation for that weapon or knife (now and then, about one in nine and never
+  twice running, one of CS2's special inspects, like the Deagle's spin or the Falchion's and Skeleton's tricks), lit
+  softly like CS2's viewmodel, on CS2's first-person arms, with your skin
   and stickers (each riding on the part it's on: a sticker on the magazine comes out with it on a reload). Gloves
   equipped in your **loadout** are worn on the hands, like in game. Gloves themselves can be
   seen in first person too: worn, inspecting your equipped knife (or the default knife).
@@ -100,8 +101,8 @@ What's in a match:
 - Dust II's soccer ball is a physics prop like in CS2: walk into it to kick it along (it stops you against a wall),
   bots bump it too, and bullets, knives and HE grenades knock it; it bounces, rolls to a stop and is back on its spot
   every round.
-- CS2's special inspects and draws come up now and then in matches too (F again during an inspect for one; the console's
-  cl_inspect_rare 1 always, -1 never).
+- CS2's special inspects and draws come up now and then in matches too, as in CS2 (about one in nine, never twice
+  running; the console's cl_inspect_rare 1 always, -1 never).
 - The developer console (~): CS2's console commands and variables, with completion (Tab), history and find/help.
   sv_cheats 1 unlocks the cheats (god, noclip, give, impulse 101, host_timescale, sv_gravity, sv_infinite_ammo,
   bot_stop, bot_dont_shoot); the rest work anyway (mp_restartgame, mp_roundtime, mp_freezetime, mp_buytime,

@@ -7,8 +7,8 @@
 // Angles are in degrees with Source's signs: positive pitch looks down, positive yaw turns left.
 import { UniformRandomStream } from '../cs2/rng.js';
 import { NADES, NADE_ORDER } from './grenades.js';
+import { RARE_CHANCE } from '../cs2/firstperson.js';
 // How often CS2's special inspects (the Deagle's spin, the knives' tricks) and draws come up.
-const RARE_INSPECT = 0.25, RARE_DRAW = 0.2;
 
 // Source / CS2 convars.
 const RECOIL = {
@@ -105,12 +105,14 @@ export class Arsenal {
   // Slots in wheel order: guns, knife, Zeus, grenades (CS2's order), bomb.
   order() { return ['primary', 'secondary', 'knife', 'taser', ...NADE_ORDER.map((id) => 'g_' + id), 'c4'].filter((s) => this.guns[s]); }
 
-  // Whether to play one of CS2's special animations (role: inspectRare or drawRare): now and then at this chance,
-  // always when forced or with cl_inspect_rare 1, never with -1 (or when the weapon has none).
-  rare(g, role, chance, forced = false) {
+  // Whether to play one of CS2's special animations (role: inspectRare or drawRare): now and then (RARE_CHANCE, never
+  // twice in a row), always with cl_inspect_rare 1, never with -1 (or when the weapon has none).
+  rare(g, role) {
     if (!g.vm.has(role)) return false;
     const cv = this.game.cv?.cl_inspect_rare ?? 0;
-    return cv > 0 || (cv === 0 && (forced || Math.random() < chance));
+    if (cv) return cv > 0;
+    const last = (this.lastRare ||= {});
+    return (last[role] = !last[role] && Math.random() < RARE_CHANCE);
   }
 
   select(slot, t) {
@@ -126,7 +128,7 @@ export class Arsenal {
     this.scheduled = [];
     g.deployEnd = t + (g.stats.deploy || 1);
     g.nextAttack = Math.max(g.nextAttack, g.deployEnd);
-    g.animEnd = t + g.vm.play(this.rare(g, 'drawRare', RARE_DRAW) ? 'drawRare' : 'draw');
+    g.animEnd = t + g.vm.play(this.rare(g, 'drawRare') ? 'drawRare' : 'draw');
     if (g.nade) { g.pin = null; g.throwAt = null; g.released = false; this.sound(g.id === 'weapon_molotov' ? 'Molotov.Draw' : 'HEGrenade.Draw', { volume: 0.5 }); }
     else this.sound(g.melee ? 'Weapon_Knife.Deploy' : g.prefix + 'Draw');
     this.game.emit('weapon', g);
@@ -194,10 +196,9 @@ export class Arsenal {
     // The bomb: hold fire in a bomb site to plant (the game runs the planting).
     if (cur.id === 'weapon_c4') { this.game.playerPlant(!!(input.buttons & 1), t); return; }
     // Inspecting works in freeze time too, like CS2 (not while defusing or buying). Now and then it's one of CS2's
-    // special inspects; inspecting again while one plays always is (cl_inspect_rare: 1 always, -1 never).
+    // special inspects (cl_inspect_rare: 1 always, -1 never).
     if (pressed.has('inspect') && !cur.reloading && t >= cur.nextAttack && cur.vm.has('inspect') && !this.game.defusing && !this.game.buyMenu?.isOpen) {
-      const again = /^inspect/.test(cur.vm.role) && t < cur.animEnd;
-      cur.zoom = 0; cur.animEnd = t + cur.vm.play(this.rare(cur, 'inspectRare', RARE_INSPECT, again) ? 'inspectRare' : 'inspect');
+      cur.zoom = 0; cur.animEnd = t + cur.vm.play(this.rare(cur, 'inspectRare') ? 'inspectRare' : 'inspect');
     }
     if (!this.game.canAttack()) { if (pressed.has('reload')) this.reload(cur, t); return; }
     if (pressed.has('reload')) this.reload(cur, t);

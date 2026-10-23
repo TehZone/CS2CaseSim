@@ -7,7 +7,7 @@ import { buildChicken } from './chicken3d.js';
 import { cs2Status } from './cs2/api.js';
 import { buildCS2Model } from './cs2/skin.js';
 import { buildBackdrop, BlurredBackdrop, backdropEnvironment } from './cs2/backdrop.js';
-import { buildFirstPerson } from './cs2/firstperson.js';
+import { buildFirstPerson, RARE_CHANCE } from './cs2/firstperson.js';
 import { equipped } from './loadout.js';
 import { stickerSurface } from './cs2/sticker.js';
 import { clamp } from './util.js';
@@ -299,13 +299,16 @@ class InspectView {
     this.sunLight = new THREE.DirectionalLight(0xffffff, 0);
     this.scene.add(this.sunLight);
     // First person's own lights, fixed to your view like CS2's viewmodel lighting (the eye is at the origin looking
-    // down -Z): a key from above front-right, a cool fill from the left and a rim from beyond the weapon that picks
-    // out blade edges. Off outside first person.
+    // down -Z): a soft all-round light, a key from above front-right, a cool fill from the left and a faint rim from
+    // beyond the weapon for blade edges. Even and soft, like CS2's viewmodel (a strong key and rim made it harsh: hot
+    // highlights, dark shadows). Off outside first person.
     const fpKey = new THREE.DirectionalLight(0xfff4e6, 0); fpKey.position.set(1.2, 2.2, 1.6);
     const fpFill = new THREE.DirectionalLight(0xc6d8ff, 0); fpFill.position.set(-2, 0.4, 1);
     const fpRim = new THREE.DirectionalLight(0xffffff, 0); fpRim.position.set(0.6, 1.4, -3);
     for (const l of [fpKey, fpFill, fpRim]) { l.target.position.set(0, -0.15, -0.5); this.scene.add(l, l.target); }
-    this.fpLights = [[fpKey, 2.1], [fpFill, 0.75], [fpRim, 1.0]];
+    const fpSoft = new THREE.HemisphereLight(0xf2f4ff, 0x5a5550, 0);
+    this.scene.add(fpSoft);
+    this.fpLights = [[fpKey, 1.3], [fpFill, 0.9], [fpRim, 0.35], [fpSoft, 0.8]];
     this.backdrop = null;
     this.blurBg = null;
     this.pivot = new THREE.Group();
@@ -436,12 +439,17 @@ class InspectView {
     this.shadow.visible = !bd && !this.fp;
     for (const l of this.studioLights) l.intensity = l.userData.base ?? (l.userData.base = l.intensity);
     for (const [l, k] of this.fpLights) l.intensity = this.fp ? k : 0;
+    // First person tone maps the weapon with AgX, which rolls highlights off and keeps the shadows open (ACES's punchier
+    // curve, right for the inspect's studio, made the viewmodel look over-contrasted): as bright, no clipped highlights.
+    // A map backdrop keeps ACES (see render).
+    this.renderer.toneMapping = this.fp ? THREE.AgXToneMapping : THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = this.fp ? 1.2 : 1.08;
     if (this.fp) {
       // First person: the weapon's own lights and a bright, neutral room to reflect (metal blades show what they
       // reflect, and a map's or the studio's dark surroundings turned them dark), plus a map backdrop's sun.
       for (const l of this.studioLights) l.intensity = 0;
       this.scene.environment = this.envRoom;
-      this.scene.environmentIntensity = 1.1;
+      this.scene.environmentIntensity = 1.0;
       this.sunLight.intensity = bd ? Math.min(1.6, bd.sun.intensity * 0.45) : 0;
       if (bd) { this.sunLight.color.copy(bd.sun.color); this.sunLight.position.copy(bd.sun.dir).multiplyScalar(-10); }
       return;
@@ -501,14 +509,14 @@ class InspectView {
     if (this.pivot) this.pivot.visible = true;
     if (this.model) this.applyLighting();
   }
-  // The first-person inspect: now and then (about one in four) one of CS2's special inspects (the Deagle's spin, the
-  // Falchion's and Skeleton's tricks); inspecting again while one plays always shows a special one.
+  // The first-person inspect: now and then (RARE_CHANCE, never twice in a row) one of CS2's special inspects (the
+  // Deagle's spin, the Falchion's and Skeleton's tricks), like CS2.
   playFirstPerson() {
     const fp = this.fp;
     if (!fp) return;
     if (!fp.play) { fp.action.reset(); fp.action.play(); return; }
-    const playing = fp.action.isRunning() && fp.action.time < fp.duration - 0.05;
-    fp.play(fp.hasRare && (playing || Math.random() < 0.25));
+    this.lastRare = fp.hasRare && !this.lastRare && Math.random() < RARE_CHANCE;
+    fp.play(this.lastRare);
   }
 
   // Shows a CS2 map behind the item ('studio' for the plain inspect room). Resolves when it's ready.
@@ -685,7 +693,11 @@ class InspectView {
       const r = this.renderer;
       r.autoClear = false;
       r.clear();
+      // The map keeps the inspect's ACES look (first person tone maps only the weapon its softer way: applyLighting).
+      const tone = r.toneMapping, exposure = r.toneMappingExposure;
+      r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 1.08;
       this.blurBg.render(r, this.backdrop, cam, this.fp ? 2 : 3);
+      r.toneMapping = tone; r.toneMappingExposure = exposure;
       r.clearDepth();
       r.render(this.scene, cam);
       r.autoClear = true;

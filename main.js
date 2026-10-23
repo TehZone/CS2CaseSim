@@ -354,6 +354,42 @@ async function runPlaySmoke(win) {
   await shot('stattrak-inspect');
   await js(`document.getElementById('smoke-closeup')?.remove(); document.querySelector('.inspect [data-a=close]')?.click(); 1`);
   await wait(500);
+  // Knives' StatTrak counters read the right way up (their top towards the back of the blade, which is up in the
+  // inspect), guns' too: +1 is upright, -1 upside down.
+  console.log('SMOKE stattrak knives', await js(`(async () => { try {
+    const THREE = await import('three'), { D } = await import('./js/data.js'), { buildCS2Model } = await import('./js/cs2/skin.js');
+    const renderer = new THREE.WebGLRenderer(), out = {};
+    for (const [wid, name] of [['weapon_knife_karambit', 'Karambit'], ['weapon_knife_butterfly', 'Butterfly'], ['weapon_knife_m9_bayonet', 'M9'], ['weapon_bayonet', 'Bayonet'],
+      ['weapon_knife_skeleton', 'Skeleton'], ['weapon_knife_widowmaker', 'Talon'], ['weapon_knife_css', 'Classic'], ['weapon_ak47', 'AK-47'], ['weapon_awp', 'AWP']]) {
+      const s = Object.values(D.skins).find((x) => x.wid === wid);
+      const m = await buildCS2Model({ t: 'skin', fl: 0, sd: 0, stt: true, kills: 42 }, { ...s, v: true, fid: null }, renderer);
+      m.updateMatrixWorld(true);
+      let c = null; m.traverse((o) => { if (o.name === 'stattrak') c = o; });
+      out[name] = c ? Math.round(new THREE.Vector3(0, 1, 0).transformDirection(c.children[0].matrixWorld).y * 100) / 100 : 'none';
+    }
+    renderer.dispose();
+    return JSON.stringify(out);
+  } catch (e) { return 'failed: ' + e.message; } })()`));
+  // First person's softer light: a Karambit | Fade (the weapon's pixels: shadows, middle, highlights, clipped).
+  console.log('SMOKE first person light', await js(`(async () => { try {
+    const ui = await import('./js/ui.js'), I = await import('./js/items.js'), { D } = await import('./js/data.js'), { inspectView: v } = await import('./js/inspect.js');
+    ui.openInspect(I.makeSkinItem(Object.values(D.skins).find((x) => x.n === '★ Karambit | Fade'), { stt: false, fl: 0.03, sd: 7 }));
+    for (let i = 0; i < 240 && document.querySelector('.inspect .loading'); i++) await new Promise((r) => setTimeout(r, 250));
+    await v.enterFirstPerson();
+    const fp = v.fp; fp.play(false); fp.update(0); fp.update(2); fp.mixer.timeScale = 0; v.applyLighting();
+    const r = v.renderer, gl = r.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+    const grab = () => { r.setRenderTarget(null); r.render(v.scene, v.fpCamera); const px = new Uint8Array(W * H * 4); gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px); return px; };
+    const a = grab(); fp.rig.visible = false; const b = grab(); fp.rig.visible = true;
+    const lum = [];
+    for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) >= 12) lum.push((0.2126 * a[i] + 0.7152 * a[i + 1] + 0.0722 * a[i + 2]) / 255);
+    lum.sort((x, y) => x - y);
+    const q = (p) => Math.round(lum[Math.floor(lum.length * p)] * 100) / 100;
+    return JSON.stringify({ toneMapping: r.toneMapping === 6 ? 'AgX' : r.toneMapping, shadows: q(0.05), middle: q(0.5), highlights: q(0.95), clippedPct: Math.round((lum.filter((x) => x > 0.97).length / lum.length) * 1000) / 10 });
+  } catch (e) { return 'failed: ' + e.message; } })()`));
+  await wait(1500);
+  await shot('first-person-light');
+  await js(`document.querySelector('.inspect [data-a=close]')?.click(); 1`);
+  await wait(500);
   const t0 = Date.now();
   await js(`window.__cs2Debug = true; document.querySelector('#nav [data-page=play]').click(); setTimeout(() => document.querySelector('[data-start]').click(), 300); 1`);
   let last = '';

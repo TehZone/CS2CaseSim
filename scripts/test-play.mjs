@@ -406,6 +406,20 @@ function fakeGame() {
   ok(twist > 25 && big < 65, 'bots: the upper body turns with the aim, at most 60° from the legs: ' + twist.toFixed(0) + '°, ' + big.toFixed(0) + '°');
 }
 
+// ---- CS2's special inspects and draws: now and then, never twice in a row, cl_inspect_rare forcing them on or off --
+{
+  const { Arsenal } = await import('../src/js/play/weapons.js');
+  const gun = { vm: { has: () => true } }, ars = { game: { cv: { cl_inspect_rare: 0 } } };
+  let n = 0, twice = 0, prev = false;
+  for (let i = 0; i < 9000; i++) { const r = Arsenal.prototype.rare.call(ars, gun, 'inspectRare'); n += r; if (r && prev) twice++; prev = r; }
+  ok(n > 700 && n < 1100 && twice === 0, 'special inspects: about one in nine, never twice in a row: ' + n + ' in 9000');
+  ars.game.cv.cl_inspect_rare = 1;
+  const always = [0, 1, 2].every(() => Arsenal.prototype.rare.call(ars, gun, 'inspectRare'));
+  ars.game.cv.cl_inspect_rare = -1;
+  const never = [0, 1, 2].every(() => !Arsenal.prototype.rare.call(ars, gun, 'inspectRare'));
+  ok(always && never && !Arsenal.prototype.rare.call({ game: { cv: { cl_inspect_rare: 1 } } }, { vm: { has: () => false } }, 'inspectRare'), 'special inspects: cl_inspect_rare 1 always, -1 never (and none for a weapon without one)');
+}
+
 // ---- nav links and what bots can climb ------------------------------------------------------------------------------
 {
   const { NavMesh } = await import('../src/js/play/nav.js');
