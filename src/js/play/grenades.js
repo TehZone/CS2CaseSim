@@ -147,6 +147,7 @@ export class Grenades {
   move(n, dt) {
     const col = this.game.collision;
     if (n.still > 0.15) { n.still += dt; return; }
+    const from = n.pos.slice();
     let left = dt;
     for (let it = 0; it < 3 && left > 0; it++) {
       n.vel[2] -= GRAVITY * left;
@@ -166,6 +167,7 @@ export class Grenades {
       }
       if (nrm[2] > 0.7 && Math.hypot(...n.vel) < 25) { n.vel = [0, 0, 0]; n.still = 0.16; break; }
     }
+    if (this.game.balls.bump(n, from)) n.still = 0;
     if (Math.hypot(...n.vel) < 5) n.still += dt; else n.still = 0;
     toGl(n.pos, n.obj.position);
     if (n.still < 0.1) { n.obj.rotation.x += n.spin.x * dt; n.obj.rotation.y += n.spin.y * dt; n.obj.rotation.z += n.spin.z * dt; }
@@ -194,6 +196,7 @@ export class Grenades {
     const g = this.game;
     g.effects.explosion(n.pos, 0.35);
     this.volume.blast(n.pos);
+    g.balls.blast(n.pos, HE_RADIUS);
     for (const c of g.combatants.slice()) {
       if (!c.alive) continue;
       const p = g.bodyOf(c).chest;

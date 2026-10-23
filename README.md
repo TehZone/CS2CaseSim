@@ -70,8 +70,9 @@ What's in a match:
   this position, regroup, fall back, cover me; "enemy spotted" points them where you aim) and answer. Bots talk on the
   radio in their agent's CS2 voice (enemy spotted with the callout, enemy down, planting, flashbang out, enemies left...),
   shown in a chat with where it came from. Optional friendly fire with CS2's damage reductions and team-kill penalty.
-- Bots walk the map's own navigation mesh, ladders included: terrorists pick a site, take it and plant;
-  counter-terrorists split up to hold the sites, rotate when they see terrorists, retake and defuse; they flee a bomb
+- Bots walk the map's own navigation mesh, ladders included, and climb like players: up an 18-unit step at most,
+  jumping (or crouch-jumping, up to 66 units) onto boxes and ledges, and never onto anything higher. Terrorists pick
+  a site, take it and plant; counter-terrorists split up to hold the sites, rotate when they see terrorists, retake and defuse; they flee a bomb
   they can't stop. In fights they react after a human-like delay, aim with an error that shrinks as they track you,
   stop to shoot, control part of the recoil and fire in bursts. They smoke off and flash sites before taking them,
   molotov or HE where they last saw you, flash retakes, burn a defuser, get blinded by flashes, step out of fire and pick
@@ -91,6 +92,9 @@ What's in a match:
 - The lobby shows CS2's own screenshot of each map.
 - Kills with your StatTrak™ guns and knives count on them (enemies only), like CS2: the counter on the weapon goes up
   and the item keeps the count (online too).
+- Dust II's soccer ball is a physics prop like in CS2: walk into it to kick it along (it stops you against a wall),
+  bots bump it too, and bullets, knives and HE grenades knock it; it bounces, rolls to a stop and is back on its spot
+  every round.
 - CS2's special inspects and draws come up now and then in matches too (F again during an inspect for one; the console's
   cl_inspect_rare 1 always, -1 never).
 - The developer console (~): CS2's console commands and variables, with completion (Tab), history and find/help.

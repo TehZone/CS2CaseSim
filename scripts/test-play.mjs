@@ -1,7 +1,7 @@
 // Play mode physics tests on synthetic geometry: collision traces and Source-style movement (walking, walls, steps,
 // jumping, crouch-jumping onto a ledge, falling).
 //   node scripts/test-play.mjs
-import { CollisionWorld, FLAG_PLAYER, FLAG_BULLET } from '../src/js/play/collision.js';
+import { CollisionWorld, FLAG_PLAYER, FLAG_BULLET, FLAG_GRENADE } from '../src/js/play/collision.js';
 import { PlayerMovement, MOVE } from '../src/js/play/movement.js';
 import { Match, Combatant, SHORT_RULES } from '../src/js/play/match.js';
 import { SmokeField } from '../src/js/play/smoke.js';
@@ -338,6 +338,74 @@ function fakeGame() {
   const all = CATALOG.flatMap((c) => c.items.map(([id]) => id));
   ok(all.every((id) => icon(id)), 'icons: every buy menu item has one: ' + all.filter((id) => !icon(id)).join(', '));
   ok(icon(undefined) === null && iconFor(undefined, 'weapon_ak47') === null && iconFor({}, 'weapon_ak47') === null, 'icons: none without CS2 (names shown)');
+}
+
+// ---- the soccer ball -----------------------------------------------------------------------------------------------
+{
+  const { Balls } = await import('../src/js/play/props.js');
+  const THREE = await import('three');
+  // The floor and the wall, solid to props as well (they move like grenades).
+  const SOLID = FLAG_PLAYER | FLAG_BULLET | FLAG_GRENADE;
+  const BW = world([[[-2000, -2000, -64], [2000, 2000, 0], SOLID], [[500, -2000, 0], [564, 2000, 300], SOLID]]);
+  const game = { collision: BW, scene: { add() {} }, sounds: { play() {} }, now: 0, frameNo: 0, lineOfSight: () => true };
+  const make = (at) => new Balls(game, [{ mesh: new THREE.Object3D(), spawn: at, radius: 8, amb: { set() {} } }]);
+  const run = (balls, secs) => { for (let i = 0; i < secs * 64; i++) { game.now += 1 / 64; balls.tick(1 / 64); } };
+  const hull = [[-16, -16, 0], [16, 16, 72]];
+
+  let balls = make([0, 600, 9]), b = balls.list[0];
+  ok(near(b.spawn[2], 8.05, 0.01) && b.asleep, 'ball: settles onto the floor at its spot, at rest');
+  run(balls, 1);
+  ok(b.asleep && near(b.pos[0], 0, 1e-9) && near(b.pos[2], 8.05, 0.01), 'ball: stays put until something touches it');
+
+  const back = balls.touch([-23, 600, 0], [250, 0, 0], ...hull);
+  ok(!back && b.vel[0] > 250 && !b.asleep, 'ball: walking into it kicks it ahead, faster than you walk: ' + b.vel[0].toFixed(0));
+  run(balls, 10);
+  ok(b.asleep && b.pos[0] > 150 && near(b.pos[2], 8, 0.5) && Math.abs(b.pos[1] - 600) < 1, 'ball: rolls on along the floor and comes to rest: ' + b.pos.map((v) => v.toFixed(1)));
+
+  balls = make([400, 800, 8]); b = balls.list[0];
+  b.vel = [400, 0, 0]; balls.wake(b);
+  let maxX = 0;
+  for (let i = 0; i < 64; i++) { balls.tick(1 / 64); maxX = Math.max(maxX, b.pos[0]); }
+  ok(maxX < 500 - 7 && b.vel[0] < 0, 'ball: bounces off a wall without going into it: ' + maxX.toFixed(1));
+
+  balls = make([500 - 7.3, 1000, 8]); b = balls.list[0];
+  const pinned = balls.touch([500 - 7.3 - 8 - 16 + 2, 1000, 0], [0, 0, 0], ...hull);
+  ok(pinned && pinned[0] < -1.5, "ball: against a wall it can't get out of the way, so it holds you back: " + pinned?.map((v) => v.toFixed(2)));
+
+  balls = make([0, 1200, 8]); b = balls.list[0];
+  ok(!balls.shot([-100, 1220, 8], [1, 0, 0], 500, 300) && b.asleep, 'ball: a shot that misses leaves it be');
+  ok(balls.shot([-100, 1200, 8], [1, 0, 0], 500, 300) && b.vel[0] > 250 && b.vel[2] > 0, 'ball: a shot knocks it along the bullet');
+  balls.reset();
+  ok(b.asleep && b.pos[0] === 0 && b.vel.every((v) => v === 0), 'ball: a new round puts it back on its spot, at rest');
+
+  // A grenade moving 11 units a tick through where the ball is bounces off it (no tunnelling).
+  const nade = { pos: [-4, 1200, 9], vel: [700, 0, 0] };
+  ok(balls.bump(nade, [-15, 1200, 9]) && nade.vel[0] < 700 && b.vel[0] > 0 && Math.hypot(nade.pos[0] - b.pos[0], nade.pos[2] - b.pos[2]) >= 10, 'ball: a grenade bounces off it and knocks it');
+  balls.reset();
+  balls.blast([-60, 1200, 4], 350);
+  ok(b.vel[0] > 500 && b.vel[2] > 100, 'ball: an HE next to it sends it flying');
+}
+
+// ---- nav links and what bots can climb ------------------------------------------------------------------------------
+{
+  const { NavMesh } = await import('../src/js/play/nav.js');
+  // A floor (A, z 0) with a 16-unit step to the west (E), a 50-unit box to the east (B) and an 80-unit ledge to the
+  // north (C). Corners go round each area; edge i runs from corner i to i+1 and lists the areas across it.
+  const sq = (x0, y0, x1, y1, z) => [[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]];
+  const nav = new NavMesh({ areas: [
+    { id: 1, flags: 0, c: sq(0, 0, 100, 100, 0), e: [[], [2], [3], [4]] },
+    { id: 2, flags: 0, c: sq(100, 0, 200, 100, 50), e: [[], [], [], [1]] },
+    { id: 3, flags: 0, c: sq(0, 100, 100, 200, 80), e: [[1], [], [], []] },
+    { id: 4, flags: 0, c: sq(-100, 0, 0, 100, 16), e: [[], [1], [], []] },
+  ] });
+  const box = nav.path([50, 50, 0], [150, 50, 50]);
+  ok(box && box.points.some((p) => p.jump > 40 && p.jump < 60), 'nav: onto a 50-unit box is a jump');
+  const step = nav.path([50, 50, 0], [-50, 50, 16]);
+  ok(step && !step.points.some((p) => p.jump), 'nav: up a 16-unit step is a walk');
+  ok(nav.path([50, 50, 0], [50, 150, 80]) === null, "nav: an 80-unit ledge can't be climbed (higher than a crouch-jump)");
+  ok(nav.path([50, 150, 80], [50, 50, 0]) !== null, 'nav: but you can drop down from it');
+  ok(nav.groundAt(150, 50, 0) === null && nav.groundAt(150, 50, 0, 74) === 50 && nav.groundAt(50, 150, 0, 74) === null && nav.groundAt(-50, 50, 0) === 16,
+    'nav: the ground a step (or a jump) up from where you are');
 }
 
 console.log(`${pass} passed, ${fail} failed`);

@@ -438,6 +438,49 @@ async function runPlaySmoke(win) {
     return JSON.stringify({ gun: gun.id, before, after: kills(), display });
   } catch (e) { return 'failed: ' + e.message; } })()`));
   await shot('stattrak-play');
+  // Dust II's soccer ball: walked into (you can't walk through it at a wall), shot, a grenade off it and an HE next to
+  // it; it's back on its spot next round (see round 2 below). A screenshot of it in play-ball.png.
+  console.log('SMOKE play soccer ball', await js(`(async () => { try {
+    const g = window.__playGame, b = g.balls.list[0];
+    if (!b) return 'no ball on this map';
+    const god = g.god, stop = g.cv.bot_stop; g.god = true; g.cv.bot_stop = 1; // the bots wait (the round mustn't end meanwhile)
+    const rel = () => b.pos.map((v, k) => Math.round(v - b.spawn[k]));
+    const speed = () => Math.round(Math.hypot(...b.vel));
+    const stand = (dx, dy = 0) => { g.player.origin = [b.spawn[0] + dx, b.spawn[1] + dy, b.spawn[2] - b.radius - 0.05]; g.player.velocity = [0, 0, 0]; g.input.yaw = 0; g.input.pitch = 0; };
+    const out = {};
+    if (!g.me.alive) { g.me.alive = true; g.me.health = 100; g.deathCam = null; } // shot by then: back on your feet to walk
+    g.balls.reset(); stand(-70);
+    g.input.keys.add('KeyW');
+    let kicked = 0;
+    for (let i = 0; i < 192; i++) { g.tick(); kicked = Math.max(kicked, speed()); }
+    g.input.keys.delete('KeyW');
+    out.walk = { kickedTo: kicked, ballAt: rel(), youAt: Math.round(g.player.origin[0] - b.spawn[0]), gap: Math.round(b.pos[0] - g.player.origin[0]) };
+    g.balls.reset(); stand(-200);
+    const eye = g.player.eye(), d = b.pos.map((v, k) => v - eye[k]), l = Math.hypot(...d);
+    g.fireBullet(g.me, eye, d.map((v) => v / l), g.arsenal.gun);
+    const shotSpeed = speed();
+    for (let i = 0; i < 64; i++) g.tick();
+    out.shot = { gun: g.arsenal.gun.id, speed: shotSpeed, after1s: rel() };
+    g.balls.reset();
+    const n = g.nades.throw(g.me, 'weapon_decoy', [b.spawn[0] - 120, b.spawn[1], b.spawn[2] + 2], [700, 0, 40]);
+    let nade = null;
+    for (let i = 0; i < 30 && !nade; i++) { g.tick(); if (!b.asleep) nade = { ball: speed(), decoy: Math.round(Math.hypot(...n.vel)) }; }
+    out.grenade = nade || 'missed';
+    g.balls.reset();
+    g.nades.explodeHE({ pos: [b.spawn[0] - 60, b.spawn[1] + 20, b.spawn[2] - 4], c: g.me, id: 'weapon_hegrenade', info: { name: 'HE Grenade' } });
+    out.he = { speed: speed() };
+    for (let i = 0; i < 64; i++) g.tick();
+    out.he.after1s = rel();
+    stand(-90, -30);
+    const e2 = g.player.eye();
+    g.input.yaw = Math.atan2(b.pos[1] - e2[1], b.pos[0] - e2[0]) * 180 / Math.PI;
+    g.input.pitch = Math.atan2(e2[2] - b.pos[2], Math.hypot(b.pos[0] - e2[0], b.pos[1] - e2[1])) * 180 / Math.PI;
+    g.god = god; g.cv.bot_stop = stop;
+    out.phase = g.match.phase;
+    return JSON.stringify(out);
+  } catch (e) { return 'failed: ' + e.message; } })()`));
+  await wait(600);
+  await shot('ball');
   // The Deagle's spin in the match: bought, drawn and inspected with cl_inspect_rare 1.
   await js(`(async () => { const g = window.__playGame; g.cv.cl_inspect_rare = 1; await g.giveMe('secondary', 'weapon_deagle'); g.input.pressed.add('slot2'); })()`);
   await wait(1500);
@@ -473,7 +516,51 @@ async function runPlaySmoke(win) {
   console.log('SMOKE play round 1 result', ff);
   await wait(1500);
   await shot('round2');
-  console.log('SMOKE play round 2', await state());
+  console.log('SMOKE play round 2', await state(), await js(`(() => { const b = window.__playGame.balls.list[0];
+    return b ? 'ball ' + JSON.stringify({ fromSpot: Math.round(Math.hypot(...b.pos.map((v, k) => v - b.spawn[k]))), resting: b.asleep }) : ''; })()`));
+  // Bots climb like players: a box on Long A, the xbox at top of Mid and the box by Mid doors take a jump (the Mid doors
+  // one a crouch-jump), and over four minutes of bots playing none gets up more than a step without one.
+  console.log('SMOKE play bot climbing', await js(`(() => { try {
+    const g = window.__playGame, nav = g.nav, m = g.match;
+    for (const b of g.bots) delete b.brain.tick; // the smoke check above switched their thinking off
+    const stage = (from, to) => {
+      const A = nav.findArea(from, 40), B = nav.findArea(to, 40);
+      if (!A || !B) return 'no nav there';
+      const b = g.bots.find((x) => x.c.alive) || g.bots[0], br = b.brain;
+      const goal = B.center.slice();
+      b.pos = [A.center[0], A.center[1], g.floorAt(A.center, 64) ?? A.center[2]]; b.vel = [0, 0, 0]; b.jumped = false; b.tuck = 0; b.climbing = null;
+      br.target = null; br.task = 'goto'; br.goTo(goal);
+      let jumps = 0, crouch = 0, walkUps = 0, was = false, z = b.pos[2], vz = 0;
+      for (let i = 0; i < 5 * 64; i++) {
+        g.now += 1 / 64; br.move(1 / 64, g.now, true);
+        if (b.jumped && !was) { jumps++; if (b.tuck) crouch++; }
+        was = !!b.jumped;
+        if (vz === 0 && b.vel[2] === 0 && b.pos[2] - z > 18.5) walkUps++;
+        z = b.pos[2]; vz = b.vel[2];
+      }
+      const onTop = Math.hypot(b.pos[0] - goal[0], b.pos[1] - goal[1]) < 48 && Math.abs(b.pos[2] - goal[2]) < 20;
+      return { rise: Math.round(goal[2] - A.center[2]), jumps, crouch, walkUps, onTop };
+    };
+    const out = { longBox: stage([1547, 2040, -10], [1647, 2071, 55]), xbox: stage([-208, 491, -2], [-233, 550, 47]), midDoorsBox: stage([-311, 1436, -28], [-247, 1332, 36]) };
+    const rec = { simSeconds: 240, walkUps: 0, jumps: 0, falls: 0, rounds: [] }, prev = new Map();
+    for (let n = 0; n < 240 * 64; n++) {
+      const r0 = m.round, ph0 = m.phase;
+      for (const b of g.bots) prev.set(b, { z: b.pos[2], vz: b.vel[2], j: !!b.jumped, alive: b.c.alive });
+      g.tick();
+      const fresh = m.round !== r0 || (ph0 !== m.phase && m.phase === 'freeze');
+      for (const b of g.bots) {
+        const p = prev.get(b);
+        if (fresh || !b.c.alive || !p.alive) continue;
+        if (!b.climbing && p.vz === 0 && b.vel[2] === 0 && b.pos[2] - p.z > 18.5) rec.walkUps++;
+        if (b.jumped && !p.j) rec.jumps++;
+        if (b.vel[2] < -1500 && p.vz >= -1500) rec.falls++;
+      }
+      if (m.round !== r0) { const h = m.history[m.history.length - 1]; rec.rounds.push(h.winner + ':' + h.reason); }
+      if (g.me.alive && m.phase === 'live') g.kill(g.me, null, { name: 'World' }, false);
+    }
+    out.playing = rec;
+    return JSON.stringify(out);
+  } catch (e) { return 'failed: ' + e.message; } })()`));
   console.log('SMOKE screenshots saved to', app.getPath('userData'));
   app.quit();
 }

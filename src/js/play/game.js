@@ -8,7 +8,7 @@ import { equipped } from '../loadout.js';
 import { itemDef } from '../items.js';
 import { D } from '../data.js';
 import { CollisionWorld, FLAG_BULLET, FLAG_PLAYER } from './collision.js';
-import { PlayerMovement } from './movement.js';
+import { PlayerMovement, HULL_STAND as BOT_HULL } from './movement.js';
 import { loadWorld, toGl } from './world.js';
 import { Input } from './input.js';
 import { SoundBank } from './sound.js';
@@ -27,6 +27,7 @@ import { Radar } from './radar.js';
 import { buildCS2Model } from '../cs2/skin.js';
 import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, aimThrow as aimThrowPitch } from './grenades.js';
 import { Drops } from './drops.js';
+import { Balls } from './props.js';
 import { Post } from './post.js';
 import { Radio } from './radio.js';
 import { MODES, WINGMAN_RULES, Deathmatch, ARMS_RACE, PROTECT } from './modes.js';
@@ -164,6 +165,7 @@ export class Game {
     this.effects = new Effects(this.scene, this.vmScene);
     this.nades = new Grenades(this);
     this.drops = new Drops(this);
+    this.balls = new Balls(this, this.world.balls);
     this.post = new Post(this.renderer, { samples: this.msaa, smoke: this.nades.volume });
     this.post.setLighting(this.world);
     // The map's post processing: its tone curve, auto exposure range and colour grading LUT.
@@ -247,7 +249,7 @@ export class Game {
       'c4.keypressquiet', 'Player.PickupC4', 'Player.PickupWeapon', 'Event.BombPlanted', 'Event.BombDefused', 'Event.CTWin', 'Event.TERWin',
       `Music.StartRound.${MUSIC}`, `Music.BombPlanted.${MUSIC}`, `Music.WonRound.${MUSIC}`, `Music.LostRound.${MUSIC}`, `Music.MatchEnd.${MUSIC}`,
       ...NADE_SOUNDS, 'Molotov.Draw', 'HEGrenade.Draw', 'Player.PickupGrenadeAudible', 'Player.PickupWeaponSilent', 'Player.DeathTaser', 'Player.DamageFall',
-      'CT_Ladder.StepLeft', 'CT_Wood_Ladder.StepLeft', 'UI.PlayerPing'];
+      'CT_Ladder.StepLeft', 'CT_Wood_Ladder.StepLeft', 'UI.PlayerPing', 'Ball.ImpactSoft', 'Ball.ImpactHard', 'Ball.BulletImpact'];
   }
 
   setupViewmodelLighting() {
@@ -525,6 +527,7 @@ export class Game {
 
   // ---- rounds (called by the match) -------------------------------------------------------------------------------
   onRoundStart(round, { halftime, pistol, overtime, respawn }) {
+    if (!respawn) this.balls?.reset();
     if (respawn) { this.startRespawnMode(); return; }
     this.effects.clear();
     this.nades.clear();
@@ -924,6 +927,7 @@ export class Game {
       const wasGround = this.player.onGround;
       if (this.noclip) this.flyNoclip(cmd); else this.player.tick(TICK, cmd);
       this.pushOutOfBots();
+      if (!this.noclip) this.pushOutOfBalls();
       if (this.player.origin[2] < -3000) this.kill(me, null, { name: 'World' }, false);
       this.fallDamage();
       this.footsteps(wasGround);
@@ -947,6 +951,7 @@ export class Game {
       if (!b.c.alive) continue;
       if (this.cv.bot_stop) { b.vel = [0, 0, 0]; continue; }
       b.brain.tick(TICK, this.now);
+      this.balls.touch(b.pos, b.vel, BOT_HULL.mins, BOT_HULL.maxs);
       this.botThrowing(b);
       const bomb = m.bomb;
       if (bomb?.state === 'dropped' && b.c.team === 'T' && Math.hypot(b.pos[0] - bomb.pos[0], b.pos[1] - bomb.pos[1]) < 50) m.pickupBomb(b.c);
@@ -954,6 +959,7 @@ export class Game {
     }
     this.nades.tick(TICK);
     this.drops.tick(TICK);
+    this.balls.tick(TICK);
     this.pickups();
     // The planted bomb beeps faster as it gets closer to going off.
     if (m.phase === 'planted' && this.now >= m.bomb.beepAt) {
@@ -1111,6 +1117,16 @@ export class Game {
         this.player.origin = this.collision.traceBox(o, to, this.player.hull.mins, this.player.hull.maxs, FLAG_PLAYER).endpos;
       }
     }
+  }
+
+  // Walking into the soccer ball kicks it along; where it can't get out of the way (against a wall) it stops you.
+  pushOutOfBalls() {
+    const pl = this.player, back = this.balls.touch(pl.origin, pl.velocity, pl.hull.mins, pl.hull.maxs);
+    if (!back) return;
+    const o = pl.origin, l = Math.hypot(...back);
+    pl.origin = this.collision.traceBox(o, o.map((p, k) => p + back[k]), pl.hull.mins, pl.hull.maxs, FLAG_PLAYER).endpos;
+    const into = (pl.velocity[0] * back[0] + pl.velocity[1] * back[1] + pl.velocity[2] * back[2]) / l;
+    if (into < 0) for (let k = 0; k < 3; k++) pl.velocity[k] -= (back[k] / l) * into;
   }
 
   // CS2's fall damage: landing faster than 580 units/s hurts (armor doesn't help), 1024+ is about 125 damage.
@@ -1301,6 +1317,7 @@ export class Game {
         const h = this.hitTest(c, o, dir, hit ? hit.t : maxT);
         if (h) hit = { ...h, c };
       }
+      this.balls.shot(o, dir, hit ? hit.t : maxT, Math.min(520, st.damage * scale * 9));
       if (hit) {
         if (shooter === this.me) this.me.hits = (this.me.hits || 0) + 1;
         const p = [0, 1, 2].map((i) => o[i] + dir[i] * hit.t);
@@ -1370,6 +1387,7 @@ export class Game {
     }
     if (best) return best;
     const wall = this.collision.raycast(eye, fwd, range, FLAG_BULLET);
+    if (this.balls.shot(eye, fwd, wall ? wall.t : range + 8, 380)) return { ball: true };
     if (wall) { this.effects.impact([0, 1, 2].map((i) => eye[i] + fwd[i] * wall.t), wall.normal, wall.surface); return { wall }; }
     return null;
   }
@@ -1631,6 +1649,7 @@ export class Game {
       const lum = (c[6] + c[7] + c[8]) / 3;
       this.vmScene.environmentIntensity = 0.3 * Math.min(1, Math.max(0.1, lum / 0.45));
     }
+    this.balls.update(this.paused ? 1 : this.acc / TICK, probes);
     this.updatePings();
     this.effects.update(dt);
     this.nades.update(dt);

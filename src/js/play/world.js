@@ -23,6 +23,8 @@ export const dirGl = (d, out = new THREE.Vector3()) => out.set(d[1], d[2], d[0])
 // Materials that never draw in game (tool textures), or need CS2 shaders we don't have.
 const HIDDEN = /toolsskybox|tools\/|toolsnodraw|nodraw|toolsclip|toolsplayerclip|toolsinvisible|toolstrigger|skybox/i;
 const HIDDEN_SHADERS = /csgo_effects|sky\.vfx|csgo_water|spritecard/i;
+// Physics props kept out of the static world: the soccer ball.
+const BALL = /soccer_?ball/i;
 // Shaders whose second UV set is the lightmap UV (world geometry and overlays).
 const LIGHTMAPPED = /lightmappedgeneric|static_overlay|environment_blend|csgo_environment\.vfx/i;
 const CELL = 3000; // merge cell size, game units
@@ -313,13 +315,14 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     const kx = n[0] >= 0 ? 0 : 3, ky = n[1] >= 0 ? 1 : 4, kz = n[2] >= 0 ? 2 : 5, wx = n[0] * n[0], wy = n[1] * n[1], wz = n[2] * n[2];
     for (let c = 0; c < 3; c++) out[c] = cube[kx * 3 + c] * wx + cube[ky * 3 + c] * wy + cube[kz * 3 + c] * wz;
   });
-  const variants = new Map(), groups = new Map(), originals = new Set();
+  const variants = new Map(), groups = new Map(), originals = new Set(), props = [];
   const center = new THREE.Vector3();
   gltf.scene.traverse((o) => {
     if (!o.isMesh || Array.isArray(o.material)) return;
     const m = o.material;
     const vm = m.userData?.vmat || {};
     if (HIDDEN.test(m.name || '') || HIDDEN.test(vm.Name || '') || HIDDEN_SHADERS.test(vm.ShaderName || '')) return;
+    if (BALL.test(o.name) || BALL.test(o.parent?.name || '')) { props.push(o); return; }
     const lm = !!(lightMap && o.geometry.attributes.uv1 && LIGHTMAPPED.test(vm.ShaderName || ''));
     const key = m.uuid + (lm ? ':lm' : ':amb');
     if (!variants.has(key)) {
@@ -351,6 +354,21 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     world.add(mesh);
     if (++n % 200 === 0) { onProgress(`Building the world… ${Math.round((n / groups.size) * 100)}%`); await tick(); }
   }
+  // The soccer ball (a physics prop, exported in place) stays a mesh of its own, to be kicked about (see props.js).
+  const balls = props.map((o) => {
+    const geo = o.geometry.clone().applyMatrix4(o.matrixWorld);
+    geo.computeBoundingSphere();
+    const c = geo.boundingSphere.center.clone();
+    geo.translate(-c.x, -c.y, -c.z);
+    const amb = ambientCube(), m = o.material.clone();
+    m.vertexColors = false; m.envMap = null;
+    ambientLit(m, { cube: amb.cube });
+    const mesh = new THREE.Mesh(geo, m);
+    mesh.position.copy(c);
+    mesh.castShadow = false; // the sun's shadow map is drawn once
+    mesh.receiveShadow = true;
+    return { mesh, spawn: fromGl(c), radius: geo.boundingSphere.radius / IN, amb };
+  });
   gltf.scene.traverse((o) => o.geometry?.dispose());
   for (const m of originals) m.dispose();
 
@@ -382,7 +400,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   } else scene.background = new THREE.Color(0x9cc3e8);
 
   return {
-    scene, world, sun, sky, ambient, bounds, probes,
+    scene, world, sun, sky, ambient, bounds, probes, balls,
     sunDir: [-travel.z, -travel.x, -travel.y], // game-space direction towards the sun
     drawCalls: world.children.length,
     dispose() {
@@ -391,6 +409,11 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
         v.dispose();
       }
       world.traverse((o) => o.geometry?.dispose());
+      for (const { mesh } of balls) {
+        mesh.geometry.dispose();
+        for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) mesh.material[k]?.dispose();
+        mesh.material.dispose();
+      }
       lightMap?.dispose();
       for (const t of layerTextures.values()) t.dispose();
       sky?.dispose();

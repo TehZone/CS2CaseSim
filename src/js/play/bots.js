@@ -321,7 +321,7 @@ export class Bot {
     this.mixer.stopAllAction();
     this.loco = null;
     this.gestureAction = null;
-    this.climbing = null; this.airborne = false; this.pendingThrow = null;
+    this.climbing = null; this.airborne = false; this.jumped = false; this.tuck = 0; this.pendingThrow = null;
     this.root.visible = true;
     if (this.holding) { const h = this.holding; this.holding = null; this.equip(h, { draw: false }); }
     this.sync();

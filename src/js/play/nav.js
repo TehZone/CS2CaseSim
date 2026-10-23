@@ -2,6 +2,9 @@
 // between them. Used to put bots on walkable ground and to find paths between places. Game units.
 const CELL = 256;
 const FLAG_CROUCH = 0x10000, FLAG_JUMP = 0x2, FLAG_AVOID = 0x80;
+// What a player can climb (CS2's): a step without jumping, a jump, a crouch-jump.
+export const STEP_HEIGHT = 18, JUMP_HEIGHT = 56, CROUCH_JUMP_HEIGHT = 66;
+const JUMP_COST = 100; // a jump costs a path this many units more than walking (stairs or a ramp nearby win)
 
 export class NavMesh {
   constructor(data) {
@@ -15,6 +18,17 @@ export class NavMesh {
       return { id: a.id, flags: a.flags, corners: a.c, edges: a.e, hiding: a.h, center: [cx, cy, cz], size, min, max, links: [...new Set(a.e.flat())] };
     });
     this.byId = new Map(this.areas.map((a) => [a.id, a]));
+    // How far each link climbs where the two areas meet: up to a step is a walk, up to a crouch-jump a jump, higher
+    // can't be climbed (the link is only for coming down).
+    for (const a of this.areas) {
+      a.rise = new Map();
+      for (const id of a.links) {
+        const b = this.byId.get(id);
+        if (!b) continue;
+        const from = portal(a, b), to = b.links.includes(a.id) ? portal(b, a) : heightPoint(b, from);
+        a.rise.set(id, to[2] - from[2]);
+      }
+    }
     // Ladders: climbable links between the areas at their bottom and top. dir is the side you climb from (Source's
     // NavDirType: north -y, east +x, south +y, west -x), so the climber stands at bottom + normal x 16.
     this.ladders = (data.ladders || []).map((l) => {
@@ -56,6 +70,19 @@ export class NavMesh {
   heightAt(x, y, z, maxDz = 80) {
     const a = this.findArea([x, y, z], maxDz);
     return a ? heightIn(a.corners, x, y) : null;
+  }
+
+  // The highest ground under (x, y) from `down` below z to `up` above it (what someone standing at z could get onto
+  // there), or null. A player is 72 units tall, so two walkable surfaces at one spot are always further apart than that.
+  groundAt(x, y, z, up = STEP_HEIGHT, down = 600) {
+    const list = this.grid.get(Math.floor(x / CELL) + ',' + Math.floor(y / CELL)) || [];
+    let best = null;
+    for (const a of list) {
+      if (x < a.min[0] - 1 || x > a.max[0] + 1 || y < a.min[1] - 1 || y > a.max[1] + 1) continue;
+      const h = heightIn(a.corners, x, y);
+      if (h !== null && h <= z + up && h >= z - down && (best === null || h > best)) best = h;
+    }
+    return best;
   }
 
   // A random spot inside a box (e.g. a bomb site) on walkable ground.
@@ -117,7 +144,11 @@ export class NavMesh {
         for (let n = cur; n; n = n.prev) chain.unshift(n);
         for (let i = 1; i < areas.length; i++) {
           const lad = chain[i].ladder;
-          if (!lad) { pts.push(portal(areas[i - 1], areas[i])); continue; }
+          if (!lad) {
+            const rise = areas[i - 1].rise.get(areas[i].id) || 0;
+            pts.push(rise > STEP_HEIGHT ? Object.assign(portal(areas[i - 1], areas[i]), { jump: rise }) : portal(areas[i - 1], areas[i]));
+            continue;
+          }
           // Climb: walk to the foot (or the top), then up (or down) the rungs, then step off.
           const { ladder: l, up } = lad, n = l.normal;
           const foot = [l.bottom[0] + n[0] * 16, l.bottom[1] + n[1] * 16, l.bottom[2]], head = [l.top[0] + n[0] * 16, l.top[1] + n[1] * 16, l.top[2]];
@@ -132,8 +163,9 @@ export class NavMesh {
       for (const id of cur.a.links) {
         if (closed.has(id)) continue;
         const b = this.byId.get(id);
-        if (!b) continue;
-        const g = cur.g + dist(cur.a.center, b.center) * (b.flags & FLAG_CROUCH ? 2 : 1);
+        const rise = cur.a.rise.get(id) || 0;
+        if (!b || rise > CROUCH_JUMP_HEIGHT) continue;
+        const g = cur.g + dist(cur.a.center, b.center) * (b.flags & FLAG_CROUCH ? 2 : 1) + (rise > STEP_HEIGHT ? JUMP_COST : 0);
         const o = open.get(id);
         if (!o || g < o.g) open.set(id, { a: b, g, f: g + dist(b.center, goal.center), prev: cur });
       }

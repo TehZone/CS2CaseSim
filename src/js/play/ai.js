@@ -7,6 +7,8 @@
 import { FLAG_BULLET, FLAG_PLAYER } from './collision.js';
 import { Gun } from './weapons.js';
 import { setOf } from './bots.js';
+import { MOVE } from './movement.js';
+import { STEP_HEIGHT, JUMP_HEIGHT, CROUCH_JUMP_HEIGHT } from './nav.js';
 
 export const DIFFICULTY = {
   easy: { reaction: [0.5, 0.85], turn: 240, aimErr: 7, head: 0.15, control: 0.3, burst: 3, fov: 90, hear: 0.6 },
@@ -484,7 +486,7 @@ export class Brain {
   goTo(goal) {
     const p = this.game.nav.path(this.bot.pos, goal);
     this.goal = goal.slice();
-    this.path = p ? p.points : [goal.slice()];
+    this.path = p ? p.points : [Object.assign(goal.slice(), { direct: true })]; // no way there on the mesh: straight at it
     this.pi = 0;
     this.stuckT = 0;
     this.holdYaw = null;
@@ -497,7 +499,7 @@ export class Brain {
     let max = gun?.stats?.maxSpeed?.[0] || 250;
     if (b.ducked) max *= 0.34;
     else if (this.walking(t)) max *= 0.52;
-    let want = [0, 0], wpZ = null;
+    let want = [0, 0], wpZ = null, direct = false;
     this.heading = null;
     if (moving && this.path && this.pi < this.path.length && this.task !== 'hold') {
       if (t >= (this.smoothAt || 0)) { this.smoothAt = t + 0.2; this.skipAhead(); }
@@ -506,7 +508,10 @@ export class Brain {
       let d = Math.hypot(dx, dy);
       while (d < 24 && !wp.ladder && this.pi < this.path.length - 1) { this.pi++; wp = this.path[this.pi]; dx = wp[0] - b.pos[0]; dy = wp[1] - b.pos[1]; d = Math.hypot(dx, dy); }
       const last = this.pi >= this.path.length - 1;
-      if (d > (last ? 32 : 8)) { want = [(dx / d) * max, (dy / d) * max]; wpZ = wp[2]; } else if (last) this.path = null;
+      // There once it's close, and up on the same level: a goal on a box isn't reached from the foot of it, so it keeps
+      // on (slowing down near it) into the box, which it then jumps onto.
+      const below = last && (b.vel[2] !== 0 || wp[2] - b.pos[2] > STEP_HEIGHT) && d > 2;
+      if (d > (last ? 32 : 8) || below) { const s = below && d < 32 ? max * Math.max(0.35, d / 32) : max; want = [(dx / d) * s, (dy / d) * s]; wpZ = wp[2]; direct = !!wp.direct; } else if (last) this.path = null;
     } else if (this.target?.visible && b.weapons[b.slot]?.melee && moving) {
       const e = g.bodyOf(this.target.c).feet, dx = e[0] - b.pos[0], dy = e[1] - b.pos[1], d = Math.hypot(dx, dy);
       if (d > 30) want = [(dx / d) * max, (dy / d) * max];
@@ -530,33 +535,49 @@ export class Brain {
     const k = 1 - Math.exp(-dt * 9);
     b.vel[0] += (want[0] - b.vel[0]) * k;
     b.vel[1] += (want[1] - b.vel[1]) * k;
-    const nx = b.pos[0] + b.vel[0] * dt, ny = b.pos[1] + b.vel[1] * dt;
-    // Where to stand: the nav mesh says where the ground is walkable, the collision floor exactly how high it is (the
-    // nav mesh runs a few units above it).
-    let h = nav.heightAt(nx, ny, b.pos[2] + 20);
-    const floor = g.floorAt([nx, ny, b.pos[2]], 64);
-    if (h !== null && floor !== null && Math.abs(floor - h) < 24) h = floor;
-    const below = h === null && wpZ === null ? nav.heightAt(b.pos[0], b.pos[1], b.pos[2] + 20, 600) : null;
-    if (below !== null && below < b.pos[2] - 1) {
-      // In the air over lower ground (dropped off a ledge at the end of a path): fall onto it.
-      b.vel[2] -= 800 * dt; b.pos[2] = Math.max(below, b.pos[2] + b.vel[2] * dt); if (b.pos[2] === below) b.vel[2] = 0;
-    } else if (h === null && wpZ === null) {
-      // Off the mesh (e.g. pushed by a teammate): don't go there.
+    let nx = b.pos[0] + b.vel[0] * dt, ny = b.pos[1] + b.vel[1] * dt;
+    // Where it would stand there: the nav mesh says where the ground is walkable, the collision floor exactly how high
+    // it is (the nav mesh runs a few units above it). Like a player, a bot gets up a step (18 units) at most: higher
+    // ground takes a jump (a crouch-jump for the highest), and until its feet are up there it can't move onto it.
+    const air = b.vel[2] !== 0, reach = air ? b.tuck || 0 : STEP_HEIGHT;
+    const ground = (x, y, up) => {
+      const h = nav.groundAt(x, y, b.pos[2], up);
+      if (h !== null) {
+        const floor = g.floorAt([x, y, h], 64);
+        return floor !== null && Math.abs(floor - h) < 24 ? floor : h;
+      }
+      // Between areas (a seam, or round the edge of a box or ledge, where the nav mesh stops short of it): the collision.
+      // Looking up from the feet, meeting a surface's top from below means that's inside a box: its top is the ground.
+      const over = g.collision.raycast([x, y, b.pos[2] + 1], [0, 0, 1], up, FLAG_PLAYER);
+      if (over && over.normal[2] > 0.5) return b.pos[2] + 1 + over.t;
+      return g.floorAt([x, y, b.pos[2]], 600);
+    };
+    let h = null;
+    if ((wpZ === null || direct) && nav.groundAt(nx, ny, b.pos[2], CROUCH_JUMP_HEIGHT + 8) === null) {
+      // Off the mesh (pushed by a teammate, or heading straight for somewhere the mesh has no way to): don't go there.
       b.vel[0] *= 0.3; b.vel[1] *= 0.3;
-    } else if (h === null) {
-      // Crossing between two areas (a seam, a step up or a drop): follow the path, easing towards its height (the floor
-      // there when it's close to it).
-      b.pos[0] = nx; b.pos[1] = ny;
-      if (floor !== null && Math.abs(floor - wpZ) < 24) wpZ = floor;
-      const dz = wpZ - b.pos[2];
-      if (dz > 0) b.pos[2] += Math.min(dz, 400 * dt);
-      else { b.vel[2] -= 800 * dt; b.pos[2] = Math.max(wpZ, b.pos[2] + b.vel[2] * dt); if (b.pos[2] === wpZ) b.vel[2] = 0; }
+      nx = b.pos[0]; ny = b.pos[1];
     } else {
-      b.pos[0] = nx; b.pos[1] = ny;
-      if (h < b.pos[2] - 3) { b.vel[2] -= 800 * dt; b.pos[2] = Math.max(h, b.pos[2] + b.vel[2] * dt); if (b.pos[2] === h) b.vel[2] = 0; }
-      else { b.pos[2] = h; b.vel[2] = 0; }
+      h = ground(nx, ny, CROUCH_JUMP_HEIGHT + 8);
+      if (h === null) { nx = b.pos[0]; ny = b.pos[1]; } // no floor there at all: not a step (or a jump) into the void
+      else if (h > b.pos[2] + reach + 0.5) {
+        if (!air && (want[0] || want[1]) && h - b.pos[2] <= CROUCH_JUMP_HEIGHT) this.jump(h - b.pos[2]);
+        nx = b.pos[0]; ny = b.pos[1];
+        b.vel[0] = b.vel[1] = 0;
+      }
     }
-    b.airborne = b.vel[2] < -120; // falling for real (not just a step down)
+    if (nx === b.pos[0] && ny === b.pos[1]) h = ground(nx, ny, Math.max(2, b.tuck || 0)); // staying put: the ground here
+    b.pos[0] = nx; b.pos[1] = ny;
+    if (air || h === null || h < b.pos[2] - 3) {
+      // In the air: a jump, or off a ledge (a step down is just a step).
+      b.vel[2] -= MOVE.gravity * dt;
+      const z = b.pos[2] + b.vel[2] * dt;
+      if (h !== null && z <= h && b.vel[2] <= 0) { b.pos[2] = h; b.vel[2] = 0; b.tuck = 0; b.jumped = false; }
+      else b.pos[2] = z;
+      if (b.tuck) b.ducked = true;
+      if (b.vel[2] < -3000) { const a = nav.nearestArea(b.pos); b.pos = [a.center[0], a.center[1], a.center[2]]; b.vel[2] = 0; } // fell out of the map
+    } else b.pos[2] = h;
+    b.airborne = b.vel[2] !== 0 && (b.jumped || b.vel[2] < -120); // jumping, or falling for real (not a step down)
     // Stuck: find the way again; after a few tries, stand still a moment (rather than turning back and forth between
     // new paths) and then try again.
     if (moving && this.path && !b.climbing) {
@@ -571,14 +592,23 @@ export class Brain {
       }
     }
   }
+  // Jumps onto a ledge `rise` units up: CS2's jump, crouching in the air (feet tucked 10 units higher) for a ledge too
+  // high for a plain jump.
+  jump(rise) {
+    const b = this.bot;
+    b.vel[2] = MOVE.jumpImpulse;
+    b.tuck = rise > JUMP_HEIGHT ? CROUCH_JUMP_HEIGHT - JUMP_HEIGHT : 0;
+    b.jumped = true;
+  }
+
   // String pulling: the path runs through the middles of the nav areas' shared edges (a zig-zag), so head for the
   // furthest of the next waypoints the bot can walk straight to (its body fits all the way, the ground is there with no
-  // drop or gap). It then walks, and faces, in straight lines and turns at real corners. Never past a ladder.
+  // drop or gap). It then walks, and faces, in straight lines and turns at real corners. Never past a ladder or a jump.
   skipAhead() {
     const b = this.bot, g = this.game, p = this.path;
     let best = this.pi;
     for (let k = this.pi + 1; k < Math.min(p.length, this.pi + 6); k++) {
-      if (p[k].ladder || p[k - 1].ladder || p[k + 1]?.ladder) break;
+      if (p[k].ladder || p[k - 1].ladder || p[k + 1]?.ladder || (k - 1 > this.pi && p[k - 1].jump)) break;
       if (!this.walkable(b.pos, p[k])) break;
       best = k;
     }
@@ -589,12 +619,12 @@ export class Brain {
     const d = Math.hypot(to[0] - from[0], to[1] - from[1]);
     if (d < 1) return true;
     if (Math.abs(to[2] - from[2]) > 64) return false;
-    // The ground all the way, without drops or gaps (every 24 units).
+    // The ground all the way, without drops, gaps or anything higher than a step (every 24 units).
     let z = from[2];
     for (let s = 24; s < d; s += 24) {
       const x = from[0] + ((to[0] - from[0]) * s) / d, y = from[1] + ((to[1] - from[1]) * s) / d;
-      const h = nav.heightAt(x, y, z + 20);
-      if (h === null || Math.abs(h - z) > 20) return false;
+      const h = nav.groundAt(x, y, z, STEP_HEIGHT, STEP_HEIGHT);
+      if (h === null) return false;
       z = h;
     }
     // The body fits (from knee to head height, so steps and stairs don't count).
