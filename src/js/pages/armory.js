@@ -9,6 +9,8 @@ import { armoryWindow, armoryOffers, offerBox, PASS_PRICE, PASS_STARS, SPEND_PER
 import { playRoulette, showResults, openCollectionView, caseImage } from './cases.js';
 
 let root = null, offs = [], timer = null, shownWindow = -1;
+const QTYS = [1, 5, 10];
+let qty = 1; // how many of an offer one click redeems
 
 export function render(r) {
   root = r;
@@ -57,7 +59,7 @@ function offerRow(o, live) {
   return `<div class="arm-offer">
     <img src="${img}">
     <div class="grow"><div>${label}</div><div class="muted">${esc(o.type === 'drop' ? 'Any skin from the collection' : box.n)}${o.type !== 'drop' ? ` · worth ${money(casePrice(box))}` : ''}</div></div>
-    ${live ? `<button class="btn gold sm" data-offer="${o.id}" data-stars="${o.stars}">★ ${o.stars}</button>` : `<span class="chip">★ ${o.stars}</span>`}
+    ${live ? `<button class="btn gold sm" data-offer="${o.id}" data-stars="${o.stars * qty}">${qty > 1 ? `×${qty} · ` : ''}★ ${o.stars * qty}</button>` : `<span class="chip">★ ${o.stars}</span>`}
   </div>`;
 }
 
@@ -79,13 +81,14 @@ function draw() {
       </div>
       <div style="text-align:right"><div class="muted" style="font-size:11px;letter-spacing:1px;text-transform:uppercase">Rotates in</div><div class="timer" data-timer>${fmt(w.end - Date.now())}</div></div>
     </div>
-    <div class="section-title">Featured now</div>
+    <div class="section-title">Featured now<span class="seg arm-qty" data-qty>${QTYS.map((n) => `<button data-v="${n}" class="${qty === n ? 'active' : ''}">×${n}</button>`).join('')}</span></div>
     <div class="armory-grid">${cur.collections.map((id) => colCard(id, cur.offers, true)).join('')}
     </div>
     <div class="section-title">Up next</div>
     <div class="armory-grid">${next.collections.map((id) => colCard(id, next.offers, false)).join('')}</div>
   </div>`;
   root.querySelector('[data-pass]').addEventListener('click', buyPass);
+  root.querySelectorAll('[data-qty] button').forEach((b) => b.addEventListener('click', () => { qty = +b.dataset.v; draw(); }));
   root.querySelectorAll('[data-col]').forEach((h) => h.addEventListener('click', () => {
     document.querySelector('#nav [data-page=cases]').click();
     openCollectionView(h.dataset.col);
@@ -109,10 +112,18 @@ async function redeem(offerId) {
   if (busy) return;
   busy = true;
   const o = armoryOffers(armoryWindow().i).offers.find((x) => x.id === offerId);
-  const r = await tryAct('armory.redeem', { offer: offerId, autoSell: autoSellRules() });
+  const n = qty;
+  const r = await tryAct('armory.redeem', { offer: offerId, autoSell: autoSellRules(), n });
   if (!r) { busy = false; return; }
   sfx.open();
   const box = offerBox(r.offer || o);
-  try { await playRoulette(box, [r.item], `Armory · ${esc(box.n)}`); } finally { busy = false; }
-  showResults(box, [r.item], 1, { cost: 0, again: null });
+  const items = r.items || [r.item];
+  try { await playRoulette(box, items, `Armory · ${esc(box.n)}${items.length > 1 ? ' ×' + items.length : ''}`); } finally { busy = false; }
+  if (r.autoSold) toast(`Auto-sold ${items.filter((i) => i.as).length} item${items.filter((i) => i.as).length === 1 ? '' : 's'} for <b class="green">${money(r.autoSold)}</b>`, 'good');
+  const again = () => {
+    const live = armoryOffers(armoryWindow().i).offers.find((x) => x.id === offerId);
+    if (!live) return toast('That offer has rotated out of the armory.', 'bad');
+    const prev = qty; qty = n; redeem(offerId).finally(() => { qty = prev; });
+  };
+  showResults(box, items, items.length, { cost: 0, again, againLabel: `Redeem again (★ ${(r.offer || o).stars * n})` });
 }

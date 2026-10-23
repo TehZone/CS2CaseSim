@@ -240,6 +240,9 @@ input[type=range] { accent-color: #d8dde2; }
 }
 .strips.n2 .strip, .strips.n3 .strip { height: 140px; }
 .strips.n4 .strip, .strips.n5 .strip { height: 112px; }
+/* 6-10 reels (Armory ×10): two columns */
+.strips.n6, .strips.n7, .strips.n8, .strips.n9, .strips.n10 { display: grid; grid-template-columns: 1fr 1fr; }
+.strips.n6 .strip, .strips.n7 .strip, .strips.n8 .strip, .strips.n9 .strip, .strips.n10 .strip { height: 104px; }
 .strip .reel { position: absolute; top: 0; left: 0; height: 100%; display: flex; gap: 6px; padding: 8px 0; will-change: transform; }
 .strip .slot {
   flex: none; height: 100%; aspect-ratio: 1.22; border-radius: var(--radius); position: relative;

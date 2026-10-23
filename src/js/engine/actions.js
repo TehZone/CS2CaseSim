@@ -315,21 +315,27 @@ export const ACTIONS = {
     ctx.dirty.add('stars');
     return { stars: PASS_STARS };
   },
-  'armory.redeem'(ctx, { offer, autoSell }) {
+  // Redeems an offer 1, 5 or 10 times at once (stars × n).
+  'armory.redeem'(ctx, { offer, autoSell, n = 1 }) {
+    n = int(n, 1, 10, 'amount');
     const o = findLiveOffer(String(offer), ctx.now);
     if (!o) fail('That offer has rotated out of the armory', 'expired');
-    if (ctx.st.stars < o.stars) fail('Not enough Armory Stars', 'funds');
-    ctx.st.stars -= o.stars;
+    if (ctx.st.stars < o.stars * n) fail('Not enough Armory Stars', 'funds');
+    ctx.st.stars -= o.stars * n;
     ctx.dirty.add('stars');
     const box = offerBox(o);
-    const item = I.rollFromCase(box, ctx.rng);
-    item.src = 'Armory · ' + box.n;
-    item.nw = true;
-    noteDrops(ctx, [item]);
-    const autoSold = autoSellDrops(ctx, [item], autoSell);
-    if (!item.as) give(ctx, [item]);
-    stats(ctx).armory++;
-    return { item, offer: o, autoSold };
+    const items = [];
+    for (let i = 0; i < n; i++) {
+      const item = I.rollFromCase(box, ctx.rng);
+      item.src = 'Armory · ' + box.n;
+      item.nw = true;
+      items.push(item);
+    }
+    noteDrops(ctx, items);
+    const autoSold = autoSellDrops(ctx, items, autoSell);
+    give(ctx, items.filter((i) => !i.as));
+    stats(ctx).armory += n;
+    return { item: items[0], items, offer: o, autoSold };
   },
 
   'team.pack'(ctx, { pack, token = false }) {

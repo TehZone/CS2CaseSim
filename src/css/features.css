@@ -58,6 +58,7 @@ body:not(.is-online) .online-only { display: none !important; }
 .armory-head .stars::before { content: '★ '; }
 .timer { font-size: 32px; font-variant-numeric: tabular-nums; letter-spacing: .04em; font-weight: 700; font-family: var(--font-cond); }
 .armory-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
+.section-title .arm-qty { order: 2; text-transform: none; letter-spacing: 0; font-weight: 400; }
 .arm-col { background: var(--panel-grad); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; }
 .arm-col .top { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; background: radial-gradient(ellipse at 50% 60%, rgba(255, 255, 255, .07), transparent 70%), rgba(0, 0, 0, .3); padding: 10px; border-bottom: 1px solid var(--line); }
 .arm-col .top img { width: 100%; aspect-ratio: 4/3; object-fit: contain; filter: drop-shadow(0 4px 8px rgba(0, 0, 0, .6)); }
