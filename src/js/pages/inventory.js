@@ -3,9 +3,11 @@ import * as I from '../items.js';
 import { S, on } from '../state.js';
 import { act } from '../backend.js';
 import { itemCard, showItemDetail, sellItems, openModal, toast } from '../ui.js';
-import { rarityColor } from '../data.js';
+import { D, rarityColor } from '../data.js';
 import { SELL_RANKS } from '../autosell.js';
-import { MAIN_SLOTS, equipped, equippedUids, slotName } from '../loadout.js';
+import { MAIN_SLOTS, GUN_GROUPS, ZEUS_SLOT, equipped, equippedUids, slotName } from '../loadout.js';
+import { cs2Play } from '../cs2/api.js';
+import { iconFor } from '../play/icons.js';
 
 const view = { type: 'all', sort: 'new', q: '', select: false, selected: new Set(), limit: 150 };
 const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['pro', 'Players'], ['chicken', 'Chickens']];
@@ -115,28 +117,40 @@ async function action(a, items) {
   if (a === 'loadout') loadoutModal();
 }
 
-// Loadout: gloves, knife and agents (pick from your inventory), plus the gun skins you equipped from their item page.
+// Loadout, laid out like CS2's: a box for every slot (knife, gloves, Zeus, agents and every gun), with the gun's
+// silhouette in the empty ones. Click a box to pick from the skins you own for it.
 function loadoutModal() {
   const m = openModal({ title: 'Loadout', cls: 'wide', body: '<div data-lo></div>' });
   const box = m.el.querySelector('[data-lo]');
   const fits = (slot) => S.inv.filter((i) => I.loadoutSlot(i) === slot).sort((a, b) => I.itemValue(b) - I.itemValue(a));
+  const wids = {};
+  for (const s of Object.values(D.skins)) if (s.wid?.startsWith('weapon_') && !wids[s.w]) wids[s.w] = s.wid;
+  let icons = null;
   const drawSlots = () => {
-    const guns = Object.keys(S.loadout || {}).filter((k) => k.startsWith('w:') && equipped(k)).sort();
-    const slot = (k) => {
+    const owned = {};
+    for (const i of S.inv) { const k = I.loadoutSlot(i); if (k) owned[k] = (owned[k] || 0) + 1; }
+    const slot = (k, side = '') => {
       const it = equipped(k);
-      return `<div class="lo-slot" data-slot="${esc(k)}"><div class="lo-name">${esc(slotName(k))}</div>
-        ${it ? itemCard(it) : `<div class="lo-empty">${fits(k).length ? 'Choose…' : 'None in your inventory'}</div>`}</div>`;
+      const n = owned[k] || 0;
+      const name = slotName(k);
+      const icon = iconFor(icons, k === 'knife' ? 'knife' : k.startsWith('w:') ? wids[name] : null);
+      return `<div class="lo-slot ${n ? '' : 'none'}" data-slot="${esc(k)}"><div class="lo-name">${esc(name)}${side ? `<span class="lo-side ${side.toLowerCase()}">${side}</span>` : ''}</div>
+        ${it ? itemCard(it) : `<div class="lo-empty">${icon ? `<img src="${esc(icon)}" alt="">` : ''}<span>${n ? `Choose… (${n})` : 'None owned'}</span></div>`}</div>`;
     };
-    box.innerHTML = `<p class="muted" style="margin-top:0">Equipped gloves are worn on your hands in the first-person inspect.
-        Equip gun skins from their item page (one per gun).</p>
-      <div class="lo-grid">${MAIN_SLOTS.map(([k]) => slot(k)).join('')}</div>
-      ${guns.length ? `<h3 class="lo-head">Guns</h3><div class="lo-grid">${guns.map(slot).join('')}</div>` : ''}`;
+    const total = MAIN_SLOTS.length + 1 + GUN_GROUPS.reduce((s, [, g]) => s + g.length, 0);
+    const on = [...MAIN_SLOTS.map(([k]) => k), ZEUS_SLOT, ...GUN_GROUPS.flatMap(([, g]) => g.map((x) => x.slot))].filter((k) => equipped(k)).length;
+    box.innerHTML = `<p class="muted" style="margin-top:0">${on} of ${total} slots equipped. Equipped gloves are worn on your hands in
+        the first-person inspect and in Play, and your knife, agents and gun skins are what you use there.</p>
+      <div class="lo-grid">${[...MAIN_SLOTS.map(([k]) => slot(k)), slot(ZEUS_SLOT)].join('')}</div>
+      ${GUN_GROUPS.map(([name, guns]) => `<h3 class="lo-head">${name}</h3><div class="lo-grid guns">${guns.map((g) => slot(g.slot, g.side)).join('')}</div>`).join('')}`;
     box.querySelectorAll('[data-slot]').forEach((el) => el.addEventListener('click', () => choose(el.dataset.slot)));
   };
+  // CS2's weapon silhouettes for the empty boxes (when CS2 is installed).
+  cs2Play('icons').then((i) => { icons = i; if (box.isConnected && !box.querySelector('[data-back]')) drawSlots(); }).catch(() => {});
   const choose = (k) => {
     const list = fits(k);
     const cur = equipped(k);
-    if (!list.length) return;
+    if (!list.length) { toast(`You don't own anything for the ${esc(slotName(k))} slot yet.`); return; }
     box.innerHTML = `<div class="toolbar" style="margin-top:0"><button class="btn ghost" data-back>← Back</button>
         <b>${esc(slotName(k))}</b><span class="spacer"></span>${cur ? '<button class="btn" data-off>Unequip</button>' : ''}</div>
       <div class="grid">${list.slice(0, 200).map((i) => itemCard(i)).join('')}</div>`;

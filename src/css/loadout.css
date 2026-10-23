@@ -5,8 +5,19 @@
 .lo-slot { cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
 .lo-name { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
 .lo-empty {
-  flex: 1; min-height: 180px; display: grid; place-items: center; border: 1px dashed var(--line2); border-radius: var(--radius);
-  color: var(--dim); background: var(--panel2); transition: border-color .15s, color .15s;
+  flex: 1; min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  border: 1px dashed var(--line2); border-radius: var(--radius); color: var(--dim); background: var(--panel2); font-size: 12px;
+  transition: border-color .15s, color .15s;
 }
+.lo-empty img { width: 72%; height: 56px; object-fit: contain; opacity: .45; transition: opacity .15s; }
 .lo-slot:hover .lo-empty { border-color: var(--gold); color: var(--text); }
+.lo-slot:hover .lo-empty img { opacity: .8; }
+.lo-slot.none { cursor: default; }
+.lo-slot.none:hover .lo-empty { border-color: var(--line2); color: var(--dim); }
+.lo-slot.none .lo-empty img { opacity: .2; }
+.lo-grid.guns { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+.lo-grid.guns .lo-empty { min-height: 150px; }
+.lo-side { margin-left: 6px; padding: 0 4px; border-radius: 3px; font-size: 10px; border: 1px solid currentColor; vertical-align: 1px; }
+.lo-side.t { color: #e0a94f; }
+.lo-side.ct { color: #7aa7ec; }
 .lo-head { margin: 18px 0 10px; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
