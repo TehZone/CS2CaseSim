@@ -1,5 +1,6 @@
 // CS2's volumetric smoke: the cloud floods the space it lands in (voxels flood-filled outwards from the grenade, so it
-// pours around corners, through doors and down stairs, but never through walls), blooms over about a second, lasts
+// pours around corners, through doors and down stairs, but never through walls), bursts out like CS2's (near full size
+// in about a second, fully bloomed by 1.5 s), lasts
 // 18 seconds and thins out from its edges. Bullets punch tunnels through it and an HE grenade blows a hole in it,
 // both of which close up again. Sight lines (yours, the bots') are blocked by how much smoke they pass through, so you
 // can see through a hole or a thin edge. Game units (inches, Z up). Drawn by the composite pass in post.js; each voxel
@@ -11,7 +12,10 @@ import { FLAG_BULLET } from './collision.js';
 export const VOX = 16, NX = 32, NY = 32, NZ = 16, SLOTS = 6;
 const N = NX * NY * NZ;
 export const SMOKE_TIME = 18;
-const FADE = 3, MAX_CELLS = 2300, MAX_COST = 24, MAX_RISE = 9, BLOOM = 0.075, FILL_PER_TICK = 260;
+const FADE = 3, MAX_CELLS = 2300, MAX_COST = 24, MAX_RISE = 9, FILL_PER_TICK = 260;
+// The bloom: the edge of the cloud reaches a cell at BLOOM * (1 - sqrt(1 - its share of the way out)) seconds (fast at
+// first, slowing as it spreads, like CS2's), and each cell then thickens over GROW seconds.
+const BLOOM = 1.2, GROW = 0.25, BLOOM_DONE = 0.05 + BLOOM + GROW;
 // Holes hold seconds until they're refilled: clear until the last REFILL seconds, then filling back in.
 const TUNNEL = 1.15, TUNNEL_SIDE = 0.55, BLAST = 2.4, BLAST_CORE = 1.6, BLAST_RADIUS = 190, REFILL = 0.7;
 const BLOCK = 30; // units of full smoke that hide what's behind
@@ -118,7 +122,8 @@ export class SmokeField {
   cellDensity(k, now) {
     if (this.state[k] !== 2) return 0;
     const c = this.cost[k];
-    const grow = Math.min(1, Math.max(0, (now - this.born - 0.1 - c * BLOOM) / 0.3));
+    const reach = 0.05 + BLOOM * (1 - Math.sqrt(Math.max(0, 1 - Math.min(1, c / this.maxCost))));
+    const grow = Math.min(1, Math.max(0, (now - this.born - reach) / GROW));
     const fade = Math.min(1, Math.max(0, (this.until - now) / FADE + (1 - c / this.maxCost) * 0.7));
     return grow * fade * (1 - Math.min(1, this.hole[k] / REFILL));
   }
@@ -295,7 +300,7 @@ export class SmokeSystem {
     let changed = this.dirty;
     for (const f of this.fields) {
       const age = now - f.born;
-      if (age < 0.1 + f.maxCost * BLOOM + 0.5 || f.until - now < FADE + 1 || f.holes || !f.done || f.wroteHole) {
+      if (age < BLOOM_DONE + 0.1 || f.until - now < FADE + 1 || f.holes || !f.done || f.wroteHole) {
         f.write(this.data, now, this.lighting);
         f.wroteHole = f.holes;
         changed = true;

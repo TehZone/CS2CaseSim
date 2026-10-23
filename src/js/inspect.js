@@ -298,6 +298,14 @@ class InspectView {
     // A map backdrop's sun, lighting the weapon too (only on when a backdrop is shown).
     this.sunLight = new THREE.DirectionalLight(0xffffff, 0);
     this.scene.add(this.sunLight);
+    // First person's own lights, fixed to your view like CS2's viewmodel lighting (the eye is at the origin looking
+    // down -Z): a key from above front-right, a cool fill from the left and a rim from beyond the weapon that picks
+    // out blade edges. Off outside first person.
+    const fpKey = new THREE.DirectionalLight(0xfff4e6, 0); fpKey.position.set(1.2, 2.2, 1.6);
+    const fpFill = new THREE.DirectionalLight(0xc6d8ff, 0); fpFill.position.set(-2, 0.4, 1);
+    const fpRim = new THREE.DirectionalLight(0xffffff, 0); fpRim.position.set(0.6, 1.4, -3);
+    for (const l of [fpKey, fpFill, fpRim]) { l.target.position.set(0, -0.15, -0.5); this.scene.add(l, l.target); }
+    this.fpLights = [[fpKey, 2.1], [fpFill, 0.75], [fpRim, 1.0]];
     this.backdrop = null;
     this.blurBg = null;
     this.pivot = new THREE.Group();
@@ -427,6 +435,17 @@ class InspectView {
     }
     this.shadow.visible = !bd && !this.fp;
     for (const l of this.studioLights) l.intensity = l.userData.base ?? (l.userData.base = l.intensity);
+    for (const [l, k] of this.fpLights) l.intensity = this.fp ? k : 0;
+    if (this.fp) {
+      // First person: the weapon's own lights and a bright, neutral room to reflect (metal blades show what they
+      // reflect, and a map's or the studio's dark surroundings turned them dark), plus a map backdrop's sun.
+      for (const l of this.studioLights) l.intensity = 0;
+      this.scene.environment = this.envRoom;
+      this.scene.environmentIntensity = 1.1;
+      this.sunLight.intensity = bd ? Math.min(1.6, bd.sun.intensity * 0.45) : 0;
+      if (bd) { this.sunLight.color.copy(bd.sun.color); this.sunLight.position.copy(bd.sun.dir).multiplyScalar(-10); }
+      return;
+    }
     if (bd) {
       this.scene.environment = bd.env;
       this.scene.environmentIntensity = 1.0;
