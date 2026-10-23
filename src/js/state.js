@@ -2,6 +2,7 @@
 // (updated from the changes the server sends back). Changes go through backend.js actions, not direct edits.
 import { debounce, round2 } from './util.js';
 import * as E from './engine/economy.js';
+import { backfillSerials } from './engine/items.js';
 
 const LS_KEY = 'cs2-case-sim-save';
 export const bus = new EventTarget();
@@ -24,6 +25,7 @@ export async function loadState() {
   if (text) {
     try {
       S = E.upgradeState(JSON.parse(text));
+      backfillSerials(S); // saves from before serial numbers (once)
     } catch (e) {
       console.error('Save corrupted, starting fresh', e);
     }

@@ -8,6 +8,7 @@ import WebSocket from 'ws';
 process.env.JACKPOT_MS = '1500';
 const { startServer } = await import('./index.mjs');
 const { D, casePrice } = await import('../src/js/engine/data.js');
+const { serialKey } = await import('../src/js/engine/items.js');
 
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'cs2sim-test-db-'));
 let failed = 0, passed = 0;
@@ -102,7 +103,11 @@ try {
   }
 
   // ---- trading --------------------------------------------------------------------------------------
-  await B.act('case.open', { id: box.id, n: 2 });
+  const bOpen = await B.act('case.open', { id: box.id, n: 2 });
+  // Serial numbers are counted across the server: Bob's continue after Alice's of the same item.
+  const last = {};
+  check('serial numbers are shared by everyone on the server', [...op.items, ...bOpen.items].every((it) => it.sn === (last[serialKey(it)] = (last[serialKey(it)] || 0) + 1)),
+    [...op.items, ...bOpen.items].map((it) => it.sn).join(','));
   const x = A.st.inv[0], y = B.st.inv[0];
   const inv = await A.rpc('trade', 'inventory', { name: 'bob_2' });
   check('see another player’s inventory', inv.items.some((i) => i.uid === y.uid));

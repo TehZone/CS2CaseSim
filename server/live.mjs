@@ -4,7 +4,7 @@
 import crypto from 'node:crypto';
 import { D } from '../src/js/engine/data.js';
 import { makeCtx, delta, give, credit, spend, takeStake, atomically, GameError } from '../src/js/engine/actions.js';
-import { itemValue } from '../src/js/engine/items.js';
+import { itemValue, serialKey } from '../src/js/engine/items.js';
 import * as G from '../src/js/engine/gamble.js';
 import { round2 } from '../src/js/engine/util.js';
 
@@ -238,7 +238,10 @@ export class Live {
     const winnings = {};
     for (const seat of res.winners) {
       const s = b.seats[seat];
-      if (s && !s.bot) winnings[s.userId] = { cash: 0, items: res.share[seat] };
+      if (s && !s.bot) {
+        for (const it of res.share[seat]) it.sn = this.srv.serial(serialKey(it)); // unboxed in the battle
+        winnings[s.userId] = { cash: 0, items: res.share[seat] };
+      }
     }
     await this.settle(b, winnings);
     const seats = b.seats.map((s) => ({ name: s.name, bot: !!s.bot, avatar: s.avatar || '', color: s.color || '' }));

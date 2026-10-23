@@ -145,6 +145,10 @@ What's in a match:
   five-role lineup with chemistry, round-by-round match simulation, cups, LANs and Majors against real rosters
 - Online play (optional): accounts on your own server, trading between players, live lobbies; see DEPLOY.md
 - Rare Special Items (knives and gloves) show CS:GO's classic gold "?" medallion in case contents and the roulette
+- Serial numbers on everything you unbox (cases, packages, capsules, the Armory, case battles), counted per item in
+  unboxing order (offline in your save, online across the whole server). Market buys and trade-ups have none; unboxed
+  items are worth 3% more, with bigger premiums for #1, the top 10 and top 100, and special numbers (#69, #420, #777,
+  #1337, #111, #1000...)
 - Floats (CS2 wear distribution), pattern seeds 0-1000 with rare patterns (blue gems, Fire & Ice, full fades, Doppler phases...)
 - StatTrak™, knives and gloves, stickers with free placement, scraping, and craft bonuses
 - Loadout (Inventory → Loadout, or Equip on an item): gloves, knife, a T and a CT agent, and one skin per gun

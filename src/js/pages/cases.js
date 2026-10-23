@@ -670,7 +670,8 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro 
 function resultCard(it) {
   const r = I.rarityInfo(it);
   const pat = I.patternInfo(it);
-  const sub = it.t === 'skin' && it.fl != null ? `${I.wearName(it)} · ${it.fl.toFixed(6)} · Seed ${it.sd}` : it.t === 'chicken' ? `${HAT[it.hat].n} · Feather ${it.fl.toFixed(4)}` : r.n;
+  const sub = (it.t === 'skin' && it.fl != null ? `${I.wearName(it)} · ${it.fl.toFixed(6)} · Seed ${it.sd}` : it.t === 'chicken' ? `${HAT[it.hat].n} · Feather ${it.fl.toFixed(4)}` : r.n)
+    + (it.sn ? ` · #${it.sn.toLocaleString()}` : '');
   return `<div class="result ${r.rank >= 6 ? 'gold' : ''} ${it.as ? 'autosold' : ''}" style="--rc:${r.c}" data-uid="${it.uid}">
     <img src="${I.itemImage(it, 'm')}"><div class="rbar"></div>
     <div class="rn">${esc(r.n)}</div>

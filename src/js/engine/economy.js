@@ -19,6 +19,8 @@ export function freshState() {
     coopSlots: 3,
     team: freshTeam(),
     loadout: {}, // slot (see items.loadoutSlot) -> uid
+    serials: {}, // offline serial counters: items.serialKey -> last number given
+    serialsBackfilled: true, // (older saves get their unboxed items numbered once on load)
     rank: freshRank(), // CS:GO competitive rank from Play (see ranks.js)
     stats: {
       opened: 0, spent: 0, sold: 0, clicks: 0, clickEarned: 0, passiveEarned: 0,
@@ -43,6 +45,7 @@ export function upgradeState(saved) {
   st.team = { ...freshTeam(), ...(saved.team || {}) };
   st.team.slots = { ...freshTeam().slots, ...(st.team.slots || {}) };
   st.loadout = { ...(saved.loadout || {}) };
+  st.serialsBackfilled = !!saved.serialsBackfilled; // saves from before serials get theirs on load (items.backfillSerials)
   st.v = base.v;
   return st;
 }

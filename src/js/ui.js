@@ -96,7 +96,7 @@ export function itemCard(item, { selectable = false, selected = false, extra = '
   const stk = item.stk?.length ? `<div class="stickers">${item.stk.map((s) => `<img src="${imgUrl(D.stickers[s.id]?.img, 's')}">`).join('')}</div>` : '';
   return `<div class="card ${selected ? 'selected' : ''} ${extra}" data-uid="${item.uid}" style="--rc:${r.c}">
     ${selectable ? '<div class="sel"></div>' : ''}
-    <div class="tags">${item.nw ? '<span class="tag new">New</span>' : ''}${item.stt ? '<span class="tag st">ST™</span>' : ''}${item.sv ? '<span class="tag sv">Souvenir</span>' : ''}${patternTag(pat)}${item.lk ? '<span class="tag lock">🔒</span>' : ''}${isEquipped(item) ? '<span class="tag eq">Equipped</span>' : ''}</div>
+    <div class="tags">${item.nw ? '<span class="tag new">New</span>' : ''}${item.stt ? '<span class="tag st">ST™</span>' : ''}${item.sv ? '<span class="tag sv">Souvenir</span>' : ''}${patternTag(pat)}${item.lk ? '<span class="tag lock">🔒</span>' : ''}${isEquipped(item) ? '<span class="tag eq">Equipped</span>' : ''}${item.sn ? `<span class="tag sn ${item.sn <= 100 || I.isSpecialSerial(item.sn) ? 'low' : ''}" title="Serial number: unboxed #${item.sn}">#${item.sn}</span>` : ''}</div>
     <div class="img"><img loading="lazy" src="${I.itemImage(item, 'm')}" alt="">${stk}</div>
     <div class="rbar"></div>
     ${item.t === 'skin' && item.fl != null ? `<div class="floatline"><i style="left:${item.fl * 100}%"></i></div>` : ''}
@@ -158,6 +158,8 @@ function detailBody(item) {
     kv.push(['Feather float', `<span class="money">${I.floatString(item.fl)}</span>`]);
     kv.push(['Egg income', `${money(chickenIncome(item))}/s (when in coop)`]);
   }
+  if (item.sn) kv.push(['Serial number', `#${item.sn.toLocaleString()}${I.serialLabel(item.sn) ? ` <span class="muted">· ${I.serialLabel(item.sn)}</span>` : ''}`]);
+  else if (['skin', 'sticker', 'agent', 'chicken'].includes(item.t)) kv.push(['Serial number', '<span class="muted">None (only unboxed items are numbered)</span>']);
   if (item.src) kv.push(['Obtained from', esc(item.src)]);
 
   const lines = [];
@@ -173,6 +175,7 @@ function detailBody(item) {
   } else {
     lines.push(['Market price', money(vb.base)]);
   }
+  if (vb.sm !== 1) lines.push([`Serial #${item.sn.toLocaleString()}${I.serialLabel(item.sn) ? ' (' + I.serialLabel(item.sn).toLowerCase() + ')' : ' (unboxed)'}`, '×' + vb.sm.toFixed(3).replace(/0+$/, '')]);
 
   return `<div class="detail" style="--rc:${r.c}">
     <div>

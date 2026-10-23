@@ -111,6 +111,20 @@ function noteDrops(ctx, items) {
     if (v > s.bestValue) { s.bestValue = v; s.bestName = I.itemName(it); }
   }
 }
+// Gives unboxed items their serial numbers (see items.serialKey). ctx.serial(key) is the server's shared counter;
+// offline the save keeps its own (replaced, not mutated, so a failed action rolls it back).
+function serialize(ctx, items) {
+  for (const it of items) {
+    const key = I.serialKey(it);
+    if (ctx.serial) it.sn = ctx.serial(key);
+    else {
+      const n = (ctx.st.serials?.[key] || 0) + 1;
+      ctx.st.serials = { ...(ctx.st.serials || {}), [key]: n };
+      ctx.dirty.add('serials');
+      it.sn = n;
+    }
+  }
+}
 function earnStars(ctx, spent) {
   const add = starsFromSpend(ctx.st.starSpend || 0, spent);
   ctx.st.starSpend = round2((ctx.st.starSpend || 0) + spent);
@@ -149,6 +163,7 @@ export const ACTIONS = {
     const cost = round2(casePrice(c) * n);
     spend(ctx, cost);
     const items = Array.from({ length: n }, () => I.rollFromCase(c, ctx.rng));
+    serialize(ctx, items);
     for (const it of items) it.nw = true;
     noteDrops(ctx, items);
     const s = stats(ctx);
@@ -349,6 +364,7 @@ export const ACTIONS = {
       item.nw = true;
       items.push(item);
     }
+    serialize(ctx, items);
     noteDrops(ctx, items);
     const autoSold = autoSellDrops(ctx, items, autoSell);
     give(ctx, items.filter((i) => !i.as));
@@ -508,6 +524,7 @@ export const ACTIONS = {
     const myTeam = f.teams.findIndex((t) => t.includes(0));
     const won = res.winTeam === myTeam;
     const prize = won ? res.share[0] : [];
+    serialize(ctx, prize); // the drops you take home (the bots' leave with them)
     for (const it of prize) it.nw = true;
     if (prize.length) give(ctx, prize);
     const value = round2(prize.reduce((s, it) => s + I.itemValue(it), 0));

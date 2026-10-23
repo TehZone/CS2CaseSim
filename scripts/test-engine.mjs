@@ -373,5 +373,41 @@ function tierFreq(box, n) {
   check('selling an equipped item takes it out of the loadout', !st.loadout.gloves && st.loadout['w:AK-47'] === 'ak' && 'loadout' in sold.d.set);
 }
 
+// ---- serial numbers --------------------------------------------------------------------------------
+{
+  const MK = await import(new URL('../src/js/engine/market.js', import.meta.url));
+  const st = freshState();
+  st.money = 1e6;
+  const now = (MK.marketWindow() + 0.5) * MK.MARKET_WINDOW_MS;
+  const run = (name, args, opts = {}) => { const ctx = ACT.makeCtx(st, { rng, now, ...opts }); const r = ACT.runAction(ctx, name, args); return { r, d: ACT.delta(ctx) }; };
+  const c = D.cases.find((x) => x.kind === 'case' && x.price != null);
+  const o = run('case.open', { id: c.id, n: 5 });
+  const keys = o.r.items.map(I.serialKey);
+  check('unboxed items are numbered per item, in order', o.r.items.every((it) => it.sn >= 1) && o.r.items.every((it, i) => it.sn === keys.slice(0, i + 1).filter((k) => k === keys[i]).length)
+    && st.serials[keys[0]] >= 1 && 'serials' in o.d.set);
+  const again = run('case.open', { id: c.id, n: 1 }).r.items[0];
+  check('the counter keeps going across openings', again.sn === st.serials[I.serialKey(again)]);
+  const w = MK.marketWindow(now);
+  const skin = Object.values(D.skins).find((s) => !s.star && MK.skinListings(s, w).length);
+  const bought = run('market.buy', { kind: 'skin', id: skin.id, n: 0, window: w }).r.item;
+  check('items bought on the market have no serial', !bought.sn);
+  const base = { uid: 'x', t: 'skin', id: skin.id, fl: 0.2, sd: 5, at: 0 };
+  const v0 = I.itemValue({ ...base }), v1 = I.itemValue({ ...base, sn: 1 }), v5123 = I.itemValue({ ...base, sn: 5123 }), v69 = I.itemValue({ ...base, sn: 69 });
+  check('serials add value: #1 > special > any', v1 > v69 && v69 > v5123 && v5123 > v0 && I.isSpecialSerial(1337) && I.isSpecialSerial(2222) && !I.isSpecialSerial(1234),
+    `${v0} / #5123 ${v5123} / #69 ${v69} / #1 ${v1}`);
+  const counted = { ...st.serials };
+  let err = null; try { run('case.open', { id: c.id, n: 5000 }); } catch (e) { err = e; }
+  check('a failed opening gives out no numbers', err && JSON.stringify(st.serials) === JSON.stringify(counted));
+  const shared = new Map();
+  const hook = (k) => { const n = (shared.get(k) || 0) + 1; shared.set(k, n); return n; };
+  const before = { ...st.serials };
+  const ctx = ACT.makeCtx(st, { rng, now, online: true });
+  ctx.serial = hook;
+  const r = ACT.runAction(ctx, 'case.open', { id: c.id, n: 3 });
+  const seen = {};
+  check('online, the server hook numbers them (not the save)', r.items.every((it) => it.sn === (seen[I.serialKey(it)] = (seen[I.serialKey(it)] || 0) + 1))
+    && !('serials' in ACT.delta(ctx).set) && JSON.stringify(st.serials) === JSON.stringify(before));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

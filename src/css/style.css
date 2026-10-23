@@ -179,6 +179,8 @@ input[type=range] { accent-color: #d8dde2; }
 .card .tags { position: absolute; top: 6px; left: 6px; display: flex; gap: 3px; flex-wrap: wrap; z-index: 2; }
 .tag { font-size: 10px; letter-spacing: .06em; padding: 1px 5px; border-radius: 1px; background: rgba(8, 10, 13, .72); color: var(--text); text-transform: uppercase; border: 1px solid rgba(255, 255, 255, .14); font-weight: 600; line-height: 14px; }
 .tag.st { color: #fff; background: var(--st); border-color: #e3874f; }
+.tag.sn { color: var(--muted); font-variant-numeric: tabular-nums; }
+.tag.sn.low { color: #111; background: var(--gold); border-color: var(--gold); }
 .tag.pat { color: #bfe3ff; border-color: rgba(106, 166, 232, .55); background: rgba(16, 38, 62, .8); }
 .tag.pat.t0, .tag.pat.t1 { color: #1a1306; background: linear-gradient(90deg, var(--gold2), var(--gold)); border-color: var(--gold2); }
 .tag.new { background: #fff; color: #111; border-color: #fff; }

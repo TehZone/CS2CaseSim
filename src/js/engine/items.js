@@ -237,14 +237,49 @@ export function stickerContribution(item) {
   });
 }
 
+// Serial numbers: every item unboxed from a container (cases, packages, capsules, the Armory, case battles) is
+// numbered in unboxing order per item, StatTrak™ and Souvenir counted apart: offline within your save, online across
+// everyone on the server. Items bought on the market or made in trade-ups have none, so unboxing is worth more.
+export const serialKey = (item) => `${item.t}:${item.id}${item.stt ? ':st' : ''}${item.sv ? ':sv' : ''}`;
+const FUN_SERIALS = new Set([69, 420, 777, 1337, 4200, 6969]);
+// Funny or neat numbers: #69, #420, #777, #1337, repeated digits (#111, #2222) and round thousands (#1000).
+export function isSpecialSerial(sn) {
+  const s = String(sn);
+  return FUN_SERIALS.has(sn) || (s.length >= 3 && /^(\d)\1+$/.test(s)) || (sn >= 1000 && /^[1-9]0+$/.test(s));
+}
+// Value multiplier for a serial: +3% for being unboxed at all, more for low (#1, #2-10, #11-100) and special numbers.
+export function serialMultiplier(sn) {
+  if (!sn) return 1;
+  let tier = sn === 1 ? 1.5 : sn <= 10 ? 1.2 : sn <= 100 ? 1.05 : 1;
+  if (isSpecialSerial(sn)) tier = Math.max(tier, 1.1);
+  return 1.03 * tier;
+}
+// Saves from before serial numbers: number the items you unboxed back then, oldest first (once). Market buys and
+// trade-up results stay unnumbered.
+export function backfillSerials(st) {
+  if (st.serialsBackfilled) return;
+  st.serialsBackfilled = true;
+  const unboxed = st.inv.filter((it) => !it.sn && ['skin', 'sticker', 'agent', 'chicken'].includes(it.t)
+    && it.src && it.src !== 'Market' && it.src !== 'Trade Up Contract').sort((a, b) => (a.at || 0) - (b.at || 0));
+  const counts = { ...(st.serials || {}) };
+  for (const it of unboxed) it.sn = counts[serialKey(it)] = (counts[serialKey(it)] || 0) + 1;
+  st.serials = counts;
+}
+
+export function serialLabel(sn) {
+  if (!sn) return '';
+  return sn === 1 ? 'First ever unboxed' : sn <= 10 ? 'Top 10' : sn <= 100 ? 'Top 100' : isSpecialSerial(sn) ? 'Special number' : '';
+}
+
 export function valueBreakdown(item) {
   const base = basePrice(item);
   const fm = floatMultiplier(item);
   const pat = patternInfo(item);
+  const sm = serialMultiplier(item.sn);
   const stickers = item.t === 'skin' ? stickerContribution(item) : [];
   const stickerTotal = stickers.reduce((s, x) => s + x.value, 0);
-  const total = round2(base * fm * pat.mult + stickerTotal);
-  return { base, fm, pat, stickers, stickerTotal: round2(stickerTotal), total };
+  const total = round2(base * fm * pat.mult * sm + stickerTotal);
+  return { base, fm, pat, sm, stickers, stickerTotal: round2(stickerTotal), total };
 }
 
 const valueCache = new WeakMap();

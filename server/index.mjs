@@ -129,6 +129,28 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
       .catch((e) => { marketDirty = true; log('[market] save failed', e.message); });
   }, 3000);
 
+  // ---- serial numbers: one counter per item for the whole server (see engine items.serialKey) -------------
+  const serials = new Map();
+  let serialsDirty = false;
+  try {
+    const { rows } = await db.query("SELECT v FROM kv WHERE k = 'serials'");
+    const saved = rows[0] && (typeof rows[0].v === 'string' ? JSON.parse(rows[0].v) : rows[0].v);
+    for (const [k, n] of Object.entries(saved || {})) serials.set(k, Number(n) || 0);
+  } catch (e) { log('[serials] could not load counters', e.message); }
+  srv.serial = (key) => {
+    const n = (serials.get(key) || 0) + 1;
+    serials.set(key, n);
+    serialsDirty = true;
+    return n;
+  };
+  const saveSerials = async () => {
+    if (!serialsDirty) return;
+    serialsDirty = false;
+    await db.query("INSERT INTO kv (k, v) VALUES ('serials', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(Object.fromEntries(serials))])
+      .catch((e) => { serialsDirty = true; log('[serials] save failed', e.message); });
+  };
+  const serialTimer = setInterval(saveSerials, 3000);
+
   // ---- HTTP ----------------------------------------------------------------------------------------------
   const ipLimit = A.limiter(20, 60000);
   const nameLimit = A.limiter(30, 3600000);
@@ -286,6 +308,7 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
             const ctx = makeCtx(e.st, { online: true, invCap: INV_CAP, reserved: trades.reserved(user.id) });
             // The market's stock is shared by everyone on the server.
             ctx.market = (w) => ({ has: (lid) => soldSet(w).has(lid), add: (lid) => { soldSet(w).add(lid); marketDirty = true; boughtNow.push([w, lid]); } });
+            ctx.serial = srv.serial; // serial numbers are counted across the server
             ctx.dirty.add('money');
             const r = runAction(ctx, String(msg.m), args);
             store.markDirty(e);
@@ -348,7 +371,8 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
   log(`[server] listening on :${actualPort}`);
 
   async function close() {
-    clearInterval(ping); clearInterval(idle); clearInterval(priceTimer); clearInterval(saveMarket);
+    clearInterval(ping); clearInterval(idle); clearInterval(priceTimer); clearInterval(saveMarket); clearInterval(serialTimer);
+    await saveSerials();
     if (marketDirty) await db.query("INSERT INTO kv (k, v) VALUES ('market', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(marketSnapshot())]).catch(() => {});
     live.close();
     for (const ws of wss.clients) ws.terminate();
