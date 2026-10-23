@@ -498,3 +498,6 @@ input[type=range] { accent-color: #d8dde2; }
   .inspect .help { display: none; }
   .modal-body { padding: 14px; }
 }
+
+/* The stats page's competitive rank (the emblems are styled in play.css: .rank-emblem). */
+.stat-rank { display: inline-flex; align-items: center; gap: 8px; }

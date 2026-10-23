@@ -67,6 +67,8 @@ const CASE_SOUNDS = {
 
 // CS2's weapon and gear icons (vsvg_c, which the CLI decompiles to SVG).
 const ICON_DIR = 'panorama/images/icons/equipment';
+const RANK_DIR = 'panorama/images/icons/skillgroups';
+const RANKUP_TEXTURES = { flag: 'panorama/images/ui_textures/rankup_flag_png.vtex_c', halo: 'panorama/images/ui_textures/rankup_flare_halo_png.vtex_c' };
 
 class CS2Service {
   // shrinkImages(files, maxSize): optional, makes backdrop textures smaller after export (Electron passes one).
@@ -835,6 +837,40 @@ class CS2Service {
       }
       fs.rmSync(tmp, { recursive: true, force: true });
       if (!names.length) throw new Error('No equipment icons in this CS2 install');
+      fs.writeFileSync(file, JSON.stringify({ stamp, names }));
+      return result(names);
+    });
+  }
+
+  // CS:GO's competitive rank art in this install: the skill group emblems (skillgroup0..18, none, need_wins, expired) as
+  // SVGs, and the rank-up screen's flag and flare: { emblems: { name: url }, flag, halo }.
+  playRanks() {
+    return this.playJob('ranks', async () => {
+      const cs2 = this.ensureCS2();
+      const dir = path.join(this.cacheDir, 'play', 'ranks');
+      const file = path.join(dir, 'ranks.json');
+      const stamp = cs2.vpkStamp();
+      const textures = async () => {
+        const got = await cs2.extract(Object.values(RANKUP_TEXTURES));
+        return Object.fromEntries(Object.entries(RANKUP_TEXTURES).map(([k, v]) => [k, got[v] ? this.url(got[v]) : null]));
+      };
+      const result = async (names) => ({ emblems: Object.fromEntries(names.map((n) => [n.replace(/^_/, ''), this.url(path.join(dir, 'skillgroup' + n + '.svg'))])), ...await textures() });
+      try { const c = JSON.parse(fs.readFileSync(file, 'utf8')); if (c.stamp === stamp) return result(c.names); } catch {}
+      fs.rmSync(dir, { recursive: true, force: true });
+      const tmp = path.join(dir, 'tmp');
+      await cs2.run(['-i', cs2.vpk, '-f', RANK_DIR + '/', '-d', '-o', tmp]);
+      const src = path.join(tmp, ...RANK_DIR.split('/'));
+      const names = [];
+      for (const f of fs.existsSync(src) ? fs.readdirSync(src) : []) {
+        const name = /^skillgroup(\d+|_none|_need_wins|_expired)\.svg$/i.exec(f)?.[1].toLowerCase();
+        if (!name) continue;
+        const svg = fs.readFileSync(path.join(src, f), 'utf8');
+        if (!/<svg\b/.test(svg)) continue;
+        fs.writeFileSync(path.join(dir, 'skillgroup' + name + '.svg'), svg);
+        names.push(name);
+      }
+      fs.rmSync(tmp, { recursive: true, force: true });
+      if (!names.length) throw new Error('No skill group emblems in this CS2 install');
       fs.writeFileSync(file, JSON.stringify({ stamp, names }));
       return result(names);
     });

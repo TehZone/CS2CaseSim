@@ -185,6 +185,8 @@
 .play-hud .endscreen .reward b { color: #8ee06e; }
 /* the scoreboard drops a little to make room for the result */
 .play-hud:has(> .endscreen:not(.hidden)) .scoreboard { top: calc(50% + 40px); }
+/* and further for a competitive rank result under it */
+.play-hud:has(> .endscreen:not(.hidden) .rank-result:not(:empty)) .scoreboard { top: calc(50% + 130px); }
 @media (max-height: 920px) {
   .play-hud .endscreen { top: 50px; }
   .play-hud .endscreen h1 { font-size: 44px; }
@@ -341,3 +343,31 @@
   position: absolute; right: 30px; top: -15px; font-family: var(--font-cond); font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
   color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .8); white-space: nowrap;
 }
+
+/* CS:GO competitive ranks: emblems (CS2's skill group art, or the short name), the lobby card, the scoreboard column and
+   the end of match result with its rank-up flag and flare. */
+.rank-emblem { display: inline-block; vertical-align: middle; width: auto; }
+.rank-emblem.text { height: var(--h); min-width: calc(var(--h) * 2.2); line-height: var(--h); padding: 0 4px; border: 1px solid rgba(255, 255, 255, .35);
+  border-radius: 3px; font-size: calc(var(--h) * .5); font-weight: 700; text-align: center; color: #e9ecf2; background: rgba(0, 0, 0, .35); box-sizing: border-box; }
+.play-rank { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: rgba(0, 0, 0, .25); border: 1px solid rgba(255, 255, 255, .08); }
+.play-rank.off { opacity: .6; }
+.play-rank > div { display: flex; flex-direction: column; min-width: 0; }
+.play-rank small { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; opacity: .7; }
+.play-rank b { font-size: 16px; }
+.play-rank span { font-size: 12px; opacity: .75; }
+.play-hud .scoreboard td.rank, .play-hud .scoreboard th.rank { width: 46px; text-align: center; padding-right: 2px; }
+.play-hud .endscreen .rank-result { position: relative; display: inline-flex; align-items: center; gap: 14px; margin-top: 14px; padding: 10px 22px 10px 14px;
+  background: rgba(0, 0, 0, .55); border: 1px solid rgba(255, 255, 255, .12); overflow: hidden; text-align: left; }
+.play-hud .endscreen .rank-result:empty { display: none; }
+.play-hud .endscreen .rank-result .emblem { position: relative; z-index: 2; }
+.play-hud .endscreen .rank-result .text { position: relative; z-index: 2; display: flex; flex-direction: column; }
+.play-hud .endscreen .rank-result small { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; opacity: .8; }
+.play-hud .endscreen .rank-result span { font-size: 18px; }
+.play-hud .endscreen .rank-result.up small, .play-hud .endscreen .rank-result.placed small { color: #8ee06e; }
+.play-hud .endscreen .rank-result.down small { color: #ff5a4f; }
+.play-hud .endscreen .rank-result .flag { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .55; z-index: 1; animation: rankFlag 1.2s ease-out both; }
+.play-hud .endscreen .rank-result .halo { position: absolute; left: -24px; top: 50%; width: 150px; translate: 0 -50%; z-index: 1; mix-blend-mode: screen; animation: rankHalo 2.4s ease-out both; }
+.play-hud .endscreen .rank-result.up .emblem, .play-hud .endscreen .rank-result.placed .emblem { animation: rankPop .7s cubic-bezier(.2, 1.6, .4, 1) both .2s; }
+@keyframes rankFlag { from { opacity: 0; transform: translateX(-30%); } }
+@keyframes rankHalo { 0% { opacity: 0; scale: .4; } 30% { opacity: 1; scale: 1.15; } 100% { opacity: .75; scale: 1; } }
+@keyframes rankPop { from { scale: .2; opacity: 0; } }

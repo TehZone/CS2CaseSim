@@ -3,6 +3,7 @@
 // progress, damage direction, the scoreboard (Tab), the sniper scope, the radio menu and chat, and the end-of-match
 // screen.
 import { esc } from '../util.js';
+import { emblemHtml } from '../rank.js';
 
 const fmtTime = (s) => { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
@@ -193,11 +194,12 @@ export class Hud {
       el.innerHTML = ffa ? table(null, 'Free for all') : table('CT', 'Counter-Terrorists') + table('T', 'Terrorists');
       return;
     }
+    const ranked = players.some((p) => p.rank !== undefined);
     const rows = (side) => players.filter((p) => p.team === side).sort((a, b) => b.score - a.score).map((p) => `
-      <tr class="${p.alive ? '' : 'dead'} ${p.me ? 'me' : ''}"><td>${esc(p.name)}</td><td>${p.team === myTeam ? '$' + p.money : ''}</td>
+      <tr class="${p.alive ? '' : 'dead'} ${p.me ? 'me' : ''}">${ranked ? `<td class="rank">${emblemHtml(p.rank, { size: 18 })}</td>` : ''}<td>${esc(p.name)}</td><td>${p.team === myTeam ? '$' + p.money : ''}</td>
       <td>${p.kills}</td><td>${p.deaths}</td><td>${p.assists}</td><td>${Math.round(p.damage / Math.max(1, round - 1 || 1))}</td><td>${p.mvps ? '★' + p.mvps : ''}</td><td>${p.score}</td></tr>`).join('');
     const table = (side, name) => `<div class="sb-team ${side.toLowerCase()}"><div class="sb-head"><b>${scores[side] ?? 0}</b> ${name}</div>
-      <table><thead><tr><th>Player</th><th>Money</th><th>K</th><th>D</th><th>A</th><th>ADR</th><th>MVP</th><th>Score</th></tr></thead><tbody>${rows(side)}</tbody></table></div>`;
+      <table><thead><tr>${ranked ? '<th class="rank">Rank</th>' : ''}<th>Player</th><th>Money</th><th>K</th><th>D</th><th>A</th><th>ADR</th><th>MVP</th><th>Score</th></tr></thead><tbody>${rows(side)}</tbody></table></div>`;
     el.innerHTML = table('CT', 'Counter-Terrorists') + table('T', 'Terrorists');
   }
 

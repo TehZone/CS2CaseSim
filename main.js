@@ -40,6 +40,7 @@ const PLAY_CALLS = {
   maps: () => cs2.playMaps(), mapImages: () => cs2.playMapImages(), map: (id) => cs2.playMap(id), progress: (key) => cs2.playProgress(key), weapon: (id) => cs2.playWeapon(id),
   agent: (vmdl) => cs2.playAgent(vmdl), anims: (list) => cs2.playAnims(list), sounds: (events) => cs2.playSounds(events),
   agentModel: (id) => cs2.agentModel(id), stats: () => cs2.playStats(), voices: () => cs2.playVoices(), icons: () => cs2.playIcons(),
+  ranks: () => cs2.playRanks(),
 };
 function playCall(fn, arg) {
   if (!Object.hasOwn(PLAY_CALLS, fn)) throw new Error('Unknown play call ' + fn);
@@ -368,13 +369,14 @@ async function runPlaySmoke(win) {
     return JSON.stringify({ round: m.round, phase: m.phase, time: Math.round(m.time), score: m.score, fps: Math.round(g.fps || 0), bomb: m.bomb?.state,
       alive: g.combatants.filter((c) => c.alive).map((c) => c.team[0]).join(''), feed: document.querySelector('.feed')?.innerText.split(String.fromCharCode(10)).join(' | ') }); })()`);
   // The bots standing still: on the floor and not turning round, idle in spawn through a 30 s freeze time, then for 35 s
-  // of the round (bots holding angles), with you in god mode and the bots not shooting.
+  // of the round (bots holding angles), with you in god mode and the bots not shooting. Their torsos too: upright, and
+  // twisted from the legs only as far as their aim is (the chest's offset from the aim stays put, frame after frame).
   await js(`(() => { const g = window.__playGame; document.querySelector('.play-pause').classList.add('hidden'); g.paused = false; g.input.locked = true;
     g.god = true; g.cv.bot_dont_shoot = 1; g.match.time = 31;
     const wrap = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
     const mates = g.bots.filter((b) => b.c.team === g.me.team), c = [0, 1].map((k) => mates.reduce((s, b) => s + b.pos[k], 0) / Math.max(1, mates.length));
     const o = g.player.origin; g.input.yaw = Math.atan2(c[1] - o[1], c[0] - o[0]) * 180 / Math.PI; g.input.pitch = 8;
-    const rec = window.__stillRec = { gap: 0, freezeSec: 0, freezeAim: 0, freezeBody: 0, stillSec: 0, stillAim: 0, stillBody: 0, maxStillBodyRate: 0, stillTurningFrames: 0, stillFrames: 0 };
+    const rec = window.__stillRec = { gap: 0, freezeSec: 0, freezeAim: 0, freezeBody: 0, stillSec: 0, stillAim: 0, stillBody: 0, maxStillBodyRate: 0, stillTurningFrames: 0, stillFrames: 0, torso: {}, maxTwist: 0, rootTilt: 0 };
     const last = new Map(g.bots.map((b) => [b, [b.yaw, b.bodyYaw]]));
     g.on((type, dt) => { if (type !== 'frame' || !dt) return;
       for (const b of g.bots) { if (!b.c.alive) continue;
@@ -383,16 +385,27 @@ async function runPlaySmoke(win) {
         else if (Math.hypot(b.vel[0], b.vel[1]) < 20 && !b.airborne && !b.brain.target?.visible) {
           rec.stillSec += dt; rec.stillAim += da; rec.stillBody += db; rec.stillFrames++; if (da > 0.05) rec.stillTurningFrames++;
           rec.maxStillBodyRate = Math.max(rec.maxStillBodyRate, db / dt);
+        }
+        const L = b.root.visible && b.bonePos('arm_upper_L'), R = L && b.bonePos('arm_upper_R');
+        if (R) {
+          const twist = wrap(Math.atan2(R[1] - L[1], R[0] - L[0]) * 180 / Math.PI + 90 - b.bodyYaw), dev = wrap(twist - Math.max(-60, Math.min(60, wrap(b.yaw - b.bodyYaw))));
+          const t = rec.torso[b.index] ||= { min: 1e9, max: -1e9 };
+          if (g.match.phase === 'freeze') { t.min = Math.min(t.min, dev); t.max = Math.max(t.max, dev); }
+          rec.maxTwist = Math.max(rec.maxTwist, Math.abs(twist));
+          rec.rootTilt = Math.max(rec.rootTilt, Math.abs(b.root.rotation.x), Math.abs(b.root.rotation.z));
         } } }); })()`);
   await wait(3000);
   await shot('spawn');
-  await wait(29000);
+  await wait(22000);
+  await shot('spawn-25s'); // the torsos 25 s on (a twist left adding up would have turned them round by now)
+  await wait(7000);
   await wait(35000);
   console.log('SMOKE play standing still', await js(`(() => { const r = window.__stillRec, g = window.__playGame; g.god = false; g.cv.bot_dont_shoot = 0;
     return JSON.stringify({ floorGap: Math.round(r.gap * 10) / 10,
       freeze: { botSeconds: Math.round(r.freezeSec), aimDegPerSec: Math.round((r.freezeAim / Math.max(1, r.freezeSec)) * 100) / 100, bodyDegPerSec: Math.round((r.freezeBody / Math.max(1, r.freezeSec)) * 100) / 100 },
       holding: { botSeconds: Math.round(r.stillSec), aimDegPerSec: Math.round((r.stillAim / Math.max(1, r.stillSec)) * 100) / 100, bodyDegPerSec: Math.round((r.stillBody / Math.max(1, r.stillSec)) * 100) / 100,
-        turningPct: Math.round((r.stillTurningFrames / Math.max(1, r.stillFrames)) * 100), maxBodyDegPerSec: Math.round(r.maxStillBodyRate) } }); })()`));
+        turningPct: Math.round((r.stillTurningFrames / Math.max(1, r.stillFrames)) * 100), maxBodyDegPerSec: Math.round(r.maxStillBodyRate) },
+      torso: { freezeDriftDeg: Math.round(Math.max(0, ...Object.values(r.torso).filter((t) => t.max >= t.min).map((t) => t.max - t.min))), maxTwistDeg: Math.round(r.maxTwist), rootTiltDeg: Math.round(r.rootTilt * 180 / Math.PI * 10) / 10 } }); })()`));
   // Stickers on the magazine come out with it: an AK-47 with one on the mag and one on the receiver, a third into a reload.
   console.log('SMOKE play mag sticker', await js(`(async () => { try {
     const THREE = await import('three'), { D } = await import('./js/data.js'), { buildViewmodel } = await import('./js/play/viewmodel.js'), { cs2Play } = await import('./js/cs2/api.js');
@@ -561,6 +574,28 @@ async function runPlaySmoke(win) {
     out.playing = rec;
     return JSON.stringify(out);
   } catch (e) { return 'failed: ' + e.message; } })()`));
+  // CS:GO ranks: the 10th competitive win reveals your rank on the end screen (play-rank.png), a later win ranks you up,
+  // the scoreboard shows everyone's, and so does the lobby afterwards (play-lobby-rank.png).
+  console.log('SMOKE play rank', await js(`(async () => { try {
+    const g = window.__playGame, { S } = await import('./js/state.js'), { act } = await import('./js/backend.js');
+    S.rank = { mmr: 1190, group: 0, wins: 9, losses: 3, ties: 1, lastWin: Date.now() };
+    g.match.score.A = 9; g.match.score.B = 4;
+    g.onMatchOver('A');
+    await new Promise((r) => setTimeout(r, 1500));
+    const box = document.querySelector('.play-hud [data-rank]');
+    const shown = box?.innerText.replace(/\\s+/g, ' '), art = !!box?.querySelector('img.rank-emblem'), flag = !!box?.querySelector('img.flag');
+    const placed = S.rank.group;
+    S.rank.group = Math.max(1, placed - 2); // as if it had dropped: the next win takes it up a group
+    const up = await act('play.rank', { result: 'win', roundsFor: 13, roundsAgainst: 5, difficulty: 'hard' });
+    return JSON.stringify({ shown, emblem: art, flag, placed, nextWin: { change: up.change, from: up.before, to: up.after }, scoreboardEmblems: document.querySelectorAll('.play-hud td.rank .rank-emblem').length });
+  } catch (e) { return 'failed: ' + e.message; } })()`));
+  await wait(1200);
+  await shot('rank');
+  await js(`document.querySelector('[data-leave]')?.click(); 1`);
+  await wait(2500);
+  console.log('SMOKE play lobby rank', await js(`(() => { const c = document.querySelector('.play-rank'); c?.scrollIntoView({ block: 'center' }); return c ? c.innerText.replace(/\\s+/g, ' ') + (c.querySelector('img') ? ' (emblem)' : '') : 'no rank card'; })()`));
+  await wait(800);
+  await shot('lobby-rank');
   console.log('SMOKE screenshots saved to', app.getPath('userData'));
   app.quit();
 }

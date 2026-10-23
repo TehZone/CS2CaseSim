@@ -11,6 +11,7 @@ import { PASS_PRICE, PASS_STARS, findLiveOffer, offerBox, starsFromSpend } from 
 import * as M from './manager.js';
 import * as G from './gamble.js';
 import * as MK from './market.js';
+import * as R from './ranks.js';
 import { rand, round2 } from './util.js';
 
 export class GameError extends Error {
@@ -251,6 +252,15 @@ export const ACTIONS = {
     s.playKills = (s.playKills || 0) + kills;
     s.playEarned = round2((s.playEarned || 0) + earned);
     return { earned };
+  },
+  // A finished competitive match against the bots moves your CS:GO rank (one for all maps; online too: it's only the rank).
+  'play.rank'(ctx, { result, roundsFor = 0, roundsAgainst = 0, difficulty = 'normal' }) {
+    if (!['win', 'loss', 'tie'].includes(result)) fail('Invalid result');
+    if (!Object.hasOwn(R.BOT_MMR, difficulty)) fail('Invalid difficulty');
+    const r = R.rateMatch(ctx.st.rank, { result, roundsFor: int(roundsFor, 0, 60, 'rounds'), roundsAgainst: int(roundsAgainst, 0, 60, 'rounds'), difficulty, now: ctx.now });
+    ctx.st.rank = r.rank;
+    ctx.dirty.add('rank');
+    return { change: r.change, before: r.before, after: r.after, rank: r.rank };
   },
   // A kill in Play with a StatTrak™ gun or knife counts on its counter (online too: it changes nothing but the count).
   'play.stattrak'(ctx, { uid, kills = 1 }) {

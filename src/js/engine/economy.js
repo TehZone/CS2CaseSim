@@ -2,6 +2,7 @@
 // same rules run on the client (offline save) and on the multiplayer server (online account).
 import { round2 } from './util.js';
 import { chickenIncome } from './chickens.js';
+import { freshRank } from './ranks.js';
 
 // Auto-sell rules for new drops: sell anything worth less than `below` dollars and/or of the rarity ranks in
 // `ranks` (0 Consumer ... 5 Covert). Knives, gloves and other ★ items are never auto-sold.
@@ -18,6 +19,7 @@ export function freshState() {
     coopSlots: 3,
     team: freshTeam(),
     loadout: {}, // slot (see items.loadoutSlot) -> uid
+    rank: freshRank(), // CS:GO competitive rank from Play (see ranks.js)
     stats: {
       opened: 0, spent: 0, sold: 0, clicks: 0, clickEarned: 0, passiveEarned: 0,
       bestValue: 0, bestName: '', drops: {}, knives: 0, stickersApplied: 0,

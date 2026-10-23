@@ -87,6 +87,11 @@ What's in a match:
   your K/D/A, ADR, headshots, accuracy, MVPs and multi-kills. You can inspect your weapon during freeze time.
 - Sound carries like CS2's: gunshots over much of the map, footsteps about 1100 units, smaller sounds less, fading with
   distance and muffled through walls; the round's music and the radio play one at a time.
+- CS:GO's competitive ranks, one for all maps: Silver I to The Global Elite, with CS2's own emblems. Competitive matches
+  move a hidden rating (more for a bigger win, and depending on the bots' difficulty); the rank shows after 10 wins and
+  then moves a group at a time, with CS:GO's rank-up (or down) at the end of the match. It's in the lobby, the
+  scoreboard (the bots are ranked by their difficulty) and your stats, saved with your progress (online too), and
+  shows as expired after 30 days without a win.
 - Finished matches pay into your wallet when you play offline: kills, assists, MVPs, rounds won and the win, more
   against harder bots. The lobby shows your record.
 - The lobby shows CS2's own screenshot of each map.

@@ -386,6 +386,26 @@ function fakeGame() {
   ok(b.vel[0] > 500 && b.vel[2] > 100, 'ball: an HE next to it sends it flying');
 }
 
+// ---- the bots' upper body: bent to the aim from the animation's pose, never on top of last frame's bend --------------
+{
+  const THREE = await import('three');
+  const { Bot } = await import('../src/js/play/bots.js');
+  const chain = ['spine_0', 'spine_1', 'spine_2', 'spine_3'].map(() => new THREE.Bone());
+  chain.reduce((parent, b) => (parent.add(b), b), new THREE.Group());
+  const bot = { bones: { spine_1: chain[1], spine_2: chain[2], spine_3: chain[3] }, yaw: 30, bodyYaw: 0, pitch: 12 };
+  const chest = () => chain[3].getWorldQuaternion(new THREE.Quaternion());
+  // A still pose: the mixer only writes bones whose animated value changed, so on these frames it writes nothing.
+  const frame = () => { Bot.prototype.unbendSpine.call(bot); Bot.prototype.bendSpine.call(bot); };
+  frame();
+  const once = chest();
+  for (let i = 0; i < 30; i++) frame();
+  ok(once.angleTo(chest()) < 1e-6, 'bots: the torso bend does not add up frame after frame (no spinning round)');
+  const twist = 2 * Math.acos(Math.min(1, Math.abs(chest().w))) * 180 / Math.PI;
+  bot.yaw = 170; frame();
+  const big = 2 * Math.acos(Math.min(1, Math.abs(chest().w))) * 180 / Math.PI;
+  ok(twist > 25 && big < 65, 'bots: the upper body turns with the aim, at most 60° from the legs: ' + twist.toFixed(0) + '°, ' + big.toFixed(0) + '°');
+}
+
 // ---- nav links and what bots can climb ------------------------------------------------------------------------------
 {
   const { NavMesh } = await import('../src/js/play/nav.js');

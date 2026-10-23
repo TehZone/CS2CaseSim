@@ -5,12 +5,15 @@ import { toast } from '../ui.js';
 import { MODES } from '../play/modes.js';
 import { S } from '../state.js';
 import { settingsHtml, bindSettings, matchSettings, SETTINGS_DEFAULTS } from './play-settings.js';
+import { rankInfo, PLACEMENT_WINS } from '../engine/ranks.js';
+import { loadRankArt, emblemHtml, rankKey } from '../rank.js';
 
 // Map art colours for the lobby cards (any other installed map gets a neutral card).
 const MAP_TINT = { de_dust2: '#c9a46a, #7b5a33', de_mirage: '#d8b98a, #8a6a45', de_inferno: '#c98a5a, #6b3f22', de_nuke: '#8fa5b5, #3e4b57',
   de_ancient: '#7fa36a, #3c5a35', de_anubis: '#d6b97a, #6d5a3a', de_overpass: '#9fb0a0, #4a5a4c', de_vertigo: '#a8b8c8, #4c5a6a', de_train: '#9a9a8a, #4a4a40',
   cs_office: '#a0a8b8, #404858', cs_italy: '#d8a878, #7a5030' };
 let mapList = null, mapImages = null; // the installed maps, and CS2's screenshot of each ({ id: url })
+let rankAsked = false;
 
 const PREFS_KEY = 'cs2sim.play';
 const DEFAULTS = { map: 'de_dust2', mode: 'competitive', site: 'A', ffa: 'ffa', minutes: 10, team: 'CT', teamSize: 5, difficulty: 'normal', length: 'short', overtime: 'on', friendlyFire: 'off', sensitivity: 1.25, quality: 'balanced', ...SETTINGS_DEFAULTS };
@@ -31,6 +34,7 @@ export function render(r) {
       if (bomb.length) { mapList = bomb; if (root === r) render(r); }
     }).catch(() => {});
   }
+  if (!rankAsked) { rankAsked = true; loadRankArt().then((a) => { if (a && root === r) render(r); }); }
   if (!mapImages) {
     mapImages = {};
     cs2Play('mapImages').then((imgs) => { mapImages = imgs || {}; if (root === r) render(r); }).catch(() => {});
@@ -59,6 +63,7 @@ export function render(r) {
         <label>Sensitivity (CS2)<input class="input" type="number" min="0.05" max="20" step="0.05" data-k="sensitivity" value="${p.sensitivity}"></label>
         <label>Graphics<select class="input" data-k="quality">${opts([['high', 'High (full resolution)'], ['balanced', 'Balanced'], ['performance', 'Performance']], p.quality)}</select></label>
         <button class="btn primary big" data-start>Play</button>
+        ${rankCard(mode)}
         ${record()}
         <div class="muted play-keys">WASD move · Space jump · Ctrl crouch · Shift walk · W into a ladder climbs it · Mouse1 fire · Mouse2 scope / silencer / burst mode · R reload · F inspect · B buy · E defuse / pick up · G drop · 1/2/3 weapons (3 again for the Zeus) · 4 grenades (Mouse1 throw, Mouse2 lob) · 5 bomb (hold Mouse1 in a site) · Z / X / V radio (commands, reports, responses: your bots follow orders) · Middle mouse ping · Tab scores · Esc pause</div>
       </div>
@@ -78,6 +83,16 @@ export function render(r) {
 }
 
 export function destroy() { root = null; }
+
+// Your competitive rank (CS:GO's, one for all maps): the emblem, and the wins still needed to get one.
+function rankCard(mode) {
+  const r = S.rank || {}, info = rankInfo(r);
+  const name = info.expired ? 'Rank expired' : info.group ? info.name : 'Unranked';
+  const sub = info.needWins ? `${info.needWins} more competitive win${info.needWins === 1 ? '' : 's'} to get your rank (${PLACEMENT_WINS - info.needWins}/${PLACEMENT_WINS})`
+    : info.expired ? 'Win a competitive match to show it again' : `${r.wins || 0} wins · ${r.losses || 0} losses · ${r.ties || 0} ties`;
+  return `<div class="play-rank ${mode === 'competitive' ? '' : 'off'}" title="${mode === 'competitive' ? 'Competitive matches move your rank' : 'Only competitive matches move your rank'}">
+    ${emblemHtml(rankKey(info), { size: 46 })}<div><small>Competitive rank</small><b>${esc(name)}</b><span>${esc(sub)}</span></div></div>`;
+}
 
 // Your Play record (offline matches): played, won, kills and what they paid.
 function record() {
@@ -104,6 +119,7 @@ async function start() {
     session?.game.dispose();
     session = null;
     overlay.remove();
+    if (root) render(root); // the lobby again, with the rank and record the match changed
   };
   overlay.querySelector('[data-cancel]').addEventListener('click', leave);
   overlay.querySelector('[data-leave]').addEventListener('click', leave);

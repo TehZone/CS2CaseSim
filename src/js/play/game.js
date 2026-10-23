@@ -32,6 +32,9 @@ import { Post } from './post.js';
 import { Radio } from './radio.js';
 import { MODES, WINGMAN_RULES, Deathmatch, ARMS_RACE, PROTECT } from './modes.js';
 import { act, online } from '../backend.js';
+import { S } from '../state.js';
+import { rankInfo, botGroup, SKILL_GROUPS } from '../engine/ranks.js';
+import { loadRankArt, rankArt, emblemHtml, rankKey } from '../rank.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
 export const TICK = 1 / 64;
@@ -174,6 +177,7 @@ export class Game {
     this.resize();
     this.sounds = new SoundBank();
     this.stats = await cs2Play('stats');
+    await loadRankArt();
     this.midSpot = this.findMid();
 
     status('Loading players…');
@@ -249,7 +253,8 @@ export class Game {
       'c4.keypressquiet', 'Player.PickupC4', 'Player.PickupWeapon', 'Event.BombPlanted', 'Event.BombDefused', 'Event.CTWin', 'Event.TERWin',
       `Music.StartRound.${MUSIC}`, `Music.BombPlanted.${MUSIC}`, `Music.WonRound.${MUSIC}`, `Music.LostRound.${MUSIC}`, `Music.MatchEnd.${MUSIC}`,
       ...NADE_SOUNDS, 'Molotov.Draw', 'HEGrenade.Draw', 'Player.PickupGrenadeAudible', 'Player.PickupWeaponSilent', 'Player.DeathTaser', 'Player.DamageFall',
-      'CT_Ladder.StepLeft', 'CT_Wood_Ladder.StepLeft', 'UI.PlayerPing', 'Ball.ImpactSoft', 'Ball.ImpactHard', 'Ball.BulletImpact'];
+      'CT_Ladder.StepLeft', 'CT_Wood_Ladder.StepLeft', 'UI.PlayerPing', 'Ball.ImpactSoft', 'Ball.ImpactHard', 'Ball.BulletImpact',
+      'UIPanorama.XP.NewSkillGroup', 'UIPanorama.XP.RankDown'];
   }
 
   setupViewmodelLighting() {
@@ -751,12 +756,38 @@ export class Game {
     const stats = [`${me.kills} / ${me.deaths} / ${me.assists} K/D/A`, this.respawnMode ? `${me.points || 0} points` : `${Math.round(me.damage / rounds)} ADR`, `${hs}% headshots`,
       me.shots ? `${Math.round(((me.hits || 0) / me.shots) * 100)}% accuracy` : '', this.respawnMode ? '' : `${me.mvps} MVPs`, multi].filter(Boolean).join(' · ');
     this.reward = this.payReward(won);
+    const ranked = this.mode === 'competitive';
     this.hud.endScreen(`<h1 class="${draw ? '' : won ? 'win' : 'loss'}">${draw ? 'Draw' : won ? 'Victory' : 'Defeat'}</h1>
-      <div class="final">${final}</div><div class="sub">${stats}</div><div class="reward" data-reward>${online() ? 'Rewards are paid for offline play' : 'Adding up your reward…'}</div>`);
+      <div class="final">${final}</div><div class="sub">${stats}</div><div class="reward" data-reward>${online() ? 'Rewards are paid for offline play' : 'Adding up your reward…'}</div>
+      ${ranked ? '<div class="rank-result" data-rank></div>' : ''}`);
     this.reward.then((r) => { const el = this.hud.q('[data-reward]'); if (el && r) el.innerHTML = `Reward: <b>+$${r.earned.toFixed(2)}</b> to your wallet`; });
+    if (ranked) this.rateMatch(draw ? 'tie' : won ? 'win' : 'loss');
     this.hud.scoreboard(true, this.scoreData());
     this.input.unlock();
     this.emit('over', { won, draw });
+  }
+
+  // A finished competitive match moves your rank (CS:GO's, one for all maps): shown under the result like CS:GO's end of
+  // match, with its rank-up (or down) screen when it changes and the placement once you have 10 wins.
+  async rateMatch(result) {
+    const m = this.match;
+    let r;
+    try { r = await act('play.rank', { result, roundsFor: Math.min(60, m.score.A), roundsAgainst: Math.min(60, m.score.B), difficulty: this.difficulty }); } catch (e) { console.warn('rank', e); return; }
+    const el = this.hud.q('[data-rank]');
+    if (!el || this.disposed) return;
+    const info = rankInfo(r.rank), art = rankArt();
+    const big = emblemHtml(rankKey(info), { size: 64 });
+    const title = r.change === 'up' ? 'Rank up!' : r.change === 'down' ? 'Rank down' : r.change === 'placed' ? 'Rank revealed' : info.group ? 'Competitive rank' : 'Unranked';
+    const line = r.change === 'up' ? `You've been promoted to <b>${SKILL_GROUPS[r.after - 1]}</b>`
+      : r.change === 'down' ? `You've been demoted to <b>${SKILL_GROUPS[r.after - 1]}</b>`
+      : r.change === 'placed' ? `Your skill group: <b>${SKILL_GROUPS[r.after - 1]}</b>`
+      : info.group ? `<b>${SKILL_GROUPS[info.group - 1]}</b>` : `${info.needWins} more competitive win${info.needWins === 1 ? '' : 's'} to get your rank`;
+    const fancy = r.change === 'up' || r.change === 'placed';
+    el.className = 'rank-result ' + (r.change || 'same');
+    el.innerHTML = `${fancy && art?.halo ? `<img class="halo" src="${art.halo}" alt="">` : ''}${fancy && art?.flag ? `<img class="flag" src="${art.flag}" alt="">` : ''}
+      <div class="emblem">${big}</div><div class="text"><small>${title}</small><span>${line}</span></div>`;
+    if (r.change) this.sounds.play(r.change === 'down' ? 'UIPanorama.XP.RankDown' : 'UIPanorama.XP.NewSkillGroup', { volume: 0.8 });
+    this.hud.scoreboard(true, this.scoreData());
   }
 
   // A finished match pays into your case-opening money (offline only): kills, assists, MVPs, rounds won and the win,
@@ -1731,7 +1762,9 @@ export class Game {
     const side = (s) => this.match.score[this.combatants.find((c) => c.team === s)?.squad] ?? 0;
     return {
       myTeam: this.me.team, round: this.match.round, scores: { CT: side('CT'), T: side('T') }, ffa: this.ffa, respawn: this.respawnMode,
-      players: this.combatants.map((c) => ({ name: c.name, team: c.team, money: this.respawnMode ? null : c.money, points: c.points || 0, level: c.level || 0, kills: c.kills, deaths: c.deaths, assists: c.assists, damage: c.damage, mvps: c.mvps, score: c.score, alive: c.alive, me: c === this.me })),
+      players: this.combatants.map((c) => ({ name: c.name, team: c.team, money: this.respawnMode ? null : c.money, points: c.points || 0, level: c.level || 0, kills: c.kills, deaths: c.deaths, assists: c.assists, damage: c.damage, mvps: c.mvps, score: c.score, alive: c.alive, me: c === this.me,
+        // Competitive: everyone's rank (yours, and the bots' from their difficulty).
+        rank: this.mode !== 'competitive' ? undefined : c === this.me ? rankKey(rankInfo(S.rank)) : botGroup(c.name, this.difficulty) })),
     };
   }
   radarData() {

@@ -303,6 +303,49 @@ function tierFreq(box, n) {
   void cards;
 }
 
+// ---- CS:GO competitive ranks ----------------------------------------------------------------------
+{
+  const R = await E('ranks');
+  check('ranks: 18 skill groups from Silver I to The Global Elite', R.SKILL_GROUPS.length === 18 && R.SKILL_GROUPS[0] === 'Silver I' && R.SKILL_GROUPS[17] === 'The Global Elite'
+    && R.groupFor(0) === 1 && R.groupFor(R.START_MMR) === 7 && R.groupFor(5000) === 18);
+  // Unranked until 10 wins, then placed.
+  let r = R.freshRank(), last;
+  for (let i = 0; i < 9; i++) r = R.rateMatch(r, { result: i % 3 ? 'win' : 'loss', roundsFor: 9, roundsAgainst: 5 }).rank;
+  const info9 = R.rankInfo(r);
+  check('ranks: unranked (need wins) before 10 wins', r.group === 0 && info9.needWins === 10 - r.wins && info9.name === 'Unranked');
+  while (r.wins < 10) { last = R.rateMatch(r, { result: 'win', roundsFor: 9, roundsAgainst: 4 }); r = last.rank; }
+  check('ranks: the 10th win reveals the rank', last.change === 'placed' && r.group >= 1 && r.group <= 18, R.SKILL_GROUPS[r.group - 1]);
+  // After that, one group at a time: up only after a win, down only after a loss.
+  let ok1 = true;
+  for (let i = 0; i < 60; i++) {
+    const result = ['win', 'loss', 'tie'][i % 3], m = R.rateMatch(r, { result, roundsFor: result === 'win' ? 9 : 3, roundsAgainst: result === 'win' ? 3 : 9, difficulty: 'hard' });
+    if (Math.abs(m.after - m.before) > 1 || (m.after > m.before && result !== 'win') || (m.after < m.before && result !== 'loss')) ok1 = false;
+    r = m.rank;
+  }
+  check('ranks: one group at a time, up only on a win and down only on a loss', ok1);
+  // Where steady results settle: beating Expert bots 70% of the time is The Global Elite, Normal bots half the time Gold Nova.
+  const settle = (difficulty, winRate, n = 600) => {
+    let x = { ...R.freshRank() }, k = 0;
+    for (let i = 0; i < n; i++) { k += winRate; const win = k >= 1; if (win) k -= 1; x = R.rateMatch(x, { result: win ? 'win' : 'loss', roundsFor: win ? 9 : 6, roundsAgainst: win ? 6 : 9, difficulty }).rank; }
+    return x;
+  };
+  const ge = settle('expert', 0.7), gn = settle('normal', 0.5), silver = settle('easy', 0.3);
+  check('ranks: settle by bot difficulty and win rate', ge.group === 18 && gn.group >= 6 && gn.group <= 8 && silver.group <= 3, `expert 70% ${R.SKILL_GROUPS[ge.group - 1]}, normal 50% ${R.SKILL_GROUPS[gn.group - 1]}, easy 30% ${R.SKILL_GROUPS[silver.group - 1]}`);
+  const tie = R.rateMatch({ ...R.freshRank(), mmr: 1000, group: 7 }, { result: 'tie', difficulty: 'normal' });
+  const blowout = R.rateMatch({ ...R.freshRank(), mmr: 1000, group: 7 }, { result: 'win', roundsFor: 13, roundsAgainst: 0, difficulty: 'normal' });
+  const close = R.rateMatch({ ...R.freshRank(), mmr: 1000, group: 7 }, { result: 'win', roundsFor: 13, roundsAgainst: 11, difficulty: 'normal' });
+  check('ranks: a tie against equals changes nothing, a bigger win counts more', tie.rank.mmr === 1000 && blowout.rank.mmr - 1000 > close.rank.mmr - 1000);
+  check('ranks: expires 30 days after the last win', !R.rankInfo({ ...r, lastWin: Date.now() }).expired && R.rankInfo({ ...r, lastWin: Date.now() - 31 * 864e5 }).expired);
+  const bots = { easy: R.botGroup('BOT Zach', 'easy'), expert: R.botGroup('BOT Zach', 'expert') };
+  check('ranks: bots ranked by difficulty (and the same each time)', bots.easy <= 4 && bots.expert >= 15 && R.botGroup('BOT Zach', 'easy') === bots.easy);
+  // The action, on a save.
+  const st = freshState();
+  const run = (args) => { const ctx = ACT.makeCtx(st, { rng }); const res = ACT.runAction(ctx, 'play.rank', args); return { res, d: ACT.delta(ctx) }; };
+  const { res, d } = run({ result: 'win', roundsFor: 9, roundsAgainst: 7, difficulty: 'normal' });
+  let bad = null; try { run({ result: 'flawless', difficulty: 'normal' }); } catch (e) { bad = e; }
+  check('ranks: play.rank updates the save and sends the rank', st.rank.wins === 1 && d.set.rank?.wins === 1 && res.change === null && bad instanceof ACT.GameError);
+}
+
 // ---- loadout -------------------------------------------------------------------------------------
 {
   const st = freshState();

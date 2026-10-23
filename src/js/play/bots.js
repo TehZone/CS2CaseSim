@@ -46,6 +46,8 @@ const PISTOL_RE = /^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven
 const wrap = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
 // Standing still, the body turns to the aim only once it's this far off (CS2's turn in place); the spine twists the rest.
 const TURN_LIMIT = 50;
+const SPINE = ['spine_1', 'spine_2', 'spine_3']; // the bones bendSpine turns, a third each
+const TWIST_LIMIT = 60; // the most the upper body twists from the legs (they step round to follow beyond TURN_LIMIT)
 // Locomotion set: grenades and the Zeus are carried like a pistol or knife (CS2 has no running clips for them).
 export const setOf = (id) => (/knife|bayonet/.test(id || '') || GRENADE_RE.test(id || '') ? 'knife' : PISTOL_RE.test(id || '') || id === 'weapon_taser' ? 'pistol' : 'rifle');
 function holdPath(id) {
@@ -388,6 +390,9 @@ export class Bot {
       l.air?.setEffectiveWeight(0);
       l.ladder?.setEffectiveWeight(0);
     }
+    // The animation's own spine pose back first: the mixer only writes a bone when its animated value changes, so a
+    // bend left on it from the last frame would be bent again (and again...), twisting the torso round and round.
+    this.unbendSpine();
     this.mixer.update(dt);
     if (this.mode === 'move' && !this.climbing) this.bendSpine();
   }
@@ -407,20 +412,29 @@ export class Bot {
   }
 
   // Twists the spine round to where the bot aims and leans it to aim up and down (CS2 blends aim poses; this turns
-  // spine_1..3 by a third each).
+  // spine_1..3 by a third each), from the pose the animation gave them this frame (see unbendSpine).
   bendSpine() {
     const yr = (this.yaw * Math.PI) / 180;
     const axis = new THREE.Vector3(-Math.cos(yr), 0, Math.sin(yr)); // the bot's right, in glTF axes
     const angle = (-this.pitch * Math.PI) / 180 / 3;
-    const twist = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ((Math.max(-80, Math.min(80, wrap(this.yaw - this.bodyYaw))) * Math.PI) / 180) / 3);
+    const twist = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ((Math.max(-TWIST_LIMIT, Math.min(TWIST_LIMIT, wrap(this.yaw - this.bodyYaw))) * Math.PI) / 180) / 3);
     const pq = new THREE.Quaternion(), q = new THREE.Quaternion().setFromAxisAngle(axis, angle).multiply(twist);
-    for (const n of ['spine_1', 'spine_2', 'spine_3']) {
+    this.spineBase ||= {};
+    for (const n of SPINE) {
       const b = this.bones[n];
       if (!b?.parent) continue;
+      (this.spineBase[n] ||= new THREE.Quaternion()).copy(b.quaternion);
       b.parent.updateWorldMatrix(true, false);
       b.parent.getWorldQuaternion(pq);
       b.quaternion.premultiply(pq.clone().invert().multiply(q).multiply(pq));
     }
+    this.bent = true;
+  }
+  // Takes the bend off again (the spine as the animation posed it).
+  unbendSpine() {
+    if (!this.bent) return;
+    for (const n of SPINE) if (this.bones[n] && this.spineBase[n]) this.bones[n].quaternion.copy(this.spineBase[n]);
+    this.bent = false;
   }
 
   // Copies the simulated position and the body's facing onto the model.
