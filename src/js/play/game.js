@@ -542,7 +542,7 @@ export class Game {
         b.weapons.secondary = botGun(pistol, this.stats[pistol]);
         this.sounds.load([this.stats[primary]?.shootSound].filter(Boolean));
       }
-      b.spawn(sp.origin, sp.yaw);
+      b.spawn(this.onFloor(sp.origin), sp.yaw);
       b.slot = b.weapons.primary ? 'primary' : b.weapons.secondary ? 'secondary' : 'knife';
       b.equip(b.weapons[b.slot].id);
       b.brain.roundStart({});
@@ -601,6 +601,14 @@ export class Game {
     Promise.all(jobs).then(() => { this.arsenal.current = null; this.arsenal.selectBest(this.now); });
   }
 
+  // The floor under a point (game units): the collision mesh straight down from a step above it, or null. CS2's
+  // spawn points float 24-35 units up, and the nav mesh runs a few units above the real floor, so bots stand on this.
+  floorAt(p, below = 200) {
+    const hit = this.collision.raycast([p[0], p[1], p[2] + 18], [0, 0, -1], below + 18, FLAG_PLAYER);
+    return hit ? p[2] + 18 - hit.t : null;
+  }
+  onFloor(p) { const z = this.floorAt(p); return z == null ? p.slice() : [p[0], p[1], z]; }
+
   respawnBot(b, sp, died) {
     const c = b.c;
     if (died) {
@@ -611,7 +619,7 @@ export class Game {
     const knife = c.team === 'T' ? 'weapon_knife_t' : 'weapon_knife';
     b.weapons.knife = botGun(knife, this.stats[knife] || this.stats.weapon_knife);
     if (c.hasC4) b.weapons.c4 = botGun('weapon_c4', this.stats.weapon_c4); else delete b.weapons.c4;
-    b.spawn(sp.origin, sp.yaw);
+    b.spawn(this.onFloor(sp.origin), sp.yaw);
     b.slot = b.weapons.primary ? 'primary' : 'secondary';
     b.equip(b.weapons[b.slot].id);
   }

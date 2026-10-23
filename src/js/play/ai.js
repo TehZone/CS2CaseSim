@@ -520,7 +520,11 @@ export class Brain {
     b.vel[0] += (want[0] - b.vel[0]) * k;
     b.vel[1] += (want[1] - b.vel[1]) * k;
     const nx = b.pos[0] + b.vel[0] * dt, ny = b.pos[1] + b.vel[1] * dt;
-    const h = nav.heightAt(nx, ny, b.pos[2] + 20);
+    // Where to stand: the nav mesh says where the ground is walkable, the collision floor exactly how high it is (the
+    // nav mesh runs a few units above it).
+    let h = nav.heightAt(nx, ny, b.pos[2] + 20);
+    const floor = g.floorAt([nx, ny, b.pos[2]], 64);
+    if (h !== null && floor !== null && Math.abs(floor - h) < 24) h = floor;
     const below = h === null && wpZ === null ? nav.heightAt(b.pos[0], b.pos[1], b.pos[2] + 20, 600) : null;
     if (below !== null && below < b.pos[2] - 1) {
       // In the air over lower ground (dropped off a ledge at the end of a path): fall onto it.
@@ -529,8 +533,10 @@ export class Brain {
       // Off the mesh (e.g. pushed by a teammate): don't go there.
       b.vel[0] *= 0.3; b.vel[1] *= 0.3;
     } else if (h === null) {
-      // Crossing between two areas (a seam, a step up or a drop): follow the path, easing towards its height.
+      // Crossing between two areas (a seam, a step up or a drop): follow the path, easing towards its height (the floor
+      // there when it's close to it).
       b.pos[0] = nx; b.pos[1] = ny;
+      if (floor !== null && Math.abs(floor - wpZ) < 24) wpZ = floor;
       const dz = wpZ - b.pos[2];
       if (dz > 0) b.pos[2] += Math.min(dz, 400 * dt);
       else { b.vel[2] -= 800 * dt; b.pos[2] = Math.max(wpZ, b.pos[2] + b.vel[2] * dt); if (b.pos[2] === wpZ) b.vel[2] = 0; }
