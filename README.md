@@ -73,8 +73,10 @@ What's in a match:
   this position, regroup, fall back, cover me; "enemy spotted" points them where you aim) and answer. Bots talk on the
   radio in their agent's CS2 voice (enemy spotted with the callout, enemy down, planting, flashbang out, enemies left...),
   shown in a chat with where it came from. Optional friendly fire with CS2's damage reductions and team-kill penalty.
-- Bots walk the map's own navigation mesh, ladders included, and climb like players: up an 18-unit step at most,
-  jumping (or crouch-jumping, up to 66 units) onto boxes and ledges, and never onto anything higher. Terrorists pick
+- Bots walk the map's own navigation mesh, ladders included, and move with your movement and collision: they slide
+  along walls (never into them), walk up an 18-unit step at most, and run up to a box or ledge and jump (or
+  crouch-jump, up to 66 units) onto it. A jump they can't make (a crate or overhang in the way) is one every bot goes
+  round for the rest of the match. Terrorists pick
   a site, take it and plant; counter-terrorists split up to hold the sites, rotate when they see terrorists, retake and defuse; they flee a bomb
   they can't stop. In fights they react after a human-like delay, aim with an error that shrinks as they track you,
   stop to shoot, control part of the recoil and fire in bursts. They smoke off and flash sites before taking them,

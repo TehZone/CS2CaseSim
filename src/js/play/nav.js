@@ -18,6 +18,8 @@ export class NavMesh {
       return { id: a.id, flags: a.flags, corners: a.c, edges: a.e, hiding: a.h, center: [cx, cy, cz], size, min, max, links: [...new Set(a.e.flat())] };
     });
     this.byId = new Map(this.areas.map((a) => [a.id, a]));
+    this.failed = new Set(); // jumps ("from>to" area ids) a bot couldn't make this match (something in the way): paths go round
+
     // How far each link climbs where the two areas meet: up to a step is a walk, up to a crouch-jump a jump, higher
     // can't be climbed (the link is only for coming down).
     for (const a of this.areas) {
@@ -146,7 +148,7 @@ export class NavMesh {
           const lad = chain[i].ladder;
           if (!lad) {
             const rise = areas[i - 1].rise.get(areas[i].id) || 0;
-            pts.push(rise > STEP_HEIGHT ? Object.assign(portal(areas[i - 1], areas[i]), { jump: rise }) : portal(areas[i - 1], areas[i]));
+            pts.push(rise > STEP_HEIGHT ? Object.assign(portal(areas[i - 1], areas[i]), { jump: rise, into: across(areas[i - 1], areas[i]), link: areas[i - 1].id + '>' + areas[i].id }) : portal(areas[i - 1], areas[i]));
             continue;
           }
           // Climb: walk to the foot (or the top), then up (or down) the rungs, then step off.
@@ -164,7 +166,7 @@ export class NavMesh {
         if (closed.has(id)) continue;
         const b = this.byId.get(id);
         const rise = cur.a.rise.get(id) || 0;
-        if (!b || rise > CROUCH_JUMP_HEIGHT) continue;
+        if (!b || rise > CROUCH_JUMP_HEIGHT || (rise > STEP_HEIGHT && this.failed.has(cur.a.id + '>' + id))) continue;
         const g = cur.g + dist(cur.a.center, b.center) * (b.flags & FLAG_CROUCH ? 2 : 1) + (rise > STEP_HEIGHT ? JUMP_COST : 0);
         const o = open.get(id);
         if (!o || g < o.g) open.set(id, { a: b, g, f: g + dist(b.center, goal.center), prev: cur });
@@ -224,6 +226,21 @@ function pointIn(c) {
 }
 
 // Where to cross from area a into its neighbour b: the middle of their shared edge (clamped into both).
+// Which way a path crosses from area a into b: straight across their shared edge (a horizontal unit vector), the way
+// to jump onto b when it's a ledge.
+function across(a, b) {
+  const n = a.corners.length;
+  for (let i = 0; i < n; i++) {
+    if (!a.edges[i]?.includes(b.id)) continue;
+    const p = a.corners[i], q = a.corners[(i + 1) % n];
+    const l = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1, x = (q[1] - p[1]) / l, y = (p[0] - q[0]) / l;
+    const k = (b.center[0] - (p[0] + q[0]) / 2) * x + (b.center[1] - (p[1] + q[1]) / 2) * y >= 0 ? 1 : -1;
+    return [x * k, y * k];
+  }
+  const l = Math.hypot(b.center[0] - a.center[0], b.center[1] - a.center[1]) || 1;
+  return [(b.center[0] - a.center[0]) / l, (b.center[1] - a.center[1]) / l];
+}
+
 function portal(a, b) {
   const n = a.corners.length;
   for (let i = 0; i < n; i++) {

@@ -644,7 +644,11 @@ async function runPlaySmoke(win) {
       return { rise: Math.round(goal[2] - A.center[2]), jumps, crouch, walkUps, onTop };
     };
     const out = { longBox: stage([1547, 2040, -10], [1647, 2071, 55]), xbox: stage([-208, 491, -2], [-233, 550, 47]), midDoorsBox: stage([-311, 1436, -28], [-247, 1332, 36]) };
-    const rec = { simSeconds: 240, walkUps: 0, jumps: 0, falls: 0, rounds: [] }, prev = new Map();
+    // How far into a wall a bot's body (32 wide) is: rays out from its middle at knee and chest height.
+    const depth = (p) => { let d = 0; for (const h of [26, 50]) for (let a = 0; a < 8; a++) {
+      const hit = g.collision.raycast([p[0], p[1], p[2] + h], [Math.cos(a * Math.PI / 4), Math.sin(a * Math.PI / 4), 0], 16, 2);
+      if (hit && Math.abs(hit.normal[2]) < 0.7) d = Math.max(d, 16 - hit.t); } return Math.round(d); };
+    const rec = { simSeconds: 240, walkUps: 0, jumps: 0, falls: 0, inWall: 0, rounds: [] }, prev = new Map();
     for (let n = 0; n < 240 * 64; n++) {
       const r0 = m.round, ph0 = m.phase;
       for (const b of g.bots) prev.set(b, { z: b.pos[2], vz: b.vel[2], j: !!b.jumped, alive: b.c.alive });
@@ -656,11 +660,34 @@ async function runPlaySmoke(win) {
         if (!b.climbing && p.vz === 0 && b.vel[2] === 0 && b.pos[2] - p.z > 18.5) rec.walkUps++;
         if (b.jumped && !p.j) rec.jumps++;
         if (b.vel[2] < -1500 && p.vz >= -1500) rec.falls++;
+        if (n % 8 === 0) rec.inWall = Math.max(rec.inWall, depth(b.pos));
       }
       if (m.round !== r0) { const h = m.history[m.history.length - 1]; rec.rounds.push(h.winner + ':' + h.reason); }
       if (g.me.alive && m.phase === 'live') g.kill(g.me, null, { name: 'World' }, false);
     }
     out.playing = rec;
+    // An enemy on A site (a CT kept there, unhurt) and the terrorists taking A by Short and Long: none of them in a wall
+    // on the way up (Ts on A: how many got onto the site).
+    const A = [1112, 2480, 100], onA = { rounds: 0, inWall: 0, tsOnSite: 0 };
+    let held = null, placed = -1, seen = new Set();
+    for (let n = 0; n < 200 * 64 && onA.rounds < 2; n++) {
+      if (placed !== m.round && m.phase === 'live') {
+        placed = m.round; seen = new Set();
+        held = g.bots.find((b) => b.c.team === 'CT' && b.c.alive);
+        if (held) { held.pos = [A[0], A[1], g.floorAt(A, 200) ?? 96]; held.c.health = 1e6; held.spot = held.pos.slice(); }
+        for (const b of g.bots) if (b.c.team === 'T' && b.brain.plan) b.brain.plan.site = 'A';
+        if (g.me.alive) g.kill(g.me, null, { name: 'World' }, false);
+      }
+      const r0 = m.round;
+      g.tick();
+      if (held?.spot) { held.pos = held.spot.slice(); held.vel = [0, 0, 0]; }
+      for (const b of g.bots) if (b.c.alive && b !== held) {
+        if (n % 4 === 0) onA.inWall = Math.max(onA.inWall, depth(b.pos));
+        if (b.c.team === 'T' && m.siteAt(b.pos)?.site === 'A') seen.add(b);
+      }
+      if (m.round !== r0) { onA.rounds++; onA.tsOnSite += seen.size; if (held) { held.c.health = 100; held.spot = null; } held = null; }
+    }
+    out.enemyOnA = onA;
     return JSON.stringify(out);
   } catch (e) { return 'failed: ' + e.message; } })()`));
   // CS:GO ranks: the 10th competitive win reveals your rank on the end screen (play-rank.png), a later win ranks you up,
