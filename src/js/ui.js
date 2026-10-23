@@ -7,7 +7,7 @@ import { act } from './backend.js';
 import { sfx } from './audio.js';
 import { inspectView } from './inspect.js';
 import { cs2VanityMaps } from './cs2/api.js';
-import { composeItem } from './composite.js';
+import { composeItem, alphaBox } from './composite.js';
 import { chickenIncome, featherMult, HAT, BREED } from './chickens.js';
 import { openStickerEditor } from './stickerEditor.js';
 import { TIER_LABEL } from './patterns.js';
@@ -202,6 +202,21 @@ function detailBody(item) {
   </div>`;
 }
 
+// Older skins only have a 512×384 Steam icon, which the CDN pads into the large size: crop to the item (with a
+// margin, keeping the 4:3 frame) so it fills the panel like newer skins do.
+function fitToContent(c) {
+  const b = alphaBox(c);
+  const W = c.width, H = c.height;
+  let w = (b.x1 - b.x0) * W * 1.08, h = (b.y1 - b.y0) * H * 1.08;
+  if (w > W * 0.8 || h > H * 0.8) return c;
+  if (w / h > W / H) h = (w * H) / W; else w = (h * W) / H;
+  const cx = ((b.x0 + b.x1) / 2) * W, cy = ((b.y0 + b.y1) / 2) * H;
+  const out = document.createElement('canvas');
+  out.width = W; out.height = H;
+  out.getContext('2d').drawImage(c, cx - w / 2, cy - h / 2, w, h, 0, 0, W, H);
+  return out;
+}
+
 export function showItemDetail(item, { onChange } = {}) {
   if (item.nw) act('item.seen', { uids: [item.uid] }).catch(() => {});
   const m = openModal({ title: 'Item details', body: detailBody(item), cls: 'wide', onClose: onChange });
@@ -217,7 +232,7 @@ export function showItemDetail(item, { onChange } = {}) {
       const big = m.el.querySelector('.big');
       if (!big) return;
       const img = document.createElement('img');
-      img.src = c.toDataURL();
+      img.src = fitToContent(c).toDataURL();
       big.replaceChildren(img);
     }).catch(() => {});
   };

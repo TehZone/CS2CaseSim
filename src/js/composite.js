@@ -90,8 +90,9 @@ function applyCaseHardened(data, W, H, blue, seed) {
     const o = i * 4;
     if (data[o + 3] < 8) continue;
     const [h, s, l] = rgb2hsl(data[o], data[o + 1], data[o + 2]);
-    // Only recolour the case-hardening palette (gold/brown, blue, purple); bare grey metal stays.
-    if (s < 0.12 || (h > 65 && h < 180) || h > 320) continue;
+    // Only recolour the case-hardening palette (gold 28-65°, blue and purple 180-335°). Bare grey metal stays,
+    // and so does wood (red-brown, under 28°: the AK's furniture).
+    if (s < 0.12 || h < 28 || (h > 65 && h < 180) || h > 335) continue;
     // `blue` of the surface (by area) becomes blue, the rest gold. Soft blob borders.
     const b01 = smoothstep(1 - blue - 0.06, 1 - blue + 0.06, n[i]);
     const th = b01 > 0.5 ? 212 : 40;
