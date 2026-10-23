@@ -1,5 +1,5 @@
-// Play mode HUD (DOM over the canvas), laid out like CS2's: round timer and team scores at the top, health, armor and
-// money bottom left, ammo bottom right, kill feed top right, crosshair, callout, round messages, plant/defuse
+// Play mode HUD (DOM over the canvas), laid out like CS2's: round timer and team scores at the top, the callout and money
+// under the radar, health and armor bottom left, ammo bottom right, kill feed top right, crosshair, round messages, plant/defuse
 // progress, damage direction, the scoreboard (Tab), the sniper scope, the radio menu and chat, and the end-of-match
 // screen.
 import { esc } from '../util.js';
@@ -22,6 +22,7 @@ export class Hud {
         <div class="team t"><b data-score-t>0</b><span class="alive" data-alive-t></span></div>
       </div>
       <div class="place"></div>
+      <div class="money"><span class="buyzone hidden" data-buyzone title="Buy zone (B)">${ICONS.cart}</span><span data-money>$0</span><span class="c4 hidden" data-c4>C4</span><span class="kit hidden" data-kit>KIT</span></div>
       <div class="modeline" data-mode></div>
       <div class="fps"></div>
       <div class="feed"></div>
@@ -32,10 +33,12 @@ export class Hud {
       <div class="spec hidden" data-spec></div>
       <div class="bottom">
         <div class="left">
-          <div class="money"><span class="buyzone hidden" data-buyzone title="Buy zone (B)">BUY</span><span data-money>$0</span><span class="c4 hidden" data-c4>C4</span><span class="kit hidden" data-kit>KIT</span></div>
-          <div class="vitals"><div><small>HP</small><span data-hp>100</span></div><div><small>ARMOR</small><span data-ar>0</span><i data-helmet class="hidden">H</i></div></div>
+          <div class="vitals">
+            <div class="hp">${ICONS.health}<span data-hp>100</span><i class="bar"></i></div>
+            <div class="ar">${ICONS.armor}<span data-ar>0</span><i data-helmet class="helmet hidden" title="Helmet">${ICONS.helmet}</i><i class="bar"></i></div>
+          </div>
         </div>
-        <div class="ammo"><div class="nades" data-nades></div><div class="weapon-name" data-wn></div><span data-clip>0</span> <small>/ <span data-res>0</span></small></div>
+        <div class="ammo"><div class="nades" data-nades></div><div class="weapon-name" data-wn></div><div class="rounds"><span data-clip>0</span><small>/ <span data-res>0</span></small>${ICONS.bullets}</div></div>
       </div>
       <div class="scoreboard hidden" data-scores></div>
       <div class="endscreen hidden" data-end></div>`;
@@ -65,7 +68,15 @@ export class Hud {
     this.set('[data-hp]', String(Math.max(0, Math.ceil(hp))));
     this.set('[data-ar]', String(Math.max(0, Math.ceil(armor))));
     this.toggle('[data-helmet]', !!helmet && armor > 0);
-    this.q('.vitals').classList.toggle('low', hp <= 25);
+    const v = this.q('.vitals');
+    v.classList.toggle('low', hp <= 25);
+    // The bars under the numbers read these (0..1).
+    const bars = `${this.cache['[data-hp]']}/${this.cache['[data-ar]']}`;
+    if (this.cache.bars !== bars) {
+      this.cache.bars = bars;
+      v.style.setProperty('--hp', String(Math.min(1, Math.max(0, hp) / 100)));
+      v.style.setProperty('--ar', String(Math.min(1, Math.max(0, armor) / 100)));
+    }
   }
   money(m, { buyzone = false, c4 = false, kit = false } = {}) {
     this.toggle('[data-money]', m != null); // no money in Deathmatch
@@ -220,6 +231,17 @@ const KILL_MARKS = {
   air: svg('In the air', '<path d="M8 10.5V2.2M4.6 5.6 8 2.2l3.4 3.4"/><path d="M3 14h10" stroke-dasharray="2 1.8"/>'),
   noscope: svg('No scope', '<circle cx="8" cy="8" r="5.6"/><path d="M8 3.6v8.8M3.6 8h8.8"/><path d="M2.2 13.8 13.8 2.2" stroke="#ff5a5a"/>'),
   blind: svg('Blinded', '<path d="M1.5 8S3.8 4.2 8 4.2 14.5 8 14.5 8 12.2 11.8 8 11.8 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.7" fill="currentColor" stroke="none"/><path d="M8 .6v1.6M2.6 2.2l1.1 1.1M13.4 2.2l-1.1 1.1"/>'),
+};
+
+// HUD icons (filled in the text colour), drawn after CS2's: health cross, armor shield, helmet, the buy zone's cart and
+// the bullets next to the ammo count.
+const icon = (cls, body) => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${body}</svg>`;
+const ICONS = {
+  health: icon('i-hp', '<path d="M9 2.5h6v6.5h6.5v6H15v6.5H9V15H2.5V9H9z"/>'),
+  armor: icon('i-ar', '<path d="M12 2l8.5 3.2v6.1c0 5.3-3.6 9.5-8.5 10.9-4.9-1.4-8.5-5.6-8.5-10.9V5.2z"/>'),
+  helmet: icon('i-helmet', '<path d="M3.2 15.5C3.2 9.8 7 5.5 12 5.5s8.8 4.3 8.8 10v1.2H3.2z"/><path d="M1.5 17.8h21v2.4h-21z"/>'),
+  cart: icon('i-cart', '<path d="M1.5 3.5h3.6l.8 3h15.6l-2.6 9H8.1L5.6 6.5 4.5 5.5H1.5z"/><circle cx="9" cy="19.2" r="1.8"/><circle cx="17.2" cy="19.2" r="1.8"/>'),
+  bullets: icon('i-ammo', '<path d="M4 10.5c0-3.4 1.4-6 2.5-7.5C7.6 4.5 9 7.1 9 10.5V21H4zM9.5 10.5c0-3.4 1.4-6 2.5-7.5 1.1 1.5 2.5 4.1 2.5 7.5V21h-5zM15 10.5c0-3.4 1.4-6 2.5-7.5 1.1 1.5 2.5 4.1 2.5 7.5V21h-5z"/>'),
 };
 
 // A bar per player, the ones alive next to their team's score (the CT bars sit left of it, the T bars right).
