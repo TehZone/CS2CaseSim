@@ -294,11 +294,19 @@ export class Post {
 
   // Draws the world, the smokes, the weapon (overlay: { scene, camera } or null) and the composite onto the screen.
   // captureFlash keeps this frame as the afterimage.
-  render(scene, camera, { camPos, flashImage = 0, captureFlash = false, overlay = null, dt = 0 }) {
+  // sky3d: the map's 3D skybox ({ scene, camera }), drawn first, behind everything.
+  render(scene, camera, { camPos, flashImage = 0, captureFlash = false, overlay = null, dt = 0, sky3d = null }) {
     const r = this.renderer, u = this.material.uniforms, su = this.smokeMat.uniforms;
     r.setRenderTarget(this.rt);
     r.clear();
-    r.render(scene, camera);
+    if (sky3d) {
+      r.render(sky3d.scene, sky3d.camera);
+      r.clearDepth();
+      const bg = scene.background;
+      scene.background = null;
+      r.render(scene, camera);
+      scene.background = bg;
+    } else r.render(scene, camera);
     if (overlay) {
       const alpha = r.getClearAlpha();
       r.setRenderTarget(this.vmRT);

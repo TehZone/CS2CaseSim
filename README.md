@@ -124,8 +124,18 @@ What's in a match:
   (the baked light where they are); and the map's post processing (CS2's filmic tone curve with the map's parameters,
   auto exposure within its range, its colour grading LUT),
   CS2's two-layer surfaces blended like the game does (sand painted over asphalt and tiles, plaster worn down to brick),
-  the map's sky, its collision mesh (brushes that only switch on in other modes, like Retakes' blockers, left out), nav
-  mesh with ladders, spawns, bomb sites, buy zones and callout areas.
+  and its newer csgo_environment surfaces (most of Train, Cache, Inferno, Ancient, Fachwerk...) with all their layers:
+  up to three textures blended by the vertex paint against their height maps like CS2's shader, each layer's colour
+  tint and saturation (Train's blue plaster), the vertex tint, and their lightmap from the right UV set; decals that
+  multiply or add like CS2's (grime, Nuke's animated water caustics); see-through glass and water (waves, sky
+  reflections, the map's water colour); metal that reflects the light around it like CS2's cubemaps (Vertigo's lift
+  doors); props with a skeleton (doors, Nuke's vent covers and slats) where their bones put them; the map's sky, its
+  3D skybox, its collision mesh, nav mesh with ladders, spawns, bomb sites, buy zones and callout areas. Things
+  another mode switches on (Wingman's barricades, fences and doors on Vertigo, Nuke, Overpass and Inferno; Retakes'
+  blockers) are left out, as in competitive. Doors open with E (CS2's swing and
+  sounds; bots open them too), breakable glass and props break when shot (windows, Nuke's vent covers, bottles), every
+  surface sounds like CS2's when shot (Inferno's church bells ring), and the map's trigger_hurt volumes hurt the moment
+  you touch one (falling off Vertigo kills you as you reach the street).
 - Movement ported from Source's: CS2's acceleration, friction, air strafing, 18-unit steps, jumping (no auto bunny
   hop), crouching, crouch-jumps, walking and ladders, with the weapon's own speed; footsteps by surface.
 - Weapons use CS2's data from `scripts/weapons.vdata` (damage, range falloff, armor penetration, fire rate,
