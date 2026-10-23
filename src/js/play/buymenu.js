@@ -3,8 +3,10 @@
 // In Deathmatch every gun is free and the menu opens anywhere.
 // The buttons are built once when it opens and then updated in place (money, prices, what you can afford): rebuilding
 // them while it's open would swallow clicks that land between a press and its release.
+// Each item shows CS2's icon for it when the game's icons are there, else just its name.
 import { esc } from '../util.js';
 import { CATALOG } from './match.js';
+import { iconFor } from './icons.js';
 
 export class BuyMenu {
   constructor(root, game) {
@@ -51,15 +53,23 @@ export class BuyMenu {
     }));
   }
 
-  // The menu's layout (categories and items for your side), then its current state.
+  // What the buttons are built from: the categories and items for your side, and whether CS2's icons have arrived.
+  layoutOf(cats) { return (this.game.icons ? 'icons|' : '') + cats.map((c) => c.cat + ':' + c.items.map((it) => it.id).join(',')).join('|'); }
+
+  // The menu's layout, then its current state.
   build() {
     if (!this.game.me) return;
     const cats = this.categories();
     const dm = this.game.respawnMode;
-    this.layout = cats.map((c) => c.cat + ':' + c.items.map((it) => it.id).join(',')).join('|');
+    this.layout = this.layoutOf(cats);
+    const item = (it, ii) => {
+      const icon = iconFor(this.game.icons, it.id);
+      return `<button class="buy-item${icon ? ' has-icon' : ''}" data-buy="${it.id}"><kbd data-key="${ii + 1}"></kbd>`
+        + `${icon ? `<img src="${esc(icon)}" alt="" draggable="false">` : ''}<span>${esc(it.name)}</span><em></em></button>`;
+    };
     this.el.innerHTML = `<div class="buy-head"><b data-money></b><span data-time></span><button class="btn ghost sm" data-close>Close (B)</button></div>
       <div class="buy-cols">${cats.map((c, ci) => `<div class="buy-col" data-col="${ci}"><h4><kbd>${ci + 1}</kbd> ${esc(c.cat)}</h4>
-        ${c.items.map((it, ii) => `<button class="buy-item" data-buy="${it.id}"><kbd data-key="${ii + 1}"></kbd><span>${esc(it.name)}</span><em></em></button>`).join('')}</div>`).join('')}</div>
+        ${c.items.map(item).join('')}</div>`).join('')}</div>
       <div class="buy-hint">${dm ? 'B opens this anywhere. What you pick is what you respawn with.' : 'Up to 4 grenades (2 flashbangs, 1 of each other). Mouse1 throws, Mouse2 lobs, both for a medium throw.'}</div>`;
     this.render(cats);
   }
@@ -67,7 +77,7 @@ export class BuyMenu {
   // Updates money, buy time, prices and what you can buy without replacing the buttons.
   render(cats = this.categories()) {
     if (!this.game.me) return;
-    if (cats.map((c) => c.cat + ':' + c.items.map((it) => it.id).join(',')).join('|') !== this.layout) return this.build();
+    if (this.layoutOf(cats) !== this.layout) return this.build();
     const g = this.game, dm = g.respawnMode;
     const left = g.match.buyOpen ? Math.max(0, Math.ceil(g.buyTimeLeft())) : 0;
     const set = (el, text) => { if (el && el.textContent !== text) el.textContent = text; };

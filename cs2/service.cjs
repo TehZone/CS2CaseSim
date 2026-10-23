@@ -52,6 +52,9 @@ const CASE_SOUNDS = {
   knife: 'sounds/ui/panorama/item_showcase_knife_01.vsnd',
 };
 
+// CS2's weapon and gear icons (vsvg_c, which the CLI decompiles to SVG).
+const ICON_DIR = 'panorama/images/icons/equipment';
+
 class CS2Service {
   // shrinkImages(files, maxSize): optional, makes backdrop textures smaller after export (Electron passes one).
   constructor({ cacheDir, cliPath, cliEnv = {}, log = () => {}, shrinkImages = null }) {
@@ -680,6 +683,37 @@ class CS2Service {
       } catch (e) { this.log('radar: ' + e.message); return null; }
     }
     return { image: this.url(img), ...JSON.parse(fs.readFileSync(meta, 'utf8')) };
+  }
+
+  // CS2's equipment icons (the white silhouettes of every gun, knife, grenade and piece of gear that its buy menu and
+  // kill feed show), decompiled to SVG once per game build into play/icons/: { name: url } (ak47, knife_karambit,
+  // hegrenade, planted_c4...). Icons that draw nothing (world, trigger_hurt) are left out.
+  playIcons() {
+    return this.playJob('icons', async () => {
+      const cs2 = this.ensureCS2();
+      const dir = path.join(this.cacheDir, 'play', 'icons');
+      const file = path.join(dir, 'icons.json');
+      const stamp = cs2.vpkStamp();
+      const result = (names) => Object.fromEntries(names.map((n) => [n, this.url(path.join(dir, n + '.svg'))]));
+      try { const c = JSON.parse(fs.readFileSync(file, 'utf8')); if (c.stamp === stamp) return result(c.names); } catch {}
+      fs.rmSync(dir, { recursive: true, force: true });
+      const tmp = path.join(dir, 'tmp');
+      await cs2.run(['-i', cs2.vpk, '-f', ICON_DIR + '/', '-d', '-o', tmp]);
+      const src = path.join(tmp, ...ICON_DIR.split('/'));
+      const names = [];
+      for (const f of fs.existsSync(src) ? fs.readdirSync(src) : []) {
+        const name = /^([a-z0-9_]+)\.svg$/i.exec(f)?.[1].toLowerCase();
+        if (!name) continue;
+        const svg = fs.readFileSync(path.join(src, f), 'utf8');
+        if (!/<svg\b/.test(svg) || !/<(path|polygon|polyline|rect|circle|ellipse|line)\b/.test(svg)) continue;
+        fs.writeFileSync(path.join(dir, name + '.svg'), svg);
+        names.push(name);
+      }
+      fs.rmSync(tmp, { recursive: true, force: true });
+      if (!names.length) throw new Error('No equipment icons in this CS2 install');
+      fs.writeFileSync(file, JSON.stringify({ stamp, names }));
+      return result(names);
+    });
   }
 
   // Default agent models per team (their item ids come from the agents in items_game).

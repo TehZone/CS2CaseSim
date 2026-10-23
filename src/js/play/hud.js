@@ -148,12 +148,13 @@ export class Hud {
   }
 
   // A kill feed line, with CS2's marks for how it happened: a blinded killer before the weapon; after it, in the air,
-  // no scope, through smoke, through a wall, headshot.
-  kill({ killer, victim, weapon, headshot, wallbang, smoke, air, blind, noscope, mine, killerTeam, victimTeam }) {
+  // no scope, through smoke, through a wall, headshot. The weapon is CS2's icon for it (icon: URL) or else its name.
+  kill({ killer, victim, weapon, icon, headshot, wallbang, smoke, air, blind, noscope, mine, killerTeam, victimTeam }) {
     const row = document.createElement('div');
     if (mine) row.className = 'mine';
     const mark = (on, k) => (on ? KILL_MARKS[k] : '');
-    row.innerHTML = `${killer ? `<span class="${killerTeam === 'CT' ? 'ct' : 't'}">${esc(killer)}</span>` : ''}${mark(blind, 'blind')}<span class="wpn">${esc(weapon)}</span>`
+    const wpn = icon ? `<img class="wpn icon" src="${esc(icon)}" alt="${esc(weapon)}" title="${esc(weapon)}" draggable="false">` : `<span class="wpn">${esc(weapon)}</span>`;
+    row.innerHTML = `${killer ? `<span class="${killerTeam === 'CT' ? 'ct' : 't'}">${esc(killer)}</span>` : ''}${mark(blind, 'blind')}${wpn}`
       + `${mark(air, 'air')}${mark(noscope, 'noscope')}${mark(smoke, 'smoke')}${mark(wallbang, 'wallbang')}${mark(headshot, 'headshot')}<span class="${victimTeam === 'CT' ? 'ct' : 't'}">${esc(victim)}</span>`;
     const feed = this.q('.feed');
     feed.prepend(row);

@@ -302,5 +302,28 @@ function fakeGame() {
   ok(lo >= 29.5 && hi <= 50.5, `freeze time: a bot glances a little either side of its heading (${lo.toFixed(1)}..${hi.toFixed(1)}), not round`);
 }
 
+// ---- CS2's equipment icons: weapon ids map to the icon files the service extracts (a set like CS2's own) ----
+{
+  const { iconFor } = await import('../src/js/play/icons.js');
+  const { CATALOG } = await import('../src/js/play/match.js');
+  const names = ['ak47', 'm4a1', 'm4a1_silencer', 'm4a1_silencer_off', 'usp_silencer', 'usp_silencer_off', 'knife', 'knife_t', 'knife_karambit',
+    'bayonet', 'knife_m9_bayonet', 'hegrenade', 'molotov', 'incgrenade', 'inferno', 'c4', 'planted_c4', 'taser', 'kevlar', 'assaultsuit', 'defuser',
+    'glock', 'hkp2000', 'elite', 'p250', 'tec9', 'fiveseven', 'cz75a', 'deagle', 'revolver', 'mac10', 'mp9', 'mp7', 'mp5sd', 'ump45', 'p90', 'bizon',
+    'nova', 'xm1014', 'sawedoff', 'mag7', 'negev', 'm249', 'galilar', 'famas', 'ssg08', 'sg556', 'aug', 'awp', 'g3sg1', 'scar20', 'decoy', 'flashbang',
+    'smokegrenade'];
+  const icons = Object.fromEntries(names.map((n) => [n, `cs2cache/play/icons/${n}.svg`]));
+  const icon = (id, opts) => iconFor(icons, id, opts)?.replace(/^.*\/|\.svg$/g, '') ?? null;
+  ok(icon('weapon_ak47') === 'ak47' && icon('weapon_m4a1_silencer') === 'm4a1_silencer' && icon('weapon_m4a1') === 'm4a1', 'icons: guns by id');
+  ok(icon('weapon_knife') === 'knife' && icon('weapon_knife_t') === 'knife_t' && icon('weapon_knife_karambit') === 'knife_karambit'
+    && icon('weapon_bayonet') === 'bayonet' && icon('weapon_knife_skeleton') === 'knife', 'icons: knives (their own, else the default)');
+  ok(icon('weapon_hegrenade') === 'hegrenade' && icon('weapon_c4') === 'c4' && icon('planted_c4') === 'planted_c4' && icon('weapon_taser') === 'taser', 'icons: grenades, C4, Zeus');
+  ok(icon('weapon_molotov') === 'molotov' && icon('weapon_molotov', { kill: true }) === 'inferno' && icon('weapon_incgrenade', { kill: true }) === 'inferno', 'icons: fire kills are the inferno');
+  ok(icon('weapon_usp_silencer', { gun: { detachable: true, silenced: false } }) === 'usp_silencer_off'
+    && icon('weapon_m4a1_silencer', { gun: { detachable: true, silenced: true } }) === 'm4a1_silencer', 'icons: silencer off');
+  const all = CATALOG.flatMap((c) => c.items.map(([id]) => id));
+  ok(all.every((id) => icon(id)), 'icons: every buy menu item has one: ' + all.filter((id) => !icon(id)).join(', '));
+  ok(icon(undefined) === null && iconFor(undefined, 'weapon_ak47') === null && iconFor({}, 'weapon_ak47') === null, 'icons: none without CS2 (names shown)');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
