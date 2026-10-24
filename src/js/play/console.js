@@ -3,12 +3,12 @@
 // while it's open (as CS2 does offline); your keys go to the console instead of the game.
 import { esc } from '../util.js';
 import { MOVE } from './movement.js';
-import { DIFFICULTY } from './ai.js';
+
 import { ITEM_NAMES } from './match.js';
 import { DEFAULT_BINDS, isKeyName } from './input.js';
 
 const MOVE_DEFAULTS = { ...MOVE };
-const BOT_LEVELS = ['easy', 'normal', 'hard', 'expert'];
+const BOT_TIERS_BY_LEVEL = ['silver', 'gold', 'eagle', 'global'];
 // cl_crosshaircolor 0-4 (5: cl_crosshaircolor_r/g/b).
 const XHAIR_COLORS = ['#fa3232', '#32fa32', '#fafa32', '#3232fa', '#32fafa'];
 const CHEAT_MSG = (name) => `Can't use cheat command ${name} in multiplayer, unless the server has sv_cheats set to 1.`;
@@ -112,10 +112,9 @@ function commands(g, con) {
     // ---- bots -----------------------------------------------------------------------------------------------------
     bot_stop: cv('bot_stop', 'Bots stand still and stop thinking (1)', 0, { cheat: true, lo: 0, hi: 1 }),
     bot_dont_shoot: cv('bot_dont_shoot', "Bots don't shoot (1)", 0, { cheat: true, lo: 0, hi: 1 }),
-    bot_difficulty: { help: 'Bot difficulty: 0 easy, 1 normal, 2 hard, 3 expert', get: () => Math.max(0, BOT_LEVELS.indexOf(g.difficulty)), set: (v) => {
+    bot_difficulty: { help: 'Bot skill: 0 Silver, 1 Gold Nova, 2 Legendary Eagle, 3 Global Elite (each bot a rank in it)', get: () => Math.max(0, BOT_TIERS_BY_LEVEL.indexOf(g.botTier)), set: (v) => {
       const n = num(v, 0, 3); if (n == null) return false;
-      g.difficulty = BOT_LEVELS[Math.round(n)];
-      for (const b of g.bots) b.brain.d = DIFFICULTY[g.difficulty];
+      g.setBotTier(BOT_TIERS_BY_LEVEL[Math.round(n)]);
       return true;
     } },
     bot_kill: { help: 'Kills the bots: bot_kill [all | t | ct]', run: ([which = 'all']) => {

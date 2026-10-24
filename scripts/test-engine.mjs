@@ -346,6 +346,27 @@ function tierFreq(box, n) {
   check('ranks: play.rank updates the save and sends the rank', st.rank.wins === 1 && d.set.rank?.wins === 1 && res.change === null && bad instanceof ACT.GameError);
 }
 
+// ---- Premier: the CS Rating ------------------------------------------------------------------------
+{
+  const P = await E('premier');
+  let p = P.freshPremier();
+  for (let i = 0; i < 9; i++) p = P.ratePremier(p, { result: 'win', roundsFor: 13, roundsAgainst: 7, opponent: 8000 }).premier;
+  check('premier: unrated until 10 wins', P.premierInfo(p).rating === null && P.premierInfo(p).needWins === 1);
+  const r = P.ratePremier(p, { result: 'win', roundsFor: 13, roundsAgainst: 5, opponent: 8000 });
+  check('premier: the 10th win reveals the rating', r.placed && r.before === null && P.premierInfo(r.premier).rating === r.premier.rating);
+  const R0 = r.premier.rating, up = (opp) => P.ratePremier(r.premier, { result: 'win', roundsFor: 13, roundsAgainst: 10, opponent: opp }).delta;
+  check('premier: beating a stronger team gains more, a weaker one less', up(R0 + 5000) > up(R0) && up(R0) > up(R0 - 5000) && up(R0 - 5000) > 0);
+  const loss = P.ratePremier(r.premier, { result: 'loss', roundsFor: 10, roundsAgainst: 13, opponent: R0 }).delta;
+  check('premier: a loss to an equal team costs what a win gains', loss < 0 && Math.abs(loss + up(R0)) <= 2);
+  check("premier: the tiers' colours", P.tierOf(4999).name === 'Grey' && P.tierOf(5000).name === 'Light blue' && P.tierOf(15000).name === 'Purple' && P.tierOf(31000).name === 'Gold');
+  check('premier: the veto bans all but one of seven maps, the second team three of them', P.VETO.length === 6 && P.VETO.filter(([t]) => t === 'B').length === 3);
+  const st = freshState();
+  const run = (args) => { const ctx = ACT.makeCtx(st, { rng }); const res = ACT.runAction(ctx, 'play.premier', args); return { res, d: ACT.delta(ctx) }; };
+  const { res, d } = run({ result: 'win', roundsFor: 13, roundsAgainst: 8, opponent: 12000 });
+  let bad = null; try { run({ result: 'win', opponent: -5 }); } catch (e) { bad = e; }
+  check('premier: play.premier updates the save and sends it', st.premier.wins === 1 && d.set.premier?.wins === 1 && res.after === null && bad instanceof ACT.GameError);
+}
+
 // ---- loadout -------------------------------------------------------------------------------------
 {
   const st = freshState();

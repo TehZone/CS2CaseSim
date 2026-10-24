@@ -6,7 +6,10 @@ import { MODES } from '../play/modes.js';
 import { S } from '../state.js';
 import { settingsHtml, bindSettings, matchSettings, SETTINGS_DEFAULTS } from './play-settings.js';
 import { rankInfo, PLACEMENT_WINS } from '../engine/ranks.js';
-import { loadRankArt, emblemHtml, rankKey } from '../rank.js';
+import { loadRankArt, emblemHtml, rankKey, ratingHtml } from '../rank.js';
+import { premierInfo, ACTIVE_DUTY, VETO } from '../engine/premier.js';
+import { BOT_TIERS, tierOf, botSkill, ratingOfSkill, groupOfSkill } from '../play/skill.js';
+import { botIdentities, pickIdentities, needsCredit, CREDIT } from '../play/identity.js';
 
 // Map art colours for the lobby cards (any other installed map gets a neutral card).
 const MAP_TINT = { de_dust2: '#c9a46a, #7b5a33', de_mirage: '#d8b98a, #8a6a45', de_inferno: '#c98a5a, #6b3f22', de_nuke: '#8fa5b5, #3e4b57',
@@ -16,7 +19,7 @@ let mapList = null, mapImages = null; // the installed maps, and CS2's screensho
 let rankAsked = false;
 
 const PREFS_KEY = 'cs2sim.play';
-const DEFAULTS = { map: 'de_dust2', mode: 'competitive', site: 'A', ffa: 'ffa', minutes: 10, team: 'CT', teamSize: 5, difficulty: 'normal', length: 'short', overtime: 'on', friendlyFire: 'off', sensitivity: 1.25, quality: 'balanced', ...SETTINGS_DEFAULTS };
+const DEFAULTS = { map: 'de_dust2', mode: 'competitive', site: 'A', ffa: 'ffa', minutes: 10, team: 'CT', teamSize: 5, difficulty: 'gold', length: 'short', overtime: 'on', friendlyFire: 'off', sensitivity: 1.25, quality: 'balanced', ...SETTINGS_DEFAULTS };
 function prefs() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULTS }; }
 }
@@ -43,27 +46,27 @@ export function render(r) {
   // stylesheet), over its tint.
   const tileStyle = (id) => [mapImages[id] && `--img: url('${new URL(mapImages[id], location.href).href}')`, MAP_TINT[id] && `--tint: linear-gradient(160deg, ${MAP_TINT[id]} 70%, #1a1712)`].filter(Boolean).join(';');
   const opts = (list, cur) => list.map(([id, n]) => `<option value="${id}" ${id === cur ? 'selected' : ''}>${esc(n)}</option>`).join('');
-  const mode = MODES[p.mode] ? p.mode : 'competitive', rounds = !MODES[mode].respawn;
+  const mode = MODES[p.mode] ? p.mode : 'competitive', rounds = !MODES[mode].respawn, premier = mode === 'premier';
   r.innerHTML = `<div class="page play-page">
     <div class="page-head"><h1>Play</h1><span class="sub">Offline CS2 against bots, on real CS2 maps from your install, with your equipped skins, gloves and knife.</span></div>
     <div class="play-lobby">
-      <div class="play-maps">${mapList.map(({ id, name }) => `<button class="play-map ${id === p.map ? 'active' : ''}" data-map="${id}" style="${tileStyle(id)}">
-          <span>${esc(name)}</span><small>${id === 'de_dust2' ? 'Recommended' : 'The first match prepares the map (a couple of minutes)'}</small></button>`).join('')}</div>
+      <div class="play-maps ${premier ? 'veto-pool' : ''}">${(premier ? mapList.filter((m) => ACTIVE_DUTY.includes(m.id)) : mapList).map(({ id, name }) => `<button class="play-map ${!premier && id === p.map ? 'active' : ''}" data-map="${id}" style="${tileStyle(id)}" ${premier ? 'disabled' : ''}>
+          <span>${esc(name)}</span><small>${premier ? 'Active Duty: picked by banning' : id === 'de_dust2' ? 'Recommended' : 'The first match prepares the map (a couple of minutes)'}</small></button>`).join('')}</div>
       <div class="play-setup panel">
         <div class="play-modes">${Object.entries(MODES).map(([id, m]) => `<button class="${id === mode ? 'active' : ''}" data-mode="${id}"><b>${esc(m.name)}</b><small>${esc(m.blurb)}</small></button>`).join('')}</div>
-        ${mode !== 'armsrace' && !(mode === 'deathmatch' && p.ffa === 'ffa') ? `<label>Side<select class="input" data-k="team"><option value="CT" ${p.team === 'CT' ? 'selected' : ''}>Counter-Terrorists</option><option value="T" ${p.team === 'T' ? 'selected' : ''}>Terrorists</option></select></label>` : ''}
+        ${mode !== 'armsrace' && !premier && !(mode === 'deathmatch' && p.ffa === 'ffa') ? `<label>Side<select class="input" data-k="team"><option value="CT" ${p.team === 'CT' ? 'selected' : ''}>Counter-Terrorists</option><option value="T" ${p.team === 'T' ? 'selected' : ''}>Terrorists</option></select></label>` : ''}
         ${mode === 'wingman' ? `<label>Bomb site<select class="input" data-k="site">${opts([['A', 'A'], ['B', 'B']], p.site)}</select></label>`
-          : `<label>${rounds || p.ffa !== 'ffa' ? 'Players per team' : 'Players'}<select class="input" data-k="teamSize">${opts([['5', rounds || p.ffa !== 'ffa' ? '5v5' : '10'], ['4', rounds || p.ffa !== 'ffa' ? '4v4' : '8'], ['3', rounds || p.ffa !== 'ffa' ? '3v3' : '6'], ['2', rounds || p.ffa !== 'ffa' ? '2v2' : '4'], ['1', rounds || p.ffa !== 'ffa' ? '1v1' : '2']], String(p.teamSize))}</select></label>`}
+          : premier ? '' : `<label>${rounds || p.ffa !== 'ffa' ? 'Players per team' : 'Players'}<select class="input" data-k="teamSize">${opts([['5', rounds || p.ffa !== 'ffa' ? '5v5' : '10'], ['4', rounds || p.ffa !== 'ffa' ? '4v4' : '8'], ['3', rounds || p.ffa !== 'ffa' ? '3v3' : '6'], ['2', rounds || p.ffa !== 'ffa' ? '2v2' : '4'], ['1', rounds || p.ffa !== 'ffa' ? '1v1' : '2']], String(p.teamSize))}</select></label>`}
         ${mode === 'deathmatch' ? `<label>Deathmatch<select class="input" data-k="ffa">${opts([['ffa', 'Free for all'], ['team', 'Teams']], p.ffa)}</select></label>` : ''}
         ${!rounds ? `<label>Length<select class="input" data-k="minutes">${opts([['5', '5 minutes'], ['10', '10 minutes'], ['15', '15 minutes']], String(p.minutes))}</select></label>` : ''}
-        <label>Bot difficulty<select class="input" data-k="difficulty">${opts([['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard'], ['expert', 'Expert']], p.difficulty)}</select></label>
+        <label>Bot skill (their ranks)<select class="input" data-k="difficulty">${opts(Object.entries(BOT_TIERS).map(([id, t]) => [id, t.name]), tierOf(p.difficulty))}</select></label>
         ${mode === 'competitive' ? `<label>Match length<select class="input" data-k="length">${opts([['short', 'Short (first to 9)'], ['long', 'Long (first to 13)']], p.length)}</select></label>` : ''}
-        ${rounds ? `<label>Overtime<select class="input" data-k="overtime">${opts([['on', 'On (MR3, $12,500)'], ['off', 'Off (ties are draws)']], p.overtime)}</select></label>` : ''}
+        ${rounds && !premier ? `<label>Overtime<select class="input" data-k="overtime">${opts([['on', 'On (MR3, $12,500)'], ['off', 'Off (ties are draws)']], p.overtime)}</select></label>` : ''}
         ${rounds || p.ffa !== 'ffa' ? `<label>Friendly fire<select class="input" data-k="friendlyFire">${opts([['off', 'Off'], ['on', 'On (CS2 competitive)']], p.friendlyFire)}</select></label>` : ''}
         <label>Sensitivity (CS2)<input class="input" type="number" min="0.05" max="20" step="0.05" data-k="sensitivity" value="${p.sensitivity}"></label>
         <label>Graphics<select class="input" data-k="quality">${opts([['high', 'High (full resolution, soft shadows)'], ['balanced', 'Medium'], ['performance', 'Low (no 3D skybox, no anti-aliasing)']], p.quality)}</select></label>
         <button class="btn primary big" data-start>Play</button>
-        ${rankCard(mode)}
+        ${premier ? premierCard() : rankCard(mode)}
         ${record()}
         <div class="muted play-keys">WASD move · Space jump · Ctrl crouch · Shift walk · W into a ladder climbs it · Mouse1 fire · Mouse2 scope / silencer / burst mode · R reload · F inspect · B buy · E defuse / pick up · G drop · 1/2/3 weapons (3 again for the Zeus) · 4 grenades (Mouse1 throw, Mouse2 lob) · 5 bomb (hold Mouse1 in a site) · Z / X / V radio (commands, reports, responses: your bots follow orders) · Middle mouse ping · Tab scores · Esc pause</div>
       </div>
@@ -94,6 +97,14 @@ function rankCard(mode) {
     ${emblemHtml(rankKey(info), { size: 46 })}<div><small>Competitive rank</small><b>${esc(name)}</b><span>${esc(sub)}</span></div></div>`;
 }
 
+// Your CS Rating (Premier): the badge, or the wins still needed to get one.
+function premierCard() {
+  const p = S.premier || {}, info = premierInfo(p);
+  const sub = info.rated ? `${p.wins || 0} wins · ${p.losses || 0} losses · ${p.ties || 0} ties${p.best ? ' · best ' + ratingHtml(p.best, { size: 11 }) : ''}`
+    : `${info.needWins} more Premier win${info.needWins === 1 ? '' : 's'} to get your CS Rating (${PLACEMENT_WINS - info.needWins}/${PLACEMENT_WINS})`;
+  return `<div class="play-rank premier"><div class="play-rating">${ratingHtml(info.rating, { size: 22 })}</div><div><small>CS Rating · Premier</small><b>${info.rated ? 'Rated' : 'Unrated'}</b><span>${sub}</span></div></div>`;
+}
+
 // Your Play record (offline matches): played, won, kills and what they paid.
 function record() {
   const st = S.stats || {};
@@ -105,7 +116,15 @@ async function start() {
   const st = await cs2Status();
   if (!st.available) { toast(st.gameDir ? 'The model extractor is missing.' : 'Play mode needs Counter-Strike 2 installed on this PC.', 'bad'); return; }
   if (session) return;
-  const p = prefs();
+  let p = prefs();
+  let roster = null;
+  if (p.mode === 'premier') {
+    // Premier: the two teams and the map, picked by banning.
+    const veto = await premierVeto(p).catch((e) => { console.error(e); toast('Could not set up the match: ' + esc(e.message), 'bad'); return null; });
+    if (!veto) return;
+    p = { ...p, map: veto.map, team: veto.team, teamSize: 5 };
+    roster = veto.roster;
+  }
   const { Game } = await import('../play/game.js');
   const overlay = document.createElement('div');
   overlay.className = 'play-root';
@@ -124,7 +143,7 @@ async function start() {
   overlay.querySelector('[data-cancel]').addEventListener('click', leave);
   overlay.querySelector('[data-leave]').addEventListener('click', leave);
   overlay.querySelector('[data-resume]').addEventListener('click', () => session?.game.resume());
-  const game = new Game(overlay, { map: p.map, mode: p.mode, site: p.site, ffa: p.ffa !== 'team', minutes: p.minutes, team: p.team, teamSize: p.teamSize, difficulty: p.difficulty, length: p.length, overtime: p.overtime !== 'off', friendlyFire: p.friendlyFire === 'on', sensitivity: p.sensitivity, quality: p.quality, settings: { ...matchSettings(p), onBinds: (t) => { const q = prefs(); q.keybinds = t; savePrefs(q); } }, onStatus: (m) => { statusEl.textContent = m; } });
+  const game = new Game(overlay, { map: p.map, mode: p.mode, site: p.site, ffa: p.ffa !== 'team', minutes: p.minutes, team: p.team, teamSize: p.teamSize, difficulty: p.difficulty, roster, length: p.length, overtime: p.overtime !== 'off', friendlyFire: p.friendlyFire === 'on', sensitivity: p.sensitivity, quality: p.quality, settings: { ...matchSettings(p), onBinds: (t) => { const q = prefs(); q.keybinds = t; savePrefs(q); } }, onStatus: (m) => { statusEl.textContent = m; } });
   session = { game, overlay };
   const showStats = () => {
     const me = game.me, m = game.match;
@@ -162,4 +181,70 @@ async function start() {
   game.on((type) => { if (type === 'pause') { overlay.querySelector('.play-pause h2').textContent = 'Paused'; overlay.querySelector('[data-resume]').textContent = 'Resume'; } });
   game.start();
   if (window.__cs2Debug) window.__playGame = game;
+}
+
+// Premier's map veto: both teams (you and four bots against five, real players each with a CS Rating, listed like a
+// leaderboard), then CS2's pick/ban over the Active Duty maps installed: the first team bans two, the second three, the
+// first one more, and the map that's left is played; the second team picks its starting side. You ban on your team's
+// turns; the other team bans by itself. Resolves to { map, team, roster } (see Game), or null if you back out.
+async function premierVeto(p) {
+  const tier = tierOf(p.difficulty);
+  const ids = pickIdentities(await botIdentities(), 9);
+  const bot = (identity) => { const skill = botSkill(identity.name, tier); return { identity, skill, rating: ratingOfSkill(skill), group: groupOfSkill(skill) }; };
+  const mine = ids.slice(0, 4).map(bot), theirs = ids.slice(4, 9).map(bot);
+  const pool = ACTIVE_DUTY.filter((id) => mapList.some((m) => m.id === id)).slice(0, 7);
+  if (!pool.length) throw new Error('none of the Active Duty maps is installed');
+  const meFirst = Math.random() < 0.5;
+  const teamOf = (ab) => (ab === 'A') === meFirst ? 'mine' : 'theirs';
+  const steps = Array.from({ length: pool.length - 1 }, (_, i) => VETO[i]?.[0] || (i % 2 ? 'B' : 'A')).map(teamOf);
+  const sidePicker = teamOf('B');
+  const banned = new Map(); // map -> 'mine' | 'theirs'
+  const you = premierInfo(S.premier);
+  const nameOf = (id) => mapList.find((m) => m.id === id)?.name || id;
+  const avg = (list) => Math.round(list.reduce((s, x) => s + x.rating, 0) / list.length);
+  const row = (x) => `<li>${x.identity?.avatar ? `<img class="veto-avatar" src="${esc(x.identity.avatar)}" alt="">` : '<span class="veto-avatar you"></span>'}
+    <span class="veto-name">${esc(x.identity?.name || 'You')}<small>${esc([x.identity?.team, x.identity?.country].filter(Boolean).join(' · ') || (x.identity ? '' : you.rated ? 'You' : `You · ${you.needWins} wins to a rating`))}</small></span>${ratingHtml(x.rating)}</li>`;
+  const team = (label, list, cls, extra = []) => `<div class="veto-team ${cls}"><h3>${label}<small>average ${ratingHtml(avg(list), { size: 12 })}</small></h3>
+    <ol>${[...extra, ...list].sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1)).map(row).join('')}</ol></div>`;
+  const youRow = { identity: null, rating: you.rating };
+
+  const el = document.createElement('div');
+  el.className = 'play-root veto-root';
+  document.body.appendChild(el);
+  return new Promise((resolve) => {
+    let side = null, enemyTimer = null;
+    const done = (v) => { clearTimeout(enemyTimer); el.remove(); resolve(v); };
+    const turn = () => steps[banned.size] || null;
+    const left = () => pool.filter((id) => !banned.has(id));
+    const draw = () => {
+      const t = turn(), map = !t ? left()[0] : null;
+      const status = t === 'mine' ? '<b>Your turn:</b> ban a map' : t === 'theirs' ? 'The other team is banning…'
+        : sidePicker === 'mine' && !side ? `<b>${esc(nameOf(map))}</b> it is. Pick your starting side` : `<b>${esc(nameOf(map))}</b> · you start as <b>${side === 'CT' ? 'Counter-Terrorists' : 'Terrorists'}</b>`;
+      el.innerHTML = `<div class="veto panel">
+        <div class="veto-head"><h2>Premier</h2><span class="veto-status">${status}</span><button class="btn ghost sm" data-veto-cancel>Cancel</button></div>
+        <div class="veto-body">
+          ${team('Your team', mine, 'mine', [youRow])}
+          <div class="veto-maps">${pool.map((id) => `<button class="veto-map ${banned.has(id) ? 'banned' : ''} ${map === id ? 'picked' : ''}" data-vmap="${id}" ${t !== 'mine' || banned.has(id) ? 'disabled' : ''}
+            style="${mapImages?.[id] ? `--img: url('${new URL(mapImages[id], location.href).href}')` : ''}"><span>${esc(nameOf(id))}</span>${banned.has(id) ? `<em>Banned by ${banned.get(id) === 'mine' ? 'your team' : 'the other team'}</em>` : map === id ? '<em>Picked</em>' : ''}</button>`).join('')}
+            <div class="veto-order">${steps.map((s, i) => `<i class="${i < banned.size ? 'done' : i === banned.size ? 'now' : ''} ${s}">${s === 'mine' ? 'You' : 'Them'}</i>`).join('')}<i class="${!t ? 'now' : ''} ${sidePicker}">Side</i></div>
+          </div>
+          ${team('Other team', theirs, 'theirs')}
+        </div>
+        <div class="veto-foot">${!t ? (sidePicker === 'mine' && !side
+          ? '<button class="btn" data-side="CT">Start as Counter-Terrorists</button><button class="btn" data-side="T">Start as Terrorists</button>'
+          : '<button class="btn primary big" data-veto-go>Play</button>') : ''}</div>
+        ${needsCredit(ids) ? `<div class="muted veto-credit">${esc(CREDIT)}</div>` : ''}
+      </div>`;
+      el.querySelector('[data-veto-cancel]').addEventListener('click', () => done(null));
+      el.querySelectorAll('[data-vmap]').forEach((b) => b.addEventListener('click', () => { if (turn() === 'mine' && !banned.has(b.dataset.vmap)) { banned.set(b.dataset.vmap, 'mine'); next(); } }));
+      el.querySelectorAll('[data-side]').forEach((b) => b.addEventListener('click', () => { side = b.dataset.side; draw(); }));
+      el.querySelector('[data-veto-go]')?.addEventListener('click', () => done({ map, team: side, roster: { A: mine, B: theirs } }));
+    };
+    const next = () => {
+      if (turn() === 'theirs') enemyTimer = setTimeout(() => { const opts = left(); banned.set(opts[Math.floor(Math.random() * opts.length)], 'theirs'); next(); }, 900 + Math.random() * 700);
+      else if (!turn() && sidePicker === 'theirs') side = Math.random() < 0.5 ? 'T' : 'CT'; // (their pick: you're on the other side)
+      draw();
+    };
+    next();
+  });
 }

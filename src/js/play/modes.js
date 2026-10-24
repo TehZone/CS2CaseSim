@@ -1,4 +1,6 @@
 // CS2's other game modes, next to Competitive (match.js):
+//  - Premier: Competitive's rules over the full MR12 (first to 13, overtime on a tie), the map picked by banning from the
+//    Active Duty pool, and a CS Rating instead of a skill group (engine/premier.js).
 //  - Wingman: 2v2 on one bomb site, first to 9 rounds, shorter rounds.
 //  - Deathmatch: 10 minutes of respawning, every weapon free from the buy menu anywhere, points for kills (more for a
 //    headshot or a pistol/knife kill); free-for-all or teams.
@@ -9,6 +11,7 @@
 import { RULES, CATALOG } from './match.js';
 
 export const MODES = {
+  premier: { name: 'Premier', blurb: 'CS Rating, map pick/ban, MR12 with overtime' },
   competitive: { name: 'Competitive', blurb: 'Rounds, economy and the bomb' },
   wingman: { name: 'Wingman', blurb: '2v2 on one bomb site, first to 9' },
   deathmatch: { name: 'Deathmatch', blurb: 'Respawn, free weapons, most points in 10 minutes', respawn: true },

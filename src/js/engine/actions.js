@@ -12,6 +12,7 @@ import * as M from './manager.js';
 import * as G from './gamble.js';
 import * as MK from './market.js';
 import * as R from './ranks.js';
+import * as P from './premier.js';
 import { rand, round2 } from './util.js';
 
 export class GameError extends Error {
@@ -276,6 +277,14 @@ export const ACTIONS = {
     ctx.st.rank = r.rank;
     ctx.dirty.add('rank');
     return { change: r.change, before: r.before, after: r.after, rank: r.rank };
+  },
+  // A finished Premier match against the bots moves your CS Rating (online too: it's only the rating).
+  'play.premier'(ctx, { result, roundsFor = 0, roundsAgainst = 0, opponent = P.START_RATING }) {
+    if (!['win', 'loss', 'tie'].includes(result)) fail('Invalid result');
+    const r = P.ratePremier(ctx.st.premier, { result, roundsFor: int(roundsFor, 0, 60, 'rounds'), roundsAgainst: int(roundsAgainst, 0, 60, 'rounds'), opponent: int(opponent, 0, P.MAX_RATING, 'rating') });
+    ctx.st.premier = r.premier;
+    ctx.dirty.add('premier');
+    return { delta: r.delta, before: r.before, after: r.after, placed: r.placed, premier: r.premier };
   },
   // A kill in Play with a StatTrak™ gun or knife counts on its counter (online too: it changes nothing but the count).
   'play.stattrak'(ctx, { uid, kills = 1 }) {

@@ -85,7 +85,7 @@ What's in a match:
   along walls (never into them), walk up an 18-unit step at most, and run up to a box or ledge and jump (or
   crouch-jump, up to 66 units) onto it. A jump they can't make (a crate or overhang in the way) is one every bot goes
   round for the rest of the match. Terrorists pick
-  a site, take it and plant; counter-terrorists split up to hold the sites, rotate when they see terrorists, retake and defuse; they flee a bomb
+  a site (see the team play below), take it and plant; counter-terrorists split up to hold the sites, rotate when they see terrorists, retake and defuse; they flee a bomb
   they can't stop. In fights they react after a human-like delay, aim with an error that shrinks as they track you,
   stop to shoot, control part of the recoil and fire in bursts. They smoke off and flash sites before taking them,
   molotov or HE where they last saw you, flash retakes, burn a defuser, get blinded by flashes, step out of fire and pick
@@ -103,8 +103,31 @@ What's in a match:
 - CS:GO's competitive ranks, one for all maps: Silver I to The Global Elite, with CS2's own emblems. Competitive matches
   move a hidden rating (more for a bigger win, and depending on the bots' difficulty); the rank shows after 10 wins and
   then moves a group at a time, with CS:GO's rank-up (or down) at the end of the match. It's in the lobby, the
-  scoreboard (the bots are ranked by their difficulty) and your stats, saved with your progress (online too), and
+  scoreboard (each bot's rank comes from its skill) and your stats, saved with your progress (online too), and
   shows as expired after 30 days without a win.
+- Premier: the full MR12 (first to 13, overtime on a tie) with a CS Rating instead of a skill group: unrated until 10
+  wins, then up or down by the result, the round difference and the other team's rating, shown in the tier's colour
+  (grey under 5,000 up to gold from 30,000). Before each match both teams are listed like a leaderboard (real players
+  with their ratings and team averages) and the map is picked by CS2's pick/ban over the Active Duty maps: the first
+  team bans two, the second three, the first one more, and the second team picks its side. Ratings show on the
+  scoreboard and the result screen.
+- The bots are real players: the pros of the game's Major autograph stickers (their autograph as the picture, their
+  team), or the players in src/data/bot-players.json when it's there (Liquipedia's data, credited), nobody twice in a
+  match. Their skill comes from their rank (Bot skill in the lobby: Silver to Global Elite, each bot its own rank in
+  it): reaction time, aim error and spray control, where the crosshair rests (head height or the floor), how quickly
+  they stop to shoot (counter-strafing), how much utility they throw and how well, patience, and how fast they trade.
+- They play as teams. Each round the team makes an economy call (save, force or full buy, a rifle dropped to a teammate
+  who couldn't afford one) and a plan its best player calls in the chat. Terrorists rush a site, execute one (gathering
+  short of it; smokes, then molotovs, then pop flashes; the entry going in as the flash bursts, the rest close enough to
+  trade), take mid and split, or play a default for picks and hit late, with roles: entry, support, lurker, AWPer.
+  Counter-terrorists split over the sites (stacking the one that keeps getting hit, at higher ranks), throw early
+  utility at the chokes, rotate on information (lower ranks on one sighting, higher on two) and retake together.
+  The utility is real lineups (src/data/lineups.json: Dust II, Mirage, Inferno and Nuke), found on each map's own
+  geometry by scripts/build-lineups.mjs: asked for by callouts ("the part of CT spawn nearest A site"), searched over
+  throw spots, aims, strengths and jump-throws with the game's own grenade physics, the steadiest kept, and checked
+  again on each match's collision. A bot stands on the spot, aims (off by its rank's error: Silvers misthrow) and throws.
+  `CS2SIM_SMOKE=bots` watches rounds at chosen ranks and logs the plans and where every lineup landed;
+  `CS2SIM_SMOKE=premier` plays through the pick/ban and a match.
 - Finished matches pay into your wallet when you play offline: kills, assists, MVPs, rounds won and the win, more
   against harder bots. The lobby shows your record.
 - The lobby shows CS2's own screenshot of each map.

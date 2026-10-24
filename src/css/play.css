@@ -396,3 +396,54 @@
 .ps-key i { font-style: normal; opacity: .55; margin-left: 2px; }
 .ps-key:hover { border-color: #ff5a4f; } .ps-key:hover i { opacity: 1; color: #ff5a4f; }
 .ps-bind .ps-add { min-width: 28px; }
+
+/* Premier: CS Rating badges (the tier's colour, slanted like CS2's), the lobby card, the map veto with both teams listed
+   like a leaderboard, and the bots' real players (pictures and teams) on the scoreboard. */
+.cs-rating { display: inline-flex; align-items: baseline; padding: 1px calc(var(--fs) * .55) 1px calc(var(--fs) * .45); font-size: calc(var(--fs) * .78);
+  font-weight: 700; font-style: italic; line-height: 1.25; color: var(--c, #b0c3d9); background: linear-gradient(90deg, rgba(0, 0, 0, .55), rgba(0, 0, 0, .25));
+  border-left: 3px solid var(--c, #b0c3d9); transform: skewX(-12deg); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cs-rating b { font-size: var(--fs); font-weight: 800; }
+.cs-rating.unrated { color: #8a919c; border-left-color: #59606b; letter-spacing: .1em; }
+.play-rank.premier .play-rating { min-width: 86px; text-align: center; }
+.play-maps.veto-pool .play-map { cursor: default; opacity: .85; }
+.play-maps.veto-pool .play-map:hover { filter: none; border-color: rgba(255, 255, 255, .12); }
+.play-hud .sb-who { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.play-hud .sb-who > span { display: flex; flex-direction: column; line-height: 1.1; min-width: 0; }
+.play-hud .sb-who small { font-size: 10px; opacity: .55; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+.play-hud .sb-avatar { width: 24px; height: 24px; object-fit: contain; background: rgba(0, 0, 0, .35); border-radius: 2px; flex: none; }
+.play-hud .endscreen .rank-result.premier .text span { display: inline-flex; align-items: center; gap: 10px; }
+
+.veto-root { display: grid; place-items: center; background: radial-gradient(ellipse at center, #1b2230 0%, #07090d 75%); padding: 24px; overflow: auto; }
+.veto { width: min(1280px, 100%); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.veto-head { display: flex; align-items: center; gap: 16px; }
+.veto-head h2 { margin: 0; font-size: 22px; letter-spacing: .12em; text-transform: uppercase; }
+.veto-status { flex: 1; font-size: 15px; opacity: .9; }
+.veto-body { display: grid; grid-template-columns: minmax(250px, 1fr) minmax(320px, 1.4fr) minmax(250px, 1fr); gap: 16px; align-items: start; }
+.veto-team h3 { display: flex; justify-content: space-between; align-items: center; margin: 0 0 8px; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; }
+.veto-team h3 small { display: inline-flex; gap: 6px; align-items: center; font-size: 11px; opacity: .8; letter-spacing: 0; text-transform: none; }
+.veto-team.mine h3 { color: #8fb4e8; } .veto-team.theirs h3 { color: #e8b48f; }
+.veto-team ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.veto-team li { display: flex; align-items: center; gap: 10px; padding: 6px 10px 6px 6px; background: rgba(255, 255, 255, .04); border-left: 2px solid rgba(255, 255, 255, .1); }
+.veto-team.mine li { border-left-color: rgba(120, 160, 220, .6); } .veto-team.theirs li { border-left-color: rgba(220, 160, 120, .6); }
+.veto-avatar { width: 38px; height: 38px; object-fit: contain; background: rgba(0, 0, 0, .35); flex: none; }
+.veto-avatar.you { background: linear-gradient(135deg, #44536b, #232b38); }
+.veto-name { flex: 1; display: flex; flex-direction: column; min-width: 0; font-weight: 600; }
+.veto-name small { font-weight: 400; font-size: 11px; opacity: .6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.veto-maps { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.veto-map { position: relative; height: 92px; border: 1px solid rgba(255, 255, 255, .14); background: #20262f var(--img) center / cover; color: #fff; cursor: pointer;
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; padding: 8px 10px; text-align: left; font-weight: 700; text-shadow: 0 1px 3px #000; }
+.veto-map::before { content: ''; position: absolute; inset: 0; background: linear-gradient(transparent 30%, rgba(0, 0, 0, .75)); }
+.veto-map > * { position: relative; }
+.veto-map:not(:disabled):hover { border-color: #ff6b6b; box-shadow: inset 0 0 0 1px #ff6b6b; }
+.veto-map:disabled { cursor: default; }
+.veto-map.banned { filter: grayscale(1) brightness(.45); }
+.veto-map.banned em { color: #ff8a8a; }
+.veto-map.picked { border-color: #ffd36b; box-shadow: inset 0 0 0 2px #ffd36b, 0 0 22px rgba(255, 211, 107, .25); }
+.veto-map em { font-style: normal; font-size: 11px; font-weight: 600; opacity: .9; }
+.veto-order { grid-column: 1 / -1; display: flex; gap: 4px; justify-content: center; margin-top: 4px; }
+.veto-order i { font-style: normal; font-size: 11px; padding: 2px 8px; background: rgba(255, 255, 255, .06); opacity: .5; }
+.veto-order i.mine { color: #8fb4e8; } .veto-order i.theirs { color: #e8b48f; }
+.veto-order i.done { opacity: .35; text-decoration: line-through; } .veto-order i.now { opacity: 1; background: rgba(255, 255, 255, .16); }
+.veto-foot { display: flex; justify-content: center; gap: 10px; min-height: 44px; }
+.veto-credit { text-align: center; font-size: 11px; }
+@media (max-width: 900px) { .veto-body { grid-template-columns: 1fr; } }

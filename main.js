@@ -670,6 +670,122 @@ async function runHitchSmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=bots` watches the bots play: for each map (CS2SIM_SMOKE_MAPS, default Dust II and Mirage) and rank tier
+// (CS2SIM_SMOKE_TIERS, default silver and global), a competitive match for CS2SIM_SMOKE_SECONDS (default 150) with you dead
+// (spectating), logging each round's plans (the terrorists' strat, site and buy, the CTs' setup, who throws which lineup),
+// every lineup thrown and how far from its spot it landed, kills, plants and who won; and a scoreboard screenshot
+// (userData/bots-<map>-<tier>.png: the bots' real players and ranks).
+async function runBotsSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const secs = +process.env.CS2SIM_SMOKE_SECONDS || 150;
+  const maps = (process.env.CS2SIM_SMOKE_MAPS || 'de_dust2,de_mirage').split(',');
+  const tiers = (process.env.CS2SIM_SMOKE_TIERS || 'silver,global').split(',');
+  const summary = [];
+  await wait(3000);
+  for (const map of maps) {
+    for (const tier of tiers) {
+      await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'competitive', map: '${map}', difficulty: '${tier}', teamSize: 5, length: 'long', quality: 'balanced' })); })(); 1`);
+      await js(`document.querySelector('#nav [data-page=stats]').click(); setTimeout(() => document.querySelector('#nav [data-page=play]').click(), 200); 1`);
+      await wait(1500);
+      if (!(await smokeStartMap(win, map, 'bots'))) continue;
+      await js(`(() => { const g = window.__playGame, B = window.__bots = { log: [], throws: [], landed: [], kills: 0, plants: 0, wins: { T: 0, CT: 0 } };
+        document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
+        const fmt = (p) => p ? Math.round(p) : '';
+        const planLine = () => { const t = g.plans?.T, ct = g.plans?.CT; if (!t) return;
+          B.log.push('round ' + g.match.round + ': T ' + t.strat + ' ' + t.site + ' (' + t.econ + ', stage ' + t.stage + ') throws [' + t.throws.map((x) => x.by.name + ':' + x.lineup.id).join(', ') + '] roles ' + [...t.roles].map(([c, r]) => c.name + '=' + r).join(' ')
+            + ' | CT ' + ct.econ + (ct.stack ? ' stack ' + ct.stack : '') + ' throws [' + ct.throws.map((x) => x.by.name + ':' + x.lineup.id).join(', ') + ']'); };
+        const start = g.onRoundStart.bind(g); g.onRoundStart = function (...a) { start(...a); planLine(); };
+        planLine();
+        g.onLineupLanded = (c, l, pos) => { const off = Math.hypot(pos[0] - l.goal[0], pos[1] - l.goal[1], l.kind === 'flash' ? 0 : pos[2] - l.goal[2]); B.landed.push({ by: c.name, id: l.id, kind: l.kind, off: Math.round(l.kind === 'flash' ? Math.hypot(pos[0] - l.goal[0], pos[1] - l.goal[1], pos[2] - l.goal[2] - 110) : off) }); };
+        const kill = g.kill.bind(g); g.kill = function (c, a, ...r) { if (c.alive) B.kills++; return kill(c, a, ...r); };
+        // CS2SIM_SMOKE_DRILL=exec (or another strat): every round that strat, everyone with money, the CTs standing still
+        // at their spawn and the terrorists not looking for them: the utility goes out every round, to see where it lands.
+        const drill = ${JSON.stringify(process.env.CS2SIM_SMOKE_DRILL || '')};
+        if (drill) {
+          g.forceStrat = drill;
+          const st0 = g.onRoundStart.bind(g);
+          g.onRoundStart = function (...a) {
+            for (const c of g.combatants) c.money = 16000;
+            st0(...a);
+            for (const b of g.bots) { if (b.c.team === 'CT') b.brain.tick = () => { b.vel = [0, 0, 0]; }; else b.brain.scan = () => {}; }
+          };
+        }
+        const end = g.onRoundEnd.bind(g); g.onRoundEnd = function (w, reason, mvp) {
+          const t = g.plans?.T;
+          if (t?.throws?.length) B.log.push('  throws: ' + t.throws.map((x) => { const b = g.botOf(x.by); return x.lineup.id + (x.thrownAt != null ? ' thrown' : ' not thrown (' + (x.by.alive ? Math.round(Math.hypot(b.pos[0] - x.lineup.pos[0], b.pos[1] - x.lineup.pos[1])) + 'u from its spot' : 'thrower dead') + ')'); }).join(', ') + ' · stage ' + t.stage);
+          B.wins[w]++; B.log.push('  round ' + g.match.round + ' won by ' + w + ' (' + reason + ')' + (g.match.bomb?.site ? ' bomb ' + g.match.bomb.site : '')); return end(w, reason, mvp); };
+        const planted = g.match.planted.bind(g.match); g.match.planted = function (...a) { B.plants++; return planted(...a); };
+        return 1; })()`);
+      const t0 = Date.now();
+      let shot = false;
+      while (Date.now() - t0 < secs * 1000) {
+        await js(`(() => { const g = window.__playGame; if (g.me.alive && g.match.phase === 'live') g.console.run('kill'); return 1; })()`);
+        if (!shot && Date.now() - t0 > 20000) {
+          shot = true;
+          await js(`window.__playGame.hud.scoreboard(true, window.__playGame.scoreData()); 1`);
+          await wait(1500);
+          fs.writeFileSync(path.join(app.getPath('userData'), `bots-${map}-${tier}.png`), (await win.webContents.capturePage()).toPNG());
+          await js(`window.__playGame.hud.scoreboard(false); 1`);
+        }
+        await wait(1000);
+      }
+      const r = JSON.parse(await js(`JSON.stringify(window.__bots)`));
+      const land = r.landed, good = land.filter((x) => x.off <= (x.kind === 'flash' ? 180 : 100));
+      console.log(`SMOKE bots ${map} ${tier}: ${r.kills} kills, ${r.plants} plants, rounds T ${r.wins.T} / CT ${r.wins.CT}, ${land.length} lineups thrown, ${good.length} landed on their spot`);
+      console.log(r.log.map((l) => '  ' + l).join('\n'));
+      console.log('  lineups: ' + land.map((x) => `${x.by}:${x.id} ${x.off}u`).join(', '));
+      summary.push({ map, tier, kills: r.kills, plants: r.plants, wins: r.wins, thrown: land.length, landed: good.length });
+      await js(`document.querySelector('.play-root [data-leave]')?.click(); 1`);
+      await wait(2500);
+    }
+  }
+  console.log('SMOKE bots all', JSON.stringify(summary));
+  app.quit();
+}
+
+// `CS2SIM_SMOKE=premier` plays through Premier: the map veto (banning on your turns, picking a side if it's yours) with
+// both teams listed, a few seconds of the match, then the end of it (a win, as your 10th: the CS Rating revealed), with
+// screenshots of the veto, the scoreboard and the result into userData/premier-*.png.
+async function runPremierSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `premier-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  await wait(3000);
+  await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'premier', difficulty: '${process.env.CS2SIM_SMOKE_TIERS || 'mg'}', quality: 'balanced' })); })(); 1`);
+  await js(`document.querySelector('#nav [data-page=play]').click(); 1`);
+  await wait(2500);
+  await shot('lobby');
+  await js(`window.__cs2Debug = true; document.querySelector('[data-start]').click(); 1`);
+  for (let i = 0; i < 60; i++) {
+    await wait(700);
+    const st = JSON.parse(await js(`JSON.stringify({ veto: !!document.querySelector('.veto'), mine: !!document.querySelector('.veto-map:not(:disabled)'), side: !!document.querySelector('[data-side]'), go: !!document.querySelector('[data-veto-go]'), status: document.querySelector('.veto-status')?.textContent || '' })`));
+    if (!st.veto) break;
+    if (i === 2) await shot('veto');
+    if (st.mine) { await js(`document.querySelector('.veto-map:not(:disabled)').click(); 1`); console.log('SMOKE premier', st.status, '(banned one)'); }
+    else if (st.side) { await js(`document.querySelector('[data-side="CT"]').click(); 1`); console.log('SMOKE premier picked CT'); }
+    else if (st.go) { console.log('SMOKE premier', st.status); await shot('veto-done'); await js(`document.querySelector('[data-veto-go]').click(); 1`); break; }
+  }
+  for (let i = 0; i < 300 && !(await js(`!!window.__playGame?.raf`)); i++) await wait(1000);
+  const ok = await js(`!!window.__playGame?.raf`);
+  console.log('SMOKE premier match', ok ? 'running' : 'did not start', await js(`JSON.stringify({ map: window.__playGame?.mapId, team: window.__playGame?.team, rules: window.__playGame?.rules })`));
+  if (ok) {
+    await js(`(() => { const g = window.__playGame; document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false; return 1; })()`);
+    await wait(6000);
+    await js(`window.__playGame.hud.scoreboard(true, window.__playGame.scoreData()); 1`);
+    await wait(1500);
+    await shot('scoreboard');
+    console.log('SMOKE premier players', await js(`JSON.stringify(window.__playGame.scoreData().players.map((p) => p.name + ' ' + (p.rating ?? '-') + (p.org ? ' (' + p.org + ')' : '')))`));
+    // The end: a win by 13-9 as your tenth win (the rating revealed).
+    const before = await js(`(async () => JSON.stringify((await import('./js/state.js')).S.premier || null))()`);
+    await js(`(async () => { const { S } = await import('./js/state.js'); S.premier = { ...(S.premier || {}), wins: 9, rating: 9000 }; const g = window.__playGame; g.match.score.A = 13; g.match.score.B = 9; g.onMatchOver('A'); return 1; })()`);
+    await wait(4000);
+    await shot('result');
+    console.log('SMOKE premier result', await js(`document.querySelector('[data-rank]')?.innerText.replace(/\\n+/g, ' ')`), 'before', before, 'after', await js(`(async () => JSON.stringify((await import('./js/state.js')).S.premier))()`));
+  }
+  app.quit();
+}
+
 // `CS2SIM_SMOKE=perf` measures Play's frame rate (vsync off, so as fast as it goes) on each map
 // (CS2SIM_SMOKE_MAPS) in a live round with the bots playing, from both spawns and both bomb sites
 // (CS2SIM_SMOKE_SECONDS each, default 5): frames a second, the slowest frames, where a frame's CPU time goes (the
@@ -1246,6 +1362,8 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'play') { win.webContents.once('did-finish-load', () => runPlaySmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'perf') { win.webContents.once('did-finish-load', () => runPerfSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'maps') { win.webContents.once('did-finish-load', () => runMapsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'premier') { win.webContents.once('did-finish-load', () => runPremierSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'hitch') { win.webContents.once('did-finish-load', () => runHitchSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'prepare') { win.webContents.once('did-finish-load', () => runPrepareSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'crate') { win.webContents.once('did-finish-load', () => runCrateSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }

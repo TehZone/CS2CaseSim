@@ -537,5 +537,59 @@ function fakeGame() {
   ok(impacts.brass_bell_large === 'inferno.bell_c' && impacts.glass === 'Glass.BulletImpact', "map export: every surface's bullet impact sound (Inferno's bells)");
 }
 
+// ---- grenade flight (flight.js): how the game, the bots and the lineup finder all fly grenades -----------------------
+{
+  const { throwVelocity, simulateFlight, FUSE } = await import('../src/js/play/flight.js');
+  const ALL = FLAG_PLAYER | FLAG_BULLET | FLAG_GRENADE;
+  const G = world([[[-4000, -4000, -64], [4000, 4000, 0], ALL], [[1500, -500, 0], [1540, 500, 400], ALL]]);
+  const s = simulateFlight(G, [0, 0, 64], throwVelocity(-30, 0, 1), 'smoke');
+  ok(s && near(s.pos[2], 2, 3) && s.time >= FUSE.smoke && s.landed, 'flight: a smoke lands, comes to rest on the floor and goes off after its fuse');
+  const w = simulateFlight(G, [1000, 0, 64], throwVelocity(0, 0, 1), 'smoke');
+  ok(w && w.pos[0] < 1500, 'flight: off a wall it bounces back to this side');
+  const fl = simulateFlight(G, [0, 0, 64], throwVelocity(-45, 0, 1), 'flash');
+  ok(fl && near(fl.time, FUSE.flash, 1 / 64 + 1e-9) && fl.pos[2] > 50, 'flight: a flashbang bursts in the air on its fuse');
+  const mo = simulateFlight(G, [0, 0, 64], throwVelocity(-10, 0, 1), 'fire');
+  ok(mo && mo.landed && near(mo.pos[2], 2, 3) && mo.time < FUSE.fire, 'flight: a molotov breaks where it first hits the floor');
+  ok(throwVelocity(0, 90, 1, [0, 0, 301.993])[2] > 300, 'flight: a jump-throw carries the jump up');
+}
+
+// ---- bots: skill by rank, CS Ratings, who they are -------------------------------------------------------------------
+{
+  const K = await import('../src/js/play/skill.js');
+  const silver = K.skillParams(0), ge = K.skillParams(1);
+  ok(silver.reaction[0] > ge.reaction[0] * 3 && silver.aimErr > ge.aimErr * 3 && silver.utility < 0.2 && ge.utility > 0.9 && silver.strafe > ge.strafe * 5 && silver.crosshair > ge.crosshair * 10,
+    "skill: Silvers react slower, aim worse, rarely throw utility, counter-strafe late and look at the floor; Global Elites don't");
+  ok([1, 6, 7, 10, 11, 14, 15, 17, 18].every((g) => K.groupOfSkill(K.skillOfGroup(g)) === g), 'skill: skill groups and skill map back and forth');
+  const band = (g) => K.ratingOfSkill(K.skillOfGroup(g));
+  ok(band(1) <= 1000 && band(6) < 5000 && band(7) > 5000 && band(10) < 10000 && band(11) > 10000 && band(14) < 15000 && band(18) >= 29000,
+    'skill: CS Ratings by rank (Silvers under 5,000, Gold Novas 5-10k, Master Guardians 10-15k, Global Elites about 30k)');
+  ok(Math.abs(K.skillOfRating(K.ratingOfSkill(0.6)) - 0.6) < 1e-6, 'skill: a CS Rating maps back to the skill');
+  ok(K.tierOf('expert') === 'global' && K.tierOf('easy') === 'silver' && K.tierOf('mg') === 'mg' && K.TO_DIFFICULTY.supreme === 'expert', 'skill: the old difficulty settings map to rank tiers');
+  let lo = 1, hi = 0;
+  for (let i = 0; i < 200; i++) { const s2 = K.botSkill('x' + i, 'gold'); lo = Math.min(lo, s2); hi = Math.max(hi, s2); }
+  ok(K.groupOfSkill(lo) >= 6 && K.groupOfSkill(hi) <= 11, "skill: a tier's bots are its ranks, one either side now and then");
+  const { pickIdentities } = await import('../src/js/play/identity.js');
+  const list = Array.from({ length: 30 }, (_, i) => ({ id: 'p' + i, name: 'P' + i }));
+  const picked = pickIdentities(list, 9);
+  ok(picked.length === 9 && new Set(picked.map((x) => x.id)).size === 9 && pickIdentities(list.slice(0, 4), 9).length === 4, "identity: a match's bots are different players");
+}
+
+// ---- the lineups (src/data/lineups.json) still land on today's maps (those exported in the cache) ---------------------
+{
+  const fs = (await import('node:fs')).default, path = (await import('node:path')).default;
+  const { landing } = await import('../src/js/play/utility.js');
+  const cache = process.env.CS2SIM_CACHE || path.join(process.env.APPDATA || '', 'CS2 Case Simulator', 'cs2cache');
+  const file = new URL('../src/data/lineups.json', import.meta.url);
+  const all = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+  for (const [map, list] of Object.entries(all)) {
+    const dir = path.join(cache, 'play', map);
+    if (!fs.existsSync(path.join(dir, 'collision.bin'))) continue;
+    const info = JSON.parse(fs.readFileSync(path.join(dir, 'map.json'), 'utf8')), buf = fs.readFileSync(path.join(dir, 'collision.bin'));
+    const col = new CollisionWorld(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), info.collision);
+    const off = list.map((l) => { const r = landing(col, l); return r ? Math.hypot(r.pos[0] - l.land[0], r.pos[1] - l.land[1], r.pos[2] - l.land[2]) : Infinity; });
+    ok(list.length && off.every((d) => d < 2), 'lineups: every ' + map + ' lineup lands where it was found (' + list.length + ')');
+  }
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

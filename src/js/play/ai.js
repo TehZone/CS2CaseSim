@@ -9,7 +9,11 @@ import { Gun } from './weapons.js';
 import { setOf } from './bots.js';
 import { PlayerMovement } from './movement.js';
 import { STEP_HEIGHT, JUMP_HEIGHT, CROUCH_JUMP_HEIGHT } from './nav.js';
+import { skillParams } from './skill.js';
+import { advancePlan, stagingPoint, ownSpawn } from './strats.js';
 
+// The old four levels (the console's bot_difficulty, and the skill they stand for: see skill.js).
+export const LEVEL_SKILL = { easy: 0.15, normal: 0.42, hard: 0.72, expert: 0.95 };
 export const DIFFICULTY = {
   easy: { reaction: [0.5, 0.85], turn: 240, aimErr: 7, head: 0.15, control: 0.3, burst: 3, fov: 90, hear: 0.6 },
   normal: { reaction: [0.3, 0.55], turn: 380, aimErr: 4.5, head: 0.3, control: 0.55, burst: 5, fov: 100, hear: 0.8 },
@@ -34,10 +38,11 @@ export function botGun(id, stats, sounds) {
 }
 
 export class Brain {
-  constructor(game, bot, level = 'normal') {
+  // skill: 0 (Silver I) to 1 (The Global Elite), see skill.js (or one of the old levels' names).
+  constructor(game, bot, skill = 0.42) {
     this.game = game;
     this.bot = bot;
-    this.d = DIFFICULTY[level] || DIFFICULTY.normal;
+    this.d = skillParams(typeof skill === 'number' ? skill : LEVEL_SKILL[skill] ?? 0.42);
     this.path = null; this.pi = 0; this.goal = null;
     this.target = null; this.lastSeen = null; this.heard = null;
     this.nextThink = 0; this.nextScan = (bot.index % 4) * (1 / 64);
@@ -58,6 +63,7 @@ export class Brain {
     this.walkUntil = 0;
     this.order = null;
     this.calledSite = false;
+    this.approach = null; this.lineupAim = null; this.lineupFace = null; this.trade = null; this.spots = {}; this.retaking = false;
   }
 
   // A radio command from you (your teammates only).
@@ -104,31 +110,41 @@ export class Brain {
   }
 
   // ---- buying -----------------------------------------------------------------------------------------------------
-  buy(pistolRound) {
-    const g = this.game, c = this.c, m = g.match, st = g.stats;
+  // Buys by the team's call (strats.js teamEconomy: 'pistol' | 'eco' | 'force' | 'full'). Higher ranks buy more utility
+  // (smokes and flashes for the lineups); lower ranks an HE more often.
+  buy(econ = 'full') {
+    if (econ === true) econ = 'pistol'; else if (!econ) econ = 'full';
+    const g = this.game, c = this.c, m = g.match, st = g.stats, skill = this.d.skill, T = c.team === 'T';
     const take = (id) => { if (m.canBuy(c, id, st)) { m.pay(c, id, st); if (id.startsWith('weapon_')) g.giveBot(this.bot, id); return true; } return false; };
-    if (pistolRound) {
-      if (c.team === 'T' || Math.random() < 0.5) take('vest'); else if (Math.random() < 0.6) take('defuser');
-      if (Math.random() < 0.25) take(Math.random() < 0.5 ? 'weapon_p250' : c.team === 'T' ? 'weapon_tec9' : 'weapon_fiveseven');
+    if (econ === 'pistol') {
+      if (T || Math.random() < 0.5) take('vest'); else if (Math.random() < 0.6) take('defuser');
+      if (Math.random() < 0.25) take(Math.random() < 0.5 ? 'weapon_p250' : T ? 'weapon_tec9' : 'weapon_fiveseven');
+      if (skill > 0.5 && Math.random() < 0.5) take('weapon_flashbang');
+      return;
+    }
+    if (econ === 'eco') { // saving: a pistol now and then, a flash at higher ranks
+      if (Math.random() < 0.25) take('weapon_p250');
+      if (skill > 0.6 && Math.random() < 0.4) take('weapon_flashbang');
       return;
     }
     const has = this.bot.weapons.primary;
-    const rifle = c.team === 'T' ? 'weapon_ak47' : Math.random() < 0.5 ? 'weapon_m4a1' : 'weapon_m4a1_silencer';
+    const rifle = T ? 'weapon_ak47' : Math.random() < 0.5 ? 'weapon_m4a1' : 'weapon_m4a1_silencer';
     const full = (st[rifle]?.price || 2900) + 1000;
     if (!has) {
-      if (c.money >= 4750 + 1000 && Math.random() < 0.18) take('weapon_awp');
+      if (econ === 'force') take(c.money >= 2850 ? (T ? 'weapon_galilar' : 'weapon_famas') : T ? 'weapon_mac10' : 'weapon_mp9');
+      else if (c.money >= 4750 + 1000 && Math.random() < 0.18) take('weapon_awp');
       else if (c.money >= full) take(rifle);
-      else if (c.money >= 2600 && g.match.lossStreak[c.team] >= 2) take(c.team === 'T' ? 'weapon_galilar' : 'weapon_famas') || take(c.team === 'T' ? 'weapon_mac10' : 'weapon_mp9');
+      else if (c.money >= 2600) take(T ? 'weapon_galilar' : 'weapon_famas') || take(T ? 'weapon_mac10' : 'weapon_mp9');
       else if (c.money >= 1300 && Math.random() < 0.35) take('weapon_deagle') || take('weapon_p250');
     }
     if (this.bot.weapons.primary || c.money >= 2500) take('vesthelm') || take('vest');
-    if (c.team === 'CT' && Math.random() < 0.7) take('defuser');
+    if (!T && Math.random() < (econ === 'force' ? 0.4 : 0.75)) take('defuser');
     // Grenades with what's left.
     if (this.bot.weapons.primary) {
-      const fire = c.team === 'T' ? 'weapon_molotov' : 'weapon_incgrenade';
-      for (const [id, p] of [['weapon_flashbang', 0.65], ['weapon_smokegrenade', 0.5], [fire, 0.4], ['weapon_hegrenade', 0.35], ['weapon_flashbang', 0.3]]) {
-        if (Math.random() < p && c.money >= (st[id]?.price || 300) + 200) take(id);
-      }
+      const fire = T ? 'weapon_molotov' : 'weapon_incgrenade', u = 0.35 + skill * 0.6;
+      const list = econ === 'force' ? [['weapon_flashbang', 0.5 * u]]
+        : [['weapon_smokegrenade', u], ['weapon_flashbang', u], [fire, 0.25 + skill * 0.5], ['weapon_flashbang', u * 0.7], ['weapon_hegrenade', 0.5 - skill * 0.3]];
+      for (const [id, p] of list) if (Math.random() < p && c.money >= (st[id]?.price || 300) + 200) take(id);
     }
   }
 
@@ -228,6 +244,7 @@ export class Brain {
       this.target.dist = best.d;
       this.lastSeen = { pos: g.bodyOf(best.c).feet.slice(), t };
       g.callout(this.c, best.c);
+      if (this.c.team === 'CT') this.reportContact(best.c);
     } else if (this.target?.visible) {
       this.target.visible = false;
       this.target.lostAt = t;
@@ -240,7 +257,15 @@ export class Brain {
     if (this.target?.visible) return;
     const d = Math.hypot(pos[0] - this.bot.pos[0], pos[1] - this.bot.pos[1]);
     if (d > loud * this.d.hear) return;
-    this.heard = { pos: pos.slice(), t };
+    // An impatient (lower-ranked) bot goes to see; a patient one holds its angle and waits for it.
+    this.heard = { pos: pos.slice(), t, peek: Math.random() > this.d.patience };
+  }
+  // A teammate just died near here: go for the killer (trading), as fast as its rank goes.
+  traded(killer, pos, t) {
+    if (this.target?.visible || Math.random() > this.d.trade) return;
+    this.trade = { c: killer, pos: pos.slice(), until: t + 4 };
+    this.heard = { pos: this.game.bodyOf(killer).feet.slice(), t };
+    this.nextThink = t;
   }
   hurt(attacker, t) {
     this.hurtBy = attacker;
@@ -274,12 +299,14 @@ export class Brain {
       const auto = gun.stats.fullAuto;
       const burst = tg.dist < 600 ? this.d.burst * 3 : tg.dist < 1500 ? this.d.burst : Math.max(1, Math.round(this.d.burst / 2));
       g.botShoot(b, gun, t, this.d.control);
+      tg.shotAt ??= t;
       tg.shots++;
       if (!auto) gun.nextAttack = Math.max(gun.nextAttack, t + rnd(0.08, 0.25) + (tg.dist > 1200 ? 0.15 : 0));
       if (tg.shots >= burst) { tg.shots = 0; tg.pauseUntil = t + rnd(0.2, 0.45); }
     }
-    // Stand still to shoot accurately (counter-strafing); keep moving if it's a knife fight.
-    return false;
+    // Stand still to shoot accurately (counter-strafing): a Global Elite has stopped as it fires, a Silver keeps walking a
+    // while, its first shots wide. Until it reacts, it carries on as it was.
+    return tg.shotAt == null ? t < tg.react : t < tg.shotAt + this.d.strafe;
   }
 
   turnTo(p, y, dt, rate = 1) {
@@ -298,9 +325,11 @@ export class Brain {
     if (t < this.blindUntil) { this.turnTo(8 + Math.sin(t * 9) * 3, (this.blindYaw ?? b.yaw) + Math.sin(t * 3.1 + b.index) * 35, dt, 0.4); return; }
     if (this.lastSeen && t - this.lastSeen.t < 4) { const [p, y] = angleTo(b.eye(), [this.lastSeen.pos[0], this.lastSeen.pos[1], this.lastSeen.pos[2] + 60]); this.turnTo(p, y, dt, 0.7); return; }
     if (this.heard && t - this.heard.t < 3) { const [p, y] = angleTo(b.eye(), [this.heard.pos[0], this.heard.pos[1], this.heard.pos[2] + 60]); this.turnTo(p, y, dt, 0.6); return; }
+    if (this.lineupFace) { this.turnTo(this.lineupFace[0], this.lineupFace[1], dt, 0.35); return; } // lining up a throw
     if (this.task === 'hold' && this.holdYaw != null && Math.hypot(b.vel[0], b.vel[1]) < 20) { this.glance(dt, t, this.holdYaw, 15, 0.2); return; }
-    // Moving: face the way it's going (the path, not its velocity, which teammates shoving past and walls jostle).
-    if (this.heading != null && Math.hypot(b.vel[0], b.vel[1]) > 30) this.turnTo(0, this.heading, dt, 0.5);
+    // Moving: face the way it's going (the path, not its velocity, which teammates shoving past and walls jostle), the
+    // crosshair at head height for a good player, down at the floor for a Silver.
+    if (this.heading != null && Math.hypot(b.vel[0], b.vel[1]) > 30) this.turnTo(this.d.crosshair, this.heading, dt, 0.5);
   }
   // Freeze time: still, the odd glance either side of the heading it spawned with.
   lookAround(dt, t) {
@@ -314,7 +343,7 @@ export class Brain {
       this.glanceAt = t + 3 + Math.random() * 4;
       this.glanceOff = Math.random() < 0.5 ? 0 : (Math.random() * 2 - 1) * spread;
     }
-    this.turnTo(0, base + this.glanceOff, dt, rate);
+    this.turnTo(this.d.crosshair, base + this.glanceOff, dt, rate);
   }
 
   // ---- objectives -------------------------------------------------------------------------------------------------
@@ -324,8 +353,11 @@ export class Brain {
     if (this.target?.visible && !this.target.c.alive) this.target = null;
     if (g.respawnMode) return this.hunt(t);
     const siteBox = (s) => g.map.info.bombsites.find((x) => x.site === s);
-    if (!this.target?.visible && t >= this.nadeAt) this.useNades(t, siteBox);
+    if (!this.target?.visible && t >= this.nadeAt && !this.lineupFace) this.useNades(t, siteBox);
     if (this.followOrder(t)) return;
+    // Trading a teammate who just went down nearby, or going to see a noise (impatient ones), before the plan.
+    if (this.trade && t < this.trade.until && !this.target?.visible && bomb.state !== 'planted') return this.setTask('goto', this.trade.pos);
+    if (this.heard?.peek && t - this.heard.t < 3 && !this.target?.visible && bomb.state !== 'planted' && dist2(this.heard.pos, b.pos) > 120) return this.setTask('goto', this.heard.pos);
     // No rifle? Grab one lying nearby.
     if (!b.weapons.primary && !this.target?.visible && (bomb.state !== 'planted' || c.team === 'T')) {
       const loot = g.drops.list.filter((it) => it.id !== 'defuser' && !/^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/.test(it.id) && !g.nades.inFire(it.pos))
@@ -344,13 +376,23 @@ export class Brain {
         if (m.rules.bombTime - (g.now - bomb.plantedAt) < 9) return this.flee(bomb.pos);
         return this.holdNear(bomb.pos, 500, 'bomb', t);
       }
-      const site = siteBox(this.plan.site || 'A');
+      const plan = this.plan;
+      advancePlan(g, plan, t);
+      const site = siteBox(plan.site || 'A');
+      const stage = plan.stage || 'execute', role = plan.roles?.get(c);
+      // A lineup of its own for the plan comes first.
+      const mine = plan.throws?.find((x) => x.by === c && !x.done);
+      if (mine && stage !== 'setup' && this.doLineup(mine, t)) return;
+      const going = stage === 'execute' && t >= (plan.execStart ?? 0) + this.entryDelay(plan);
       if (c.hasC4 && site) {
         if (!this.calledSite && Math.hypot(site.min[0] - b.pos[0], site.min[1] - b.pos[1]) < 2200) { this.calledSite = true; g.radio.chatter(c, 'goingToPlant', { site: site.site }); }
         if (m.siteAt(b.pos) && !this.recentlySawEnemy(t, 2.5)) { this.setTask('plant'); g.botPlant(b, t); return; }
-        return this.setTask('goto', this.siteSpot(site, 'plant'));
+        if (stage === 'execute' && (going || plan.rush)) return this.setTask('goto', this.siteSpot(site, 'plant'));
+        return this.holdAt(this.gatherSpot(plan), t, this.siteCenter(site));
       }
-      if (this.plan.lurk === c && m.time > 35) return this.holdIn(siteBox(this.plan.site === 'A' ? 'B' : 'A') || site, t, true);
+      if (stage === 'setup') return this.setupHold(plan, role, t);
+      if (plan.lurk === c && m.time > 30) return this.holdIn(siteBox(plan.site === 'A' ? 'B' : 'A') || site, t, true);
+      if (stage === 'gather' || !going) return this.holdAt(this.gatherSpot(plan), t, this.siteCenter(site));
       return this.holdIn(site, t, true);
     }
     // CT
@@ -362,9 +404,22 @@ export class Brain {
       // Too late to get there and defuse: save yourself.
       if (b.mode !== 'defuse' && timeLeft < need + d / 230 - 0.5) return this.flee(bomb.pos);
       if (bomb.defuser && bomb.defuser !== c) return this.holdNear(bomb.pos, 350, 'cover', t);
+      // A retake together: wait short of the site for a teammate (higher ranks; Silvers run in one by one), unless time
+      // won't allow it.
+      const spot = this.retakeSpot(bomb), cts = g.combatants.filter((x) => x.team === 'CT' && x.alive);
+      const near = cts.filter((x) => dist2(g.positionOf(x), spot) < 450).length;
+      const rush = timeLeft < need + d / 200 + 7 || near >= Math.min(2, cts.length) || Math.random() > this.d.patience;
+      if (!rush && d > 700 && !this.retaking) return this.holdAt(spot, t, bomb.pos);
+      this.retaking = true;
       return this.setTask('goto', bomb.pos);
     }
-    const site = this.plan.rotate || this.plan.assign?.get(c) || 'A';
+    // The early utility at the choke it holds (the first half minute).
+    const early = this.plan.throws?.find((x) => x.by === c && !x.done);
+    if (early && t - g.liveAt < 30 && this.doLineup(early, t, true)) return;
+    // Its site, or the one the team rotates to (one anchor stays put at higher ranks).
+    const assigned = this.plan.assign?.get(c) || 'A';
+    const anchor = this.plan.rotate && assigned !== this.plan.rotate && this.d.skill > 0.6 && [...(this.plan.assign || [])].filter(([x, sg]) => sg === assigned && x.alive).length === 1;
+    const site = this.plan.rotate && !anchor ? this.plan.rotate : assigned;
     if (site === 'mid' && g.midSpot) return this.holdAt(g.midSpot, t);
     return this.holdIn(siteBox(site), t, false);
   }
@@ -387,6 +442,87 @@ export class Brain {
   }
 
   recentlySawEnemy(t, s) { return this.lastSeen && t - this.lastSeen.t < s; }
+
+  // A lineup (utility.js) for its plan: to the exact spot, still, the aim (off by its rank's error), and the throw when
+  // its moment comes (now: at once; else smokes as the execute starts, molotovs just after, pop flashes last). Returns
+  // whether that's what it's doing.
+  doLineup(x, t, now = false) {
+    const g = this.game, b = this.bot, l = x.lineup, plan = this.plan;
+    const late = now ? t - g.liveAt > 30 : plan.stage === 'execute' && t - plan.execStart > 8;
+    if (!(this.c.nades[x.nade] > 0) || late || b.pendingThrow?.lineup === l) { if (!b.pendingThrow) x.done = true; this.lineupFace = null; this.approach = null; return false; }
+    const d = dist2(l.pos, b.pos);
+    if (d > 40) { this.approach = null; this.lineupFace = null; this.setTask('goto', l.pos); return true; }
+    this.task = 'lineup'; this.path = null; this.approach = l.pos;
+    this.lineupAim ||= [(Math.random() * 2 - 1) * this.d.utilityErr, (Math.random() * 2 - 1) * this.d.utilityErr];
+    const aim = this.lineupFace = [l.pitch + this.lineupAim[0], l.yaw + this.lineupAim[1]];
+    const ready = now || (plan.stage === 'execute' && t >= plan.execStart + [0, 0.5, 1.1][x.phase]);
+    if (d < 3 && Math.hypot(b.vel[0], b.vel[1]) < 8) { b.pos[0] = l.pos[0]; b.pos[1] = l.pos[1]; b.vel[0] = b.vel[1] = 0; } // (exactly on it)
+    const still = d < 3 && Math.hypot(b.vel[0], b.vel[1]) < 8;
+    const aimed = Math.abs(wrap(b.yaw - aim[1])) < 0.5 && Math.abs(b.pitch - aim[0]) < 0.5;
+    if (ready && still && aimed && g.botThrowAim(b, x.nade, { pitch: aim[0], yaw: aim[1], strength: l.strength, jump: l.jump, lineup: l })) {
+      x.done = true; x.thrownAt = t;
+      this.lineupAim = null; this.lineupFace = null; this.approach = null;
+      if (l.kind === 'flash' && plan.side === 'T') plan.flashAt = Math.max(plan.flashAt || 0, t + 0.55 + 1.65);
+    }
+    return true;
+  }
+  siteCenter(site) { return site ? [(site.min[0] + site.max[0]) / 2, (site.min[1] + site.max[1]) / 2, site.min[2]] : null; }
+  // Its own spot near where the team gathers for the site.
+  gatherSpot(plan) {
+    const key = 'gather' + plan.site;
+    if (!this.spots[key]) {
+      const p = stagingPoint(this.game, plan.site);
+      this.spots[key] = this.game.nav.randomPointIn([p[0] - 260, p[1] - 260, p[2] - 120], [p[0] + 260, p[1] + 260, p[2] + 120])?.point || p;
+    }
+    return this.spots[key];
+  }
+  // A default: spread out for map control (the lurker on the other site's way in, the entry in mid, the rest by both
+  // sites' ways in), holding there until it's time to gather.
+  setupHold(plan, role, t) {
+    const g = this.game;
+    if (!this.spots.setup) {
+      const other = g.map.info.bombsites.map((x) => x.site).find((x) => x !== plan.site) || plan.site;
+      const where = role === 'lurk' ? stagingPoint(g, other) : role === 'entry' && g.midSpot ? g.midSpot : stagingPoint(g, this.bot.index % 2 ? plan.site : other);
+      this.spots.setup = g.nav.randomPointIn([where[0] - 220, where[1] - 220, where[2] - 120], [where[0] + 220, where[1] + 220, where[2] + 120])?.point || where;
+    }
+    return this.holdAt(this.spots.setup, t, null);
+  }
+  // When it goes onto the site in the execute (seconds after it starts): the entry first, as the pop flash bursts if
+  // there is one, the rest a moment apart (closer at higher ranks, near enough to trade).
+  entryDelay(plan) {
+    if (plan.rush) return (this.bot.index % 5) * 0.25;
+    if (plan.throws?.some((x) => x.phase === 2 && !x.done && x.by.alive)) return Infinity; // the pop flash isn't out yet
+    const base = Math.max(0.8, (plan.flashAt ?? 0) - (plan.execStart ?? 0) - 0.25);
+    const k = plan.roles?.get(this.c) === 'entry' ? 0 : 1 + (this.bot.index % 4) * 0.6;
+    return base + k * (1.2 - this.d.skill * 0.6);
+  }
+  // Where CTs gather to retake a planted site: about 700 units short of the bomb, on the way from their spawn.
+  retakeSpot(bomb) {
+    const key = 'retake' + (bomb.site || '');
+    if (!this.spots[key]) {
+      const g = this.game, pts = g.nav.path(ownSpawn(g, 'CT'), bomb.pos)?.points || [];
+      let pt = pts[0] || bomb.pos, run = 0;
+      for (let i = pts.length - 1; i > 0; i--) { run += dist2(pts[i], pts[i - 1]); if (run >= 700) { pt = pts[i - 1]; break; } }
+      this.spots[key] = [pt[0], pt[1], pt[2]];
+    }
+    return this.spots[key];
+  }
+  // A CT seeing terrorists at a site: the team rotates there once enough show (one is enough for lower ranks; higher
+  // ranks wait for two).
+  reportContact(e) {
+    const g = this.game, plan = this.plan;
+    if (plan?.side !== 'CT' || plan.rotate) return;
+    const p = g.bodyOf(e).feet;
+    const site = g.map.info.bombsites.find((x) => p[0] > x.min[0] - 700 && p[0] < x.max[0] + 700 && p[1] > x.min[1] - 700 && p[1] < x.max[1] + 700);
+    if (!site) return;
+    plan.contact ||= {};
+    const seen = plan.contact[site.site] ||= new Set();
+    seen.add(e);
+    if (seen.size >= (this.d.skill > 0.5 ? 2 : 1)) {
+      plan.rotate = site.site;
+      g.radio?.say(this.c, 'needbackup', `They're ${site.site}! Rotate ${site.site}`);
+    }
+  }
 
   // Grenades like CS2's bots use them: terrorists smoke off the CT side and flash before taking a site; anyone throws
   // a molotov or HE where they last saw enemies; retaking CTs flash the bomb; terrorists burn a defuser.
@@ -522,6 +658,10 @@ export class Brain {
         const [ix, iy] = wp.into || [dx / (d || 1), dy / (d || 1)];
         want = [ix * max, iy * max]; wpZ = wp[2] + wp.jump;
       } else if (d > (last ? 32 : 8) || below) { want = [(dx / d) * s, (dy / d) * s]; wpZ = wp[2]; direct = !!wp.direct; } else if (last) this.path = null;
+    } else if (this.approach && moving) {
+      // The last few units onto a lineup's spot, slowing to stop on it.
+      const dx = this.approach[0] - b.pos[0], dy = this.approach[1] - b.pos[1], d = Math.hypot(dx, dy);
+      if (d > 0.5) want = [(dx / d) * Math.min(max * 0.6, d * 6), (dy / d) * Math.min(max * 0.6, d * 6)];
     } else if (this.target?.visible && b.weapons[b.slot]?.melee && moving) {
       const e = g.bodyOf(this.target.c).feet, dx = e[0] - b.pos[0], dy = e[1] - b.pos[1], d = Math.hypot(dx, dy);
       if (d > 30) want = [(dx / d) * max, (dy / d) * max];
@@ -670,25 +810,6 @@ export class Brain {
   }
 
   walking(t) { return !this.plan?.rush && (this.task === 'hold' || (this.lastSeen && t - this.lastSeen.t < 6 && !this.target?.visible)); }
-}
-
-// Team plans for a round: the T site and lurker, the CT split.
-export function teamPlan(game, side) {
-  const bots = game.bots.filter((b) => b.c.team === side);
-  const have = game.map.info.bombsites.map((s) => s.site);
-  if (side === 'T') {
-    const site = have[Math.floor(Math.random() * have.length)] || 'A';
-    const lurk = bots.length >= 4 ? bots[Math.floor(Math.random() * bots.length)].c : null;
-    return { site, lurk: lurk?.hasC4 ? null : lurk };
-  }
-  const assign = new Map();
-  const order = bots.map((b) => b.c).sort(() => Math.random() - 0.5);
-  const n = order.length;
-  const two = have.includes('B') ? 'B' : have[0] || 'A';
-  const mid = game.midSpot ? 'mid' : Math.random() < 0.5 ? 'A' : two;
-  const layout = n >= 5 ? ['A', 'A', two, two, mid] : n === 4 ? ['A', 'A', two, two] : n === 3 ? ['A', two, mid] : n === 2 ? ['A', two] : [Math.random() < 0.5 ? 'A' : two];
-  order.forEach((c, i) => assign.set(c, layout[i % layout.length]));
-  return { assign };
 }
 
 export { setOf };
