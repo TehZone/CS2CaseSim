@@ -26,6 +26,7 @@ export class Hud {
       <div class="money"><span class="buyzone hidden" data-buyzone title="Buy zone (B)">${ICONS.cart}</span><span data-money>$0</span><span class="c4 hidden" data-c4>C4</span><span class="kit hidden" data-kit>KIT</span></div>
       <div class="modeline" data-mode></div>
       <div class="fps"></div>
+      <div class="netgraph"></div>
       <div class="feed"></div>
       <div class="chat" data-chat><div class="chat-lines" data-chat-lines></div><form class="chat-say hidden" data-chat-say><span data-chat-label>Say :</span><input maxlength="127" spellcheck="false" autocomplete="off"></form></div>
       <div class="radio hidden" data-radio></div>
@@ -121,6 +122,7 @@ export class Hud {
   mode(text) { this.set('[data-mode]', text || ''); }
   place(name) { this.set('.place', name ? name.replace(/([a-z])([A-Z])/g, '$1 $2') : ''); }
   fps(v) { this.set('.fps', v == null ? '' : `${Math.round(v)} fps`); }
+  netGraph(text) { this.set('.netgraph', text || ''); }
   scoped(on) { this.el.classList.toggle('scoped', !!on); }
 
   // Top bar: scores by side, alive players, the round clock (or the planted bomb).

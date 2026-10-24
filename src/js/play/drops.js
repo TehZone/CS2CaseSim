@@ -22,12 +22,19 @@ export class Drops {
       if (!tpl || !item.obj.parent) return;
       const m = cloneSkinned(tpl);
       m.position.set(0, 0, 0); m.rotation.set(0, 0, 0); m.scale.set(1, 1, 1);
-      m.traverse((o) => { if (o.isMesh) { o.frustumCulled = false; o.castShadow = false; o.receiveShadow = true; } });
+      m.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; } }); // (culled: it lies still in its bind pose)
       item.obj.add(m);
+      if (item.resting) this.freeze(item);
     });
     toGl(item.pos, item.obj.position);
     this.list.push(item);
     return item;
+  }
+
+  // Lying still: its matrices (and its bones') worked out once, not every frame.
+  freeze(it) {
+    it.obj.updateMatrixWorld(true);
+    it.obj.traverse((o) => { o.matrixAutoUpdate = false; });
   }
 
   tick(dt) {
@@ -39,7 +46,7 @@ export class Drops {
       const tr = g.collision.traceBox(it.pos, to, [-3, -3, -1], [3, 3, 3], FLAG_PLAYER);
       it.pos = tr.endpos;
       if (tr.normal) {
-        if (tr.normal[2] > 0.7) { it.resting = true; it.vel = [0, 0, 0]; } else { const vn = it.vel[0] * tr.normal[0] + it.vel[1] * tr.normal[1] + it.vel[2] * tr.normal[2]; it.vel = it.vel.map((v, i) => (v - vn * tr.normal[i]) * 0.5); }
+        if (tr.normal[2] > 0.7) { it.resting = true; it.vel = [0, 0, 0]; toGl(it.pos, it.obj.position); this.freeze(it); } else { const vn = it.vel[0] * tr.normal[0] + it.vel[1] * tr.normal[1] + it.vel[2] * tr.normal[2]; it.vel = it.vel.map((v, i) => (v - vn * tr.normal[i]) * 0.5); }
       }
       if (it.pos[2] < -4000) it.resting = true;
       toGl(it.pos, it.obj.position);

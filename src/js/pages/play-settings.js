@@ -5,7 +5,12 @@ import { CROSSHAIR, crosshairHtml } from '../play/hud.js';
 import { ACTIONS, COMMANDS, bindTable, keyName, keyLabel } from '../play/input.js';
 
 // keybinds: your binds (CS2 key name -> command), null for the defaults; binds: older saves' per-action keys.
-export const SETTINGS_DEFAULTS = { crosshair: { ...CROSSHAIR }, viewmodel: { fov: 68, x: 1, y: 1, z: -1 }, keybinds: null, binds: {}, musicVolume: 1, voiceVolume: 1, showFps: true };
+export const SETTINGS_DEFAULTS = { crosshair: { ...CROSSHAIR }, viewmodel: { fov: 68, x: 1, y: 1, z: -1 }, keybinds: null, binds: {}, musicVolume: 1, voiceVolume: 1, showFps: true,
+  renderScale: 1, fpsMax: 0, netGraph: false };
+// The frame rate caps on offer (0: the monitor's, with vsync; past it needs the unlock below).
+const FPS_CAPS = [[0, 'Monitor refresh rate'], [60, '60'], [120, '120'], [144, '144'], [240, '240'], [300, '300'], [400, '400']];
+let display = null; // the app's display settings (window.native.display): { uncapped, active }
+window.native?.display?.().then((d) => { display = d; }).catch(() => {});
 const COLORS = [['#32fa32', 'Green'], ['#ffff32', 'Yellow'], ['#32ffff', 'Cyan'], ['#ffffff', 'White'], ['#ff3232', 'Red'], ['#ff64ff', 'Pink']];
 // CS2's viewmodel presets.
 const PRESETS = { desktop: { fov: 68, x: 1, y: 1, z: -1 }, couch: { fov: 68, x: 0, y: 0, z: -1.5 }, classic: { fov: 68, x: 2.5, y: 0, z: -1.5 } };
@@ -24,7 +29,7 @@ export function settingsHtml(p) {
     return `<div class="ps-bind"><span>${esc(label)}</span><span class="ps-keys">${keys.map((k) => `<button class="ps-key" data-unbind="${esc(k)}" title="Unbind ${esc(keyLabel(k))}">${esc(keyLabel(k))} <i>✕</i></button>`).join('')}
       <button class="btn ghost sm ps-add" data-bind="${a}">${listening === a ? 'Press a key…' : '+'}</button></span></div>`;
   }).join('');
-  return `<details class="play-settings panel" ${open ? 'open' : ''}><summary>Settings: crosshair, viewmodel, keys and sound</summary>
+  return `<details class="play-settings panel" ${open ? 'open' : ''}><summary>Settings: crosshair, viewmodel, keys, sound and video</summary>
     <div class="ps-grid">
       <section><h4>Crosshair</h4>
         <div class="ps-xhair-preview"><div class="ps-xhair">${crosshairHtml(c)}</div></div>
@@ -41,6 +46,12 @@ export function settingsHtml(p) {
         <h4>Sound and HUD</h4>
         ${range('musicVolume', 'Music', 0, 1, 0.05, p.musicVolume ?? 1, 'root')}${range('voiceVolume', 'Radio voices', 0, 1, 0.05, p.voiceVolume ?? 1, 'root')}
         ${check('showFps', 'Show fps', p.showFps !== false, 'root')}
+        ${check('netGraph', 'Performance graph (frame time, draws: net_graph)', !!p.netGraph, 'root')}
+        <h4>Video</h4>
+        ${range('renderScale', 'Render scale', 0.5, 1, 0.05, p.renderScale ?? 1, 'root')}
+        <label>Frame rate cap (fps_max)<select class="input" data-s="root.fpsMax">${FPS_CAPS.map(([v, n]) => `<option value="${v}" ${(p.fpsMax || 0) === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        ${window.native?.setDisplay ? `<label class="ps-check"><input type="checkbox" data-display="uncapped" ${display?.uncapped ? 'checked' : ''}> Unlock the frame rate past the monitor's</label>
+        ${display && !!display.uncapped !== !!display.active ? '<div class="muted">Takes effect when the app restarts. <button class="btn ghost sm" data-relaunch>Restart now</button></div>' : ''}` : ''}
       </section>
       <section class="ps-binds"><h4>Keys <button class="btn ghost sm" data-resetbinds>Defaults</button></h4>${binds}
         <div class="muted">+ adds a key: press it (a mouse button or the mouse wheel too; Esc cancels). In a match the console (~) has CS2's bind: bind mwheeldown +jump.</div></section>
@@ -62,8 +73,15 @@ export function bindSettings(el, prefs, savePrefs, rerender) {
     if (prev) prev.innerHTML = crosshairHtml({ ...CROSSHAIR, ...q.crosshair });
   };
   el.querySelectorAll('[data-s]').forEach((input) => input.addEventListener('input', () => {
-    write(input.dataset.s, input.type === 'checkbox' ? input.checked : input.type === 'range' ? Number(input.value) : input.value);
+    write(input.dataset.s, input.type === 'checkbox' ? input.checked : input.type === 'range' || input.dataset.s === 'root.fpsMax' ? Number(input.value) : input.value);
   }));
+  // The unlocked frame rate is the app's (it needs a restart), not the match's.
+  el.querySelectorAll('[data-display]').forEach((input) => input.addEventListener('change', async () => {
+    await window.native.setDisplay({ [input.dataset.display]: input.checked });
+    display = await window.native.display();
+    rerender();
+  }));
+  el.querySelector('[data-relaunch]')?.addEventListener('click', (e) => { e.preventDefault(); window.native.relaunch(); });
   el.querySelectorAll('[data-preset]').forEach((b) => b.addEventListener('click', () => { const q = prefs(); q.viewmodel = { ...PRESETS[b.dataset.preset] }; savePrefs(q); rerender(); }));
   el.querySelector('[data-resetbinds]')?.addEventListener('click', (e) => { e.preventDefault(); const q = prefs(); q.keybinds = null; q.binds = {}; savePrefs(q); rerender(); });
   const saveTable = (change) => { const q = prefs(); const t = bindTable(q); change(t); q.keybinds = t; savePrefs(q); rerender(); };
@@ -94,5 +112,6 @@ export function bindSettings(el, prefs, savePrefs, rerender) {
 
 // What a match gets from the saved preferences.
 export function matchSettings(p) {
-  return { crosshair: p.crosshair, viewmodel: p.viewmodel, keybinds: bindTable(p), musicVolume: p.musicVolume ?? 1, voiceVolume: p.voiceVolume ?? 1, showFps: p.showFps !== false };
+  return { crosshair: p.crosshair, viewmodel: p.viewmodel, keybinds: bindTable(p), musicVolume: p.musicVolume ?? 1, voiceVolume: p.voiceVolume ?? 1, showFps: p.showFps !== false,
+    renderScale: Math.min(1, Math.max(0.5, p.renderScale ?? 1)), fpsMax: p.fpsMax || 0, netGraph: !!p.netGraph };
 }

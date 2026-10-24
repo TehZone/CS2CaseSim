@@ -7,7 +7,7 @@
 // Coordinates: the scene stays in the exporter's glTF metres (Y up); gameplay runs in game units.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { TextureArrays, slotsOf, batchMaterial, materialTable, SLOTS, SRGB } from './batch.js';
+import { TextureArrays, slotsOf, batchMaterial, materialTable, addPieces, SLOTS, SRGB } from './batch.js';
 import { ProbeField } from './probes.js';
 
 export const IN = 0.0254;
@@ -298,6 +298,7 @@ function clearMaterial(src, vm, sky, water) {
   m.customProgramCacheKey = () => (water ? 'cs2water' : 'cs2glass');
   m.userData.basic = true; // lit by the sun and the sky, no probe light per vertex
   m.userData.animated = water;
+  m.userData.clear = true;
   return m;
 }
 
@@ -523,7 +524,7 @@ function fragmentCenter(geo, out) {
 // at the origin and puts it in place with its bones. Its vertices where its bones (at rest) put them, in world space: a
 // geometry sharing everything else with the original.
 const IDENTITY = new THREE.Matrix4();
-function bakeSkin(o) {
+export function bakeSkin(o) {
   const src = o.geometry, a = src.attributes, n = a.position.count;
   const sk = o.skeleton, base = new THREE.Matrix4().multiplyMatrices(o.matrixWorld, o.bindMatrixInverse);
   const bones = sk.bones.map((b, i) => new THREE.Matrix4().multiplyMatrices(base, b.matrixWorld).multiply(sk.boneInverses[i]).multiply(o.bindMatrix));
@@ -556,7 +557,7 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 
 // Loads a map exported by CS2Service.playMap: { scene, sun, sunDir, ambient, bounds, dispose }.
 // anisotropy: texture filtering for the world's surfaces (props get at most 4).
-export async function loadWorld(map, renderer, { onProgress = () => {}, anisotropy = 8 } = {}) {
+export async function loadWorld(map, renderer, { onProgress = () => {}, anisotropy = 8, sky3d: withSky3d = true } = {}) {
   const info = map.info;
   onProgress('Loading the map…');
   const [gltf, lightMap, sky, probeData] = await Promise.all([
@@ -680,20 +681,51 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   onProgress('Batching the world…');
   await Promise.all(layerLoads);
   const arrays = new TextureArrays(renderer, aniso), slotsFor = new Map(), byKind = new Map();
+  // What a material compiles to (its shader) apart from its textures' sizes, and those sizes: members of a batch share
+  // both. A decal that multiplies or adds (an overlay, MeshBasicMaterial) batches with others of its blend.
+  const overlayOf = (v) => v.userData.basic && !v.userData.clear && !v.userData.animated && v.isMeshBasicMaterial;
   for (const [gk, g] of groups) {
     const v = g.material;
-    if (g.mover?.[0] === 'd' || v.transparent || v.alphaTest > 0 || v.userData.basic || v.emissiveMap || v.emissive.getHex()) continue;
+    if (g.mover?.[0] === 'd' || v.userData.clear || (v.userData.basic && !overlayOf(v))) continue;
     if (!slotsFor.has(v)) {
       const L = layerData.get(v), slots = slotsOf(v, L);
-      slotsFor.set(v, slots && { slots, key: [v.userData.lm, v.userData.lmUv, L?.key || '', v.normalScale.x, v.normalScale.y, v.roughness, v.metalness, v.aoMapIntensity, v.side, !!v.aoMap,
-        ...SLOTS.map((k) => (slots[k] ? TextureArrays.kind(slots[k], SRGB.has(k)) : '-'))].join('|') });
+      const glow = !!(v.emissiveMap || v.emissive?.getHex());
+      const shaderKey = !slots ? null : overlayOf(v) ? ['ov', v.blending, v.blendSrc, v.blendDst, v.side, v.depthWrite].join('|')
+        : [v.userData.lm, v.userData.lmUv, L?.key || '', v.normalScale.x, v.normalScale.y, v.roughness, v.metalness, v.aoMapIntensity, v.side, !!v.aoMap,
+          v.alphaTest, v.transparent, glow].join('|');
+      const present = slots ? SLOTS.filter((k) => slots[k]) : [];
+      slotsFor.set(v, slots && { slots, glow, shaderKey: shaderKey + '|' + present.join(','), sizes: Object.fromEntries(present.map((k) => [k, slots[k].image])),
+        key: shaderKey + '|' + present.map((k) => k + ':' + TextureArrays.kind(slots[k], SRGB.has(k))).join(',') });
     }
     const p = slotsFor.get(v);
     if (!p) continue;
-    if (!byKind.has(p.key)) byKind.set(p.key, { members: [], groups: [] });
+    if (!byKind.has(p.key)) byKind.set(p.key, { members: [], groups: [], shaderKey: p.shaderKey, sizes: p.sizes, size: new Map() });
     const k = byKind.get(p.key);
     if (!k.members.includes(v)) k.members.push(v);
     k.groups.push([gk, g]);
+  }
+  // A material alone with its sizes joins a batch of the same shader whose textures are as big or bigger (its own are
+  // scaled up into that batch's arrays), the one that grows them least.
+  const kinds = [...byKind.values()].sort((x, y) => y.members.length - x.members.length);
+  for (const lone of kinds) {
+    if (lone.members.length !== 1 || lone.joined) continue;
+    let best = null, bestArea = Infinity;
+    for (const k of kinds) {
+      if (k === lone || k.joined || k.shaderKey !== lone.shaderKey) continue;
+      let area = 0, fits = true;
+      for (const [slot, img] of Object.entries(lone.sizes)) {
+        const to = k.sizes[slot];
+        if (to.width < img.width || to.height < img.height) { fits = false; break; }
+        area += to.width * to.height - img.width * img.height;
+      }
+      if (fits && area < bestArea) { best = k; bestArea = area; }
+    }
+    if (!best) continue;
+    const v = lone.members[0];
+    best.members.push(v);
+    best.groups.push(...lone.groups);
+    best.size.set(v, best.sizes);
+    lone.members = []; lone.groups = []; lone.joined = true;
   }
   // Their textures into the arrays; a batch is then the members whose textures landed in the same arrays (an array that
   // got too big is split).
@@ -701,8 +733,8 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   for (const [key, k] of byKind) {
     if (k.members.length < 2) continue; // nothing to gain
     for (const v of k.members) {
-      const s2 = slotsFor.get(v).slots, where = {};
-      for (const slot of SLOTS) if (s2[slot]) where[slot] = arrays.add(s2[slot], SRGB.has(slot));
+      const s2 = slotsFor.get(v).slots, where = {}, size = k.size.get(v);
+      for (const slot of SLOTS) if (s2[slot]) where[slot] = arrays.add(s2[slot], SRGB.has(slot), size ? [size[slot].width, size[slot].height] : null);
       at.set(v, where);
       const bk = key + '#' + SLOTS.map((slot) => where[slot]?.array ?? '-').join(',');
       if (!batches.has(bk)) batches.set(bk, { members: [], groups: [] });
@@ -718,9 +750,12 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   for (const [key, b] of batches) {
     const first = b.members[0], L = layerData.get(first), at0 = at.get(first);
     const slots = Object.fromEntries(Object.entries(at0).map(([k, a]) => [k, a.array]));
-    const table = materialTable(b.members.map((v) => ({ layers: Object.fromEntries(Object.entries(at.get(v)).map(([k, a]) => [k, a.layer])), L: layerData.get(v) })));
-    const B = batchMaterial(first, slots, arrays, table, (m) => (first.userData.lm ? lightmapped(m, lightMap, info.lightmap.irrMax, L) : ambientLit(m, ambient, L, { probe: !!probes })),
-      b.groups.some(([, g]) => g.mover) ? broken : null);
+    const overlay = overlayOf(first), glow = slotsFor.get(first).glow;
+    const table = materialTable(b.members.map((v) => ({ layers: Object.fromEntries(Object.entries(at.get(v)).map(([k, a]) => [k, a.layer])), L: layerData.get(v),
+      emissive: glow ? v.emissive.toArray().map((c) => c * v.emissiveIntensity) : null, diffuse: overlay ? [...v.color.toArray(), v.opacity] : null })));
+    const light = overlay ? (m) => { m.onBeforeCompile = first.onBeforeCompile; m.customProgramCacheKey = first.customProgramCacheKey; }
+      : (m) => (first.userData.lm ? lightmapped(m, lightMap, info.lightmap.irrMax, L) : ambientLit(m, ambient, L, { probe: !!probes }));
+    const B = batchMaterial(first, slots, arrays, table, light, b.groups.some(([, g]) => g.mover) ? broken : null, { emissive: glow, overlay });
     B.userData.tinted = b.members.some((v) => v.userData.tinted);
     B.forceSinglePass = true;
     batchMats.push({ material: B, table });
@@ -732,6 +767,30 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     }
     groups.set('batch|' + key, { material: B, list, mover: null, batched: true });
   }
+  // Glass and water: all of a material's surfaces in one mesh, map-wide, a breakable pane's pieces hidden as it breaks.
+  const clears = new Map();
+  for (const [gk, g] of groups) {
+    if (!g.material.userData.clear || g.mover?.[0] === 'd') continue;
+    if (!clears.has(g.material)) clears.set(g.material, []);
+    clears.get(g.material).push([gk, g]);
+  }
+  for (const [m, list] of clears) {
+    const hasPieces = list.some(([, g]) => g.mover);
+    if (list.length < 2 && !hasPieces) continue;
+    const entries = [];
+    for (const [gk, g] of list) {
+      const piece = g.mover ? +g.mover.slice(1) + 1 : 0;
+      for (const e of g.list) entries.push({ ...e, piece });
+      groups.delete(gk);
+    }
+    if (hasPieces) {
+      const inner = m.onBeforeCompile, key = m.customProgramCacheKey;
+      m.onBeforeCompile = (sh, r) => { inner(sh, r); addPieces(sh, broken); };
+      m.customProgramCacheKey = () => key.call(m) + 'p';
+      m.userData.pieces = true;
+    }
+    groups.set('clear|' + m.uuid, { material: m, list: entries, mover: null });
+  }
   // The batched materials' own textures are in the arrays now: free them (unless something else still draws them).
   const keep = new Set();
   for (const { material: m } of groups.values()) {
@@ -739,7 +798,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     const L = layerData.get(m);
     if (L) for (const t of [L.color, L.normal, L.blendMod, L.color2, L.normal2, L.color3, L.normal3, ...(L.height || [])]) if (t) keep.add(t);
   }
-  for (const t of arrays.placed.keys()) if (!keep.has(t)) { t.dispose(); t.image?.close?.(); }
+  for (const t of arrays.textures) if (!keep.has(t)) { t.dispose(); t.image?.close?.(); }
   for (const [file, t] of layerTextures) if (!keep.has(t)) layerTextures.delete(file);
 
   const world = new THREE.Group();
@@ -753,6 +812,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     mesh.matrixAutoUpdate = false;
     if (material.userData.animated) mesh.onBeforeRender = () => { CS2_TIME.value = performance.now() / 1000; };
     mesh.castShadow = !material.transparent;
+    if (material.cs2Depth) mesh.customDepthMaterial = material.cs2Depth; // (see batch.js)
     mesh.receiveShadow = !material.userData.lm;
     if (mover?.[0] === 'd') {
       // On its door's pivot (the geometry is in world space: offset by the hinge), and the door's box in pivot space.
@@ -820,7 +880,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   // The 3D skybox (see CS2Service.playSky3d): a scene of its own, at its own scale, lit by the sun and the sky; Game
   // draws it first from a camera that moves 1/scale as far as yours, then the map over it.
   let sky3d = null;
-  if (map.sky3d && info.sky3d) {
+  if (withSky3d && map.sky3d && info.sky3d) {
     try {
       onProgress('Loading the 3D skybox…');
       const g3 = await new GLTFLoader().loadAsync(map.sky3d);
@@ -914,7 +974,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
         for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) mesh.material[k]?.dispose();
         mesh.material.dispose();
       }
-      for (const { material, table } of batchMats) { material.dispose(); table.dispose(); }
+      for (const { material, table } of batchMats) { material.dispose(); material.cs2Depth?.dispose(); table.dispose(); }
       broken.dispose();
       arrays.dispose();
       lightMap?.dispose();

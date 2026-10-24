@@ -68,6 +68,8 @@ const PENETRATION = { wood: 1, wood_panel: 1, wood_plank: 1, wood_crate: 1.2, wo
   metal_sand_barrel: 0.5, metal_dumpster: 0.4, solidmetal: 0.15, concrete: 0.3, rock: 0.15, tile: 0.35, dirt: 0.3, sand: 0.3, rubbertire: 0.5, default: 0.4 };
 const MUSIC = 'valve_cs2_01';
 
+const _frustum = new THREE.Frustum(), _m4 = new THREE.Matrix4(), _sphere = new THREE.Sphere(), _v3 = new THREE.Vector3();
+
 export class Game {
   constructor(root, { map = 'de_dust2', mode = 'competitive', team = 'CT', teamSize = 5, difficulty = 'normal', length = 'short', overtime = true, friendlyFire = false,
     site = 'A', minutes = 10, ffa = true, sensitivity = 1.25, quality = 'balanced', settings = {}, onStatus = () => {} } = {}) {
@@ -93,12 +95,14 @@ export class Game {
     // No multisampling on the screen itself: only the full-screen post pass draws there (the world is anti-aliased in its
     // own target, see post.js).
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, powerPreference: 'high-performance' });
-    // Quality: high renders at the screen's full resolution with soft shadows; balanced at 1 CSS pixel; performance lower.
-    this.renderer.setPixelRatio(quality === 'high' ? Math.min(window.devicePixelRatio, 2) : quality === 'performance' ? 0.75 : 1);
+    // Quality: high renders at the screen's full resolution with soft shadows; balanced (Medium) at 1 CSS pixel; performance
+    // (Low) lower, without anti-aliasing or the 3D skybox. The render scale (settings) scales any of them.
+    this.quality = quality;
+    this.renderer.setPixelRatio((quality === 'high' ? Math.min(window.devicePixelRatio, 2) : quality === 'performance' ? 0.75 : 1) * (settings.renderScale || 1));
     // Tone mapping and colour grading happen in the post pass (post.js), like CS2's.
     this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = quality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    this.renderer.shadowMap.type = quality === 'high' ? THREE.PCFSoftShadowMap : quality === 'performance' ? THREE.BasicShadowMap : THREE.PCFShadowMap;
     this.renderer.shadowMap.autoUpdate = false; // the map's shadows are static: rendered once after loading
     this.renderer.autoClear = false;
     // Everything drawn with the same shader together, then by material, then near to far: switching shaders costs three
@@ -138,9 +142,11 @@ export class Game {
     this.buyMenu = new BuyMenu(root, this);
     // The developer console (~) and the console variables the game reads (set there).
     this.cv = { sv_cheats: 0, host_timescale: 1, sv_infinite_ammo: 0, mp_buy_anywhere: 0, bot_stop: 0, bot_dont_shoot: 0, r_drawviewmodel: 1, fps_max: 0, cl_inspect_rare: 0 };
+    this.cv.fps_max = settings.fpsMax || 0; // (Play's settings; the console changes it for the match)
     this.god = false; this.noclip = false;
     this.console = new DevConsole(root, this);
     this.vmCache = new Map();
+    this.vmRigs = new Set(); // every weapon viewmodel loaded
     this.resize = this.resize.bind(this);
     this.resizer = new ResizeObserver(this.resize);
     this.resizer.observe(root);
@@ -178,7 +184,7 @@ export class Game {
     const colBuf = await fetch(map.collision).then((r) => r.arrayBuffer());
     this.collision = new CollisionWorld(colBuf, map.info.collision);
     this.nav = new NavMesh(await fetch(map.nav).then((r) => r.json()));
-    this.world = await loadWorld(map, this.renderer, { onProgress: status, anisotropy: this.anisotropy });
+    this.world = await loadWorld(map, this.renderer, { onProgress: status, anisotropy: this.anisotropy, sky3d: this.quality !== 'performance' });
     if (this.disposed) return;
     this.scene = this.world.scene;
     this.setupViewmodelLighting();
@@ -351,7 +357,7 @@ export class Game {
         const vm = await buildViewmodel(item || { t: 'skin', fl: 0, sd: 0 }, def, data, { gloves: plain ? null : equipped('gloves'), renderer: this.renderer });
         this.sounds.add(data.sounds);
         vm.rig.visible = false;
-        this.vmRoot.add(vm.rig);
+        this.vmRigs.add(vm.rig); // (in the scene only while it shows: see syncRigs)
         const name = wid === 'weapon_c4' ? 'C4 Explosive' : NADES[wid] ? NADES[wid].name : def.v ? def.w : `${def.w} | ${def.n?.split(' | ')[1] || def.n}`;
         return { data, vm, name };
       })();
@@ -1312,10 +1318,7 @@ export class Game {
       this.sounds.play(secs > 3 ? 'Flashbang.Ring.Long' : secs > 1.5 ? 'Flashbang.Ring.Medium' : 'Flashbang.Ring.Short', { volume: 0.5 });
     } else { this.botOf(c)?.brain.flashed(this.now + secs * 0.85); if (secs > 1) this.botOf(c)?.flashed(secs * 0.85); }
   }
-  lineOfSight(a, b) {
-    const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], l = Math.hypot(...d);
-    return !this.collision.raycast(a, d.map((x) => x / l), l - 2, FLAG_BULLET);
-  }
+  lineOfSight(a, b) { return !this.collision.occluded(a, b, FLAG_BULLET, 2); }
   nearestTo(pos, side) {
     let best = null, bd = Infinity;
     for (const c of this.combatants) {
@@ -1681,12 +1684,14 @@ export class Game {
   frame(dt) {
     if (!this.scene) return;
     dt *= this.cv.host_timescale || 1;
+    const t0 = performance.now();
     if (!this.paused) {
       this.acc += dt;
       let steps = 0;
       while (this.acc >= TICK && steps < 8) { this.tick(); this.acc -= TICK; steps++; }
       if (steps === 8) this.acc = 0;
     }
+    const t1 = performance.now();
     const me = this.me, gun = this.arsenal.gun;
     // Camera: your eyes (interpolated, with recoil punch), the death cam, or a teammate you spectate.
     let camEye;
@@ -1738,14 +1743,21 @@ export class Game {
       gun.vm.rig.position.set((this.vm.x + Math.cos(this.bob) * 0.25 * sp) * IN, (this.vm.z - Math.abs(Math.sin(this.bob)) * 0.35 * sp) * IN, -this.vm.y * IN);
     }
     this.updateSpecView(dt);
+    this.syncRigs();
     this.vmRoot.quaternion.copy(this.camera.quaternion);
     this.vmCamera.quaternion.copy(this.camera.quaternion);
     this.frameNo = (this.frameNo || 0) + 1;
     const probes = this.world.probes;
+    // A bot out of view isn't drawn and animates a third as often (its hitboxes stay current enough: a bullet syncs it).
+    this.camera.updateMatrixWorld();
+    _frustum.setFromProjectionMatrix(_m4.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
     for (const b of [...this.bots, this.myBody]) {
       if (!b.root.visible) continue;
       b.sync();
-      b.animate(this.paused ? 0 : dt);
+      const seen = _frustum.intersectsSphere(_sphere.set(toGl([b.pos[0], b.pos[1], b.pos[2] + 36], _v3), 60 * IN));
+      b.view.visible = seen;
+      b.animDt = (b.animDt || 0) + (this.paused ? 0 : dt);
+      if (seen || (this.frameNo + b.index) % 3 === 0) { b.animate(b.animDt); b.animDt = 0; }
       // Lit by the probes where it stands (a few times a second is plenty).
       if (probes && (this.frameNo + b.index) % 6 === 0) b.amb.set(probes, [b.pos[0], b.pos[1], b.pos[2] + 36]);
     }
@@ -1785,8 +1797,31 @@ export class Game {
     this.flashCapture = false;
 
     this.fps = this.fps ? this.fps * 0.95 + (1 / Math.max(dt, 1e-3)) * 0.05 : 60;
+    if (this.settings.netGraph) this.graphFrame(dt, t0, t1);
     this.updateHud(dt);
     this.emit('frame', dt);
+  }
+
+  // Only the viewmodels that show are in the scene: three updates every bone of everything in it each frame, hidden or
+  // not, and the twenty or so loaded weapons' arms and guns cost a third of a frame.
+  syncRigs() {
+    for (const r of this.vmRigs) {
+      const inScene = r.parent === this.vmRoot;
+      if (r.visible && !inScene) this.vmRoot.add(r);
+      else if (!r.visible && inScene) this.vmRoot.remove(r);
+    }
+  }
+
+  // net_graph: the frame rate and frame time, how much of a frame the simulation and the drawing took (averaged), and
+  // what was drawn. (Draws are counted over the whole frame: three counts each render call on its own.)
+  graphFrame(dt, t0, t1) {
+    const t2 = performance.now(), info = this.renderer.info, k = 0.05, gr = this.graph || (this.graph = { ms: 16, sim: 0, cpu: 0, calls: 0, tris: 0 });
+    gr.ms += (dt * 1000 - gr.ms) * k; gr.sim += (t1 - t0 - gr.sim) * k; gr.cpu += (t2 - t0 - gr.cpu) * k;
+    gr.calls = info.render.calls; gr.tris = info.render.triangles;
+    info.autoReset = false; info.reset();
+    if ((this.graphAt = (this.graphAt || 0) - dt) > 0) return;
+    this.graphAt = 0.25;
+    this.hud.netGraph(`${Math.round(1000 / gr.ms)} fps · ${gr.ms.toFixed(1)} ms · cpu ${gr.cpu.toFixed(1)} ms (sim ${gr.sim.toFixed(1)}) · ${gr.calls} draws · ${(gr.tris / 1e6).toFixed(1)}M tris`);
   }
 
   lookAt(from, to, rate) {

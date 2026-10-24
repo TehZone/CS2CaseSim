@@ -44,7 +44,13 @@ export class Effects {
     scene.add(this.group);
     this.holeMat = new THREE.MeshBasicMaterial({ map: holeTex(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
     this.holeGeo = new THREE.PlaneGeometry(3.2 * IN, 3.2 * IN);
-    this.holes = [];
+    // The last 120 bullet holes, in one draw (a mesh each cost a draw each).
+    this.holes = new THREE.InstancedMesh(this.holeGeo, this.holeMat, 120);
+    this.holes.count = 0;
+    this.holes.frustumCulled = false;
+    this.holeNext = 0;
+    this.holePose = new THREE.Object3D();
+    this.group.add(this.holes);
     this.puffTex = soft('rgba(255,255,255,0.9)');
     this.sparkTex = soft('rgba(255,220,140,1)');
     this.particles = [];
@@ -61,14 +67,17 @@ export class Effects {
   // A bullet hole on a wall plus a puff of dust (or sparks on metal).
   impact(pos, normal, surface = 'default') {
     const p = toGl(pos), n = new THREE.Vector3(normal[1], normal[2], normal[0]);
-    const hole = new THREE.Mesh(this.holeGeo, this.holeMat);
+    const hole = this.holePose, H = this.holes;
     hole.position.copy(p).addScaledVector(n, 0.002);
+    hole.rotation.set(0, 0, 0);
     hole.lookAt(p.clone().add(n));
     hole.rotateZ(Math.random() * Math.PI * 2);
     hole.scale.setScalar(0.7 + Math.random() * 0.5);
-    this.group.add(hole);
-    this.holes.push(hole);
-    if (this.holes.length > 120) this.group.remove(this.holes.shift());
+    hole.updateMatrix();
+    H.setMatrixAt(this.holeNext, hole.matrix);
+    this.holeNext = (this.holeNext + 1) % H.instanceMatrix.count;
+    H.count = Math.min(H.instanceMatrix.count, H.count + 1);
+    H.instanceMatrix.needsUpdate = true;
     const metal = /metal|chainlink/i.test(surface);
     const color = DUST[surface.toLowerCase()] ?? (metal ? 0xffd080 : /wood/i.test(surface) ? 0x9a7b55 : DUST.default);
     this.puff(p, n, metal ? this.sparkTex : this.puffTex, color, metal ? 6 : 3, metal);
@@ -134,8 +143,8 @@ export class Effects {
 
   // Bullet holes and particles go away when a round restarts.
   clear() {
-    for (const h of this.holes) this.group.remove(h);
-    this.holes = [];
+    this.holes.count = 0;
+    this.holeNext = 0;
     for (const p of this.particles) { this.group.remove(p.s); p.s.material.dispose(); }
     this.particles = [];
   }

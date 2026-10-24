@@ -127,6 +127,7 @@ function commands(g, con) {
     snd_musicvolume: { help: 'Music volume (0-1)', get: () => g.musicVolume, set: (v) => { const n = num(v, 0, 1); if (n == null) return false; g.musicVolume = n; return true; } },
     fps_max: cv('fps_max', 'Frame rate cap (0 = none)', 0, { lo: 0, hi: 1000 }),
     cl_showfps: { help: 'Shows the frame rate (1) or not (0)', get: () => (g.settings.showFps === false ? 0 : 1), set: (v) => { const n = num(v, 0, 1); if (n == null) return false; g.settings.showFps = !!n; return true; } },
+    net_graph: { help: 'Shows the frame time, the simulation and drawing times and the draws (1) or not (0)', get: () => (g.settings.netGraph ? 1 : 0), set: (v) => { const n = num(v, 0, 1); if (n == null) return false; g.settings.netGraph = !!n; if (!n) { g.hud.netGraph(null); g.renderer.info.autoReset = true; } return true; } },
     cl_drawhud: { help: 'Shows the HUD (1) or not (0)', get: () => (g.hud.el.style.display === 'none' ? 0 : 1), set: (v) => { const n = num(v, 0, 1); if (n == null) return false; g.hud.el.style.display = n ? '' : 'none'; return true; } },
     r_drawviewmodel: cv('r_drawviewmodel', 'Draws your weapon (1) or not (0)', 1, { lo: 0, hi: 1 }),
     cl_inspect_rare: cv('cl_inspect_rare', "CS2's special inspects and draws: 0 now and then, 1 always, -1 never", 0, { lo: -1, hi: 1 }),

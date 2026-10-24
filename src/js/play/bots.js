@@ -9,7 +9,7 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2Play } from '../cs2/api.js';
 import { loadGltf } from '../cs2/rig.js';
 import { buildCS2Model } from '../cs2/skin.js';
-import { toGl, fromGl, ambientLit, ambientCube } from './world.js';
+import { toGl, fromGl, ambientLit, ambientCube, bakeSkin } from './world.js';
 
 export const AGENTS = {
   T: ['agents/models/tm_phoenix/tm_phoenix.vmdl', 'agents/models/tm_leet/tm_leet_variantb.vmdl'],
@@ -90,6 +90,43 @@ export class BotAssets {
     this.holds = new Map(); // weapon id -> Promise<arm clip | null>
     this.gestures = new Map(); // "weapon id:kind" -> Promise<arm clip | null>
     this.lit = new Set();
+    this.botMats = new Map(); // a model's material -> the one every bot draws it with (see Bot.lightOwn)
+    this.statics = new Map(); // a gun's model -> it baked as bots hold it (see staticWeapon)
+  }
+
+  // A gun as bots hold it: its meshes baked where its bones put them at rest (it doesn't animate in their hands), so a
+  // bot's gun has no skeleton of its own to update and upload every frame. { model, grip }: grip is the weapon bone's
+  // matrix (the hand bone holds the gun by it).
+  staticWeapon(tpl) {
+    if (!this.statics.has(tpl)) {
+      const w = cloneSkinned(tpl);
+      w.position.set(0, 0, 0); w.rotation.set(0, 0, 0); w.scale.set(1, 1, 1); // (no inspect framing)
+      w.updateMatrixWorld(true);
+      const model = new THREE.Group();
+      let grip = null;
+      const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
+      w.traverse((o) => {
+        if (!grip && o.isBone && o.name === 'weapon') grip = o.matrixWorld.clone();
+        if (!o.isMesh || !shown(o)) return;
+        const m = new THREE.Mesh(o.isSkinnedMesh ? bakeSkin(o) : o.geometry.clone().applyMatrix4(o.matrixWorld), o.material);
+        m.castShadow = m.receiveShadow = true;
+        model.add(m);
+      });
+      this.statics.set(tpl, { model, grip: grip || new THREE.Matrix4() });
+    }
+    return this.statics.get(tpl);
+  }
+
+  // The material every bot draws a model material with: lit by its own light-probe cube (cs2Cube), which each bot sets
+  // as its meshes draw (see Bot.lightOwn).
+  botMaterial(m) {
+    if (!this.botMats.has(m)) {
+      const c = m.clone(), cube = ambientCube().cube;
+      ambientLit(c, { cube });
+      c.cs2Cube = cube;
+      this.botMats.set(m, c);
+    }
+    return this.botMats.get(m);
   }
 
   light(root) {
@@ -188,6 +225,10 @@ export class Bot {
     this.assets = assets;
     this.index = index;
     this.root = new THREE.Group();
+    // The model goes in here: hidden while it's out of view (Game culls bots itself: their meshes' bounds are the bind
+    // pose's, so three's own culling is off for them).
+    this.view = new THREE.Group();
+    this.root.add(this.view);
     this.pos = [0, 0, 0]; this.vel = [0, 0, 0];
     this.yaw = 0; this.pitch = 0; this.ducked = false;
     this.bodyYaw = 0; // where the legs face (yaw is where it aims)
@@ -195,7 +236,6 @@ export class Bot {
     this.mode = 'move'; // move | plant | defuse | dead
     this.time = 0;
     this.amb = ambientCube(); // the light probes where it stands (set by the game)
-    this.ownMats = new Map();
     this.setModel(c.team);
   }
 
@@ -213,7 +253,7 @@ export class Bot {
       o.frustumCulled = false; o.castShadow = true; o.receiveShadow = true;
       if (/firstperson/.test(o.name) || /firstperson/.test(o.parent?.name || '')) o.visible = false;
     });
-    this.root.add(this.model);
+    this.view.add(this.model);
     this.bones = {};
     this.model.traverse((o) => { if (o.isBone && !this.bones[o.name]) this.bones[o.name] = o; });
     this.mixer = new THREE.AnimationMixer(this.model);
@@ -225,12 +265,24 @@ export class Bot {
   }
 
   // Gives a model this bot's own copies of its materials, lit by the bot's ambient cube.
+  // Its meshes lit by the light probes where it stands. All bots share their materials (a material each had them all
+  // switched between, a third of a frame with nine bots): three uploads a material's uniforms when it switches to it,
+  // so each mesh puts its bot's cube in the shared uniform before it draws, and sends it to the shader straight away
+  // when that shader is already the one in use (the draw before was the same material: three draws them in a row).
   lightOwn(root) {
-    const own = (m) => {
-      if (!this.ownMats.has(m)) { const c = m.clone(); ambientLit(c, { cube: this.amb.cube }); this.ownMats.set(m, c); }
-      return this.ownMats.get(m);
+    const gl = this.assets.renderer.getContext(), props = this.assets.renderer.properties, cube = this.amb.cube;
+    const before = (r, sc, cam, geo, mat) => {
+      const u = mat.cs2Cube;
+      if (!u) return;
+      for (let k = 0; k < 6; k++) u.value[k].copy(cube.value[k]);
+      const p = props.get(mat).currentProgram;
+      if (p && gl.getParameter(gl.CURRENT_PROGRAM) === p.program) p.getUniforms().setValue(gl, 'cs2Cube', u.value);
     };
-    root.traverse((o) => { if (o.isMesh) o.material = Array.isArray(o.material) ? o.material.map(own) : own(o.material); });
+    root.traverse((o) => {
+      if (!o.isMesh) return;
+      o.material = Array.isArray(o.material) ? o.material.map((m) => this.assets.botMaterial(m)) : this.assets.botMaterial(o.material);
+      o.onBeforeRender = before; // (called per material for a mesh with several)
+    });
   }
 
   // Locomotion actions for a weapon class (all playing; weights blend them).
@@ -256,16 +308,12 @@ export class Bot {
     this.weaponModel?.removeFromParent();
     this.weaponModel = null;
     if (tpl && this.bones.wpn) {
-      const w = cloneSkinned(tpl);
+      const { model, grip } = this.assets.staticWeapon(tpl);
+      const w = model.clone(); // (its geometry shared with every bot holding one)
       this.lightOwn(w);
-      w.position.set(0, 0, 0); w.rotation.set(0, 0, 0); w.scale.set(1, 1, 1);
-      w.traverse((o) => { if (o.isMesh) { o.frustumCulled = false; o.castShadow = true; o.receiveShadow = true; } });
-      let wb = null;
-      w.traverse((o) => { if (!wb && o.isBone && o.name === 'weapon') wb = o; });
-      w.updateMatrixWorld(true);
       const holder = new THREE.Group();
       holder.matrixAutoUpdate = false;
-      if (wb) holder.matrix.copy(wb.matrixWorld).invert();
+      holder.matrix.copy(grip).invert();
       holder.add(w);
       this.bones.wpn.add(holder);
       this.weaponModel = holder;
@@ -488,7 +536,7 @@ export class Bot {
     return best;
   }
 
-  dispose() { this.mixer?.stopAllAction(); this.root.removeFromParent(); for (const m of this.ownMats.values()) m.dispose(); }
+  dispose() { this.mixer?.stopAllAction(); this.root.removeFromParent(); }
 }
 
 // Distance along a ray (o + d t, d unit length) to a capsule (segment a-b, radius r), or null.

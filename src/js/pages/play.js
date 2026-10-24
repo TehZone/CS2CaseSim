@@ -61,7 +61,7 @@ export function render(r) {
         ${rounds ? `<label>Overtime<select class="input" data-k="overtime">${opts([['on', 'On (MR3, $12,500)'], ['off', 'Off (ties are draws)']], p.overtime)}</select></label>` : ''}
         ${rounds || p.ffa !== 'ffa' ? `<label>Friendly fire<select class="input" data-k="friendlyFire">${opts([['off', 'Off'], ['on', 'On (CS2 competitive)']], p.friendlyFire)}</select></label>` : ''}
         <label>Sensitivity (CS2)<input class="input" type="number" min="0.05" max="20" step="0.05" data-k="sensitivity" value="${p.sensitivity}"></label>
-        <label>Graphics<select class="input" data-k="quality">${opts([['high', 'High (full resolution)'], ['balanced', 'Balanced'], ['performance', 'Performance']], p.quality)}</select></label>
+        <label>Graphics<select class="input" data-k="quality">${opts([['high', 'High (full resolution, soft shadows)'], ['balanced', 'Medium'], ['performance', 'Low (no 3D skybox, no anti-aliasing)']], p.quality)}</select></label>
         <button class="btn primary big" data-start>Play</button>
         ${rankCard(mode)}
         ${record()}

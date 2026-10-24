@@ -117,7 +117,11 @@ ok(!p.ducked, 'stands up again');
   const pos = new Float32Array(buf, 0, n * 9), fl = new Uint8Array(buf, n * 36, n), sf = new Uint8Array(buf, n * 37, n);
   tris.forEach(({ t, surface }, i) => { pos.set(t.flat(), i * 9); fl[i] = FLAG_PLAYER | FLAG_BULLET; sf[i] = surface; });
   const L = new CollisionWorld(buf, { tris: n, surfaces: ['default', 'ladder'] });
-  const climb = (cmd, ticks, q) => { for (let i = 0; i < ticks; i++) q.tick(1 / 64, { forward: 0, side: 0, yaw: 90, pitch: 0, maxSpeed: 250, ...cmd }); return q; };
+  // Sight lines: the first-hit test agrees with the ray test, and stops short of the end point.
+  const sights = [[[0, 500, 100], [0, 1600, 100]], [[0, 500, 300], [0, 1600, 300]], [[-500, 500, 50], [500, 500, 50]], [[0, 1200, 100], [0, 1300, 100]], [[0, 900, 10], [0, 999, 10]]];
+  ok(sights.every(([a, b]) => { const d = b.map((v, k) => v - a[k]), l = Math.hypot(...d); return L.occluded(a, b) === !!L.raycast(a, d.map((v) => v / l), l - 2); }),
+    'collision: a sight line is blocked exactly when a ray says so (through the block, over it, along the floor, from inside, to the ladder)');
+  const climb =(cmd, ticks, q) => { for (let i = 0; i < ticks; i++) q.tick(1 / 64, { forward: 0, side: 0, yaw: 90, pitch: 0, maxSpeed: 250, ...cmd }); return q; };
   let q = new PlayerMovement(L, [0, 900, 0]);
   climb({ forward: 1 }, 64, q);
   ok(q.onLadder && q.origin[2] > 20, 'walking into a ladder climbs it: z=' + q.origin[2].toFixed(1));

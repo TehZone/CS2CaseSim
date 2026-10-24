@@ -111,13 +111,16 @@ What's in a match:
   sv_cheats 1 unlocks the cheats (god, noclip, give, impulse 101, host_timescale, sv_gravity, sv_infinite_ammo,
   bot_stop, bot_dont_shoot); the rest work anyway (mp_restartgame, mp_roundtime, mp_freezetime, mp_buytime,
   mp_buy_anywhere, mp_startmoney, mp_maxmoney, bot_difficulty, bot_kill, viewmodel_*, cl_crosshair*, sensitivity,
-  volume, fps_max, cl_drawhud, r_drawviewmodel, status...), and CS2's binds: bind <key> <command> (bind key alone
+  volume, fps_max, cl_showfps, net_graph, cl_drawhud, r_drawviewmodel, status...), and CS2's binds: bind <key> <command> (bind key alone
   shows it), unbind, unbindall, binddefaults, key_listboundkeys. Any key, mouse button or the mouse wheel; a wheel
   notch on a + command presses and releases it in one tick, so `bind mwheeldown +jump` scroll-jumps (bunny hops) like
   CS2. Binds are saved with your settings.
 - CS2's weapon list on the right when you switch weapons, with CS2's icons (also in the buy menu and kill feed).
 - Settings in the lobby: your crosshair (classic or static, colour, length, gap, thickness, outline, dot; live preview),
-  the viewmodel (field of view, offsets, CS2's presets), every key, music and radio volume, the fps counter.
+  the viewmodel (field of view, offsets, CS2's presets), every key, music and radio volume, the fps counter and a
+  performance graph (net_graph: frame time, simulation and drawing time, draws); video: Low / Medium / High (Low: no
+  3D skybox or anti-aliasing), a render scale, the frame rate cap (fps_max; the monitor's refresh rate by default) and
+  unlocking it past the monitor's (after a restart).
 - The map is exported from your install the first time (a couple of minutes, cached in `cs2cache/play`): CS2's render
   world lit like CS2 lights it: the baked irradiance lightmap plus the sun (its colour and brightness from the map)
   masked by the baked sun shadows on world surfaces; props, players and your weapon lit by CS2's light probe volumes
@@ -137,10 +140,14 @@ What's in a match:
   surface sounds like CS2's when shot (Inferno's church bells ring), and the map's trigger_hurt volumes hurt the moment
   you touch one (falling off Vertigo kills you as you reach the street).
 - Drawn lean: the map's surfaces batched, every texture of a size in one texture array and the materials that share a
-  shader drawn as one (their own values in a small table: a few dozen draws for a map, not hundreds), breakables and
-  the 3D skybox too; props tinted differently share a material (each one's colour per vertex); every texture uploaded
-  and new guns' shaders compiled before they're seen; the radar moved by the page's compositor, not redrawn. Bots move with your movement code on a collision test that allocates
-  nothing. `CS2SIM_SMOKE=perf` measures each map's frame rate with the bots playing.
+  shader drawn as one (their own values in a small table: a few dozen draws for a map, not hundreds) — cut-outs,
+  decals, glowing and breakable surfaces and the 3D skybox too, a lone surface joining a batch of bigger textures;
+  props tinted differently share a material (each one's colour per vertex); bots share their materials (each its own
+  light) and hold baked guns, and aren't drawn out of view; hidden viewmodels out of the scene; bullet holes in one
+  draw; every texture uploaded and new guns' shaders compiled before they're seen; the radar moved by the page's
+  compositor, not redrawn. Bots move with your movement code on a collision test that allocates
+  nothing, and their sight lines stop at the first wall. `CS2SIM_SMOKE=perf` measures each map's frame rate with the
+  bots playing.
 - Movement ported from Source's: CS2's acceleration, friction, air strafing, 18-unit steps, jumping (no auto bunny
   hop), crouching, crouch-jumps, walking and ladders, with the weapon's own speed; footsteps by surface.
 - Weapons use CS2's data from `scripts/weapons.vdata` (damage, range falloff, armor penetration, fire rate,

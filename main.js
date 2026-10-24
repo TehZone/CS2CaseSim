@@ -193,6 +193,11 @@ function registerIpc() {
     if (/^https:\/\//.test(u)) shell.openExternal(u);
   });
   ipcMain.handle('app:info', () => ({ version: app.getVersion(), userData: userDir, electron: process.versions.electron }));
+  // Display settings that need a restart (the uncapped frame rate): { uncapped, active } (active: what this run has).
+  const displayNow = readDisplay();
+  ipcMain.handle('app:display', () => ({ ...readDisplay(), active: !!displayNow.uncapped }));
+  ipcMain.handle('app:setDisplay', (_e, d) => { fs.writeFileSync(displayFile, JSON.stringify({ ...readDisplay(), uncapped: !!d?.uncapped })); return true; });
+  ipcMain.handle('app:relaunch', () => { app.relaunch(); app.exit(0); });
   ipcMain.handle('app:clearImageCache', () => {
     fs.rmSync(imgDir, { recursive: true, force: true });
     fs.mkdirSync(imgDir, { recursive: true });
@@ -231,8 +236,12 @@ function createWindow() {
 // `CS2SIM_SMOKE=1 electron .` loads the game hidden, opens a case preview in 3D, screenshots it and quits.
 const SMOKE = !!process.env.CS2SIM_SMOKE;
 if (SMOKE) app.setPath('userData', path.join(app.getPath('temp'), 'cs2sim-smoke'));
-// (A perf run measures as fast as Play goes: no vsync, no frame rate cap.)
-if (process.env.CS2SIM_SMOKE === 'perf') { app.commandLine.appendSwitch('disable-frame-rate-limit'); app.commandLine.appendSwitch('disable-gpu-vsync'); }
+// The frame rate is the monitor's (vsync) unless the player unlocked it in Play's settings (display.json, read at start:
+// Chromium only takes these switches before it starts). A perf run always measures as fast as Play goes.
+const displayFile = path.join(app.getPath('userData'), 'display.json');
+const readDisplay = () => { try { return JSON.parse(fs.readFileSync(displayFile, 'utf8')); } catch { return {}; } };
+if (process.env.CS2SIM_SMOKE_ANGLE) app.commandLine.appendSwitch('use-angle', process.env.CS2SIM_SMOKE_ANGLE); // (trying ANGLE's other backends: gl, vulkan, d3d11)
+if (process.env.CS2SIM_SMOKE === 'perf' || readDisplay().uncapped) { app.commandLine.appendSwitch('disable-frame-rate-limit'); app.commandLine.appendSwitch('disable-gpu-vsync'); }
 
 // `CS2SIM_SMOKE=features`: opens a souvenir package and a player pack, plays a bot battle and a team match, signs
 // a trade-up, then screenshots every page into userData/smoke-<page>.png.
@@ -304,6 +313,10 @@ async function smokeMapIds(win) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const js = (code) => win.webContents.executeJavaScript(code);
   await wait(3000);
+  // CS2SIM_SMOKE_GLOBALS: page globals for the run (JSON, e.g. debugging switches the game reads).
+  if (process.env.CS2SIM_SMOKE_GLOBALS) await js(`Object.assign(window, ${process.env.CS2SIM_SMOKE_GLOBALS}); 1`);
+  // CS2SIM_SMOKE_PREFS: Play settings for the run (JSON, e.g. {"quality":"performance","renderScale":0.75}).
+  if (process.env.CS2SIM_SMOKE_PREFS) await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, ...${process.env.CS2SIM_SMOKE_PREFS} })); })(); 1`);
   await js(`document.querySelector('#nav [data-page=play]').click(); 1`);
   let ids = (process.env.CS2SIM_SMOKE_MAPS || '').split(',').filter(Boolean);
   for (let i = 0; i < 40 && !ids.length; i++) {
@@ -415,6 +428,7 @@ async function runPerfSmoke(win) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const js = (code) => win.webContents.executeJavaScript(code);
   const secs = +process.env.CS2SIM_SMOKE_SECONDS || 5;
+  if (process.env.CS2SIM_SMOKE_FULLSCREEN) win.setFullScreen(true); // the screen's own resolution
   const all = [];
   for (const id of await smokeMapIds(win)) {
     const t0 = Date.now();
@@ -428,7 +442,7 @@ async function runPerfSmoke(win) {
       const t = i.spawns.T[0]?.origin, ct = i.spawns.CT[0]?.origin, mid = sites.length ? [0, 1].map((k) => sites.reduce((s, x) => s + x.pos[k], 0) / sites.length) : [0, 0];
       // Measuring: each frame's time, its simulation and drawing, and (EXT_disjoint_timer_query_webgl2) the GPU's.
       const P = window.__perf = { frames: [], cur: null };
-      const gl = g.renderer.getContext(), tq = gl.getExtension('EXT_disjoint_timer_query_webgl2'), pending = [];
+      const gl = g.renderer.getContext(), tq = ${process.env.CS2SIM_SMOKE_NOGPU ? 'null' : "gl.getExtension('EXT_disjoint_timer_query_webgl2')"}, pending = []; // (CS2SIM_SMOKE_NOGPU: no GPU timing)
       P.gpuTimer = !!tq;
       g.renderer.info.autoReset = false;
       const frame = g.frame, tick = g.tick, render = g.post.render;
@@ -445,6 +459,14 @@ async function runPerfSmoke(win) {
         }
       };
       g.tick = function () { const t = performance.now(); tick.call(this); if (P.cur) P.cur.sim += performance.now() - t; };
+      // Each render call's time, by what it draws (the world, the 3D skybox, your weapon, the post passes).
+      const rr = g.renderer.render.bind(g.renderer);
+      g.renderer.render = function (scene, camera) {
+        const t = performance.now(); rr(scene, camera);
+        if (!P.cur) return;
+        const k = scene === g.scene ? 'rWorld' : scene === g.world.sky3d?.scene ? 'rSky' : scene === g.vmScene ? 'rVm' : 'rPost';
+        P.cur[k] = (P.cur[k] || 0) + performance.now() - t;
+      };
       g.post.render = function (...a) {
         const q = tq && pending.length < 8 ? gl.createQuery() : null;
         if (q) gl.beginQuery(tq.TIME_ELAPSED_EXT, q);
@@ -510,6 +532,7 @@ async function runPerfSmoke(win) {
         const gpu = f.filter((x) => x.gpu != null);
         return JSON.stringify({ fps: Math.round(n / ${secs}), p99: +(ms[Math.floor(n * 0.99)] || 0).toFixed(1), worst: +(ms[n - 1] || 0).toFixed(1), hitches: ms.filter((x) => x > 50).length,
           cpu: +avg('cpu').toFixed(2), sim: +avg('sim').toFixed(2), draw: +avg('draw').toFixed(2),
+          rWorld: +avg('rWorld').toFixed(2), rSky: +avg('rSky').toFixed(2), rVm: +avg('rVm').toFixed(2), rPost: +avg('rPost').toFixed(2),
           gpu: gpu.length ? +(gpu.reduce((s, x) => s + x.gpu, 0) / gpu.length).toFixed(2) : null,
           calls: Math.round(avg('calls')), tris: Math.round(avg('tris') / 1000) + 'k', bots: g.bots.filter((b) => b.c.alive).length,
           // The slowest frames: how long since the one before, and that frame's own time (simulation, drawing).

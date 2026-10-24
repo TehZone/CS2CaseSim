@@ -106,6 +106,41 @@ export class CollisionWorld {
     return { t: best, normal: triNormal(P, hit * 9), tri: hit, surface: this.surfaces[this.surface[hit]] || 'default' };
   }
 
+  // Is anything solid (mask) between a and b, short of b by margin? A sight line: done at the first triangle in the way
+  // (raycast looks on for the nearest), bots check dozens a tick.
+  occluded(a, b, mask = FLAG_BULLET, margin = 2) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2], l = Math.hypot(dx, dy, dz);
+    if (l <= margin) return false;
+    const d = [dx / l, dy / l, dz / l], maxT = l - margin;
+    const P = this.pos, B = this.box, L = this.link, S = this.stack;
+    const ix = 1 / d[0], iy = 1 / d[1], iz = 1 / d[2];
+    let sp = 0;
+    S[sp++] = 0;
+    while (sp) {
+      const node = S[--sp], bo = node * 6;
+      let t0 = (B[bo] - a[0]) * ix, t1 = (B[bo + 3] - a[0]) * ix;
+      let tn = Math.min(t0, t1), tf = Math.max(t0, t1);
+      t0 = (B[bo + 1] - a[1]) * iy; t1 = (B[bo + 4] - a[1]) * iy;
+      tn = Math.max(tn, Math.min(t0, t1)); tf = Math.min(tf, Math.max(t0, t1));
+      t0 = (B[bo + 2] - a[2]) * iz; t1 = (B[bo + 5] - a[2]) * iz;
+      tn = Math.max(tn, Math.min(t0, t1)); tf = Math.min(tf, Math.max(t0, t1));
+      if (tf < Math.max(tn, 0) || tn > maxT) continue;
+      const c0 = L[node * 2], c1 = L[node * 2 + 1];
+      if (c1 >= 0) { S[sp++] = c0; S[sp++] = c1; continue; }
+      for (let k = c0; k < c0 - c1; k++) {
+        const tri = this.order[k];
+        if (!(this.flags[tri] & mask)) continue;
+        const t = rayTri(P, tri * 9, a, d);
+        if (t >= 0 && t < maxT) return true;
+      }
+    }
+    for (const sh of this.dynamic) {
+      if (sh.off || !(sh.flags & mask)) continue;
+      for (let i = 0; i < sh.tris.length; i += 9) { const t = rayTri(sh.tris, i, a, d); if (t >= 0 && t < maxT) return true; }
+    }
+    return false;
+  }
+
   // Sweeps an axis-aligned box (mins/maxs relative to start) from start to end. Returns Source-style trace results:
   // { fraction, endpos, normal, startsolid, tri }. only: a Set of surface ids to consider (e.g. ladders).
   traceBox(start, end, mins, maxs, mask = FLAG_PLAYER, only = null) {
