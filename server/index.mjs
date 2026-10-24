@@ -20,6 +20,7 @@ import { makeCtx, runAction, delta, credit, GameError } from '../src/js/engine/a
 import * as M from '../src/js/engine/manager.js';
 import { marketWindow } from '../src/js/engine/market.js';
 import { itemValue } from '../src/js/engine/items.js';
+import { DB_TYPES, publicCopy } from '../src/js/engine/database.js';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -198,7 +199,36 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
 
   // ---- team ladder: play against other players' saved lineups ------------------------------------------
   const challenged = new Map(); // "a|b" -> time of last challenge
+  // The item database reads everyone's saved inventories: what's still only in memory is written first (at most every
+  // few seconds), and the counts of every item are kept a little while.
+  let dbIndex = null, dbFlushed = 0;
+  const dbFresh = async () => { if (Date.now() - dbFlushed > 4000) { dbFlushed = Date.now(); await store.flush().catch(() => {}); } };
+  const DB_IN = DB_TYPES.map((t) => `'${t}'`).join(', ');
+
   async function social(user, m, a) {
+    // The item database: how many copies of each item there are on the server, and every copy of one with its owner.
+    if (m === 'db.index') {
+      if (!dbIndex || Date.now() - dbIndex.at > 15000) {
+        await dbFresh();
+        const { rows } = await db.query(`SELECT it->>'t' AS t, it->>'id' AS id, count(*)::int AS n
+          FROM users, jsonb_array_elements(COALESCE(state->'inv', '[]'::jsonb)) AS it WHERE it->>'t' IN (${DB_IN}) GROUP BY 1, 2`);
+        const { rows: [u] } = await db.query('SELECT count(*)::int AS n FROM users');
+        dbIndex = { at: Date.now(), counts: Object.fromEntries(rows.map((x) => [x.t + ':' + x.id, x.n])), players: u.n };
+      }
+      return { r: { counts: dbIndex.counts, players: dbIndex.players } };
+    }
+    if (m === 'db.item') {
+      const t = String(a.t || ''), id = String(a.id || '').slice(0, 80);
+      if (!DB_TYPES.includes(t) || !id) throw new GameError('Unknown item');
+      await dbFresh();
+      const { rows } = await db.query(`SELECT u.name, it FROM users u, jsonb_array_elements(COALESCE(u.state->'inv', '[]'::jsonb)) AS it
+        WHERE it->>'t' = $1 AND it->>'id' = $2 LIMIT 5000`, [t, id]);
+      const row = (x) => ({ owner: x.name, me: x.name === user.name, item: publicCopy(typeof x.it === 'string' ? JSON.parse(x.it) : x.it) });
+      // A sticker: also the guns it's applied to.
+      const applied = t !== 'sticker' ? [] : (await db.query(`SELECT u.name, it FROM users u, jsonb_array_elements(COALESCE(u.state->'inv', '[]'::jsonb)) AS it
+        WHERE it->'stk' @> $1::jsonb LIMIT 5000`, [JSON.stringify([{ id }])])).rows;
+      return { r: { copies: rows.map(row), applied: applied.map(row) } };
+    }
     if (m === 'ladder') {
       await store.flush().catch(() => {});
       const { rows } = await db.query(`SELECT name, state->'team'->>'name' AS team, (state->'team'->>'elo')::int AS elo,

@@ -102,6 +102,20 @@ try {
     check('other players are told when a listing sells', !!ev);
   }
 
+  // ---- the item database: everyone's copies, by item ----------------------------------------------------
+  {
+    const idx = await B.rpc('social', 'db.index', {});
+    const it = A.st.inv.find((i) => i.t === 'skin' && i.fl != null);
+    const key = 'skin:' + it.id, mine = A.st.inv.filter((i) => i.t === 'skin' && i.id === it.id).length;
+    check('item database counts every copy on the server', idx.players >= 2 && idx.counts[key] === mine, `${key}: ${idx.counts[key]} (alice has ${mine})`);
+    const { copies } = await B.rpc('social', 'db.item', { t: 'skin', id: it.id });
+    check('item database lists each copy with its owner and float', copies.length === mine && copies.every((c) => c.owner === 'alice' && !c.me && c.item.fl === A.st.inv.find((x) => x.uid === c.item.uid)?.fl));
+    let e = null; try { await B.rpc('social', 'db.item', { t: 'chicken', id: 'x' }); } catch (x) { e = x; }
+    check('item database refuses unknown kinds', /Unknown item/.test(e?.message || ''));
+    const stk = await B.rpc('social', 'db.item', { t: 'sticker', id: Object.keys(D.stickers)[0] });
+    check('item database: a sticker, held and applied to guns', Array.isArray(stk.copies) && Array.isArray(stk.applied));
+  }
+
   // ---- trading --------------------------------------------------------------------------------------
   const bOpen = await B.act('case.open', { id: box.id, n: 2 });
   // Serial numbers are counted across the server: Bob's continue after Alice's of the same item.

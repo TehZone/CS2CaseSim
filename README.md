@@ -213,6 +213,10 @@ What's in a match:
 - Team manager: 2,570 pro player cards (one per player per Major, rated from real Major results), packs, a
   five-role lineup with chemistry, round-by-round match simulation, cups, LANs and Majors against real rosters
 - Online play (optional): accounts on your own server, trading between players, live lobbies; see DEPLOY.md
+- Item Database (like CSFloat's): search every skin, knife, glove, sticker, agent and pro card in the game; open one to
+  see every copy that exists with its owner, float, seed, pattern and stickers (online: everyone on the server;
+  offline: your inventory), its float rank (#1-#3 lowest and highest, StatTrak™ and Souvenir copies ranked apart), the
+  guns a sticker is applied to, and a skin's current Market listings
 - Rare Special Items (knives and gloves) show CS:GO's classic gold "?" medallion in case contents and the roulette
 - Serial numbers on everything you unbox (cases, packages, capsules, the Armory, case battles), counted per item in
   unboxing order (offline in your save, online across the whole server). Market buys and trade-ups have none; unboxed

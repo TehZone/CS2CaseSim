@@ -430,5 +430,20 @@ function tierFreq(box, n) {
     && !('serials' in ACT.delta(ctx).set) && JSON.stringify(st.serials) === JSON.stringify(before));
 }
 
+// ---- item database: float ranks -----------------------------------------------------------------------------
+{
+  const DB = await import('../src/js/engine/database.js');
+  const mk = (uid, fl, x = {}) => ({ item: { uid, t: 'skin', id: 's', fl, at: 0, ...x } });
+  const copies = [mk('a', 0.2), mk('b', 0.01), mk('c', 0.5), mk('d', 0.3), mk('e', 0.07), mk('f', 0.9), mk('g', 0.45), mk('st', 0.6, { stt: true }), mk('sv', 0.4, { sv: true }), mk('v', null)];
+  const r = DB.floatRanks(copies);
+  check('float ranks: the three lowest and highest floats of an item', r.get('b').low === 1 && r.get('e').low === 2 && r.get('a').low === 3
+    && r.get('f').high === 1 && r.get('c').high === 2 && r.get('g').high === 3 && !r.has('d') && r.get('b').of === 7);
+  check('float ranks: StatTrak and Souvenir copies are ranked apart, vanillas not at all', r.get('st').low === 1 && r.get('st').high === 1 && r.get('st').of === 1 && r.get('sv').low === 1 && !r.has('v'));
+  const tie = DB.floatRanks([mk('x', 0.1, { at: 5 }), mk('y', 0.1, { at: 2 })]);
+  check('float ranks: an equal float ranks by who had it first', tie.get('y').low === 1 && tie.get('x').low === 2);
+  const n = DB.countCopies([...copies.map((c) => c.item), { t: 'sticker', id: 'k' }, { t: 'chicken', id: 'h' }]);
+  check('item database counts copies by item', n['skin:s'] === 10 && n['sticker:k'] === 1 && !('chicken:h' in n));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -242,6 +242,51 @@ body:not(.is-online) .online-only { display: none !important; }
 .inspect .stage { position: absolute; }
 .inspect .bg-pick { min-width: 140px; }
 
+/* ---------- item database ---------- */
+.db-note { background: rgba(106, 166, 232, .08); border: 1px solid rgba(106, 166, 232, .25); color: var(--muted); padding: 8px 12px; margin-bottom: 14px; font-size: 13px; }
+.db .db-search { flex: 1 1 320px; min-width: 220px; }
+.db-card { cursor: pointer; }
+.db-count { font-size: 11px; color: var(--green); letter-spacing: .03em; }
+.db-count.none { color: var(--dim); }
+.db-item { display: grid; grid-template-columns: minmax(240px, 380px) 1fr; gap: 22px; align-items: start; margin-bottom: 22px; }
+.db-hero { background: var(--panel-grad); border: 1px solid var(--line); position: relative; display: flex; flex-direction: column; }
+.db-hero img { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; padding: 14px; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .6)); }
+.db-hero .rbar { height: 4px; background: var(--rc); }
+.db-hero [data-inspect] { position: absolute; right: 8px; top: 8px; }
+.db-stats { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.db-stats > div { background: var(--well); border: 1px solid var(--line); padding: 8px 12px; min-width: 92px; display: flex; flex-direction: column; }
+.db-stats b { font-size: 18px; color: var(--hi); font-variant-numeric: tabular-nums; }
+.db-stats b.st { color: var(--st); }
+.db-stats b.sv { color: var(--sv); }
+.db-stats span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+.db-dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0 0 6px; font-size: 13px; }
+.db-dl dt { color: var(--muted); }
+.db-dl dd { margin: 0; }
+.db-dl .floatwrap { max-width: 260px; margin-bottom: 2px; }
+.db-h2 { font-family: var(--font-cond); font-size: 18px; text-transform: uppercase; letter-spacing: .06em; color: var(--hi); margin: 22px 0 10px; font-weight: 600; }
+.db-table-wrap { overflow-x: auto; }
+.db-table td { vertical-align: middle; white-space: nowrap; }
+.db-table tr.ranked td { background: rgba(228, 174, 57, .045); }
+.db-ranks { display: flex; gap: 4px; min-height: 22px; align-items: center; }
+.db-float { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.db-float .floatline { display: inline-block; width: 70px; height: 3px; position: relative; background: linear-gradient(90deg, #4fb54a 0 7%, #9cc23b 7% 15%, #e8c33a 15% 38%, #e88a35 38% 45%, #d94a3a 45%); }
+.db-float .floatline i { position: absolute; top: -2px; width: 2px; height: 7px; background: #fff; box-shadow: 0 0 3px #000; }
+.db-float .wk { margin-right: 0; }
+.db-name.stt { color: var(--st); }
+.db-name.sv { color: var(--sv); }
+.db-stk { display: inline-flex; gap: 2px; margin-left: 6px; vertical-align: middle; }
+.db-stk img { width: 28px; height: 21px; object-fit: contain; }
+.db-owner.me { color: var(--gold2); }
+/* float ranks: #1-#3 lowest and highest, gold, silver and bronze */
+.fr { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 2px; line-height: 16px; letter-spacing: .02em; border: 1px solid transparent; }
+.fr.low::before { content: "▼"; font-size: 8px; }
+.fr.high::before { content: "▲"; font-size: 8px; }
+.fr.r1 { color: #1c1404; background: linear-gradient(90deg, #f7d774, #e4ae39); border-color: #f7d774; }
+.fr.r2 { color: #111; background: linear-gradient(90deg, #e9edf1, #b9c2cc); border-color: #e9edf1; }
+.fr.r3 { color: #1b0f05; background: linear-gradient(90deg, #e3a473, #b8703c); border-color: #e3a473; }
+.fr.low { box-shadow: inset 0 -2px 0 rgba(79, 181, 74, .9); }
+.fr.high { box-shadow: inset 0 -2px 0 rgba(217, 74, 58, .9); }
+
 /* first-person inspect: rotate/flip do not apply */
 .inspect.fp [data-a=flip], .inspect.fp [data-a=reset] { display: none; }
 .inspect.fp .help { visibility: hidden; }
@@ -250,6 +295,7 @@ body:not(.is-online) .online-only { display: none !important; }
 @media (max-width: 760px) {
   .two-col, .offer-sides, .match, .opps { grid-template-columns: 1fr; }
   .armory-head { grid-template-columns: 1fr; }
+  .db-item { grid-template-columns: 1fr; }
   .armory-grid { grid-template-columns: 1fr; }
   .tu-sum { grid-template-columns: repeat(2, 1fr); }
   .auto-panel { left: 8px; right: 8px; width: auto; }
