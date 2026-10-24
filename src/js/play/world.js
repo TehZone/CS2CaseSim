@@ -309,6 +309,33 @@ const REFLECT_AROUND = `
 		radiance += irradiance * RECIPROCAL_PI;
 	#endif`;
 
+// Centroid sampling: with multisampling, a pixel on the edge of a triangle is shaded at its centre, which can lie
+// outside the triangle, so its normal and texture coordinates were guessed beyond the edge: models' silhouettes and
+// thin parts showed white dots (the sky reflected at a grazing angle, or the texture past the edge of its patch) and
+// dark ones (the lightmap past the edge of its chart). Centroid varyings are taken from inside the triangle. Applied to
+// both shaders alike (the two must match): the normal and texture coordinate chunks, and what's declared in the shader.
+const CENTROID_CHUNKS = ['normal_pars_vertex', 'normal_pars_fragment', 'uv_pars_vertex', 'uv_pars_fragment'];
+export function centroidVaryings(sh) {
+  const c = (src) => {
+    for (const k of CENTROID_CHUNKS) src = src.replace(`#include <${k}>`, THREE.ShaderChunk[k]);
+    return src.replace(/^(\s*)varying (vec[234] v\w+;)/gm, '$1centroid varying $2');
+  };
+  sh.vertexShader = c(sh.vertexShader);
+  sh.fragmentShader = c(sh.fragmentShader);
+}
+
+// Specular anti-aliasing, as CS2 has: where the surface's normal (with its normal map) turns faster than a pixel can
+// show (a model's fine bumps, buckles and straps further off), it counts as that much rougher, so the sun's highlight
+// spreads instead of breaking up into single white pixels that sparkle as it moves (Tokuyoshi and Kaplanyan's filter,
+// with Filament's defaults).
+export const SPECULAR_AA = `#include <lights_physical_fragment>
+	{
+		vec3 cs2Ndx = dFdx( normal ), cs2Ndy = dFdy( normal );
+		float cs2A = material.roughness * material.roughness;
+		float cs2Kernel = min( 0.3 * ( dot( cs2Ndx, cs2Ndx ) + dot( cs2Ndy, cs2Ndy ) ), 0.2 );
+		material.roughness = sqrt( sqrt( clamp( cs2A * cs2A + cs2Kernel, 0.0, 1.0 ) ) );
+	}`;
+
 // One material for every prop that uses it, however each is tinted (Dust II's window frames come in 40 colours; the
 // exporter gives each colour a copy of the material): each one's colour (its glTF base colour) per vertex instead.
 function addFactor(sh) {
@@ -328,6 +355,8 @@ function lightmapped(m, lightMap, irrMax, layer = null) {
     sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_maps>', '#include <lights_fragment_maps>' + REFLECT_AROUND);
     if (layer) (layer.kind === 'env' ? addEnv : addLayer)(sh, layer);
     if (m.userData.tinted) addFactor(sh);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <lights_physical_fragment>', SPECULAR_AA);
+    centroidVaryings(sh);
   };
   m.customProgramCacheKey = () => 'cs2lm' + (layer?.key || '') + (m.userData.tinted ? 'f' : '');
 }
@@ -360,8 +389,10 @@ export function ambientLit(m, ambient, layer = null, { probe = false } = {}) {
     }[mode];
     sh.fragmentShader = add + sh.fragmentShader.replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
 	{ ${light} }${REFLECT_AROUND}`);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <lights_physical_fragment>', SPECULAR_AA);
     if (layer) (layer.kind === 'env' ? addEnv : addLayer)(sh, layer);
     if (m.userData.tinted) addFactor(sh);
+    centroidVaryings(sh);
   };
   m.customProgramCacheKey = () => 'cs2amb' + mode + (layer?.key || '') + (m.userData.tinted ? 'f' : '');
 }
@@ -552,6 +583,27 @@ export function bakeSkin(o) {
   g.setIndex(src.index);
   g.userData.mirrored = bones[0]?.determinant() < 0; // (see mergeMeshes)
   return g;
+}
+
+// The tip of a gun's barrel, in its "weapon" bone's space (CS2 keeps +X forward along the barrel there): its shown
+// vertices furthest forward, averaged (the barrel's end ring, or the silencer's). Null without a weapon bone.
+export function barrelTip(root) {
+  let bone = null;
+  root.traverse((o) => { if (!bone && o.isBone && o.name === 'weapon') bone = o; });
+  if (!bone) return null;
+  root.updateMatrixWorld(true);
+  const inv = bone.matrixWorld.clone().invert(), v = new THREE.Vector3(), sum = new THREE.Vector3(), EPS = 0.004;
+  const shown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
+  let best = -Infinity, n = 0;
+  root.traverse((o) => {
+    if (!o.isMesh || !shown(o)) return;
+    for (let i = 0, c = o.geometry.attributes.position.count; i < c; i++) {
+      o.getVertexPosition(i, v).applyMatrix4(o.matrixWorld).applyMatrix4(inv);
+      if (v.x > best + EPS) { best = v.x; sum.set(0, 0, 0); n = 0; }
+      if (v.x > best - EPS) { sum.add(v); n++; }
+    }
+  });
+  return n ? sum.divideScalar(n) : null;
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));

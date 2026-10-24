@@ -52,6 +52,9 @@ const RANGE = {
   crosshair: [14, 0.5],
   // Counter-strafing: how long it keeps moving after it starts shooting (inaccurate) before it's stopped.
   strafe: [0.4, 0.03],
+  // Knowing its gun: how far it waits for a shot that will land (stopped, the spray's penalty and recoil worn off) rather
+  // than firing anyway, walking and spraying at range.
+  discipline: [0.05, 1],
   // Utility: the chance it throws the lineup its plan gives it, and how far off its aim is (degrees).
   utility: [0.12, 0.97], utilityErr: [6, 0.08],
   // Patience: holding an angle and waiting for the team rather than peeking alone; trading: going for a teammate's
@@ -66,7 +69,7 @@ export function skillParams(s) {
   const v = Object.fromEntries(Object.entries(RANGE).map(([k, [a, b]]) => [k, lerp(a, b, e)]));
   return {
     skill: s, reaction: [v.reactMin, v.reactMax], turn: v.turn, aimErr: v.aimErr, head: v.head, control: v.control, fov: v.fov, hear: v.hear,
-    burst: Math.round(v.burst), crosshair: v.crosshair, strafe: v.strafe, utility: v.utility, utilityErr: v.utilityErr, patience: v.patience,
+    burst: Math.round(v.burst), crosshair: v.crosshair, strafe: v.strafe, discipline: v.discipline, utility: v.utility, utilityErr: v.utilityErr, patience: v.patience,
     trade: v.trade, popFlash: s > 0.55, executes: s > 0.35,
   };
 }

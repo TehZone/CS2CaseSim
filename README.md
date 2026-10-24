@@ -87,13 +87,19 @@ What's in a match:
   round for the rest of the match. Terrorists pick
   a site (see the team play below), take it and plant; counter-terrorists split up to hold the sites, rotate when they see terrorists, retake and defuse; they flee a bomb
   they can't stop. In fights they react after a human-like delay, aim with an error that shrinks as they track you,
-  stop to shoot, control part of the recoil and fire in bursts. They smoke off and flash sites before taking them,
+  stop to shoot, control part of the recoil and fire in bursts. They know their guns' spread like a player at their
+  rank: higher ranks counter-strafe to a stop and only fire once the shot will land (moving, the spray's penalty and
+  the recoil they can't pull down all count), so they tap at range, burst nearer and spray up close, and scope in with
+  the AWP and Scout; Silvers fire anyway, on the run. Players block each other without pushing (you can stand on a
+  head), and crouch spam slows the crouch down like CS2's duck speed. They smoke off and flash sites before taking them,
   molotov or HE where they last saw you, flash retakes, burn a defuser, get blinded by flashes, step out of fire and pick
   up guns and kits. They hear gunshots and footsteps, buy by their money (eco, force, AWP, grenades...) and are animated
   with CS2's third-person clips: running, walking and crouching in every direction, each gun's hold pose, drawing and
   reloading it, pulling a grenade's pin and throwing it, flinching when hit, covering their eyes when flashed, climbing
   ladders, falling, planting, defusing, deaths. Standing still they aim around with the upper body and only step round
   when the aim swings far off, like CS2's turn in place.
+- Everyone's picture by the round clock (the bots' real players), dimmed when they die. Grenades stay primed for as
+  long as you hold the button and keep the crosshair; tracers come out of the gun's barrel (yours and the bots').
 - Radar (CS2's overview of the map), kill feed (with CS2's marks for headshots, wallbangs, kills through smoke, jumping,
   no-scope and blinded kills), scoreboard (Tab), damage direction, death cam and spectating teammates (first person
   with their gun, like CS2; Jump for third person), CS2's announcer, round music and bomb sounds, and an end screen with

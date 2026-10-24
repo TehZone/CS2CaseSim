@@ -4,10 +4,11 @@ import * as THREE from 'three';
 import { assembleViewmodel } from '../cs2/firstperson.js';
 import { loadGltf } from '../cs2/rig.js';
 import { buildCS2Model } from '../cs2/skin.js';
+import { barrelTip, SPECULAR_AA, centroidVaryings } from './world.js';
 
 // The weapon's reflections, stronger than the map's sky alone gives: metal (blades, the Molotov's lighter) shows only
 // what it reflects, and in the shade, without the sun, it went near black. CS2's own reflections come from bright
-// captures of the map around you.
+// captures of the map around you. (And specular anti-aliasing and centroid sampling, see world.js: no sparkling dots.)
 const REFLECT = 3;
 function strongerReflections(m) {
   if (!m?.isMeshStandardMaterial || m.userData.vmReflect) return;
@@ -15,12 +16,14 @@ function strongerReflections(m) {
   const prev = m.onBeforeCompile, key = m.customProgramCacheKey;
   m.onBeforeCompile = (sh, r) => {
     prev?.call(m, sh, r);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <lights_physical_fragment>', SPECULAR_AA);
     sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
 	#if defined( RE_IndirectSpecular )
 		radiance *= ${REFLECT.toFixed(1)};
 	#endif`);
+    centroidVaryings(sh);
   };
-  m.customProgramCacheKey = () => (key?.call(m) || '') + 'vmreflect';
+  m.customProgramCacheKey = () => (key?.call(m) || '') + 'vmreflect3';
   m.needsUpdate = true;
 }
 
@@ -70,9 +73,12 @@ export async function buildViewmodel(item, def, data, { gloves = null, gloveScen
   play(has('idle') ? 'idle' : 'draw', { loop: has('idle') });
   update(0);
 
-  // Muzzle: the weapon model's muzzle attachment bone if it has one.
+  // Muzzle: the weapon model's muzzle attachment bone if it has one, else a point on its weapon bone at the barrel's tip
+  // (the muzzle flash and your tracers start there).
   let muzzle = null;
   vm.rig.traverse((o) => { if (!muzzle && /muzzle/i.test(o.name)) muzzle = o; });
+  const tip = !muzzle && vm.bones.weapon && def.cat !== 'knife' && barrelTip(model.userData.root);
+  if (tip) { muzzle = new THREE.Object3D(); muzzle.name = 'muzzle_tip'; muzzle.position.copy(tip); vm.bones.weapon.add(muzzle); }
   return {
     model, rig: vm.rig, bones: vm.bones, muzzle, play, has, length, update, setSilencer,
     get role() { return currentRole; },

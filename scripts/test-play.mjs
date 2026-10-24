@@ -105,6 +105,18 @@ run(p, 10, { forward: 0 });
 p.tick(1 / 64, { forward: 0, side: 0, yaw: 0, maxSpeed: 250 });
 run(p, 30, {});
 ok(!p.ducked, 'stands up again');
+// crouch spam: each new crouch goes down slower (CS2's duck speed), and it comes back after a rest
+{
+  const q = new PlayerMovement(W, [0, 900, 0]);
+  const downTicks = () => { let n = 0; while (q.duckAmount < 1 && n < 200) { q.tick(1 / 64, { forward: 0, side: 0, yaw: 0, duck: true, maxSpeed: 250 }); n++; } run(q, 12, {}); return n; };
+  const first = downTicks();
+  for (let i = 0; i < 8; i++) { run(q, 3, { duck: true }); run(q, 3, {}); } // tapping crouch
+  run(q, 20, {});
+  const spammed = downTicks();
+  run(q, 64 * 3, {});
+  const rested = downTicks();
+  ok(first <= 12 && spammed > first * 2.5 && rested <= 12, `crouch spam slows the crouch, a rest brings it back: ${first} ticks down, ${spammed} after tapping it, ${rested} rested`);
+}
 
 // ---- ladders: a wall at y=1000..1040 up to z=200 with a ladder plane in front of it, and a roof to step onto ----
 {
@@ -564,6 +576,19 @@ function fakeGame() {
   ok(band(1) <= 1000 && band(6) < 5000 && band(7) > 5000 && band(10) < 10000 && band(11) > 10000 && band(14) < 15000 && band(18) >= 29000,
     'skill: CS Ratings by rank (Silvers under 5,000, Gold Novas 5-10k, Master Guardians 10-15k, Global Elites about 30k)');
   ok(Math.abs(K.skillOfRating(K.ratingOfSkill(0.6)) - 0.6) < 1e-6, 'skill: a CS Rating maps back to the skill');
+  {
+    // Bots know their guns: an AK-47's spray at range, a run, an unscoped AWP.
+    const { inaccuracyOf, hitOdds } = await import('../src/js/play/ai.js');
+    const ak = { maxSpeed: [215, 215], inaccStand: [0.00641, 0.00641], inaccCrouch: [0.00481, 0.00481], inaccMove: [0.17506, 0.17506], spread: [0.0006, 0.0006], inaccJump: [0.4, 0.4] };
+    const awp = { maxSpeed: [200, 100], inaccStand: [0.0808, 0.002], inaccCrouch: [0.0606, 0.0015], inaccMove: [0.17648, 0.17648], spread: [0.0002, 0.0002] };
+    const at = (d) => 8 / d, odds = (st, m, s, d, o) => hitOdds(at(d), inaccuracyOf(st, m, s), { spread: st.spread[m], ...o });
+    ok(odds(ak, 0, {}, 2000) > 0.5 && odds(ak, 0, { penalty: 0.0078 * 3 }, 2000) < 0.2 && odds(ak, 0, { speed: 215 }, 1000) < 0.05 && odds(ak, 0, { speed: 60 }, 1000) > 0.95,
+      'bots: an AK-47 lands its first shot at 2000 units, not a three-bullet spray there or on the run');
+    ok(odds(ak, 0, { penalty: 0.0078 * 5 }, 250) > 0.6 && odds(ak, 0, { penalty: 0.0078 * 5 }, 250, { recoil: 0.04 }) === 0,
+      "bots: up close a spray still lands, unless the recoil isn't pulled down");
+    ok(odds(awp, 0, {}, 1500) < 0.1 && odds(awp, 1, {}, 1500) > 0.99 && odds(awp, 1, { speed: 100 }, 1500) < 0.1, 'bots: an AWP hits scoped and stopped');
+    ok(silver.discipline < 0.1 && ge.discipline > 0.99, 'skill: Global Elites wait for their shot, Silvers fire anyway');
+  }
   ok(K.tierOf('expert') === 'global' && K.tierOf('easy') === 'silver' && K.tierOf('mg') === 'mg' && K.TO_DIFFICULTY.supreme === 'expert', 'skill: the old difficulty settings map to rank tiers');
   let lo = 1, hi = 0;
   for (let i = 0; i < 200; i++) { const s2 = K.botSkill('x' + i, 'gold'); lo = Math.min(lo, s2); hi = Math.max(hi, s2); }

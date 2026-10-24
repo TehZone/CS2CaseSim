@@ -294,16 +294,19 @@ export class Arsenal {
     const b1 = !!(input.buttons & 1), b2 = !!(input.buttons & 4);
     if (g.throwAt == null) {
       if (!this.game.canAttack() || t < g.deployEnd) return;
+      // Pressing pulls the pin; it stays primed, held up and ready, for as long as you hold the button (the pin pulled
+      // pose kept: nothing puts the idle back), and it's thrown when you let go (once the pin is out).
       if (!g.pin && (b1 || b2)) {
         g.pin = t;
+        g.animEnd = Infinity;
         g.vm.play(g.vm.has('pullpin') ? 'pullpin' : 'idle');
         this.sound(g.nade.pin, { volume: 0.6 });
       }
       if (g.pin) {
         if (b1 || b2) g.strength = b1 && b2 ? 0.5 : b1 ? 1 : 0;
-        else if (t >= g.pin + 0.3) {
+        else if (t >= g.pin + Math.min(0.6, g.vm.length('pullpin') || 0.3)) {
           g.throwAt = t + 0.1;
-          g.vm.play(g.strength >= 0.5 ? 'throw' : g.vm.has('throwUnder') ? 'throwUnder' : 'throw', { fade: 0.03 });
+          g.animEnd = t + 0.1 + (g.vm.play(g.strength >= 0.5 ? 'throw' : g.vm.has('throwUnder') ? 'throwUnder' : 'throw', { fade: 0.03 }) || 0.5);
         }
       }
       return;

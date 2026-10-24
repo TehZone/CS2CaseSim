@@ -9,7 +9,7 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2Play } from '../cs2/api.js';
 import { loadGltf } from '../cs2/rig.js';
 import { buildCS2Model } from '../cs2/skin.js';
-import { toGl, fromGl, ambientLit, ambientCube, bakeSkin } from './world.js';
+import { toGl, fromGl, ambientLit, ambientCube, bakeSkin, barrelTip } from './world.js';
 
 export const AGENTS = {
   T: ['agents/models/tm_phoenix/tm_phoenix.vmdl', 'agents/models/tm_leet/tm_leet_variantb.vmdl'],
@@ -44,7 +44,7 @@ const HOLD = {
 };
 const PISTOL_RE = /^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/;
 const wrap = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
-const _lerp = [0, 0, 0];
+const _lerp = [0, 0, 0], _tip = new THREE.Vector3();
 
 // Skinned meshes' bounds from their bind pose. three works out the posed ones vertex by vertex, through the bones, the
 // first time it draws one (tens of ms for an agent or a viewmodel, and garbage for every vertex) only to sort it by
@@ -118,8 +118,8 @@ export class BotAssets {
   }
 
   // A gun as bots hold it: its meshes baked where its bones put them at rest (it doesn't animate in their hands), so a
-  // bot's gun has no skeleton of its own to update and upload every frame. { model, grip }: grip is the weapon bone's
-  // matrix (the hand bone holds the gun by it).
+  // bot's gun has no skeleton of its own to update and upload every frame. { model, grip, muzzle }: grip is the weapon
+  // bone's matrix (the hand bone holds the gun by it), muzzle the barrel's tip in the model (tracers start there).
   staticWeapon(tpl) {
     if (!this.statics.has(tpl)) {
       const w = cloneSkinned(tpl);
@@ -135,7 +135,8 @@ export class BotAssets {
         m.castShadow = m.receiveShadow = true;
         model.add(m);
       });
-      this.statics.set(tpl, { model, grip: grip || new THREE.Matrix4() });
+      const tip = grip && barrelTip(w);
+      this.statics.set(tpl, { model, grip: grip || new THREE.Matrix4(), muzzle: tip ? tip.applyMatrix4(grip) : null });
     }
     return this.statics.get(tpl);
   }
@@ -161,6 +162,7 @@ export class BotAssets {
         m.envMap = null;
         ambientLit(m, this.ambient);
         if (m.transparent && m.map) { m.alphaTest = 0.4; m.transparent = false; }
+        if (m.alphaTest > 0 && this.coverage) m.alphaToCoverage = true; // (see Game: alpha to coverage)
       }
     });
   }
@@ -332,13 +334,14 @@ export class Bot {
     this.weaponModel?.removeFromParent();
     this.weaponModel = null;
     if (tpl && this.bones.wpn) {
-      const { model, grip } = this.assets.staticWeapon(tpl);
+      const { model, grip, muzzle } = this.assets.staticWeapon(tpl);
       const w = model.clone(); // (its geometry shared with every bot holding one)
       this.lightOwn(w);
       const holder = new THREE.Group();
       holder.matrixAutoUpdate = false;
       holder.matrix.copy(grip).invert();
       holder.add(w);
+      holder.userData.muzzle = muzzle;
       this.bones.wpn.add(holder);
       this.weaponModel = holder;
     }
@@ -548,6 +551,9 @@ export class Bot {
 
   // Where shots come out of the bot's gun (game units).
   muzzle() {
+    // The barrel's tip of the gun in its hands (see staticWeapon), where its bones put it now.
+    const h = this.weaponModel, tip = h?.userData.muzzle;
+    if (tip && h.parent) { h.updateWorldMatrix(true, false); return fromGl(_tip.copy(tip).applyMatrix4(h.matrixWorld)); }
     const w = this.bonePos('wpn');
     const yr = (this.yaw * Math.PI) / 180, pr = (this.pitch * Math.PI) / 180;
     const d = [Math.cos(pr) * Math.cos(yr), Math.cos(pr) * Math.sin(yr), -Math.sin(pr)];

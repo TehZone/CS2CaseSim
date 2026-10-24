@@ -145,12 +145,16 @@ export class Hud {
   }
   scoped(on) { this.el.classList.toggle('scoped', !!on); }
 
-  // Top bar: scores by side, alive players, the round clock (or the planted bomb).
-  top({ ct, t, aliveCT, aliveT, totalCT, totalT, clock, planted, phase, ffa = false }) {
+  // Top bar: scores by side, alive players, the round clock (or the planted bomb). roster: [{ team, alive, avatar, name,
+  // me }] puts everyone's picture there (like CS2's), dimmed once they're dead; rosterKey changes when it does.
+  top({ ct, t, aliveCT, aliveT, totalCT, totalT, clock, planted, phase, ffa = false, roster = null, rosterKey = 0 }) {
     this.q('.top').classList.toggle('ffa', ffa);
     this.set('[data-score-ct]', String(ct));
     this.set('[data-score-t]', String(t));
-    const act = pips(aliveCT, totalCT, 'ct'), att = pips(aliveT, totalT, 't');
+    const fresh = roster && rosterKey !== this.cache.rosterKey;
+    if (fresh) this.cache.rosterKey = rosterKey;
+    const act = roster ? (fresh ? tiles(roster, 'CT') : this.cache.act) : pips(aliveCT, totalCT, 'ct');
+    const att = roster ? (fresh ? tiles(roster, 'T') : this.cache.att) : pips(aliveT, totalT, 't');
     if (act !== this.cache.act) this.q('[data-alive-ct]').innerHTML = this.cache.act = act;
     if (att !== this.cache.att) this.q('[data-alive-t]').innerHTML = this.cache.att = att;
     const text = planted ? 'C4' : fmtTime(clock);
@@ -314,3 +318,9 @@ const ICONS = {
 // A player on the scoreboard: their picture (a bot's real player), name and team.
 const who = (p) => `<span class="sb-who">${p.avatar ? `<img class="sb-avatar" src="${esc(p.avatar)}" alt="" loading="lazy">` : ''}<span>${esc(p.name)}${p.org ? `<small>${esc(p.org)}</small>` : ''}</span></span>`;
 const pips = (alive, total, side) => Array.from({ length: total }, (_, i) => `<i class="${(side === 'ct' ? total - 1 - i : i) < alive ? 'on' : ''}"></i>`).join('');
+// A side's players by the score, each with their picture (or the figure, without one): the CTs' read towards it.
+const tiles = (roster, side) => {
+  const list = roster.filter((p) => p.team === side);
+  if (side === 'CT') list.reverse();
+  return list.map((p) => `<i class="${p.alive ? 'on' : ''}${p.avatar ? ' pic' : ''}${p.me ? ' me' : ''}" title="${esc(p.name)}">${p.avatar ? `<img src="${esc(p.avatar)}" alt="" draggable="false">` : ''}</i>`).join('');
+};

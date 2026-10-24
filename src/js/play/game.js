@@ -9,13 +9,13 @@ import { itemDef } from '../items.js';
 import { D } from '../data.js';
 import { CollisionWorld, FLAG_BULLET, FLAG_PLAYER } from './collision.js';
 import { PlayerMovement, HULL_STAND as BOT_HULL } from './movement.js';
-import { loadWorld, toGl } from './world.js';
+import { loadWorld, toGl, fromGl } from './world.js';
 import { Input, bindTable } from './input.js';
 import { SoundBank } from './sound.js';
 import { buildViewmodel } from './viewmodel.js';
 import { Arsenal, Gun, basis } from './weapons.js';
 import { BotAssets, Bot, BOT_NAMES, rayCapsule, bindBounds } from './bots.js';
-import { Brain, botGun } from './ai.js';
+import { Brain, botGun, inaccuracyOf } from './ai.js';
 import { teamPlan, teamEconomy } from './strats.js';
 import { Effects } from './effects.js';
 import { Hud } from './hud.js';
@@ -224,6 +224,7 @@ export class Game {
     status('Loading players…');
     this.me = new Combatant({ name: 'You', team: this.team, squad: 'A', bot: false });
     this.botAssets = new BotAssets(this.renderer, this.world.ambient);
+    this.botAssets.coverage = this.msaa > 0;
     await this.botAssets.load(['weapon_glock', 'weapon_usp_silencer', 'weapon_ak47', 'weapon_m4a1', 'weapon_m4a1_silencer', 'weapon_awp', 'weapon_knife', 'weapon_c4']);
     if (this.disposed) return;
     // Who the bots are: real players (identity.js), each its own rank in the tier (Premier's come from the veto).
@@ -259,7 +260,7 @@ export class Game {
 
     status('Loading weapons and sounds…');
     this.arsenal = new Arsenal(this, {});
-    this.player = new PlayerMovement(this.collision, this.map.info.spawns[this.team][0].origin);
+    this.player = new PlayerMovement(this.bodyWorld(() => this.me), this.map.info.spawns[this.team][0].origin);
     this.prevEye = this.player.eye();
     await Promise.all([
       this.sounds.load(this.commonSounds()),
@@ -294,6 +295,10 @@ export class Game {
     // it showed.
     const hidden = [];
     this.scene.traverse((o) => { if (!o.visible && !o.isLight) { hidden.push(o); o.visible = true; } });
+    // Alpha to coverage: with multisampling, cut-out surfaces (foliage, fences, a model's straps and netting) blend their
+    // edges by how much of each pixel they cover, instead of each pixel being all in or all out (sparkling dots along
+    // them). Set before they compile here.
+    if (this.msaa) for (const sc of [this.scene, this.vmScene]) sc.traverse((o) => { for (const m of [].concat(o.material || [])) if (m.alphaTest > 0) m.alphaToCoverage = true; });
     this.post.compile(this.scene, this.camera, { scene: this.vmScene, camera: this.vmCamera });
     for (const o of hidden) o.visible = false;
     for (const b of bodies) {
@@ -1172,7 +1177,6 @@ export class Game {
     if (me.alive) {
       const wasGround = this.player.onGround;
       if (this.noclip) this.flyNoclip(cmd); else this.player.tick(TICK, cmd);
-      this.pushOutOfBots();
       if (!this.noclip) this.pushOutOfBalls();
       if (this.player.origin[2] < -3000) this.kill(me, null, { name: 'World' }, false);
       this.fallDamage();
@@ -1356,17 +1360,41 @@ export class Game {
   }
 
   // Bots are solid: you can't walk through them.
-  pushOutOfBots() {
-    const o = this.player.origin;
-    for (const b of this.bots) {
-      if (!b.c.alive) continue;
-      const dx = o[0] - b.pos[0], dy = o[1] - b.pos[1], d = Math.hypot(dx, dy);
-      if (d < 32 && d > 0.01 && Math.abs(o[2] - b.pos[2]) < 70) {
-        const push = 32 - d;
-        const to = [o[0] + (dx / d) * push, o[1] + (dy / d) * push, o[2]];
-        this.player.origin = this.collision.traceBox(o, to, this.player.hull.mins, this.player.hull.maxs, FLAG_PLAYER).endpos;
+  // Players block each other like CS2's, without pushing: a movement trace (FLAG_PLAYER) also stops at the other living
+  // players' hulls (sliding along them, standing on a head), but not at one it already overlaps (it can walk out of it).
+  traceBodies(start, end, mins, maxs, flags, self, extra) {
+    const tr = this.collision.traceBox(start, end, mins, maxs, flags, extra);
+    if (!(flags & FLAG_PLAYER) || !this.combatants || (self === this.me && this.noclip)) return tr;
+    const d = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
+    let best = tr.normal ? tr.fraction : 1, axis = -1, sign = 0;
+    for (const c of this.combatants) {
+      if (c === self || !c.alive) continue;
+      const p = c === this.me ? this.player.origin : this.botOf(c)?.pos;
+      if (!p) continue;
+      const top = (c === this.me ? this.player.ducked : this.botOf(c).ducked) ? 54 : 72;
+      const lo = [p[0] - 16 - maxs[0], p[1] - 16 - maxs[1], p[2] - maxs[2]], hi = [p[0] + 16 - mins[0], p[1] + 16 - mins[1], p[2] + top - mins[2]];
+      let t0 = -Infinity, t1 = Infinity, ax = -1, sg = 0;
+      for (let k = 0; k < 3 && t0 <= t1; k++) {
+        if (Math.abs(d[k]) < 1e-9) { if (start[k] <= lo[k] || start[k] >= hi[k]) t0 = Infinity; continue; }
+        let a = (lo[k] - start[k]) / d[k], b = (hi[k] - start[k]) / d[k], s = -1;
+        if (a > b) { [a, b] = [b, a]; s = 1; }
+        if (a > t0) { t0 = a; ax = k; sg = s; }
+        if (b < t1) t1 = b;
       }
+      if (t0 > t1 || t0 < 0 || t0 >= best || ax < 0) continue; // missed, already inside it, or the world is nearer
+      best = t0; axis = ax; sign = sg;
     }
+    if (axis < 0) return tr;
+    const len = Math.hypot(d[0], d[1], d[2]), f = len > 0 ? Math.max(0, best - 0.03125 / len) : 0, normal = [0, 0, 0];
+    normal[axis] = sign;
+    return { fraction: f, normal, startsolid: false, tri: null, endpos: [start[0] + d[0] * f, start[1] + d[1] * f, start[2] + d[2] * f] };
+  }
+  // The collision world as one player moves in it (see traceBodies). who: () => the combatant moving.
+  bodyWorld(who) {
+    const w = Object.create(this.collision);
+    w.of = this.collision;
+    w.traceBox = (s, e, mins, maxs, flags, extra) => this.traceBodies(s, e, mins, maxs, flags, who(), extra);
+    return w;
   }
 
   // Walking into the soccer ball kicks it along; where it can't get out of the way (against a wall) it stops you.
@@ -1524,28 +1552,28 @@ export class Game {
     gun.clip--;
     gun.nextAttack = t + (st.cycle?.[0] || 0.1);
     gun.lastShot = t;
-    const speed = Math.hypot(b.vel[0], b.vel[1]), max = st.maxSpeed?.[0] || 250;
-    const move = Math.max(0, Math.min(1, (speed - max * 0.34) / (max * 0.61)));
-    const inacc = (b.ducked ? st.inaccCrouch?.[0] : st.inaccStand?.[0]) + gun.penalty + (st.inaccMove?.[0] || 0) * move;
+    const m = gun.zoom > 0 ? 1 : 0;
+    const inacc = inaccuracyOf(st, m, { ducked: b.ducked, speed: Math.hypot(b.vel[0], b.vel[1]), airborne: b.airborne, penalty: gun.penalty });
     const pitch = b.pitch + gun.punch[0] * 2 * (1 - control), yaw = b.yaw + gun.punch[1] * 2 * (1 - control);
     const { fwd, right, up } = basis(pitch, yaw);
     const eye = b.eye();
     const r0 = Math.random(), t0 = Math.random() * Math.PI * 2;
     for (let i = 0; i < (st.bullets || 1); i++) {
       const r1 = Math.random(), t1 = Math.random() * Math.PI * 2;
-      const x = Math.cos(t0) * r0 * inacc + Math.cos(t1) * r1 * (st.spread?.[0] || 0);
-      const y = Math.sin(t0) * r0 * inacc + Math.sin(t1) * r1 * (st.spread?.[0] || 0);
+      const x = Math.cos(t0) * r0 * inacc + Math.cos(t1) * r1 * (st.spread?.[m] || 0);
+      const y = Math.sin(t0) * r0 * inacc + Math.sin(t1) * r1 * (st.spread?.[m] || 0);
       const d = [fwd[0] + right[0] * x + up[0] * y, fwd[1] + right[1] * x + up[1] * y, fwd[2] + right[2] * x + up[2] * y];
       const l = Math.hypot(...d);
       this.fireBullet(b.c, eye, d.map((v) => v / l), gun, { tracer: i === 0 && Math.random() < 0.5, muzzle: b.muzzle() });
     }
     // Recoil: Source's recoil table drives the punch.
-    const tbl = gun.tables[0], k = Math.min(Math.floor(gun.recoilIndex), 63);
+    const tbl = gun.tables[m] || gun.tables[0], k = Math.min(Math.floor(gun.recoilIndex), 63);
     const ang = (tbl[k].angle * Math.PI) / 180;
     gun.punchVel[0] -= Math.cos(ang) * tbl[k].mag * 0.9;
     gun.punchVel[1] -= Math.sin(ang) * tbl[k].mag * 0.9;
-    gun.penalty += st.inaccFire?.[0] || 0;
+    gun.penalty += st.inaccFire?.[m] || 0;
     gun.recoilIndex++;
+    if (st.unzoomsAfterShot) gun.zoom = 0; // (the AWP and the Scout: scoped again for the next shot)
     const ev = gun.silenced ? (gun.id === 'weapon_usp_silencer' ? 'Weapon_USP.SilencedShot' : 'Weapon_M4A1.Silenced') : st.shootSound;
     this.sounds.play(ev, { pos: eye, listener: this, volume: 1 });
     this.specAnim(b, 'shoot');
@@ -1627,11 +1655,22 @@ export class Game {
         this.sounds.play('BulletBy.Supersonic.Crack', { volume: 0.5 });
       }
     }
-    if (tracer) this.effects.tracer(muzzle || [origin[0] + dir[0] * 40, origin[1] + dir[1] * 40, origin[2] + dir[2] * 40 - 4], end(Math.min(lastT, range)));
+    if (tracer) this.effects.tracer(muzzle || (shooter === this.me && this.myMuzzle(gun)) || [origin[0] + dir[0] * 40, origin[1] + dir[1] * 40, origin[2] + dir[2] * 40 - 4], end(Math.min(lastT, range)));
     if (shooter === this.me) {
       if (gun.vm.muzzle) this.effects.muzzleFlash(gun.vm.muzzle.getWorldPosition(new THREE.Vector3()));
       else this.effects.muzzleFlash(new THREE.Vector3(0.09, -0.06, -0.55).applyQuaternion(this.camera.quaternion));
     }
+  }
+
+  // Where your gun's muzzle shows on screen, as a point in the world a little in front of you (the viewmodel is drawn in
+  // a scene of its own, with its own field of view): your tracers come out of the barrel there.
+  myMuzzle(gun) {
+    const m = gun?.vm?.muzzle;
+    if (!m) return null;
+    m.updateWorldMatrix(true, false);
+    const ndc = m.getWorldPosition(_v3).project(this.vmCamera);
+    const cam = this.camera.position, dir = new THREE.Vector3(ndc.x, ndc.y, 0.5).unproject(this.camera).sub(cam).normalize();
+    return fromGl(cam.clone().addScaledVector(dir, 24 * IN));
   }
 
   // Knife reach: the nearest enemy in front within range (a backstab if hitting from behind), else a wall.
@@ -2009,22 +2048,30 @@ export class Game {
       const val = (c) => (this.armsRace ? `level ${Math.min(c.level, ARMS_RACE.length - 1) + 1}/${ARMS_RACE.length}` : `${c.points || 0} pts`);
       hud.mode(this.ffa ? `You ${val(me)} · Leader: ${lead === me ? 'you' : lead.name} ${val(lead)}` : `${MODES[this.mode].name} · kills per team`);
     } else hud.mode(this.mode === 'wingman' ? 'Wingman' : '');
+    // (Everyone's picture by the clock: the list made again only when someone lives or dies, joins or changes sides.)
+    let rosterKey = this.combatants.length;
+    for (const c of this.combatants) rosterKey = (rosterKey * 4 + (c.alive ? 2 : 0) + (c.team === 'CT' ? 1 : 0)) % 2147483647;
+    if (!this.ffa && rosterKey !== this.rosterKey) {
+      this.rosterKey = rosterKey;
+      this.roster = this.combatants.map((c) => ({ team: c.team, alive: c.alive, avatar: c.identity?.avatar || null, name: c.name, me: c === me }));
+    }
     hud.top({
       ffa: this.ffa,
       ct: sideScore('CT'), t: sideScore('T'),
       aliveCT: m.alive('CT').length, aliveT: m.alive('T').length,
       totalCT: this.combatants.filter((c) => c.team === 'CT').length, totalT: this.combatants.filter((c) => c.team === 'T').length,
       clock: m.phase === 'end' ? 0 : m.time, planted: m.phase === 'planted', phase: m.phase,
+      roster: this.ffa ? null : this.roster, rosterKey,
     });
     const s = this.spectating && !me.alive ? this.spectating.c : me;
     hud.vitals(s.health, s.armor, s.helmet);
     hud.money(this.respawnMode ? null : me.money, { buyzone: me.alive && m.buyOpen && this.inBuyZone() && !this.armsRace, c4: me.hasC4, kit: me.defuser });
     hud.spectate(!me.alive && this.spectating && !(this.deathCam && this.now < this.deathCam.until) ? this.spectating.c.name : null, !this.specThird);
-    hud.crosshair(me.alive ? !this.buyMenu.isOpen && !gun?.nade : !!this.specVm);
+    hud.crosshair(me.alive ? !this.buyMenu.isOpen : !!this.specVm);
     const left = (this.flashUntil || 0) - this.now;
     hud.flashed(left > 0 ? Math.min(1, left / Math.max(0.5, this.flashSecs * 0.6)) : 0);
     hud.nades(me.alive ? NADE_ORDER.filter((id) => me.nades[id] > 0).map((id) => [id, NADES[id].short, me.nades[id]]) : [], gun?.nade ? gun.id : null);
-    if (me.alive && gun && !gun.melee) hud.setCrosshair(this.arsenal.inaccuracy(gun));
+    if (me.alive && gun && !gun.melee) hud.setCrosshair(gun.nade ? 0 : this.arsenal.inaccuracy(gun)); // (a grenade: the crosshair at rest)
     // The weapon list on the right whenever what you hold or carry changes.
     const listKey = me.alive && gun ? this.arsenal.order().map((sl) => sl + ':' + this.arsenal.guns[sl].id).join(',') + '|' + gun.slot + '|' + !!this.icons : '';
     if (listKey !== this.listKey) { if (listKey && this.listKey !== undefined) this.showWeaponList(); this.listKey = listKey; }

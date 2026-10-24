@@ -30,6 +30,21 @@ const wrap = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
 const dist2 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 const NO_LADDERS = new Set(); // bots climb ladders on their paths themselves (climb)
 
+// A gun's inaccuracy (as yours, weapons.js): standing or crouched, the firing penalty, moving faster than a third of its
+// top speed, in the air. m: its mode (1 scoped). The bullets' spread adds to it.
+export function inaccuracyOf(st, m, { ducked = false, speed = 0, airborne = false, penalty = 0 } = {}) {
+  const max = st.maxSpeed?.[m] || 250, move = Math.max(0, Math.min(1, (speed - max * 0.34) / (max * 0.61)));
+  return ((ducked ? st.inaccCrouch?.[m] : st.inaccStand?.[m]) || 0) + penalty + (st.inaccMove?.[m] || 0) * move + (airborne ? st.inaccJump?.[m] || 0 : 0);
+}
+
+// The chance a shot lands on a target this big (its half width over the distance, radians): bullets land at up to
+// inaccuracy (plus spread) from where the gun points, evenly out to it, and recoil it doesn't pull down pushes them off
+// by that (radians). A shotgun's pellets: the chance any one does.
+export function hitOdds(size, inacc, { spread = 0, bullets = 1, recoil = 0 } = {}) {
+  const one = Math.max(0, Math.min(1, (size - recoil) / Math.max(1e-5, inacc + spread)));
+  return 1 - (1 - one) ** bullets;
+}
+
 // A bot's gun (same data and recoil tables as yours, without a viewmodel).
 export function botGun(id, stats, sounds) {
   const g = new Gun({ slot: id === 'weapon_knife' || /knife/.test(id) ? 'knife' : 'x', id, name: id, stats: stats || {}, sounds, vm: null });
@@ -183,6 +198,7 @@ export class Brain {
       w.punchVel[0] *= Math.exp(-8 * dt); w.punchVel[1] *= Math.exp(-8 * dt);
       w.penalty *= Math.exp(-dt * 2.3 / Math.max(0.1, w.stats.recoveryStand || 0.4));
       if (t > w.lastShot + 0.4) w.recoilIndex *= Math.exp(-dt * 6);
+      if (w !== gun || (!this.target?.visible && t > (this.target?.lostAt || 0) + 1)) w.zoom = 0; // (scoped only to fight)
     }
     if (gun?.reloading && t >= gun.reloadEnd) {
       const take = Math.min(gun.stats.clip - gun.clip, gun.reserve);
@@ -293,9 +309,18 @@ export class Brain {
       return true;
     }
     b.ducked = this.crouchFight;
+    // A sniper rifle scopes in (unscoped, CS2's are wild) unless the enemy is right on top of it; the shot waits until
+    // the scope has settled.
+    const scope = gun.stats.zoomLevels > 0 && tg.dist > 300;
+    if (scope && !gun.zoom && t >= tg.react - 0.15) {
+      gun.zoom = 1;
+      gun.zoomReady = t + (gun.stats.zoomTime?.[1] || 0.05) + rnd(0.05, 0.15) + (1 - this.d.skill) * 0.25;
+      g.botSound(b, 'Weapon_AWP.Zoom', 0.4);
+    } else if (!scope && gun.zoom) gun.zoom = 0;
     const tol = Math.max(0.6, Math.min(5, (Math.atan(10 / Math.max(1, tg.dist)) * 180) / Math.PI));
     const onTarget = Math.abs(wrap(b.yaw - y)) < tol + Math.abs(this.aimErr[1]) && Math.abs(b.pitch - p) < tol + Math.abs(this.aimErr[0]);
-    if (t >= tg.react && t >= tg.pauseUntil && onTarget && t >= gun.nextAttack && gun.clip > 0 && !g.teammateInLine(b, aimAt) && !g.cv?.bot_dont_shoot) {
+    const settled = (!scope || (gun.zoom && t >= gun.zoomReady)) && this.accurate(gun, tg);
+    if (t >= tg.react && t >= tg.pauseUntil && onTarget && settled && t >= gun.nextAttack && gun.clip > 0 && !g.teammateInLine(b, aimAt) && !g.cv?.bot_dont_shoot) {
       const auto = gun.stats.fullAuto;
       const burst = tg.dist < 600 ? this.d.burst * 3 : tg.dist < 1500 ? this.d.burst : Math.max(1, Math.round(this.d.burst / 2));
       g.botShoot(b, gun, t, this.d.control);
@@ -307,6 +332,20 @@ export class Brain {
     // Stand still to shoot accurately (counter-strafing): a Global Elite has stopped as it fires, a Silver keeps walking a
     // while, its first shots wide. Until it reacts, it carries on as it was.
     return tg.shotAt == null ? t < tg.react : t < tg.shotAt + this.d.strafe;
+  }
+
+  // Whether its next shot would land, as it knows its gun (see inaccuracyOf, hitOdds): the spread now (moving, the
+  // spray's penalty) and the recoil it can't pull down, against the target's size there. One that knows its gun
+  // (discipline) waits for good odds, or the best this gun gets at that range: it stops before shooting, taps at range,
+  // bursts nearer and sprays up close. A Silver fires anyway.
+  accurate(gun, tg) {
+    const b = this.bot, st = gun.stats, m = gun.zoom > 0 ? 1 : 0;
+    const size = (this.aimHead ? 4 : 8) / Math.max(1, tg.dist);
+    const opts = { spread: st.spread?.[m] || 0, bullets: st.bullets || 1 };
+    const now = hitOdds(size, inaccuracyOf(st, m, { ducked: b.ducked, speed: Math.hypot(b.vel[0], b.vel[1]), airborne: b.airborne, penalty: gun.penalty }),
+      { ...opts, recoil: Math.hypot(gun.punch[0], gun.punch[1]) * 2 * (1 - this.d.control) * (Math.PI / 180) });
+    const best = hitOdds(size, inaccuracyOf(st, m, { ducked: b.ducked }), opts);
+    return now >= this.d.discipline * Math.min(0.5, best * 0.85);
   }
 
   turnTo(p, y, dt, rate = 1) {
@@ -634,10 +673,11 @@ export class Brain {
     const g = this.game, b = this.bot, nav = g.nav;
     const gun = b.weapons[b.slot];
     if (this.climb(dt, moving)) return;
-    let max = gun?.stats?.maxSpeed?.[0] || 250;
+    const topSpeed = gun?.stats?.maxSpeed?.[gun.zoom > 0 ? 1 : 0] || 250;
+    let max = topSpeed;
     if (b.ducked) max *= 0.34;
     else if (this.walking(t)) max *= 0.52;
-    let want = [0, 0], wpZ = null, direct = false;
+    let want = [0, 0], wpZ = null, direct = false, counter = false;
     this.heading = null;
     if (moving && this.path && this.pi < this.path.length && this.task !== 'hold') {
       if (t >= (this.smoothAt || 0)) { this.smoothAt = t + 0.2; this.skipAhead(); }
@@ -665,6 +705,11 @@ export class Brain {
     } else if (this.target?.visible && b.weapons[b.slot]?.melee && moving) {
       const e = g.bodyOf(this.target.c).feet, dx = e[0] - b.pos[0], dy = e[1] - b.pos[1], d = Math.hypot(dx, dy);
       if (d > 30) want = [(dx / d) * max, (dy / d) * max];
+    } else if (!moving && this.target?.visible && this.d.discipline > 0.35 && !b.airborne) {
+      // Stopping to shoot: one that knows how counter-strafes (presses the other way, stopped in a tenth of a second
+      // rather than sliding to a stop, its first shot inaccurate).
+      const v = Math.hypot(b.vel[0], b.vel[1]);
+      if (v > 40) { want = [(-b.vel[0] / v) * max, (-b.vel[1] / v) * max]; counter = true; }
     }
     if (!moving) b.ducked = this.target?.visible ? b.ducked : this.task === 'plant' || this.task === 'defuse';
     else if (!this.target?.visible) b.ducked = false;
@@ -675,13 +720,8 @@ export class Brain {
       want = [(dx / d) * max, (dy / d) * max];
     }
     // Face where it's going, unless that's only a few units away (pushed around a point, it would swing round it).
-    if ((want[0] || want[1]) && (!this.path || Math.hypot(this.path[this.pi][0] - b.pos[0], this.path[this.pi][1] - b.pos[1]) > 24 || burning)) this.heading = (Math.atan2(want[1], want[0]) * 180) / Math.PI;
-    // Keep apart from teammates and you (only when actually bumping into them; it doesn't change where it faces).
-    for (const o of g.bodies()) {
-      if (o.c === this.c || !o.c.alive) continue;
-      const dx = b.pos[0] - o.feet[0], dy = b.pos[1] - o.feet[1], d = Math.hypot(dx, dy);
-      if (d < 32 && d > 0.01 && Math.abs(b.pos[2] - o.feet[2]) < 60) { const k = 90 * (1 - d / 32) + 30; want[0] += (dx / d) * k; want[1] += (dy / d) * k; }
-    }
+    if ((want[0] || want[1]) && !counter && (!this.path || Math.hypot(this.path[this.pi][0] - b.pos[0], this.path[this.pi][1] - b.pos[1]) > 24 || burning)) this.heading = (Math.atan2(want[1], want[0]) * 180) / Math.PI;
+    // (Other players block it like walls, without shoving: see Game.traceBodies.)
     // Off the mesh (pushed by a teammate, or heading straight for somewhere the mesh has no way to), or a drop with no
     // floor at all: don't go there.
     const speed = Math.hypot(want[0], want[1]);
@@ -703,7 +743,7 @@ export class Brain {
     const tucking = !!b.tuck && air && t > this.jumpAt;
     body.tick(dt, {
       yaw: (Math.atan2(want[1], want[0]) * 180) / Math.PI, forward: Math.min(1, go / max), side: 0, pitch: 0,
-      maxSpeed: gun?.stats?.maxSpeed?.[0] || 250, walk: this.walking(t) && !b.ducked, duck: b.ducked || tucking, jump, jumpPress: jump,
+      maxSpeed: topSpeed, walk: this.walking(t) && !b.ducked, duck: b.ducked || tucking, jump, jumpPress: jump,
     });
     if (body.velocity[2] < -3000) { const a = nav.nearestArea(body.origin); body.teleport([a.center[0], a.center[1], a.center[2]]); } // fell out of the map
     b.pos = body.origin.slice(); b.vel = body.velocity.slice();
@@ -734,7 +774,10 @@ export class Brain {
   // ladder) or stopped it (planting, bot_stop) is taken over first.
   physics() {
     const b = this.bot, c = this.game.collision;
-    if (this.body?.world.of !== c) this.body = new PlayerMovement({ of: c, traceBox: (...a) => c.traceBox(...a), ladders: NO_LADDERS }, b.pos);
+    if (this.body?.world.of !== c) {
+      const w = this.game.bodyWorld(() => this.c);
+      this.body = new PlayerMovement({ of: c, traceBox: w.traceBox, ladders: NO_LADDERS }, b.pos);
+    }
     const m = this.body;
     if (m.origin[0] !== b.pos[0] || m.origin[1] !== b.pos[1] || m.origin[2] !== b.pos[2]) m.teleport(b.pos);
     m.velocity = b.vel.slice();

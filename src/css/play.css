@@ -85,6 +85,11 @@
   opacity: .32; filter: grayscale(1);
 }
 .play-hud .top .alive i.on { opacity: 1; filter: none; }
+/* with their pictures (a bot's real player): wider, the photo filling the tile above the team-colour line */
+.play-hud .top .alive i.pic { width: 34px; background-image: none; position: relative; overflow: hidden; }
+.play-hud .top .alive i.pic img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center top; }
+.play-hud .top .alive i.pic::after { content: ""; position: absolute; inset: 0; box-shadow: inherit; pointer-events: none; }
+.play-hud .top .alive i.me { outline: 1px solid rgba(255, 255, 255, .7); outline-offset: -1px; }
 .play-hud .top .team.ct .alive i.on { background-color: rgba(68, 112, 176, .85); box-shadow: inset 0 -2px 0 #8dbbf0; }
 .play-hud .top .team.t .alive i.on { background-color: rgba(184, 136, 42, .85); box-shadow: inset 0 -2px 0 #f0cc78; }
 .play-hud .top .clock {

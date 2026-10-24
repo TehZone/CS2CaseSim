@@ -14,6 +14,7 @@ export const HULL_DUCK = { mins: [-16, -16, 0], maxs: [16, 16, 54] };
 export const EYE_STAND = 64.06, EYE_DUCK = 46.05;
 const DUCK_DIFF = HULL_STAND.maxs[2] - HULL_DUCK.maxs[2];
 const NON_JUMP_VELOCITY = 140;
+const DUCK_SPEED = 8, DUCK_SPEED_MIN = 1.5, DUCK_SPAM = 2, DUCK_RECOVER = 3; // CS2's duck speed (see duck)
 
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -246,15 +247,20 @@ export class PlayerMovement {
     } else { this.onGround = false; this.groundNormal = null; }
   }
 
-  // Crouching: on the ground the box shrinks from the top; in the air it pulls the legs up (crouch-jumping).
+  // Crouching: on the ground the box shrinks from the top; in the air it pulls the legs up (crouch-jumping). How fast it
+  // goes down and up is CS2's duck speed: 8 (an eighth of a second), less 2 for every new crouch (down to 1.5, two thirds
+  // of a second), coming back at 3 a second: spam crouch and it gets slow.
   duck(dt, want) {
+    this.duckSpeed = Math.min(DUCK_SPEED, (this.duckSpeed ?? DUCK_SPEED) + DUCK_RECOVER * dt);
+    if (want && !this.duckHeld) this.duckSpeed = Math.max(DUCK_SPEED_MIN, this.duckSpeed - DUCK_SPAM);
+    this.duckHeld = !!want;
     if (want) {
       if (!this.ducked) {
         if (!this.onGround) this.origin[2] += DUCK_DIFF; // keep the head where it is
         this.ducked = true;
         if (!this.onGround) this.duckAmount = 1;
       }
-      this.duckAmount = Math.min(1, this.duckAmount + dt / MOVE.duckTime);
+      this.duckAmount = Math.min(1, this.duckAmount + dt * this.duckSpeed);
     } else {
       if (this.ducked) {
         // Stand up only if there's room (in the air, by dropping the legs back down).
@@ -269,7 +275,7 @@ export class PlayerMovement {
           if (!tr2.normal) this.ducked = false;
         }
       }
-      if (!this.ducked) this.duckAmount = Math.max(0, this.duckAmount - dt / MOVE.duckTime);
+      if (!this.ducked) this.duckAmount = Math.max(0, this.duckAmount - dt * this.duckSpeed);
     }
   }
 }

@@ -744,6 +744,146 @@ async function runBotsSmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=look` starts a match (CS2SIM_SMOKE_MAPS, else Dust II): holds a grenade primed and throws it (the
+// crosshair, the pin), then screenshots bots close up and further off, front and back, your viewmodel, a bot shooting
+// (its tracers and muzzle flash) and the HUD (everyone's picture by the clock) into userData/look-*.png, counting the
+// white specks on the players in each view (CS2SIM_SMOKE_OUTLIERS: every dot, dark or bright, by what's drawn there).
+// CS2SIM_SMOKE_SWEEP adds the count from 32 views round two bots.
+async function runLookSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `look-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  await wait(4000);
+  const map = (process.env.CS2SIM_SMOKE_MAPS || 'de_dust2').split(',')[0];
+  await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'competitive', map: '${map}', teamSize: 5 })); })(); 1`);
+  await js(`document.querySelector('#nav [data-page=stats]').click(); setTimeout(() => document.querySelector('#nav [data-page=play]').click(), 200); 1`);
+  await wait(1500);
+  if (!(await smokeStartMap(win, map, 'look'))) return app.quit();
+  await js(`(() => { const g = window.__playGame;
+    document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
+    g.god = true; g.cv.bot_stop = 1; g.match.time = 9999; g.console.run('cl_drawhud 0'); return 1; })()`);
+  await wait(3000);
+  // A grenade: the crosshair shows with it out; held, the pin stays pulled (not thrown, however long); let go, it's thrown.
+  console.log('SMOKE look grenade', await js(`(async () => { const g = window.__playGame, A = g.arsenal, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    if (g.match.phase === 'freeze') { g.match.time = 0; await wait(400); g.match.time = 9999; } // (live, so it can be thrown)
+    g.console.run('sv_cheats 1'); g.console.run('give weapon_hegrenade');
+    for (let i = 0; i < 50 && !A.current?.nade; i++) await wait(100);
+    const gun = A.current;
+    if (!gun?.nade) return 'no grenade in hand';
+    await wait(1500);
+    const xhair = () => !document.querySelector('.play-hud .xhair').classList.contains('hidden');
+    const out = { crosshairOut: xhair() };
+    g.input.buttons |= 1;
+    await wait(3000);
+    out.held3s = { pin: gun.pin != null, thrown: gun.throwAt != null, anim: gun.vm.role, crosshair: xhair() };
+    g.input.buttons &= ~1;
+    await wait(700);
+    out.released = { thrown: gun.throwAt != null || !!gun.released, hegrenadesLeft: g.me.nades.weapon_hegrenade || 0 };
+    return JSON.stringify(out); })()`));
+  // Stand in front of (or behind) a bot, looking at its chest from d units.
+  const at = (d, back = 0, bot = 0) => js(`(() => { const g = window.__playGame, b = g.bots.filter((x) => x.c.alive)[${bot}];
+    if (!b) return 'no bot';
+    const yr = b.yaw * Math.PI / 180 + (${back} ? Math.PI : 0), p = [b.pos[0] + Math.cos(yr) * ${d}, b.pos[1] + Math.sin(yr) * ${d}, b.pos[2]];
+    g.player.teleport(p); g.input.yaw = Math.atan2(b.pos[1] - p[1], b.pos[0] - p[0]) * 180 / Math.PI;
+    g.input.pitch = Math.atan2(64 - 50, ${d}) * 180 / Math.PI;
+    return b.c.name + ' ' + b.holding; })()`);
+  // Dots: single pixels unlike every neighbour (dark or bright), by what's drawn there and how it's lit.
+  const outliers = async (name) => {
+    const img = await win.webContents.capturePage(), { width: W, height: H } = img.getSize(), px = img.toBitmap();
+    const at = (x, y) => (y * W + x) * 4, found = [];
+    for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) {
+      if (x < W * 0.2 && y < H * 0.32) continue; // (the radar)
+      const k = at(x, y);
+      let min = 1e9;
+      for (const [dx, dy] of [[-2, 0], [2, 0], [0, -2], [0, 2], [-1, -1], [1, 1], [-1, 1], [1, -1]]) {
+        const n = at(x + dx, y + dy), d = Math.abs(px[k] - px[n]) + Math.abs(px[k + 1] - px[n + 1]) + Math.abs(px[k + 2] - px[n + 2]);
+        if (d < min) min = d;
+      }
+      if (min > 120) found.push([x, y, (px[k] + px[k + 1] + px[k + 2]) / 3 > 120 ? 'bright' : 'dark', px[k] > px[k + 2] + 8 && (px[k] + px[k + 1] + px[k + 2]) / 3 > 150]); // (BGRA: cool and bright, like the sky)
+    }
+    const kinds = JSON.parse(await js(`(async () => { const THREE = await import('three'), g = window.__playGame, r = new THREE.Raycaster(), out = {};
+      for (const [x, y, tone] of ${JSON.stringify(found.slice(0, 150))}) {
+        r.setFromCamera(new THREE.Vector2(x / ${W} * 2 - 1, 1 - y / ${H} * 2), g.camera);
+        const hit = r.intersectObjects(g.scene.children, true).find((h) => h.object.visible && h.object.material?.visible !== false);
+        const m = [].concat(hit?.object.material || [])[0];
+        const lit = !m ? '' : m.lightMap ? 'lightmapped' : m.cs2Cube ? 'player' : 'other';
+        const k = tone + ' ' + (hit ? lit + ' ' + (m?.userData?.vmat?.Name || m?.name || m?.type).replace('materials/', '') + (m.alphaTest ? ' alphatest' : '') + (m.transparent ? ' transparent' : '') : 'nothing');
+        out[k] = (out[k] || 0) + 1;
+      }
+      return JSON.stringify(Object.entries(out).sort((a, b) => b[1] - a[1]).slice(0, 14)); })()`));
+    console.log(`SMOKE look outliers ${name}: ${found.length} (${found.filter((f) => f[2] === 'dark').length} dark)`);
+    for (const [k, n] of kinds) console.log('   ', n, k);
+    const of = (re) => kinds.filter(([k]) => re.test(k)).reduce((s, [, n]) => s + n, 0);
+    return { total: found.length, dark: found.filter((f) => f[2] === 'dark').length, cool: found.filter((f) => f[3]).length, players: of(/ player /), lightmapped: of(/lightmapped/) };
+  };
+  // White specks: pixels far brighter than everything around them, and what's drawn there (the mesh and material under
+  // each, by a ray from the camera). Returns how many are on the players and their guns.
+  const specks = async (name) => {
+    if (process.env.CS2SIM_SMOKE_OUTLIERS) return (await outliers(name)).players;
+    const img = await win.webContents.capturePage(), { width: W, height: H } = img.getSize(), px = img.toBitmap();
+    const lum = (x, y) => { const k = (y * W + x) * 4; return (px[k] + px[k + 1] + px[k + 2]) / 3; };
+    const found = [];
+    for (let y = 3; y < H - 3; y++) for (let x = 3; x < W - 3; x++) {
+      if (x < W * 0.2 && y < H * 0.32) continue; // (the radar)
+      const l = lum(x, y);
+      if (l < 200) continue;
+      let ring = 0;
+      for (const [dx, dy] of [[-3, 0], [3, 0], [0, -3], [0, 3], [-2, -2], [2, 2], [-2, 2], [2, -2]]) ring += lum(x + dx, y + dy);
+      if (ring / 8 < l - 80 && !found.some((f) => Math.abs(f[0] - x) < 4 && Math.abs(f[1] - y) < 4)) found.push([x, y, Math.round(l), Math.round(ring / 8)]);
+    }
+    const hits = JSON.parse(await js(`(async () => { const THREE = await import('three'), g = window.__playGame, r = new THREE.Raycaster();
+      return JSON.stringify(${JSON.stringify(found.slice(0, 60))}.map(([x, y, l, ring]) => {
+        r.setFromCamera(new THREE.Vector2(x / ${W} * 2 - 1, 1 - y / ${H} * 2), g.camera);
+        const hit = r.intersectObjects(g.scene.children, true).find((h) => h.object.visible && h.object.material?.visible !== false);
+        let o = hit?.object, path = []; for (let p = o; p && path.length < 4; p = p.parent) path.push(p.name || p.type);
+        const m = [].concat(o?.material || [])[0];
+        const who = path.some((p) => /thirdperson|^(ctm|tm)_/.test(p)) ? 'player' : o?.parent?.userData?.muzzle !== undefined || path.some((p) => /weapon/.test(p)) ? 'gun' : 'map';
+        return [x, y, l, ring, who, hit ? (m?.userData?.vmat?.Name || m?.name || m?.type) + ' @ ' + path.join('<') + ' d=' + Math.round(hit.distance / 0.0254)
+          + (m ? ' rough ' + (+m.roughness).toFixed(2) + (m.roughnessMap ? '+map' : '') + ' metal ' + (+m.metalness).toFixed(2) + (m.metalnessMap ? '+map' : '') + ' env ' + (+(m.envMapIntensity ?? 1)).toFixed(2) + (m.normalMap ? ' normal' : '') : '') : 'nothing (viewmodel/sky)'];
+      })); })()`));
+    const onPlayers = hits.filter((h) => h[4] !== 'map');
+    console.log(`SMOKE look specks ${name}: ${found.length}, ${onPlayers.length} on players and their guns`);
+    for (const h of onPlayers) console.log('  ', JSON.stringify(h));
+    return onPlayers.length;
+  };
+  if (process.env.CS2SIM_SMOKE_SWEEP) {
+    // Round two bots, close and further off, eight ways: how many specks there are on them in all.
+    let total = 0;
+    for (const bot of [0, 1]) for (const d of [90, 260]) for (let k = 0; k < 8; k++) {
+      await js(`(() => { const g = window.__playGame, b = g.bots.filter((x) => x.c.alive)[${bot}];
+        const yr = ${k} * Math.PI / 4, p = [b.pos[0] + Math.cos(yr) * ${d}, b.pos[1] + Math.sin(yr) * ${d}, b.pos[2]];
+        g.player.teleport(p); g.input.yaw = Math.atan2(b.pos[1] - p[1], b.pos[0] - p[0]) * 180 / Math.PI; g.input.pitch = Math.atan2(14, ${d}) * 180 / Math.PI; return 1; })()`);
+      await wait(700);
+      total += await specks(`bot${bot} d${d} k${k}`);
+    }
+    console.log('SMOKE look sweep specks on players', total);
+  }
+  for (const [name, d, back] of [['near', 60, 0], ['near-back', 60, 1], ['mid', 200, 0], ['far', 600, 0]]) {
+    console.log('SMOKE look', name, await at(d, back));
+    await wait(1800);
+    await shot(name);
+    await specks(name);
+  }
+  // Your viewmodel against the sky and against a wall.
+  await js(`(() => { const g = window.__playGame; g.input.pitch = -20; return 1; })()`);
+  await wait(1200);
+  await shot('viewmodel');
+  // A bot shooting past you: its tracers from its barrel.
+  console.log('SMOKE look shooting', await js(`(() => { const g = window.__playGame, b = g.bots.filter((x) => x.c.alive)[0];
+    const yr = b.yaw * Math.PI / 180 + Math.PI / 2, p = [b.pos[0] + Math.cos(yr) * 120, b.pos[1] + Math.sin(yr) * 120, b.pos[2]];
+    g.player.teleport(p); g.input.yaw = Math.atan2(b.pos[1] - p[1], b.pos[0] - p[0]) * 180 / Math.PI; g.input.pitch = 5;
+    const gun = b.weapons[b.slot]; if (!gun || gun.melee) return 'no gun';
+    let n = 0; const iv = setInterval(() => { gun.clip = 30; g.botShoot(b, gun, g.now, 1); if (++n > 30) clearInterval(iv); }, 60);
+    return b.c.name + ' ' + gun.id + ' muzzle ' + b.muzzle().map(Math.round) + ' eye ' + b.eye().map(Math.round); })()`));
+  await wait(400);
+  await shot('shooting');
+  // The HUD: everyone's picture by the clock, one of them dead.
+  await js(`(() => { const g = window.__playGame; g.console.run('cl_drawhud 1'); const b = g.bots.find((x) => x.c.alive && x.c.team !== g.me.team); if (b) g.kill(b.c, null, { name: 'World' }, false); return 1; })()`);
+  await wait(1500);
+  await shot('hud');
+  app.quit();
+}
+
 // `CS2SIM_SMOKE=premier` plays through Premier: the map veto (banning on your turns, picking a side if it's yours) with
 // both teams listed, a few seconds of the match, then the end of it (a win, as your 10th: the CS Rating revealed), with
 // screenshots of the veto, the scoreboard and the result into userData/premier-*.png.
@@ -1363,6 +1503,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'perf') { win.webContents.once('did-finish-load', () => runPerfSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'maps') { win.webContents.once('did-finish-load', () => runMapsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'look') { win.webContents.once('did-finish-load', () => runLookSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'premier') { win.webContents.once('did-finish-load', () => runPremierSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'hitch') { win.webContents.once('did-finish-load', () => runHitchSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'prepare') { win.webContents.once('did-finish-load', () => runPrepareSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
