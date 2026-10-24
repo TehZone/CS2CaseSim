@@ -267,7 +267,9 @@ body:not(.is-online) .online-only { display: none !important; }
 .db-table-wrap { overflow-x: auto; }
 .db-table td { vertical-align: middle; white-space: nowrap; }
 .db-table tr.ranked td { background: rgba(228, 174, 57, .045); }
-.db-ranks { display: flex; gap: 4px; min-height: 22px; align-items: center; }
+/* (the badges in a box of their own: the cell stays a table cell, in line with the rest of the row) */
+.db-table .db-rank-col { width: 150px; }
+.db-ranks { display: flex; gap: 4px; align-items: center; }
 .db-float { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
 .db-float .floatline { display: inline-block; width: 70px; height: 3px; position: relative; background: linear-gradient(90deg, #4fb54a 0 7%, #9cc23b 7% 15%, #e8c33a 15% 38%, #e88a35 38% 45%, #d94a3a 45%); }
 .db-float .floatline i { position: absolute; top: -2px; width: 2px; height: 7px; background: #fff; box-shadow: 0 0 3px #000; }

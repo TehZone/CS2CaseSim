@@ -212,7 +212,7 @@ function drawItem() {
         <select class="input" data-csort>${COPY_SORTS.map(([k, n]) => `<option value="${k}" ${view.copySort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>` : ''}
       <input class="input" type="search" data-owner placeholder="Owner…" value="${esc(view.owner)}">
       <span class="spacer"></span><span class="muted">${rows.length.toLocaleString()} shown</span></div>
-    <div class="db-table-wrap"><table class="price-table db-table"><thead><tr>${skin ? '<th>Float rank</th><th>Float</th><th>Seed</th>' : ''}<th>Item</th><th>Owner</th><th>Value</th><th></th></tr></thead><tbody>
+    <div class="db-table-wrap"><table class="price-table db-table"><thead><tr>${skin ? '<th class="db-rank-col">Float rank</th><th>Float</th><th>Seed</th>' : ''}<th>Item</th><th>Owner</th><th>Value</th><th></th></tr></thead><tbody>
       ${shownRows.map((c, i) => copyRow(c, i, skin, ranks)).join('')}</tbody></table></div>
     ${rows.length > shownRows.length ? `<div class="muted" style="margin-top:8px">Showing the first ${shownRows.length} of ${rows.length.toLocaleString()}.</div>` : ''}`
     : `<div class="empty" style="padding:30px">${online() ? 'Nobody on the server has one yet.' : "You don't have one. Log in to a server to see other players' copies."}</div>`}
@@ -247,7 +247,7 @@ const itemCell = (it) => {
 const ownerCell = (c) => `<span class="db-owner ${c.me ? 'me' : ''}">${esc(c.owner)}${c.me ? ' <span class="dim">(you)</span>' : ''}</span>`;
 function copyRow(c, i, skin, ranks) {
   const it = c.item, r = ranks.get(it.uid);
-  return `<tr class="${r ? 'ranked' : ''}">${skin ? `<td class="db-ranks">${rankBadges(r, copyCategory(it))}</td><td>${floatCell(it)}</td><td>${it.sd ?? '—'}</td>` : ''}
+  return `<tr class="${r ? 'ranked' : ''}">${skin ? `<td class="db-rank-col"><div class="db-ranks">${rankBadges(r, copyCategory(it))}</div></td><td>${floatCell(it)}</td><td>${it.sd ?? '—'}</td>` : ''}
     <td>${skin ? itemCell(it) : esc(I.itemName(it))}</td><td>${ownerCell(c)}</td><td>${money(I.itemValue(it))}</td>
     <td>${it.t !== 'pro' ? `<button class="btn sm" data-cinsp="${i}">Inspect</button>` : ''}</td></tr>`;
 }
