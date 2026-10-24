@@ -17,12 +17,14 @@ export const RARE_CHANCE = 1 / 9;
 // the rig is in game metres with the eye at the origin, looking down -Z; run pose() after each animation step (forearm
 // twist, weapon merge). `gloves` (an inventory item) replaces CS2's default arms with that glove model and its skin,
 // like equipped gloves in game.
-export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = null, renderer = null } = {}) {
+// gloveScene: the equipped gloves already built (buildGloveScene's promise), for rigs that share them (Play mode builds a
+// rig per weapon, and baking the gloves for each took a tenth of a second); each rig gets its own copy, the baked
+// materials shared.
+export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = null, gloveScene = null, renderer = null } = {}) {
   let gloveArms;
-  [clipScene, gloveArms] = await Promise.all([clipScene, gloves && renderer ? buildGloveScene(gloves, itemDef(gloves), renderer).catch((e) => {
-    console.warn('Equipped gloves unavailable in first person, using the default arms:', e);
-    return null;
-  }) : null]);
+  const warn = (e) => { console.warn('Equipped gloves unavailable in first person, using the default arms:', e); return null; };
+  [clipScene, gloveArms] = await Promise.all([clipScene, gloveScene ? gloveScene.then((s) => s && { ...s, root: cloneSkinned(s.root), shared: true }, warn)
+    : gloves && renderer ? buildGloveScene(gloves, itemDef(gloves), renderer).catch(warn) : null]);
 
   const rig = new THREE.Group();
   const view = new THREE.Group(); // the exported viewmodel faces +Z; turn it to face -Z like our cameras
@@ -92,8 +94,10 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
       weaponRoot.matrix.copy(weaponBone.matrix).invert();
     }
   };
-  // Frees what this rig made itself (the equipped gloves' baked textures); the weapon's materials belong to the model.
+  // Frees what this rig made itself (the equipped gloves' baked textures, unless they're shared); the weapon's materials
+  // belong to the model.
   const dispose = () => {
+    if (gloveArms?.shared) return;
     gloveArms?.root.traverse((o) => {
       if (!o.isMesh) return;
       for (const m of [].concat(o.material || [])) {

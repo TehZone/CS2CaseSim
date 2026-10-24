@@ -349,9 +349,9 @@ function loadGltf(url) {
 
 async function plainMaterial(info) {
   const [map, orm, normal] = await Promise.all([
-    info?.color ? texture(info.color, { srgb: true }) : null,
-    info?.orm ? texture(info.orm) : null,
-    info?.normal ? texture(info.normal) : null,
+    info?.color ? texture(info.color, { srgb: true, shared: true }) : null,
+    info?.orm ? texture(info.orm, { shared: true }) : null,
+    info?.normal ? texture(info.normal, { shared: true }) : null,
   ]);
   return new THREE.MeshPhysicalMaterial({
     map, roughnessMap: orm, metalnessMap: orm, aoMap: orm, normalMap: normal,
@@ -435,8 +435,10 @@ async function buildGloveModel(item, def, renderer) {
 }
 
 // Returns a THREE.Group with the item on its real model, centred, barrel along +X, or null if unsupported.
-// statTrak: false leaves a StatTrak™ item's counter off (the sticker editor's side view).
-export async function buildCS2Model(item, def, renderer, { statTrak = true } = {}) {
+// statTrak: false leaves a StatTrak™ item's counter off (the sticker editor's side view). quick: framed by its meshes'
+// bind-pose bounds, not by every vertex where the bones put it (Play mode's guns, built mid-match: that took tens of ms
+// for a gun and the framing is the inspect's).
+export async function buildCS2Model(item, def, renderer, { statTrak = true, quick = false } = {}) {
   if (def.cat === 'gloves') return buildGloveModel(item, def, renderer);
   const paint = def.v ? null : def.fid;
   // Vanilla knives carry a HUD id instead of the weapon id; borrow it from a finished skin of the same knife.
@@ -451,11 +453,11 @@ export async function buildCS2Model(item, def, renderer, { statTrak = true } = {
   if (prep.kit && prep.inputs) {
     const baked = await bakeSkin(renderer, prep, item);
     const [normal, orm] = await Promise.all([
-      prep.materials[prep.material]?.normal ? texture(prep.materials[prep.material].normal) : null,
-      prep.materials[prep.material]?.orm ? texture(prep.materials[prep.material].orm) : null,
+      prep.materials[prep.material]?.normal ? texture(prep.materials[prep.material].normal, { shared: true }) : null,
+      prep.materials[prep.material]?.orm ? texture(prep.materials[prep.material].orm, { shared: true }) : null,
     ]);
     // Some kits replace the model's normal map and ambient occlusion in the final material.
-    const finalTex = (name) => { const v = prep.kit.final?.[name]?.value; return v && prep.textures[v] ? texture(prep.textures[v]) : null; };
+    const finalTex = (name) => { const v = prep.kit.final?.[name]?.value; return v && prep.textures[v] ? texture(prep.textures[v], { shared: true }) : null; };
     const [normalOverride, aoOverride] = await Promise.all([finalTex('g_tNormal'), finalTex('g_tAmbientOcclusion')]);
     skin = new THREE.MeshPhysicalMaterial({
       map: baked.colorRT.texture, roughnessMap: baked.rmRT.texture, metalnessMap: baked.rmRT.texture,
@@ -480,8 +482,13 @@ export async function buildCS2Model(item, def, renderer, { statTrak = true } = {
 
   // Centre and orient: longest axis along X, model standing upright.
   root.updateMatrixWorld(true);
-  const box = new THREE.Box3();
-  root.traverse((o) => { if (o.isMesh && o.visible) box.expandByObject(o); });
+  const box = new THREE.Box3(), part = new THREE.Box3();
+  root.traverse((o) => {
+    if (!o.isMesh || !o.visible) return;
+    if (!quick) { box.expandByObject(o); return; }
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    box.union(part.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld));
+  });
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const wrap = new THREE.Group();

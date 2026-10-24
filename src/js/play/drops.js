@@ -1,7 +1,6 @@
 // Weapons on the ground: dropped by dying players (their best gun) or by you (G). Walking over one picks it up when that
 // slot is free; E swaps it for the gun in your hand. Bots pick them up too. Cleared when a round restarts.
 import * as THREE from 'three';
-import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { FLAG_PLAYER } from './collision.js';
 import { toGl } from './world.js';
 
@@ -20,9 +19,9 @@ export class Drops {
     this.group.add(item.obj);
     this.game.botAssets.weapon(gun.id).then((tpl) => {
       if (!tpl || !item.obj.parent) return;
-      const m = cloneSkinned(tpl);
-      m.position.set(0, 0, 0); m.rotation.set(0, 0, 0); m.scale.set(1, 1, 1);
-      m.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; } }); // (culled: it lies still in its bind pose)
+      // The gun as bots hold it (baked at rest: no skeleton to update and upload every frame while it lies there).
+      const m = this.game.botAssets.staticWeapon(tpl).model.clone();
+      m.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; } }); // (culled: it lies still)
       item.obj.add(m);
       if (item.resting) this.freeze(item);
     });

@@ -156,6 +156,15 @@ What's in a match:
   compositor, not redrawn. Bots move with your movement code on a collision test that allocates
   nothing, and their sight lines stop at the first wall. `CS2SIM_SMOKE=perf` measures each map's frame rate with the
   bots playing.
+- No stutters: everything a match shows is loaded behind the loading screen (every gun bots carry, your viewmodels and
+  the plain ones you see spectating, the bomb, the effects), with its shaders compiled and first used and its textures
+  and bone textures on the GPU, and one frame drawn, so nothing is loaded, compiled or uploaded mid-round. Textures are
+  shared between the models that use the same image; your gloves are baked once; skinned meshes take their bind-pose
+  bounds; dropped and thrown guns are the bots' baked copies; a molotov lays out its flames over a few ticks; the smoke's
+  lighting runs allocation-free; bots and grenades are drawn between ticks (the tick is 64 Hz, the screen faster).
+  `cl_showfps 2` (or `net_graph 1`, or Show fps in the settings) graphs each frame's time: a stutter is a red spike.
+  `CS2SIM_SMOKE=hitch` plays rounds on Dust II, Inferno and Nuke and logs every frame over 33 ms with what ran in it
+  (`CS2SIM_SMOKE_PROFILE` and `CS2SIM_SMOKE_ALLOC` add a CPU and an allocation profile).
 - Movement ported from Source's: CS2's acceleration, friction, air strafing, 18-unit steps, jumping (no auto bunny
   hop), crouching, crouch-jumps, walking and ladders, with the weapon's own speed; footsteps by surface.
 - Weapons use CS2's data from `scripts/weapons.vdata` (damage, range falloff, armor penetration, fire rate,

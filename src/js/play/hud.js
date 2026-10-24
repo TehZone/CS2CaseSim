@@ -26,6 +26,7 @@ export class Hud {
       <div class="money"><span class="buyzone hidden" data-buyzone title="Buy zone (B)">${ICONS.cart}</span><span data-money>$0</span><span class="c4 hidden" data-c4>C4</span><span class="kit hidden" data-kit>KIT</span></div>
       <div class="modeline" data-mode></div>
       <div class="fps"></div>
+      <div class="ftgraph hidden"><canvas width="240" height="60"></canvas><span data-ft></span></div>
       <div class="netgraph"></div>
       <div class="feed"></div>
       <div class="chat" data-chat><div class="chat-lines" data-chat-lines></div><form class="chat-say hidden" data-chat-say><span data-chat-label>Say :</span><input maxlength="127" spellcheck="false" autocomplete="off"></form></div>
@@ -123,6 +124,25 @@ export class Hud {
   place(name) { this.set('.place', name ? name.replace(/([a-z])([A-Z])/g, '$1 $2') : ''); }
   fps(v) { this.set('.fps', v == null ? '' : `${Math.round(v)} fps`); }
   netGraph(text) { this.set('.netgraph', text || ''); }
+  // The frame-time graph (net_graph, cl_showfps 2): a bar per frame, scrolling left, as tall as the frame took (the top
+  // is 50 ms; lines at 60 fps and 30 fps), red over 33 ms: a stutter shows as a spike. ms null hides it.
+  frameGraph(ms) {
+    this.toggle('.ftgraph', ms != null);
+    if (ms == null) return;
+    const c = this.ftCanvas || (this.ftCanvas = this.q('.ftgraph canvas')), g = this.ftCtx || (this.ftCtx = c.getContext('2d'));
+    const w = c.width, h = c.height, y = (v) => h - Math.min(h, (v / 50) * h);
+    g.globalCompositeOperation = 'copy';
+    g.drawImage(c, -1, 0); // everything one bar to the left
+    g.globalCompositeOperation = 'source-over';
+    g.fillStyle = ms > 33.4 ? '#ff4b4b' : ms > 17.5 ? '#ffc24b' : '#7dff8a';
+    g.fillRect(w - 1, y(ms), 1, h - y(ms));
+    g.fillStyle = 'rgba(255,255,255,0.35)';
+    g.fillRect(w - 1, Math.round(y(16.7)), 1, 1); g.fillRect(w - 1, Math.round(y(33.3)), 1, 1);
+    // The slowest frame of the last few seconds, as text.
+    const now = performance.now(), worst = this.ftWorst || (this.ftWorst = { ms: 0, at: 0 });
+    if (ms >= worst.ms || now - worst.at > 3000) { worst.ms = ms; worst.at = now; }
+    this.set('[data-ft]', `${ms.toFixed(1)} ms · worst ${worst.ms.toFixed(0)} ms`);
+  }
   scoped(on) { this.el.classList.toggle('scoped', !!on); }
 
   // Top bar: scores by side, alive players, the round clock (or the planted bomb).

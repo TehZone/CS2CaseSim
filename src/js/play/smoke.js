@@ -12,7 +12,8 @@ import { FLAG_BULLET } from './collision.js';
 export const VOX = 16, NX = 32, NY = 32, NZ = 16, SLOTS = 6;
 const N = NX * NY * NZ;
 export const SMOKE_TIME = 18;
-const FADE = 3, MAX_CELLS = 2300, MAX_COST = 24, MAX_RISE = 9, FILL_PER_TICK = 260;
+// (The flood fill takes about 18 ticks: still well ahead of the bloom, and each tick's collision checks stay small.)
+const FADE = 3, MAX_CELLS = 2300, MAX_COST = 24, MAX_RISE = 9, FILL_PER_TICK = 130;
 // The bloom: the edge of the cloud reaches a cell at BLOOM * (1 - sqrt(1 - its share of the way out)) seconds (fast at
 // first, slowing as it spreads, like CS2's), and each cell then thickens over GROW seconds.
 const BLOOM = 1.2, GROW = 0.25, BLOOM_DONE = 0.05 + BLOOM + GROW;
@@ -127,8 +128,9 @@ export class SmokeField {
     const fade = Math.min(1, Math.max(0, (this.until - now) / FADE + (1 - c / this.maxCost) * 0.7));
     return grow * fade * (1 - Math.min(1, this.hole[k] / REFILL));
   }
-  densityAt(p, now) {
-    const [x, y, z] = this.cellOf(p);
+  densityAt(p, now) { return this.densityXYZ(p[0], p[1], p[2], now); }
+  densityXYZ(px, py, pz, now) {
+    const x = Math.floor((px - this.min[0]) / VOX), y = Math.floor((py - this.min[1]) / VOX), z = Math.floor((pz - this.min[2]) / VOX);
     if (x < 0 || y < 0 || z < 0 || x >= NX || y >= NY || z >= NZ) return 0;
     return this.cellDensity(this.idx(x, y, z), now);
   }
@@ -186,27 +188,29 @@ export class SmokeField {
   }
 
   // Units of full smoke along a segment.
+  // (Every bot's sight lines through a cloud, several times a second: the densities come from the texture's last write
+  // when there's been one, see write, and nothing is allocated a step.)
   thickness(a, b, now) {
-    const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], l = Math.hypot(...d);
+    const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2], l = Math.hypot(dx, dy, dz);
     if (l < 1e-6) return 0;
-    for (let i = 0; i < 3; i++) d[i] /= l;
+    const d = [dx / l, dy / l, dz / l];
     const seg = this.clip(a, d, l);
     if (!seg) return 0;
+    const dens = this.dens;
     let sum = 0;
-    for (let t = seg[0] + 4; t < seg[1]; t += 8) sum += this.densityAt([a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t], now) * 8;
+    for (let t = seg[0] + 4; t < seg[1]; t += 8) {
+      const x = Math.floor((a[0] + d[0] * t - this.min[0]) / VOX), y = Math.floor((a[1] + d[1] * t - this.min[1]) / VOX), z = Math.floor((a[2] + d[2] * t - this.min[2]) / VOX);
+      if (x < 0 || y < 0 || z < 0 || x >= NX || y >= NY || z >= NZ) continue;
+      const k = x + NX * (y + NY * z);
+      sum += (dens ? dens[k] : this.cellDensity(k, now)) * 8;
+    }
     return sum;
   }
 
-  // The light at a cell (linear RGB, before LIGHT_SCALE): the sky from above (less deep inside, under more smoke) and
-  // the sun through the cloud towards it. lit = { sunDir, sun, sky, ground } (game space, colours as [r, g, b]).
-  lightAt(k, lit, now, out) {
-    const x = k % NX, y = Math.floor(k / NX) % NY, z = Math.floor(k / (NX * NY));
-    const p = [this.min[0] + (x + 0.5) * VOX, this.min[1] + (y + 0.5) * VOX, this.min[2] + (z + 0.5) * VOX];
-    let toSun = 0, above = 0;
-    if (this.state[k] === 2) {
-      for (const d of [20, 52, 96]) toSun += this.densityAt([p[0] + lit.sunDir[0] * d, p[1] + lit.sunDir[1] * d, p[2] + lit.sunDir[2] * d], now);
-      above = this.densityAt([p[0], p[1], p[2] + 40], now) + this.densityAt([p[0], p[1], p[2] + 90], now);
-    }
+  // The light at a height with this much smoke above and towards the sun (linear RGB, before LIGHT_SCALE): the sky from
+  // above (less deep inside, under more smoke) and the sun through the cloud. lit = { sunDir, sun, sky, ground } (game
+  // space, colours as [r, g, b]).
+  lightOf(z, toSun, above, lit, out) {
     const up = Math.min(1, Math.max(0, (z - (this.startZ ?? 3)) / 8)), occ = 1 - 0.32 * Math.min(1, above * 0.6), sun = Math.exp(-toSun * 1.8);
     for (let i = 0; i < 3; i++) out[i] = ((lit.ground[i] + (lit.sky[i] - lit.ground[i]) * (0.3 + 0.7 * up)) * occ + lit.sun[i] * sun) * 0.72;
     return out;
@@ -215,6 +219,10 @@ export class SmokeField {
   // This cloud's voxels into its slot of the shared RGBA 3D texture: light in RGB, density in A. Empty cells keep the
   // open-air light (so the edges blend to it); the floor and ceiling cells next to the cloud get its density too, so
   // the smoke meets the ground (the depth test, not the voxel, decides where it ends).
+  // A cell's light looks at the smoke 20, 52 and 96 units towards the sun and 40 and 90 above it: from a cell's middle
+  // those land a whole number of cells away, the same from every cell, so it's all done by cell index. (This runs for
+  // thousands of cells a frame while a cloud blooms or fades, and is written out in one loop: numbers passed to or
+  // returned from a call that isn't inlined are boxed, which made hundreds of MB of garbage a smoke.)
   write(data, now, lit) {
     const base = this.slot * N, rgb = [0, 0, 0];
     const put = (k, a, light) => {
@@ -222,13 +230,44 @@ export class SmokeField {
       for (let i = 0; i < 3; i++) data[o + i] = Math.min(255, Math.round((light[i] / LIGHT_SCALE) * 255));
       data[o + 3] = a;
     };
-    if (!this.airLit) { this.airLit = true; for (let k = 0; k < N; k++) put(k, 0, this.lightAt(k, lit, now, rgb)); }
+    if (!this.airLit) {
+      // The open air's light only changes with height: worked out once a layer, not for each of the 16384 cells.
+      this.airLit = true;
+      for (let z = 0; z < NZ; z++) {
+        this.lightOf(z, 0, 0, lit, rgb);
+        for (let k = z * NX * NY; k < (z + 1) * NX * NY; k++) put(k, 0, rgb);
+      }
+    }
     for (const k of this.skin) data[(base + k) * 4 + 3] = 0;
+    const dens = this.dens ||= new Float32Array(N); // (cells that aren't smoke stay 0)
+    const life = now - this.born, left = this.until - now, mc = this.maxCost;
     for (const k of this.cells) {
-      const a = Math.round(this.cellDensity(k, now) * 255);
-      this.lightAt(k, lit, now, rgb);
+      const c = this.cost[k];
+      const reach = 0.05 + BLOOM * (1 - Math.sqrt(Math.max(0, 1 - Math.min(1, c / mc))));
+      const grow = Math.min(1, Math.max(0, (life - reach) / GROW)), fade = Math.min(1, Math.max(0, left / FADE + (1 - c / mc) * 0.7));
+      dens[k] = grow * fade * (1 - Math.min(1, this.hole[k] / REFILL)); // (cellDensity)
+    }
+    const sd = lit.sunDir, step = (d, i) => Math.floor(0.5 + (sd[i] * d) / VOX);
+    const s1x = step(20, 0), s1y = step(20, 1), s1z = step(20, 2), s2x = step(52, 0), s2y = step(52, 1), s2z = step(52, 2);
+    const s3x = step(96, 0), s3y = step(96, 1), s3z = step(96, 2), layer = NX * NY;
+    const g = lit.ground, sky = lit.sky, sun = lit.sun, startZ = this.startZ ?? 3;
+    for (const k of this.cells) {
+      const x = k % NX, y = Math.floor(k / NX) % NY, z = Math.floor(k / layer);
+      let toSun = 0, above = 0, X = x + s1x, Y = y + s1y, Z = z + s1z;
+      if (X >= 0 && Y >= 0 && Z >= 0 && X < NX && Y < NY && Z < NZ) toSun += dens[X + NX * (Y + NY * Z)];
+      X = x + s2x; Y = y + s2y; Z = z + s2z;
+      if (X >= 0 && Y >= 0 && Z >= 0 && X < NX && Y < NY && Z < NZ) toSun += dens[X + NX * (Y + NY * Z)];
+      X = x + s3x; Y = y + s3y; Z = z + s3z;
+      if (X >= 0 && Y >= 0 && Z >= 0 && X < NX && Y < NY && Z < NZ) toSun += dens[X + NX * (Y + NY * Z)];
+      if (z + 3 < NZ) above += dens[k + 3 * layer];
+      if (z + 6 < NZ) above += dens[k + 6 * layer];
+      const up = Math.min(1, Math.max(0, (z - startZ) / 8)), occ = 1 - 0.32 * Math.min(1, above * 0.6), lightSun = Math.exp(-toSun * 1.8);
+      for (let i = 0; i < 3; i++) rgb[i] = ((g[i] + (sky[i] - g[i]) * (0.3 + 0.7 * up)) * occ + sun[i] * lightSun) * 0.72; // (lightOf)
+      const a = Math.round(dens[k] * 255);
       put(k, a, rgb);
-      for (const n of [k - NX * NY, k + NX * NY]) if (this.inSkin[n] && data[(base + n) * 4 + 3] < a) put(n, a, rgb);
+      const below = k - layer, over = k + layer;
+      if (this.inSkin[below] && data[(base + below) * 4 + 3] < a) put(below, a, rgb);
+      if (this.inSkin[over] && data[(base + over) * 4 + 3] < a) put(over, a, rgb);
     }
   }
 }

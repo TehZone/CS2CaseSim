@@ -3,7 +3,6 @@
 // floods the area with CS2's volumetric smoke (smoke.js), the molotov/incendiary sets the ground on fire (a smoke puts it
 // out), the decoy fakes gunfire. Game units (inches, Z up); drawn in the glTF scene.
 import * as THREE from 'three';
-import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { FLAG_GRENADE, FLAG_BULLET } from './collision.js';
 import { toGl } from './world.js';
 import { SmokeSystem } from './smoke.js';
@@ -74,9 +73,8 @@ export class Grenades {
     this.group.add(n.obj);
     this.game.botAssets.weapon(id).then((tpl) => {
       if (!tpl || !n.obj.parent) return;
-      const m = cloneSkinned(tpl);
-      m.position.set(0, 0, 0); m.rotation.set(0, 0, 0); m.scale.set(1, 1, 1);
-      m.traverse((o) => { if (o.isMesh) { o.frustumCulled = false; o.castShadow = false; } });
+      const m = this.game.botAssets.staticWeapon(tpl).model.clone(); // (baked: see Drops.drop)
+      m.traverse((o) => { if (o.isMesh) { o.frustumCulled = false; o.castShadow = false; o.receiveShadow = true; } });
       n.obj.add(m);
     });
     toGl(n.pos, n.obj.position);
@@ -102,6 +100,7 @@ export class Grenades {
     for (let i = this.fires.length - 1; i >= 0; i--) {
       const f = this.fires[i];
       if (now > f.until) { this.endFire(f, i); continue; }
+      if (!f.art) this.spreadFire(f);
       // A smoke spreading over the flames puts them out.
       if (this.volume.active && this.smokedOut(f.pos)) { g.sounds.play('Molotov.Extinguish', { pos: f.pos, listener: g }); this.endFire(f, i); continue; }
       // Burning: damage four times a second to anyone standing in it.
@@ -232,10 +231,17 @@ export class Grenades {
       g.sounds.play('Molotov.Extinguish', { pos, listener: g });
       return;
     }
-    // Where the flames stand: on whatever is below (the ground, a box, the stairs), spread along it from where it
-    // broke (not through walls), and not up or down a drop.
-    const spots = [], from = [pos[0], pos[1], pos[2] + 24];
-    for (let i = 0; i < 200 && spots.length < 84; i++) {
+    const loop = g.sounds.play('Inferno.Loop', { pos, listener: g, volume: 0.6 });
+    const f = { c: n.c, id: n.id, pos, radius: FIRE_RADIUS, born: g.now, until: g.now + FIRE_TIME, nextHurt: g.now, art: null, loop, spots: [], tries: 0 };
+    this.fires.push(f);
+    this.spreadFire(f);
+  }
+  // Where the flames stand: on whatever is below (the ground, a box, the stairs), spread along it from where it broke
+  // (not through walls), and not up or down a drop. Worked out a few dozen tries a tick (all at once, its few hundred
+  // traces took a frame's worth of time), then the flames show.
+  spreadFire(f) {
+    const g = this.game, pos = f.pos, spots = f.spots, from = [pos[0], pos[1], pos[2] + 24];
+    for (let i = 0; i < 25 && f.tries < 200 && spots.length < 84; i++, f.tries++) {
       const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * FIRE_RADIUS * 0.95;
       const dx = Math.cos(a), dy = Math.sin(a);
       if (r > 8 && g.collision.raycast(from, [dx, dy, 1e-6], r, FLAG_BULLET)) continue;
@@ -244,13 +250,12 @@ export class Grenades {
       if (!hit || Math.abs(40 - hit.t) > 40) continue;
       spots.push([...toGl([x, y, pos[2] + 40 - hit.t]).toArray(), r / FIRE_RADIUS]);
     }
-    const art = new GroundFire(this.fireArt, toGl(pos), spots, FIRE_TIME, g.now);
-    this.group.add(art.obj);
-    const loop = g.sounds.play('Inferno.Loop', { pos, listener: g, volume: 0.6 });
-    this.fires.push({ c: n.c, id: n.id, pos, radius: FIRE_RADIUS, until: g.now + FIRE_TIME, nextHurt: g.now, art, loop });
+    if (f.tries < 200 && spots.length < 84) return;
+    f.art = new GroundFire(this.fireArt, toGl(pos), spots, FIRE_TIME, f.born);
+    this.group.add(f.art.obj);
   }
   endFire(f, i) {
-    f.art.dispose();
+    f.art?.dispose();
     Promise.resolve(f.loop).then((src) => { try { src?.stop(); } catch {} });
     this.game.sounds.play('Inferno.FadeOut', { pos: f.pos, listener: this.game, volume: 0.5 });
     this.fires.splice(i, 1);
@@ -262,13 +267,19 @@ export class Grenades {
   // A fire on your level (not one on a ledge above or a floor below).
   fireNear(p, r = 0) { return this.fires.find((f) => Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius + r && Math.abs(p[2] - f.pos[2]) < 70) || null; }
 
-  // Animation of clouds and flames, and the light of the fire nearest you (flickering).
-  update(dt) {
+  // Animation of clouds and flames, and the light of the fire nearest you (flickering). Grenades in the air are drawn
+  // the fraction `a` of the way from where they were at the last tick to where they are (see Bot.sync).
+  update(dt, a = 1) {
     const g = this.game, now = g.now;
+    for (const n of this.flying) {
+      const p = n.prev, q = n.pos;
+      if (p && a < 1) toGl([p[0] + (q[0] - p[0]) * a, p[1] + (q[1] - p[1]) * a, p[2] + (q[2] - p[2]) * a], n.obj.position);
+    }
     this.volume.update();
     this.warmFire?.obj.removeFromParent();
     let lit = null, best = Infinity;
     for (const f of this.fires) {
+      if (!f.art) continue;
       f.art.update(now);
       const d = f.art.center.distanceToSquared(g.camera.position);
       if (d < best) { best = d; lit = f; }

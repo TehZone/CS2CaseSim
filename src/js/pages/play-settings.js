@@ -45,7 +45,8 @@ export function settingsHtml(p) {
         ${range('y', 'Offset Y (forward)', -2, 2, 0.5, v.y, 'viewmodel')}${range('z', 'Offset Z (height)', -2, 2, 0.5, v.z, 'viewmodel')}
         <h4>Sound and HUD</h4>
         ${range('musicVolume', 'Music', 0, 1, 0.05, p.musicVolume ?? 1, 'root')}${range('voiceVolume', 'Radio voices', 0, 1, 0.05, p.voiceVolume ?? 1, 'root')}
-        ${check('showFps', 'Show fps', p.showFps !== false, 'root')}
+        <label>Show fps (cl_showfps)<select class="input" data-s="root.showFps">${[['0', 'Off'], ['1', 'Frame rate'], ['2', 'Frame rate and frame-time graph (stutters show as red spikes)']]
+          .map(([val, n]) => `<option value="${val}" ${String(p.showFps === false ? 0 : p.showFps === 2 ? 2 : 1) === val ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
         ${check('netGraph', 'Performance graph (frame time, draws: net_graph)', !!p.netGraph, 'root')}
         <h4>Video</h4>
         ${range('renderScale', 'Render scale', 0.5, 1, 0.05, p.renderScale ?? 1, 'root')}
@@ -73,7 +74,9 @@ export function bindSettings(el, prefs, savePrefs, rerender) {
     if (prev) prev.innerHTML = crosshairHtml({ ...CROSSHAIR, ...q.crosshair });
   };
   el.querySelectorAll('[data-s]').forEach((input) => input.addEventListener('input', () => {
-    write(input.dataset.s, input.type === 'checkbox' ? input.checked : input.type === 'range' || input.dataset.s === 'root.fpsMax' ? Number(input.value) : input.value);
+    const s = input.dataset.s;
+    write(s, input.type === 'checkbox' ? input.checked : s === 'root.showFps' ? (input.value === '0' ? false : input.value === '2' ? 2 : true)
+      : input.type === 'range' || s === 'root.fpsMax' ? Number(input.value) : input.value);
   }));
   // The unlocked frame rate is the app's (it needs a restart), not the match's.
   el.querySelectorAll('[data-display]').forEach((input) => input.addEventListener('change', async () => {
@@ -112,6 +115,6 @@ export function bindSettings(el, prefs, savePrefs, rerender) {
 
 // What a match gets from the saved preferences.
 export function matchSettings(p) {
-  return { crosshair: p.crosshair, viewmodel: p.viewmodel, keybinds: bindTable(p), musicVolume: p.musicVolume ?? 1, voiceVolume: p.voiceVolume ?? 1, showFps: p.showFps !== false,
+  return { crosshair: p.crosshair, viewmodel: p.viewmodel, keybinds: bindTable(p), musicVolume: p.musicVolume ?? 1, voiceVolume: p.voiceVolume ?? 1, showFps: p.showFps === 2 ? 2 : p.showFps !== false,
     renderScale: Math.min(1, Math.max(0.5, p.renderScale ?? 1)), fpsMax: p.fpsMax || 0, netGraph: !!p.netGraph };
 }

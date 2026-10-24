@@ -147,7 +147,8 @@ export class Brain {
     this.updateGun(dt, t);
     if (phase === 'freeze') { b.vel = [0, 0, 0]; this.lookAround(dt, t); return; }
     if (t >= this.nextScan) { this.nextScan = t + 3 / 64; this.scan(t); }
-    if (t >= this.nextThink) { this.nextThink = t + 0.25; this.decide(t); }
+    // (Their thinking spread over the ticks: all nine finding paths in the same tick, as the round went live, took 20 ms.)
+    if (t >= this.nextThink && t - g.liveAt >= (b.index % 8) * 0.03) { this.nextThink = t + 0.25; this.decide(t); }
     let moving = true;
     if (this.target?.visible) moving = this.fight(dt, t);
     else if (this.task === 'plant' || this.task === 'defuse') moving = false;

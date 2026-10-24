@@ -141,6 +141,19 @@ export class Effects {
     this.particles.push({ s, v: new THREE.Vector3(), life: 0.25, age: 0, size: 3, grow: 0.6, gravity: 0 });
   }
 
+  // While the map's shaders compile (on), one of each kind of thing this draws is in the scene and the muzzle flash
+  // shows, so the first shot doesn't compile them mid-fight; off takes them out again. The sprite's material is kept: a
+  // shader goes when the last material using it is disposed, and every puff's is (the next one compiled it again).
+  warmUp(on) {
+    if (on) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.puffTex, transparent: true, depthWrite: false }));
+      const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0.01, 0)]), this.tracerMat);
+      this.warm = [s, l];
+      this.group.add(s, l);
+    } else for (const o of this.warm || []) { this.group.remove(o); if (o.isLine) o.geometry.dispose(); else this.keep = o.material; }
+    this.flash.visible = on;
+  }
+
   // Bullet holes and particles go away when a round restarts.
   clear() {
     this.holes.count = 0;
@@ -181,7 +194,7 @@ export class Effects {
     this.group.removeFromParent();
     this.holeMat.map.dispose(); this.holeMat.dispose(); this.holeGeo.dispose();
     this.puffTex.dispose(); this.sparkTex.dispose();
-    this.flash.material.map.dispose(); this.flash.material.dispose();
+    this.flash.material.map.dispose(); this.flash.material.dispose(); this.keep?.dispose();
     for (const p of this.particles) p.s.material.dispose();
     for (const t of this.tracers) { t.l.geometry.dispose(); t.l.material.dispose(); }
   }

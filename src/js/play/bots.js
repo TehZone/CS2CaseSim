@@ -44,6 +44,21 @@ const HOLD = {
 };
 const PISTOL_RE = /^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/;
 const wrap = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
+const _lerp = [0, 0, 0];
+
+// Skinned meshes' bounds from their bind pose. three works out the posed ones vertex by vertex, through the bones, the
+// first time it draws one (tens of ms for an agent or a viewmodel, and garbage for every vertex) only to sort it by
+// distance; the bind pose is near enough for that (Play draws them all: none is culled by its bounds).
+export function bindBounds(root) {
+  root?.traverse((o) => {
+    if (!o.isSkinnedMesh || o.boundingSphere) return;
+    const g = o.geometry;
+    if (!g.boundingSphere) g.computeBoundingSphere();
+    if (!g.boundingBox) g.computeBoundingBox();
+    o.boundingSphere = g.boundingSphere.clone();
+    o.boundingBox = g.boundingBox.clone();
+  });
+}
 // Standing still, the body turns to the aim only once it's this far off (CS2's turn in place); the spine twists the rest.
 const TURN_LIMIT = 50;
 const SPINE = ['spine_1', 'spine_2', 'spine_3']; // the bones bendSpine turns, a third each
@@ -215,7 +230,7 @@ export class BotAssets {
   weapon(id) {
     if (!this.weapons.has(id)) {
       const def = { wid: id, w: id, n: id, cat: /knife|bayonet/.test(id) ? 'knife' : 'rifle', v: true };
-      this.weapons.set(id, buildCS2Model({ t: 'skin', fl: 0, sd: 0 }, def, this.renderer).then((m) => {
+      this.weapons.set(id, buildCS2Model({ t: 'skin', fl: 0, sd: 0 }, def, this.renderer, { quick: true }).then((m) => {
         const root = m?.userData.root;
         if (root) this.light(root);
         return root || null;
@@ -238,6 +253,8 @@ export class Bot {
     this.pos = [0, 0, 0]; this.vel = [0, 0, 0];
     this.yaw = 0; this.pitch = 0; this.ducked = false;
     this.bodyYaw = 0; // where the legs face (yaw is where it aims)
+    // Where it was at the tick before (see keepPrev), to be drawn between ticks.
+    this.prev = [0, 0, 0]; this.prevYaw = 0; this.prevAim = [0, 0]; this.hasPrev = false;
     this.weapons = {}; this.slot = 'secondary';
     this.mode = 'move'; // move | plant | defuse | dead
     this.time = 0;
@@ -260,6 +277,7 @@ export class Bot {
       if (/firstperson/.test(o.name) || /firstperson/.test(o.parent?.name || '')) o.visible = false;
     });
     this.view.add(this.model);
+    bindBounds(this.model);
     this.bones = {};
     this.model.traverse((o) => { if (o.isBone && !this.bones[o.name]) this.bones[o.name] = o; });
     this.mixer = new THREE.AnimationMixer(this.model);
@@ -280,7 +298,7 @@ export class Bot {
     const before = (r, sc, cam, geo, mat) => {
       const u = mat.cs2Cube;
       if (!u) return;
-      for (let k = 0; k < 6; k++) u.value[k].copy(cube.value[k]);
+      u.value.set(cube.value);
       const p = props.get(mat).currentProgram;
       if (p && gl.getParameter(gl.CURRENT_PROGRAM) === p.program) p.getUniforms().setValue(gl, 'cs2Cube', u.value);
     };
@@ -380,6 +398,7 @@ export class Bot {
     this.climbing = null; this.airborne = false; this.jumped = false; this.tuck = 0; this.pendingThrow = null;
     this.root.visible = true;
     if (this.holding) { const h = this.holding; this.holding = null; this.equip(h, { draw: false }); }
+    this.hasPrev = false; // (not drawn sliding over from where it died)
     this.sync();
   }
 
@@ -492,12 +511,33 @@ export class Bot {
   }
 
   // Copies the simulated position and the body's facing onto the model.
-  sync() {
-    toGl(this.pos, this.root.position);
-    this.root.rotation.set(0, (this.bodyYaw * Math.PI) / 180, 0);
+  // The tick moves it 64 times a second, the screen shows it 144 (or 60, or 240): drawn only where the ticks put it, a
+  // moving bot (and the view of one you spectate) steps unevenly. So each tick remembers where it was, and the frame
+  // draws it that fraction `a` of the way to where it is now (a = 1, where it is: for its hitboxes).
+  keepPrev() {
+    const p = this.prev, q = this.pos;
+    p[0] = q[0]; p[1] = q[1]; p[2] = q[2];
+    this.prevYaw = this.bodyYaw; this.prevAim[0] = this.pitch; this.prevAim[1] = this.yaw;
+    this.hasPrev = this.mode !== 'dead';
+  }
+  lerped(a) {
+    const p = this.prev, q = this.pos, out = _lerp;
+    if (!this.hasPrev || a >= 1 || Math.abs(q[0] - p[0]) + Math.abs(q[1] - p[1]) + Math.abs(q[2] - p[2]) > 64) { out[0] = q[0]; out[1] = q[1]; out[2] = q[2]; return out; }
+    for (let i = 0; i < 3; i++) out[i] = p[i] + (q[i] - p[i]) * a;
+    return out;
+  }
+  sync(a = 1) {
+    toGl(this.lerped(a), this.root.position);
+    const y = a < 1 && this.hasPrev ? this.prevYaw + wrap(this.bodyYaw - this.prevYaw) * a : this.bodyYaw;
+    this.root.rotation.set(0, (y * Math.PI) / 180, 0);
   }
 
   eye() { return [this.pos[0], this.pos[1], this.pos[2] + (this.ducked ? 46 : 64)]; }
+  // Its eye and aim as drawn this frame (see sync): [eye, pitch, yaw].
+  eyeAt(a) {
+    const p = this.lerped(a), k = a < 1 && this.hasPrev ? a : 1;
+    return [[p[0], p[1], p[2] + (this.ducked ? 46 : 64)], this.prevAim[0] + (this.pitch - this.prevAim[0]) * k, this.prevAim[1] + wrap(this.yaw - this.prevAim[1]) * k];
+  }
 
   bonePos(name, out = new THREE.Vector3()) {
     const b = this.bones[name];

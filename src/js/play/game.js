@@ -14,7 +14,7 @@ import { Input, bindTable } from './input.js';
 import { SoundBank } from './sound.js';
 import { buildViewmodel } from './viewmodel.js';
 import { Arsenal, Gun, basis } from './weapons.js';
-import { BotAssets, Bot, BOT_NAMES, rayCapsule } from './bots.js';
+import { BotAssets, Bot, BOT_NAMES, rayCapsule, bindBounds } from './bots.js';
 import { Brain, botGun, teamPlan } from './ai.js';
 import { Effects } from './effects.js';
 import { Hud } from './hud.js';
@@ -24,7 +24,7 @@ import { BuyMenu } from './buymenu.js';
 import { DevConsole } from './console.js';
 import { iconFor } from './icons.js';
 import { Radar } from './radar.js';
-import { buildCS2Model } from '../cs2/skin.js';
+import { buildCS2Model, buildGloveScene } from '../cs2/skin.js';
 import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, aimThrow as aimThrowPitch } from './grenades.js';
 import { Drops } from './drops.js';
 import { Balls } from './props.js';
@@ -68,7 +68,7 @@ const PENETRATION = { wood: 1, wood_panel: 1, wood_plank: 1, wood_crate: 1.2, wo
   metal_sand_barrel: 0.5, metal_dumpster: 0.4, solidmetal: 0.15, concrete: 0.3, rock: 0.15, tile: 0.35, dirt: 0.3, sand: 0.3, rubbertire: 0.5, default: 0.4 };
 const MUSIC = 'valve_cs2_01';
 
-const _frustum = new THREE.Frustum(), _m4 = new THREE.Matrix4(), _sphere = new THREE.Sphere(), _v3 = new THREE.Vector3();
+const _frustum = new THREE.Frustum(), _m4 = new THREE.Matrix4(), _sphere = new THREE.Sphere(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _euler = new THREE.Euler();
 
 export class Game {
   constructor(root, { map = 'de_dust2', mode = 'competitive', team = 'CT', teamSize = 5, difficulty = 'normal', length = 'short', overtime = true, friendlyFire = false,
@@ -95,6 +95,9 @@ export class Game {
     // No multisampling on the screen itself: only the full-screen post pass draws there (the world is anti-aliased in its
     // own target, see post.js).
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, powerPreference: 'high-performance' });
+    // (Reading each shader's compile log, the first time it's used, waited for the driver: a stall each new shader. The
+    // game's shaders are known to compile; window.__cs2Shaders turns the check back on.)
+    this.renderer.debug.checkShaderErrors = !!window.__cs2Shaders;
     // Quality: high renders at the screen's full resolution with soft shadows; balanced (Medium) at 1 CSS pixel; performance
     // (Low) lower, without anti-aliasing or the 3D skybox. The render scale (settings) scales any of them.
     this.quality = quality;
@@ -243,27 +246,70 @@ export class Game {
       this.vmData(this.knifeId(this.team)), this.vmData(DEFAULT_PISTOL.CT), this.vmData(DEFAULT_PISTOL.T), this.vmData('weapon_c4'),
     ]);
     if (this.disposed) return;
-    this.bombTemplate = buildCS2Model({ t: 'skin', fl: 0, sd: 0 }, { wid: 'weapon_c4', w: 'C4', n: 'C4', cat: 'equipment', v: true }, this.renderer).catch(() => null);
+    this.bombTemplate = buildCS2Model({ t: 'skin', fl: 0, sd: 0 }, { wid: 'weapon_c4', w: 'C4', n: 'C4', cat: 'equipment', v: true }, this.renderer, { quick: true }).catch(() => null);
     if (map.radar) this.radar = new Radar(this.root, map.radar);
     this.match = this.respawnMode ? new Deathmatch(this, { minutes: this.minutes, ffa: this.ffa, armsRace: this.armsRace }) : new Match(this, this.rules);
     if (this.respawnMode) await Promise.all((this.armsRace ? ARMS_RACE : [this.dmWeapon('primary'), this.dmWeapon('secondary')]).slice(0, 2).map((id) => this.vmData(id).catch(() => {})));
+    // Every gun the match will show, now rather than in it (each one loaded mid-round stalled the game a tenth of a second
+    // or more, and its textures again the first time it was drawn): the bots' guns as they hold them, your viewmodels
+    // and the plain ones you see spectating a bot, each with its shaders compiled and its textures on the GPU.
+    const guns = [...new Set([...BOT_GUNS, ...PRELOAD, ...(this.armsRace ? ARMS_RACE : [])])];
+    const jobs = [
+      ...BOT_GUNS.map((id) => async () => { const tpl = await this.botAssets.weapon(id); if (tpl) await this.warm(this.botAssets.staticWeapon(tpl).model, this.scene); }),
+      ...guns.flatMap((id) => [false, true].map((plain) => async () => { const d = await this.vmData(id, { plain }).catch(() => null); if (d) await this.warm(d.vm.rig, this.vmScene); })),
+    ];
+    // The planted bomb (lit as it will be: lighting it changes its shaders).
+    jobs.push(async () => { const m = await this.bombTemplate; if (m) { this.botAssets.light(m.userData.root); await this.warm(m.userData.root, this.scene); } });
+    let loaded = 0;
+    const next = async () => { while (jobs.length && !this.disposed) { await jobs.shift()(); status(`Loading weapons… ${++loaded} of ${loaded + jobs.length}`); } };
+    await Promise.all([next(), next(), next(), next()]);
+    if (this.disposed) return;
     status('Compiling shaders…');
+    this.effects.warmUp(true); // (the muzzle flash, impacts and tracers: compiled now, not at the first shot)
+    // Every bot and your own body too, though out of view (they'd compile when they first came into sight), with their
+    // bones' textures made.
+    const bodies = [...this.bots, this.myBody];
+    for (const b of bodies) { b.view.visible = true; b.root.userData.wasVisible = b.root.visible; b.root.visible = true; }
+    // So is the map's own hidden stuff (entities that start switched off, a door's other state...): it compiled the moment
+    // it showed.
+    const hidden = [];
+    this.scene.traverse((o) => { if (!o.visible && !o.isLight) { hidden.push(o); o.visible = true; } });
     this.post.compile(this.scene, this.camera, { scene: this.vmScene, camera: this.vmCamera });
+    for (const o of hidden) o.visible = false;
+    for (const b of bodies) {
+      b.root.visible = b.root.userData.wasVisible;
+      b.root.traverse((o) => { if (o.isSkinnedMesh && !o.skeleton.boneTexture) { o.skeleton.computeBoneTexture(); this.renderer.initTexture(o.skeleton.boneTexture); } });
+    }
+    this.effects.warmUp(false);
     // Every texture on the GPU now, not the first time it comes into view (a hitch turning round).
     const textures = new Set(this.world.layerTextures);
     for (const sc of [this.scene, this.world.sky3d?.scene]) sc?.traverse((o) => { if (o.material) for (const v of Object.values(o.material)) if (v?.isTexture) textures.add(v); });
     for (const t of textures) this.renderer.initTexture(t);
     this.renderer.shadowMap.needsUpdate = true;
     this.match.startRound();
+    // One frame drawn now, behind the loading screen: what's made the first time anything is drawn (render targets, the
+    // shadow map, the bots and your weapon) isn't in the match's first frame.
+    this.acc = 0;
+    this.frame(0);
+    window.gc?.(); // (what loading left behind, collected now rather than in a stall mid-round: see main.js)
     for (const c of this.combatants) if (c !== this.me) this.hud.chatLine({ system: true, text: `${c.name} has joined the ${this.ffa ? 'game' : c.team === 'CT' ? 'Counter-Terrorists' : 'Terrorists'}` });
     this.emit('loaded');
-    // Background, a little at a time so the game stays smooth: the bots' gun models, then the guns people buy.
-    (async () => {
-      const pause = () => new Promise((r) => setTimeout(r, 400));
-      await new Promise((r) => setTimeout(r, 1500));
-      for (const id of BOT_GUNS) { if (this.disposed) return; await this.precompile(await this.botAssets.weapon(id), this.scene); await pause(); }
-      for (const id of PRELOAD) { if (this.disposed) return; const d = await this.vmData(id).catch(() => null); await this.precompile(d?.vm.rig, this.vmScene); await pause(); }
-    })();
+  }
+
+  // A model ready to be drawn: its shaders compiled and its textures uploaded.
+  async warm(obj, scene) {
+    if (!obj || this.disposed) return;
+    await this.precompile(obj, scene);
+    obj.traverse((o) => {
+      if (!o.isMesh || !o.visible) return;
+      for (const m of [].concat(o.material || [])) {
+        for (const v of Object.values(m)) if (v?.isTexture) this.renderer.initTexture(v);
+        // Its shaders' first use (their uniforms and attributes looked up), done now that they're linked.
+        for (const p of this.renderer.properties.get(m).programs?.values() || []) { p.getUniforms(); p.getAttributes(); }
+      }
+      // (A skinned mesh's bone matrices go to the GPU as a texture, made the first time it's drawn.)
+      if (o.isSkinnedMesh && !o.skeleton.boneTexture) { o.skeleton.computeBoneTexture(); this.renderer.initTexture(o.skeleton.boneTexture); }
+    });
   }
 
   // A model's shaders compiled while the game goes on (the browser links them alongside) before it's first drawn: a gun
@@ -338,6 +384,8 @@ export class Game {
   // The viewmodel (with your equipped skin and gloves) for a weapon, built once per match.
   // plain: without your skins and gloves (a bot's gun, seen while spectating it).
   vmData(wid, { plain = false } = {}) {
+    // The plain look (a bot's gun, spectating) is your own when you have no skin for it and no gloves: the same rig.
+    if (plain && !equipped('gloves') && !this.ownSkin(wid)) plain = false;
     const key = (plain ? 'plain:' : '') + wid;
     if (!this.vmCache.has(key)) {
       const job = (async () => {
@@ -354,9 +402,13 @@ export class Game {
           def = item ? itemDef(item) : { wid, w, n: w, cat: vanilla?.cat || 'rifle', v: true };
         }
         const data = await cs2Play('weapon', wid);
-        const vm = await buildViewmodel(item || { t: 'skin', fl: 0, sd: 0 }, def, data, { gloves: plain ? null : equipped('gloves'), renderer: this.renderer });
+        // Your gloves are baked once for every weapon's arms.
+        const gloves = plain ? null : equipped('gloves');
+        if (gloves) this.gloveScene ||= buildGloveScene(gloves, itemDef(gloves), this.renderer);
+        const vm = await buildViewmodel(item || { t: 'skin', fl: 0, sd: 0 }, def, data, { gloves, gloveScene: gloves ? this.gloveScene : null, renderer: this.renderer });
         this.sounds.add(data.sounds);
         vm.rig.visible = false;
+        bindBounds(vm.rig);
         this.vmRigs.add(vm.rig); // (in the scene only while it shows: see syncRigs)
         const name = wid === 'weapon_c4' ? 'C4 Explosive' : NADES[wid] ? NADES[wid].name : def.v ? def.w : `${def.w} | ${def.n?.split(' | ')[1] || def.n}`;
         return { data, vm, name };
@@ -365,6 +417,13 @@ export class Game {
       job.catch((e) => { console.warn('weapon failed', wid, e); this.vmCache.delete(key); });
     }
     return this.vmCache.get(key);
+  }
+  // The skin you have equipped for a weapon, if any (see vmData).
+  ownSkin(wid) {
+    if (/knife|bayonet/.test(wid)) return equipped('knife');
+    if (wid === 'weapon_c4' || NADES[wid]) return null;
+    const vanilla = Object.values(D.skins).find((s) => s.wid === wid);
+    return equipped('w:' + (vanilla?.w || ITEM_NAMES[wid] || wid));
   }
   // A fresh gun (full ammo) for one of your slots.
   async myGun(slot, wid) {
@@ -958,6 +1017,7 @@ export class Game {
     const tpl = await this.bombTemplate;
     if (!tpl?.userData.root || token !== this.bombToken) return;
     const m = cloneSkinned(tpl.userData.root);
+    bindBounds(m);
     m.position.set(0, 0, 0); m.rotation.set(0, 0, 0); m.scale.set(1, 1, 1); // drop the inspect framing
     m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
     this.botAssets.light(m);
@@ -983,6 +1043,7 @@ export class Game {
       if (this.disposed) return;
       this.raf = requestAnimationFrame(frame);
       if (this.cv.fps_max > 0 && now - this.last < 1000 / this.cv.fps_max - 1) return; // fps_max
+      this.frameMs = now - this.last; // (for the frame-time graph: as it was, a stutter not cut short)
       const dt = Math.min(0.1, (now - this.last) / 1000);
       this.last = now;
       this.frame(dt);
@@ -1004,6 +1065,8 @@ export class Game {
     this.now += TICK;
     if (this.restartAt != null && this.now >= this.restartAt) this.restartMatch();
     this.prevEye = this.player.eye();
+    for (const b of this.bots) b.keepPrev();
+    for (const n of this.nades.flying) n.prev = n.pos.slice();
     m.tick(TICK);
     // You
     const frozen = m.phase === 'freeze' || !me.alive || this.planting || this.defusing || m.phase === 'over';
@@ -1648,7 +1711,10 @@ export class Game {
     if (this.specHidden && this.specHidden !== s) { show(this.specHidden, true); this.specHidden = null; }
     if (s) { show(s, false); this.specHidden = s; }
     const wid = s?.holding;
-    if (this.specVm && (this.specVm.bot !== s || this.specVm.wid !== wid)) { this.specVm.vm.rig.visible = false; this.specVm = null; }
+    if (this.specVm && (this.specVm.bot !== s || this.specVm.wid !== wid)) {
+      if (this.specVm.vm !== this.arsenal.gun?.vm) this.specVm.vm.rig.visible = false; // (it may be your own gun's: see vmData)
+      this.specVm = null;
+    }
     const key = s && wid ? s.c.name + '|' + wid : null;
     if (key && !this.specVm && this.specLoading !== key) {
       this.specLoading = key;
@@ -1693,10 +1759,11 @@ export class Game {
     }
     const t1 = performance.now();
     const me = this.me, gun = this.arsenal.gun;
+    // How far the frame is between the last tick and the next: what moves at the tick rate is drawn that far along.
+    const a = this.paused ? 1 : this.acc / TICK;
     // Camera: your eyes (interpolated, with recoil punch), the death cam, or a teammate you spectate.
     let camEye;
     if (me.alive) {
-      const a = this.paused ? 1 : this.acc / TICK;
       const eye = this.player.eye();
       camEye = [0, 1, 2].map((i) => this.prevEye[i] + (eye[i] - this.prevEye[i]) * a);
       const [pitch, yaw] = this.arsenal.viewAngles(this.input.pitch, this.input.yaw);
@@ -1710,11 +1777,12 @@ export class Game {
       const s = this.spectating;
       if (s && !this.specThird) {
         // First person (CS2's default): from the bot's eyes, turning with its aim (smoothed a little).
-        camEye = s.eye();
-        const q = new THREE.Quaternion().setFromEuler(new THREE.Euler((-s.pitch * Math.PI) / 180, (s.yaw * Math.PI) / 180 + Math.PI, 0, 'YXZ'));
+        const [eye, pitch, yaw] = s.eyeAt(a);
+        camEye = eye;
+        const q = _q.setFromEuler(_euler.set((-pitch * Math.PI) / 180, (yaw * Math.PI) / 180 + Math.PI, 0, 'YXZ'));
         this.camera.quaternion.slerp(q, Math.min(1, 20 * dt));
       } else if (s) {
-        const eye = s.eye(), { fwd } = basis(Math.max(-20, Math.min(40, s.pitch)), s.yaw);
+        const [eye] = s.eyeAt(a), { fwd } = basis(Math.max(-20, Math.min(40, s.pitch)), s.yaw);
         const back = [-fwd[0], -fwd[1], -fwd[2] * 0.3 + 0.35];
         const bl = Math.hypot(...back);
         const hit = this.collision.raycast(eye, back.map((v) => v / bl), 110, FLAG_BULLET);
@@ -1753,7 +1821,7 @@ export class Game {
     _frustum.setFromProjectionMatrix(_m4.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
     for (const b of [...this.bots, this.myBody]) {
       if (!b.root.visible) continue;
-      b.sync();
+      b.sync(a);
       const seen = _frustum.intersectsSphere(_sphere.set(toGl([b.pos[0], b.pos[1], b.pos[2] + 36], _v3), 60 * IN));
       b.view.visible = seen;
       b.animDt = (b.animDt || 0) + (this.paused ? 0 : dt);
@@ -1773,7 +1841,7 @@ export class Game {
     this.balls.update(this.paused ? 1 : this.acc / TICK, probes);
     this.updatePings();
     this.effects.update(dt);
-    this.nades.update(dt);
+    this.nades.update(dt, a);
     this.vmSun.intensity = this.world.sun.intensity * this.sunVis;
 
     // The world (with the smokes and the flashbang's afterimage), then your weapon on top.
@@ -1798,6 +1866,7 @@ export class Game {
 
     this.fps = this.fps ? this.fps * 0.95 + (1 / Math.max(dt, 1e-3)) * 0.05 : 60;
     if (this.settings.netGraph) this.graphFrame(dt, t0, t1);
+    this.hud.frameGraph(this.settings.netGraph || this.settings.showFps === 2 ? this.frameMs ?? dt * 1000 : null);
     this.updateHud(dt);
     this.emit('frame', dt);
   }
@@ -1938,6 +2007,7 @@ export class Game {
     this.resizer.disconnect();
     this.input.dispose();
     for (const job of this.vmCache.values()) job.then((x) => x.vm.dispose()).catch(() => {});
+    this.gloveScene?.then(({ root }) => root.traverse((o) => { for (const m of o.isMesh ? [].concat(o.material || []) : []) { m.userData.dispose?.(); m.dispose(); } })).catch(() => {});
     for (const b of this.bots || []) b.dispose();
     this.myBody?.dispose();
     this.effects?.dispose();

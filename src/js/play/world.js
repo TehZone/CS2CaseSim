@@ -367,10 +367,11 @@ export function ambientLit(m, ambient, layer = null, { probe = false } = {}) {
 }
 
 // An ambient cube uniform (see ambientLit) and a function that sets it from the probes at a point.
+// The six colours packed in one float array: three sends that as it is. (Given Vector3s, it tests whether the first is a
+// number by comparing it with 0, which turns the vector into a string: twice a draw for every bot.)
 export function ambientCube() {
-  const cube = { value: Array.from({ length: 6 }, () => new THREE.Vector3(0.4, 0.4, 0.4)) };
-  const tmp = new Float32Array(18);
-  return { cube, set(probes, p) { if (!probes) return; probes.cube(p, tmp); for (let k = 0; k < 6; k++) cube.value[k].set(tmp[k * 3], tmp[k * 3 + 1], tmp[k * 3 + 2]); }, values: tmp };
+  const cube = { value: new Float32Array(18).fill(0.4) };
+  return { cube, set(probes, p) { if (probes) probes.cube(p, cube.value); }, values: cube.value };
 }
 
 // An attribute's values as a tightly packed Float32Array (plain float arrays are used as they are). Cached: the

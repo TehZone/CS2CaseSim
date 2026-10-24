@@ -34,10 +34,10 @@ export class ProbeField {
     let n = 0, cover = 0;
     for (let i = 0; i < this.volumes.length && n < MAX_BLEND && cover < 0.99; i++) {
       const v = this.volumes[i];
-      const d = [p[0] - v.origin[0], p[1] - v.origin[1], p[2] - v.origin[2]];
+      const dx = p[0] - v.origin[0], dy = p[1] - v.origin[1], dz = p[2] - v.origin[2]; // (no array: this runs for every bot, often)
       let fade = 1;
       for (let a = 0; a < 3; a++) {
-        const local = (d[0] * v.axes[a][0] + d[1] * v.axes[a][1] + d[2] * v.axes[a][2] - v.min[a]) / v.size[a];
+        const local = (dx * v.axes[a][0] + dy * v.axes[a][1] + dz * v.axes[a][2] - v.min[a]) / v.size[a];
         if (local < 0 || local > 1) { fade = 0; break; }
         fade = Math.min(fade, Math.min(local, 1 - local) * v.invEdge[a]);
         this.blendN[n * 3 + a] = local;

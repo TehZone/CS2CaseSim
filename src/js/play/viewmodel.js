@@ -25,13 +25,13 @@ function strongerReflections(m) {
 }
 
 // data: cs2Play('weapon', id) -> { clips: { role: url | [urls] }, arms }.
-export async function buildViewmodel(item, def, data, { gloves = null, renderer }) {
-  const model = await buildCS2Model(item, def, renderer);
+export async function buildViewmodel(item, def, data, { gloves = null, gloveScene = null, renderer }) {
+  const model = await buildCS2Model(item, def, renderer, { quick: true });
   if (!model?.userData.root) throw new Error('No CS2 model for ' + def.n);
   const entries = Object.entries(data.clips).flatMap(([role, u]) => [].concat(u).map((url) => [role, url]));
   const loaded = await Promise.all(entries.map(([, url]) => loadGltf(url)));
   const base = loaded[entries.findIndex(([r]) => r === 'idle')] || loaded[0];
-  const vm = await assembleViewmodel(model, base.scene, data.arms, { gloves, renderer });
+  const vm = await assembleViewmodel(model, base.scene, data.arms, { gloves, gloveScene, renderer });
   vm.rig.traverse((o) => { if (o.isMesh) { o.frustumCulled = false; o.castShadow = false; o.receiveShadow = true; } });
   model.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) strongerReflections(m); });
 

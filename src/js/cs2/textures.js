@@ -81,7 +81,21 @@ export async function loadSource(url, { exact = false } = {}) {
 }
 
 // `exact`: decode PNGs exactly (see decodePngExact), for data textures whose colour matters where alpha is 0.
-export async function texture(url, { srgb = false, wrapS = THREE.RepeatWrapping, wrapT = THREE.RepeatWrapping, exact = false } = {}) {
+// `shared`: one texture per image and settings for everyone who asks (a model's maps: the bots' guns, your viewmodel
+// and the one you see spectating share the same images, uploaded once). Don't change a shared one; disposing it is
+// fine (it's uploaded again when next drawn).
+const sharedTextures = new Map();
+export function texture(url, opts = {}) {
+  if (!opts.shared) return makeTexture(url, opts);
+  const key = [url, opts.srgb, opts.wrapS, opts.wrapT, opts.exact].join('|');
+  if (!sharedTextures.has(key)) {
+    const job = makeTexture(url, opts);
+    sharedTextures.set(key, job);
+    job.catch(() => sharedTextures.delete(key));
+  }
+  return sharedTextures.get(key);
+}
+async function makeTexture(url, { srgb = false, wrapS = THREE.RepeatWrapping, wrapT = THREE.RepeatWrapping, exact = false } = {}) {
   const src = await loadSource(url, { exact });
   let t;
   if (src.exr) {
