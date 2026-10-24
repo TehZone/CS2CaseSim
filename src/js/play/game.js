@@ -1623,7 +1623,7 @@ export class Game {
       if (!wall) { lastT = range; break; }
       const p = [0, 1, 2].map((i) => o[i] + dir[i] * wall.t);
       this.effects.impact(p, wall.normal, wall.surface);
-      if (this.doors.shot(wall, p)) { travelled += wall.t + 0.5; o = p.map((v, i) => v + dir[i] * 0.5); continue; } // breakable glass: broken, on it goes
+      if (this.doors.shot(wall, p, dir)) { travelled += wall.t + 0.5; o = p.map((v, i) => v + dir[i] * 0.5); continue; } // breakable glass: broken, on it goes
       if (wallNo === 0) {
         const ev = [this.impactSound(wall.surface), `${impactName(wall.surface)}.BulletImpact`].find((e) => this.sounds.has(e)) || 'Default.BulletImpact';
         this.sounds.play(ev, { pos: p, listener: this, volume: 0.6 });
@@ -1694,7 +1694,12 @@ export class Game {
     if (best) return best;
     const wall = this.collision.raycast(eye, fwd, range, FLAG_BULLET);
     if (this.balls.shot(eye, fwd, wall ? wall.t : range + 8, 380)) return { ball: true };
-    if (wall) { this.effects.impact([0, 1, 2].map((i) => eye[i] + fwd[i] * wall.t), wall.normal, wall.surface); return { wall }; }
+    if (wall) {
+      const p = [0, 1, 2].map((i) => eye[i] + fwd[i] * wall.t);
+      if (this.doors.shot(wall, p, fwd)) return { wall, broke: true }; // a breakable: the knife breaks it too
+      this.effects.impact(p, wall.normal, wall.surface);
+      return { wall };
+    }
     return null;
   }
 

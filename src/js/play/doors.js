@@ -2,8 +2,9 @@
 // glass apart). Use (E) opens or closes the door you're looking at: it swings away from you (or its own way) at CS2's
 // speed with its sounds, and closes again after its wait if it has one. A door is solid (its box, turned with it, in the
 // collision world, so it stops you, the bots, bullets and grenades), and a bot that walks into a closed one opens it.
-// A breakable (a pane of glass, a shop window, Nuke's vent covers, a bottle...) is solid until a bullet breaks it (a
-// bottle or a pot only to bullets).
+// A breakable (a pane of glass, a shop window, Nuke's and Mirage's vent covers, Mirage's shutter, a bottle...) is solid
+// until a bullet or a knife breaks it (a bottle or a pot only to bullets): it goes in pieces with its break sound, what's
+// left of it shows (Mirage's shutter frame), and it's whole again next round.
 import { FLAG_PLAYER, FLAG_BULLET, FLAG_GRENADE } from './collision.js';
 import { fromGl } from './world.js';
 
@@ -106,17 +107,30 @@ export class Doors {
     return true;
   }
 
-  // Bullets: a pane of glass (or a vent cover, a bottle...) it hits breaks (returns true: the bullet goes on).
-  shot(hit, p) {
+  // Bullets (and knives): a pane of glass (or a vent cover, a bottle...) it hits breaks (returns true: a bullet goes on).
+  // dir: which way the hit went (its pieces fly that way).
+  shot(hit, p, dir = null) {
     const pane = hit?.shape?.pane;
     if (!pane || pane.broken) return false;
+    this.breakPane(pane, p, dir);
+    return true;
+  }
+  breakPane(pane, p = pane.center, dir = null) {
     pane.broken = true;
     pane.shape.off = true;
     for (const m of pane.meshes) m.visible = false;
+    for (const m of pane.after || []) m.visible = true; // (what's left of it)
     this.world.setBroken?.(pane.piece, true); // (in a batch of the map's surfaces: see world.js)
     this.game.sounds.play(pane.sound || 'Glass.Break', { pos: p, listener: this.game });
     this.game.effects.impact?.(p, [0, 0, 1], pane.surface || 'glass');
-    return true;
+    const floor = this.game.floorAt?.(pane.center, 300);
+    this.game.effects.gibs?.(pane.box, pane.surface || 'glass', dir, floor != null ? floor * 0.0254 : undefined);
+  }
+  // The intact breakable a box moving from a to b (a player's or bot's hull) would run into first, or null: a bot breaks
+  // the vent cover in its way.
+  paneAhead(a, b) {
+    const hit = this.game.collision.traceBox(a, b, [-16, -16, 0], [16, 16, 54], FLAG_PLAYER);
+    return hit?.shape?.pane && !hit.shape.pane.broken ? hit.shape.pane : null;
   }
 
   tick(dt, now) {
@@ -146,6 +160,11 @@ export class Doors {
   // Back as the map starts (each round).
   reset() {
     for (const d of this.list) { d.angle = d.target = 0; d.closeAt = Infinity; this.place(d); }
-    for (const p of this.panes) { p.broken = false; p.shape.off = false; for (const m of p.meshes) m.visible = true; this.world.setBroken?.(p.piece, false); }
+    for (const p of this.panes) {
+      p.broken = false; p.shape.off = false;
+      for (const m of p.meshes) m.visible = true;
+      for (const m of p.after || []) m.visible = false;
+      this.world.setBroken?.(p.piece, false);
+    }
   }
 }

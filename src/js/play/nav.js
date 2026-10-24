@@ -148,7 +148,9 @@ export class NavMesh {
           const lad = chain[i].ladder;
           if (!lad) {
             const rise = areas[i - 1].rise.get(areas[i].id) || 0;
-            pts.push(rise > STEP_HEIGHT ? Object.assign(portal(areas[i - 1], areas[i]), { jump: rise, into: across(areas[i - 1], areas[i]), link: areas[i - 1].id + '>' + areas[i].id }) : portal(areas[i - 1], areas[i]));
+            const p = rise > STEP_HEIGHT ? Object.assign(portal(areas[i - 1], areas[i]), { jump: rise, into: across(areas[i - 1], areas[i]), link: areas[i - 1].id + '>' + areas[i].id }) : portal(areas[i - 1], areas[i]);
+            if ((areas[i - 1].flags | areas[i].flags) & FLAG_CROUCH) p.crouch = true; // (a vent, a hole in a wall: crouch through)
+            pts.push(p);
             continue;
           }
           // Climb: walk to the foot (or the top), then up (or down) the rungs, then step off.

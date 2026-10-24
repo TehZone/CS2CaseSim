@@ -9,9 +9,10 @@ const { readEXR } = require('./exr.cjs');
 const { decodePNG, encodePNG } = require('./png.cjs');
 
 const IN = 0.0254; // the exporter writes game inches as metres
-const PLAY_VERSION = 9; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading;
+const PLAY_VERSION = 10; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading;
 // 4: entities that start switched off left out, trigger_hurt volumes; 5: csgo_environment(_blend)'s other layers and height maps;
-// 6: doors and breakable glass; 7: the 3D skybox; 8: no texture over 1024 after it; 9: breakable props too)
+// 6: doors and breakable glass; 7: the 3D skybox; 8: no texture over 1024 after it; 9: breakable props too; 10: props named
+// breakable (Mirage's vent covers) and what's left of a breakable once broken (Mirage's shutter frame))
 const PROBE_MAX = 8; // probe irradiance is stored as 8-bit sRGB of value / PROBE_MAX
 const DATA_VERSION = 6; // weapon stats + sound events (6: maps' ambience sounds, every surface's bullet impact sound)
 // Collision flags per triangle: what it stops.
@@ -196,10 +197,11 @@ function doorNodes(json, ents) {
   return out;
 }
 
-// Things a bullet breaks: breakable glass (func_breakable of glass, material 0) and the props whose model is a breakable
-// piece (Inferno's and Poseidon's shop windows, Train's windows and cabinet doors, Nuke's vent covers, Mirage's
-// shutter, bottles, pots...). Each: its glTF nodes, what it's made of (the impact surface), its break sound, and whether
-// it stops players (a bottle or a plant doesn't, only bullets).
+// Things a bullet breaks: breakable glass (func_breakable of glass, material 0) and the props whose model (or name) is a
+// breakable piece (Inferno's and Poseidon's shop windows, Train's windows and cabinet doors, Nuke's vent covers, Mirage's
+// shutter and its sheet metal vent covers, bottles, pots...). Each: its glTF nodes, what it's made of (the impact
+// surface), its break sound, whether it stops players (a bottle or a plant doesn't, only bullets), and the nodes of
+// what's left once it's broken (remainder: props that start switched off beside it, Mirage's shutter frame).
 const BREAKS = [
   [/wood|shutter|crate|fence/i, 'wood', 'Wood_Panel.Break', true], // (before glass: Mirage's shutter_window_l_breakable)
   [/glass|window/i, 'glass', 'Glass.Break', true],
@@ -215,9 +217,15 @@ function glassNodes(json, ents) {
     const model = String(e.model).replace(/^resource_name:"?|"$/g, '').replace(/.*\//, '').replace(/\.vmdl$/, '');
     let nodes, kind;
     if (e.classname === 'func_breakable' && String(e.material ?? '0') === '0') { nodes = find.brush(e); kind = BREAKS.find((k) => k[1] === 'glass'); }
-    else if (/^prop_(dynamic|physics)/.test(e.classname) && /breakable/i.test(model)) { nodes = find.prop(e); kind = BREAKS.find(([re]) => re.test(model)); }
+    else if (/^prop_(dynamic|physics)/.test(e.classname) && (/breakable/i.test(model) || /breakable/i.test(String(e.targetname || '')))) { nodes = find.prop(e); kind = BREAKS.find(([re]) => re.test(model)); }
     else continue;
-    if (nodes.length) out.push({ nodes, health: +e.health || 1, surface: kind[1], sound: kind[2], solid: kind[3] });
+    if (nodes.length) out.push({ nodes, health: +e.health || 1, surface: kind[1], sound: kind[2], solid: kind[3], origin: vec(e.origin), remainder: [] });
+  }
+  for (const e of ents) {
+    if (!/^prop_dynamic/.test(e.classname) || !/^(true|1)$/i.test(String(e.startdisabled ?? '')) || !/remainder/i.test(String(e.model || ''))) continue;
+    const o = vec(e.origin), near = out.filter((g) => g.origin.length === 3 && Math.hypot(g.origin[0] - o[0], g.origin[1] - o[1], g.origin[2] - o[2]) < 160)
+      .sort((a, b) => Math.hypot(a.origin[0] - o[0], a.origin[1] - o[1]) - Math.hypot(b.origin[0] - o[0], b.origin[1] - o[1]))[0];
+    if (near) near.remainder.push(...find.prop(e));
   }
   return out;
 }

@@ -72,6 +72,9 @@ What's in a match:
   can fire mid-reload, and the Zeus x27 (Gear, $200) recharges 30 seconds after a shot.
 - Weapons drop when players die (G drops yours); walk over a gun to pick it up into a free slot, E swaps. Dead CTs drop
   their defuse kit. Bullets go through thin walls (wood easily, metal less, concrete barely) with less damage.
+- Breakables: glass, shop windows, Nuke's and Mirage's vent covers, Mirage's B window shutter, Train's cabinet doors,
+  bottles and pots break when shot (or knifed) with their sound, in pieces, leaving what CS2 leaves (the shutter's
+  splintered frame), and are whole again each round. Until then a vent cover blocks the vent.
 - CS2's economy: $800 start, round rewards, the loss bonus ($1400 rising by $500, dropping by one on a win), kill
   rewards by weapon, planting and defusing bonuses, the $16,000 cap. Buy menu (B) with CS2's prices and team-only guns,
   Kevlar, helmet, defuse kits and the Zeus.
@@ -91,7 +94,9 @@ What's in a match:
   rank: higher ranks counter-strafe to a stop and only fire once the shot will land (moving, the spray's penalty and
   the recoil they can't pull down all count), so they tap at range, burst nearer and spray up close, and scope in with
   the AWP and Scout; Silvers fire anyway, on the run. Players block each other without pushing (you can stand on a
-  head), and crouch spam slows the crouch down like CS2's duck speed. They smoke off and flash sites before taking them,
+  head), and crouch spam slows the crouch down like CS2's duck speed. Bots crouch through vents and holes in walls
+  (and under anything too low to stand), shooting a vent cover open first; they hold their guns in their hands
+  however they crouch, run or aim. They smoke off and flash sites before taking them,
   molotov or HE where they last saw you, flash retakes, burn a defuser, get blinded by flashes, step out of fire and pick
   up guns and kits. They hear gunshots and footsteps, buy by their money (eco, force, AWP, grenades...) and are animated
   with CS2's third-person clips: running, walking and crouching in every direction, each gun's hold pose, drawing and

@@ -884,6 +884,95 @@ async function runLookSmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=breakables` on Mirage (CS2SIM_SMOKE_MAPS): lists the map's breakables, shoots each vent cover and the
+// B shutter (broken, its frame left, back next round), sends a bot through each crawl vent with its cover on (it has to
+// crouch, and break the cover), and screenshots bots holding rifles crouched and aiming up and down (the gun in the hand)
+// into userData/break-*.png.
+async function runBreakSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `break-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  await wait(4000);
+  const map = (process.env.CS2SIM_SMOKE_MAPS || 'de_mirage').split(',')[0];
+  await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'competitive', map: '${map}', teamSize: 5 })); })(); 1`);
+  await js(`document.querySelector('#nav [data-page=stats]').click(); setTimeout(() => document.querySelector('#nav [data-page=play]').click(), 200); 1`);
+  await wait(1500);
+  if (!(await smokeStartMap(win, map, 'break'))) return app.quit();
+  await js(`(() => { const g = window.__playGame;
+    document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
+    g.god = true; g.cv.bot_stop = 1; g.match.time = 9999; g.console.run('cl_drawhud 0'); return 1; })()`);
+  await wait(2500);
+  const only = process.env.CS2SIM_SMOKE_ONLY || ''; // (vents: just the crawl vents)
+  console.log('SMOKE break panes', await js(`JSON.stringify(window.__playGame.doors.panes.filter((p) => !/bottle|pottery/.test(p.surface)).map((p) => ({ surface: p.surface, at: p.center.map(Math.round), solid: p.solid, after: (p.after || []).length, meshes: p.meshes.length })))`));
+  // Look at a breakable from the open side (the side a ray from 70 units off reaches it unobstructed), shoot it.
+  const look = (i, back = 0) => js(`(() => { const g = window.__playGame, p = g.doors.panes.filter((x) => !/bottle|pottery/.test(x.surface))[${i}];
+    const b = p.box, sx = b.max.z - b.min.z, sy = b.max.x - b.min.x; // (GL z is game x, GL x is game y)
+    const ax = sx < sy ? [1, 0] : [0, 1];
+    for (const s of [1, -1]) {
+      const o = [p.center[0] + ax[0] * s * 70, p.center[1] + ax[1] * s * 70, p.center[2]];
+      const d = [p.center[0] - o[0], p.center[1] - o[1], 0], l = Math.hypot(d[0], d[1]);
+      const hit = g.collision.raycast(o, [d[0] / l, d[1] / l, 0], 80, 2);
+      if (hit && hit.shape?.pane === p) {
+        const feet = [o[0], o[1], (g.floorAt([o[0], o[1], o[2]], 200) ?? o[2] - 64)];
+        g.player.teleport(feet); g.input.yaw = Math.atan2(d[1], d[0]) * 180 / Math.PI;
+        g.input.pitch = Math.atan2(g.player.eye()[2] - p.center[2], 70) * 180 / Math.PI;
+        return JSON.stringify({ from: feet.map(Math.round), dir: [d[0] / l, d[1] / l].map((v) => +v.toFixed(2)) });
+      }
+    }
+    return 'no clear side'; })()`);
+  const panes = JSON.parse(await js(`String(window.__playGame.doors.panes.filter((x) => !/bottle|pottery/.test(x.surface)).length)`));
+  for (let i = 0; i < (only === 'vents' ? 0 : panes); i++) {
+    const where = await look(i);
+    console.log('SMOKE break look', i, where);
+    if (where === 'no clear side') continue;
+    await wait(1200);
+    await shot(`pane${i}-before`);
+    console.log('SMOKE break shoot', i, await js(`(() => { const g = window.__playGame, p = g.doors.panes.filter((x) => !/bottle|pottery/.test(x.surface))[${i}];
+      const eye = g.player.eye(), d = [p.center[0] - eye[0], p.center[1] - eye[1], p.center[2] - eye[2]], l = Math.hypot(...d);
+      g.fireBullet(g.me, eye, d.map((v) => v / l), g.arsenal.current, { tracer: true });
+      return JSON.stringify({ broken: p.broken, solidNow: !p.shape.off, after: (p.after || []).filter((m) => m.visible).length + '/' + (p.after || []).length, gibs: g.effects.gibList.length }); })()`));
+    await wait(250);
+    await shot(`pane${i}-after`);
+  }
+  await js(`window.__playGame.doors.reset(); 1`);
+  console.log('SMOKE break reset', await js(`JSON.stringify(window.__playGame.doors.panes.filter((x) => !/bottle|pottery/.test(x.surface)).map((p) => p.broken))`));
+  // Through each crawl vent, its cover on: a bot told to go to the far side.
+  const vents = JSON.parse(process.env.CS2SIM_SMOKE_VENTS || '[[[-1167,-317,-52],[-1152,-484,-164]],[[-1258,-946,-164],[-1405,-986,-164]],[[-1405,-986,-164],[-1258,-946,-164]]]');
+  await js(`(async () => { const g = window.__playGame; if (g.match.phase === 'freeze') { g.match.time = 0; await new Promise((r) => setTimeout(r, 400)); g.match.time = 9999; } return 1; })()`); // (live, so bots move)
+  for (const [from, to] of vents) {
+    await js(`(() => { const g = window.__playGame; g.doors.reset(); g.cv.bot_stop = 0;
+      for (const b of g.bots) if (b !== g.bots[0]) b.brain.tick = () => { b.vel = [0, 0, 0]; };
+      const b = g.bots[0], br = b.brain; br.decide = () => {}; br.scan = () => {}; br.target = null;
+      b.pos = g.onFloor(${JSON.stringify(from)}); b.vel = [0, 0, 0]; br.task = 'goto'; br.goTo(${JSON.stringify(to)});
+      window.__vent = { crouched: 0, broke: 0, ticks: 0 };
+      const t0 = br.tick.bind(br); br.tick = (...a) => { t0(...a); window.__vent.ticks++; if (b.ducked) window.__vent.crouched++; };
+      g.player.teleport(g.onFloor([${from[0]} + 40, ${from[1]} + 40, ${from[2]}])); return 1; })()`);
+    await wait(9000);
+    console.log('SMOKE break vent', JSON.stringify(from), '->', JSON.stringify(to), await js(`(() => { const g = window.__playGame, b = g.bots[0], to = ${JSON.stringify(to)};
+      return JSON.stringify({ at: b.pos.map(Math.round), left: Math.round(Math.hypot(b.pos[0] - to[0], b.pos[1] - to[1])), crouchedTicks: window.__vent.crouched, ticks: window.__vent.ticks,
+        coversBroken: g.doors.panes.filter((p) => p.surface === 'metalvent' && p.broken).length,
+        path: ${!!process.env.CS2SIM_SMOKE_DEBUG} ? (b.brain.path || []).map((p, i) => (i === b.brain.pi ? '>' : '') + p.map(Math.round).join(',') + (p.crouch ? 'c' : '') + (p.jump ? 'j' + Math.round(p.jump) : '')).join(' ') : undefined,
+        fresh: ${!!process.env.CS2SIM_SMOKE_DEBUG} ? (g.nav.path(g.onFloor(${JSON.stringify(from)}), to)?.points || []).map((p) => p.map(Math.round).join(',') + (p.crouch ? 'c' : '') + (p.jump ? 'j' + Math.round(p.jump) : '')).join(' ') : undefined, low: b.brain.low, task: b.brain.task, stuck: b.brain.stuckTries }); })()`));
+  }
+  // Bots with rifles, crouched and aiming up and down: the gun in their hands.
+  if (only === 'vents') return app.quit();
+  await js(`(() => { const g = window.__playGame; g.cv.bot_stop = 1; for (const b of g.bots) { b.brain.tick = () => { b.vel = [0, 0, 0]; }; b.equip(b.c.team === 'T' ? 'weapon_ak47' : 'weapon_m4a1'); } return 1; })()`);
+  await wait(2500);
+  for (const [name, ducked, pitch] of [['stand', false, 0], ['crouch', true, 0], ['up', false, -35], ['down', true, 30]]) {
+    await js(`(() => { const g = window.__playGame, b = g.bots.find((x) => x.c.alive);
+      for (const x of g.bots) { x.ducked = ${ducked}; x.pitch = ${pitch}; }
+      const yr = b.yaw * Math.PI / 180 + Math.PI / 2.6, p = [b.pos[0] + Math.cos(yr) * 75, b.pos[1] + Math.sin(yr) * 75, b.pos[2]];
+      g.player.teleport(p); g.input.yaw = Math.atan2(b.pos[1] - p[1], b.pos[0] - p[0]) * 180 / Math.PI; g.input.pitch = 10; return 1; })()`);
+    await wait(1500);
+    await shot('grip-' + name);
+    console.log('SMOKE break grip', name, await js(`(() => { const g = window.__playGame, b = g.bots.find((x) => x.c.alive), h = b.weaponModel;
+      const THREE_v = (o) => { o.updateWorldMatrix(true, false); const e = o.matrixWorld.elements; return [e[12], e[13], e[14]]; };
+      const hand = THREE_v(b.bones.hand_R), gun = h ? THREE_v(h) : null;
+      return JSON.stringify({ holding: b.holding, parent: h?.parent?.name, gunToHandCm: gun ? Math.round(Math.hypot(gun[0] - hand[0], gun[1] - hand[1], gun[2] - hand[2]) * 100) : null }); })()`));
+  }
+  app.quit();
+}
+
 // `CS2SIM_SMOKE=premier` plays through Premier: the map veto (banning on your turns, picking a side if it's yours) with
 // both teams listed, a few seconds of the match, then the end of it (a win, as your 10th: the CS Rating revealed), with
 // screenshots of the veto, the scoreboard and the result into userData/premier-*.png.
@@ -1503,6 +1592,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'perf') { win.webContents.once('did-finish-load', () => runPerfSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'maps') { win.webContents.once('did-finish-load', () => runMapsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'breakables') { win.webContents.once('did-finish-load', () => runBreakSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'look') { win.webContents.once('did-finish-load', () => runLookSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'premier') { win.webContents.once('did-finish-load', () => runPremierSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'hitch') { win.webContents.once('did-finish-load', () => runHitchSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }

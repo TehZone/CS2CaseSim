@@ -669,15 +669,16 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   const center = new THREE.Vector3();
   // Entities CS2 starts switched off (Wingman's barricades, doors and blocker walls...: see disabledNodes): left out.
   const off = new Set(info.hidden || []), offNodes = new Set();
+  for (const g of info.glass || []) for (const n of g.remainder || []) off.delete(n); // (shown when it breaks: see glass[i].after)
   if (off.size) gltf.scene.traverse((o) => { const a = gltf.parser.associations.get(o); if (a?.nodes !== undefined && off.has(a.nodes)) offNodes.add(o); });
   // (A prop with a skeleton is where its bones are: see bakeSkin.)
   const placed = (o) => (o.isSkinnedMesh ? o.skeleton.bones[0] || o : o);
   const switchedOff = (o) => { for (let p = placed(o); p && offNodes.size; p = p.parent) if (offNodes.has(p)) return true; return false; };
   // Doors and breakable glass (see doorNodes, glassNodes): drawn apart from the merged world, a door on a pivot at its
   // hinge to swing, a pane on its own to break.
-  const movers = new Map(); // glTF node index -> 'd<door>' | 'g<pane>'
+  const movers = new Map(); // glTF node index -> 'd<door>' | 'g<pane>' | 'r<pane>' (what's left of it once broken)
   (info.doors || []).forEach((d, i) => d.nodes.forEach((n) => movers.set(n, 'd' + i)));
-  (info.glass || []).forEach((g, i) => g.nodes.forEach((n) => movers.set(n, 'g' + i)));
+  (info.glass || []).forEach((g, i) => { g.nodes.forEach((n) => movers.set(n, 'g' + i)); (g.remainder || []).forEach((n) => movers.set(n, 'r' + i)); });
   const moverObjs = new Map();
   if (movers.size) gltf.scene.traverse((o) => { const a = gltf.parser.associations.get(o); if (a?.nodes !== undefined && movers.has(a.nodes)) moverObjs.set(o, movers.get(a.nodes)); });
   const moverOf = (o) => { for (let p = placed(o); p && moverObjs.size; p = p.parent) if (moverObjs.has(p)) return moverObjs.get(p); return null; };
@@ -739,7 +740,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   const overlayOf = (v) => v.userData.basic && !v.userData.clear && !v.userData.animated && v.isMeshBasicMaterial;
   for (const [gk, g] of groups) {
     const v = g.material;
-    if (g.mover?.[0] === 'd' || v.userData.clear || (v.userData.basic && !overlayOf(v))) continue;
+    if (g.mover?.[0] === 'd' || g.mover?.[0] === 'r' || v.userData.clear || (v.userData.basic && !overlayOf(v))) continue;
     if (!slotsFor.has(v)) {
       const L = layerData.get(v), slots = slotsOf(v, L);
       const glow = !!(v.emissiveMap || v.emissive?.getHex());
@@ -823,7 +824,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   // Glass and water: all of a material's surfaces in one mesh, map-wide, a breakable pane's pieces hidden as it breaks.
   const clears = new Map();
   for (const [gk, g] of groups) {
-    if (!g.material.userData.clear || g.mover?.[0] === 'd') continue;
+    if (!g.material.userData.clear || g.mover?.[0] === 'd' || g.mover?.[0] === 'r') continue;
     if (!clears.has(g.material)) clears.set(g.material, []);
     clears.get(g.material).push([gk, g]);
   }
@@ -857,7 +858,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   const world = new THREE.Group();
   let n = 0;
   const doors = (info.doors || []).map((d) => ({ ...d, pivot: new THREE.Group(), box: new THREE.Box3() }));
-  const glass = (info.glass || []).map((g, i) => ({ ...g, meshes: [], box: new THREE.Box3(), piece: i + 1 }));
+  const glass = (info.glass || []).map((g, i) => ({ ...g, meshes: [], after: [], box: new THREE.Box3(), piece: i + 1 }));
   for (const d of doors) { toGl(d.origin, d.pivot.position); world.add(d.pivot); }
   for (const { material, list, mover } of groups.values()) {
     const mesh = new THREE.Mesh(mergeMeshes(list, { lm: material.userData.lm, lmUv: material.userData.lmUv, tangents: !!material.normalMap, blend: material.userData.layer, env: material.userData.env, probe: material.userData.lm || material.userData.basic ? null : probeAt, factor: !!material.userData.tinted, mats: !!material.userData.batched,
@@ -880,6 +881,10 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
       mesh.geometry.computeBoundingBox();
       g.box.union(mesh.geometry.boundingBox);
       g.meshes.push(mesh);
+      world.add(mesh);
+    } else if (mover?.[0] === 'r') {
+      mesh.visible = false; // (what's left once it breaks)
+      glass[+mover.slice(1)].after.push(mesh);
       world.add(mesh);
     } else world.add(mesh);
     for (const [piece, box] of mesh.geometry.userData.pieceBoxes || []) glass[piece - 1].box.union(box);

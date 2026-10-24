@@ -524,7 +524,7 @@ class CS2Service {
         // Older exports are brought up to date step by step; a step that fails (no disk space, say) leaves the export as
         // it was, still playable, rather than exporting the whole map again.
         if (meta.stamp === stamp && meta.version >= 2) {
-          const steps = { 2: 'upgradeMapLighting', 3: 'upgradeMapHidden', 4: 'upgradeMapLayers', 5: 'upgradeMapDoors', 6: 'upgradeMapSky3d', 7: 'upgradeMapTextureSizes', 8: 'upgradeMapBreakables' };
+          const steps = { 2: 'upgradeMapLighting', 3: 'upgradeMapHidden', 4: 'upgradeMapLayers', 5: 'upgradeMapDoors', 6: 'upgradeMapSky3d', 7: 'upgradeMapTextureSizes', 8: 'upgradeMapBreakables', 9: 'upgradeMapBreakables2' };
           try { while (steps[meta.version]) meta = await this[steps[meta.version]](id, vpk, dir, meta, say); } catch (e) { this.log('map upgrade: ' + e.message); }
           this.progress.delete('map:' + id);
           return result(meta);
@@ -751,6 +751,8 @@ class CS2Service {
 
   // Maps exported as version 8 get version 9's breakable props (with the doors and glass again).
   upgradeMapBreakables(id, vpk, dir, meta, say) { return this.upgradeMapDoors(id, vpk, dir, meta, say, 9); }
+  // Version 9 gets version 10's breakables (props named breakable, and what's left of one when broken).
+  upgradeMapBreakables2(id, vpk, dir, meta, say) { return this.upgradeMapDoors(id, vpk, dir, meta, say, 10); }
 
   // Maps exported as version 5 get version 6's doors and breakable glass.
   async upgradeMapDoors(id, vpk, dir, meta, say, version = 6) {

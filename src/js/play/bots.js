@@ -115,6 +115,41 @@ export class BotAssets {
     this.lit = new Set();
     this.botMats = new Map(); // a model's material -> the one every bot draws it with (see Bot.lightOwn)
     this.statics = new Map(); // a gun's model -> it baked as bots hold it (see staticWeapon)
+    this.grips = new Map(); // an agent model -> weapon id -> where the gun sits in its right hand (see handGrip)
+  }
+
+  // Where a weapon sits in an agent's right hand: the weapon's hold pose (the whole of it, spine and all, as CS2 authored
+  // it) puts the "wpn" bone somewhere relative to "hand_R", and the gun is held there: it stays in the grip however the
+  // spine bends and twists (aiming up and down, crouching, running). On "wpn" itself (it hangs off the model's root, not
+  // the arm) it floated off the hands whenever the spine moved. A matrix (hand_R space), or null.
+  handGrip(g, id) {
+    if (!this.grips.has(g)) this.grips.set(g, new Map());
+    const byId = this.grips.get(g);
+    if (!byId.has(id)) {
+      const clip = this.clips[holdPath(id)];
+      let grip = null;
+      if (clip) {
+        if (!g.gripRig) {
+          // A copy of the agent to pose (once), with its bones' rest pose to put back between weapons.
+          const rig = cloneSkinned(g.scene), bones = {}, rest = [];
+          rig.traverse((o) => { if (o.isBone) { if (!bones[o.name]) bones[o.name] = o; rest.push([o, o.position.clone(), o.quaternion.clone(), o.scale.clone()]); } });
+          g.gripRig = { rig, bones, rest, mixer: new THREE.AnimationMixer(rig) };
+        }
+        const { rig, bones, rest, mixer } = g.gripRig;
+        if (bones.hand_R && bones.wpn) {
+          for (const [o, p, q, s] of rest) { o.position.copy(p); o.quaternion.copy(q); o.scale.copy(s); }
+          const a = mixer.clipAction(clip);
+          a.reset().play();
+          mixer.update(0);
+          rig.updateMatrixWorld(true);
+          grip = bones.hand_R.matrixWorld.clone().invert().multiply(bones.wpn.matrixWorld);
+          a.stop();
+          mixer.uncacheAction(clip);
+        }
+      }
+      byId.set(id, grip);
+    }
+    return byId.get(id);
   }
 
   // A gun as bots hold it: its meshes baked where its bones put them at rest (it doesn't animate in their hands), so a
@@ -191,6 +226,7 @@ export class BotAssets {
       if (c) this.clips[p] = new THREE.AnimationClip(p, c.duration, c.tracks.filter((t) => !ARMS.test(t.name)));
     }
     for (const id of holdsFor) this.holds.set(id, Promise.resolve(this.armsClip(holdPath(id))));
+    for (const g of [...this.models.T, ...this.models.CT]) for (const id of holdsFor) this.handGrip(g, id); // (now, not mid-round)
     // Gestures keep only the tracks they move over the rest of the body.
     for (const [k, p] of Object.entries(SHARED)) this.clips[k] = this.trackClip(p, /^flinch|flashed/.test(k) ? UPPER : ARMS);
   }
@@ -271,6 +307,7 @@ export class Bot {
     const list = this.assets.models[team];
     const src = list[this.index % Math.max(1, list.length)];
     this.modelTeam = team;
+    this.modelSrc = src;
     this.model = cloneSkinned(src.scene);
     this.lightOwn(this.model);
     this.model.traverse((o) => {
@@ -324,7 +361,8 @@ export class Bot {
     this.loco = loco;
   }
 
-  // Shows the bot holding a weapon (its CS2 model on the "wpn" bone, its hold pose on the arms) and drawing it.
+  // Shows the bot holding a weapon (its CS2 model in the right hand where its hold pose puts it: see handGrip; its hold
+  // pose on the arms) and drawing it.
   async equip(id, { draw = true } = {}) {
     const changed = this.holding !== id;
     this.holding = id;
@@ -342,7 +380,9 @@ export class Bot {
       holder.matrix.copy(grip).invert();
       holder.add(w);
       holder.userData.muzzle = muzzle;
-      this.bones.wpn.add(holder);
+      const inHand = this.bones.hand_R && this.assets.handGrip(this.modelSrc, id);
+      if (inHand) holder.matrix.premultiply(inHand);
+      (inHand ? this.bones.hand_R : this.bones.wpn).add(holder);
       this.weaponModel = holder;
     }
     this.armsAction?.stop();

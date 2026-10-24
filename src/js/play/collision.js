@@ -150,7 +150,7 @@ export class CollisionWorld {
     const lo = [Math.min(c0[0], c0[0] + v[0]) - ext[0] - 1, Math.min(c0[1], c0[1] + v[1]) - ext[1] - 1, Math.min(c0[2], c0[2] + v[2]) - ext[2] - 1];
     const hi = [Math.max(c0[0], c0[0] + v[0]) + ext[0] + 1, Math.max(c0[1], c0[1] + v[1]) + ext[1] + 1, Math.max(c0[2], c0[2] + v[2]) + ext[2] + 1];
     const P = this.pos, B = this.box, L = this.link, S = this.stack;
-    let best = 1, normal = null, hitTri = -1, startsolid = false, sp = 0;
+    let best = 1, normal = null, hitTri = -1, hitShape = null, startsolid = false, sp = 0;
     S[sp++] = 0;
     const res = { t: 0, n: [0, 0, 0], solid: false };
     while (sp) {
@@ -163,7 +163,7 @@ export class CollisionWorld {
         if (!(this.flags[tri] & mask) || (only && !only.has(this.surface[tri]))) continue;
         if (!sweepBoxTri(P, tri * 9, c0, ext, v, best, res)) continue;
         if (res.solid) { startsolid = true; continue; }
-        if (res.t < best) { best = res.t; normal = res.n.slice(); hitTri = tri; }
+        if (res.t < best) { best = res.t; normal = res.n.slice(); hitTri = tri; hitShape = null; }
       }
     }
     for (const sh of this.dynamic) {
@@ -171,7 +171,7 @@ export class CollisionWorld {
       for (let i = 0; i < sh.tris.length; i += 9) {
         if (!sweepBoxTri(sh.tris, i, c0, ext, v, best, res)) continue;
         if (res.solid) { startsolid = true; continue; }
-        if (res.t < best) { best = res.t; normal = res.n.slice(); hitTri = -1; }
+        if (res.t < best) { best = res.t; normal = res.n.slice(); hitTri = -1; hitShape = sh; }
       }
     }
     // Stop just short of the surface (Source's DIST_EPSILON) so the next move doesn't start inside it.
@@ -181,7 +181,7 @@ export class CollisionWorld {
       fraction = len > 0 ? Math.max(0, best - 0.03125 / len) : 0;
     }
     return {
-      fraction, normal, startsolid, tri: hitTri,
+      fraction, normal, startsolid, tri: hitTri, shape: hitShape, // (a door or breakable: hitTri -1)
       endpos: [start[0] + v[0] * fraction, start[1] + v[1] * fraction, start[2] + v[2] * fraction],
     };
   }

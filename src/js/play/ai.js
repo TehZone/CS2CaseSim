@@ -711,8 +711,21 @@ export class Brain {
       const v = Math.hypot(b.vel[0], b.vel[1]);
       if (v > 40) { want = [(-b.vel[0] / v) * max, (-b.vel[1] / v) * max]; counter = true; }
     }
+    // Low places (a vent, a hole in a wall: CS2's crouch-only nav areas, or a ceiling it would bump its head on just
+    // ahead): it crouches to go in and under, and stands again once there's room (its movement only lets it up where it
+    // fits: see below).
+    const go0 = Math.hypot(want[0], want[1]);
+    if (go0 > 0 && t >= (this.lowAt || 0)) {
+      this.lowAt = t + 0.1;
+      const wp = this.path?.[this.pi], prev = this.pi > 0 ? this.path[this.pi - 1] : null;
+      this.low = !!(wp?.crouch && Math.hypot(wp[0] - b.pos[0], wp[1] - b.pos[1]) < 120) || !!(prev?.crouch && Math.hypot(prev[0] - b.pos[0], prev[1] - b.pos[1]) < 64) || this.lowAhead(want[0] / go0, want[1] / go0);
+      // And a breakable in the way (a vent cover over the hole it goes through, a shutter): it shoots it open, or slashes
+      // it with the knife, like CS2's bots.
+      const pane = g.doors?.paneAhead([b.pos[0], b.pos[1], b.pos[2] + 2], [b.pos[0] + (want[0] / go0) * 40, b.pos[1] + (want[1] / go0) * 40, b.pos[2] + 2]);
+      if (pane) this.breakPane(pane, t);
+    } else if (go0 === 0) this.low = false;
     if (!moving) b.ducked = this.target?.visible ? b.ducked : this.task === 'plant' || this.task === 'defuse';
-    else if (!this.target?.visible) b.ducked = false;
+    else if (!this.target?.visible) b.ducked = !!this.low;
     // Step out of fire.
     const burning = g.nades.fireNear(b.pos, 30);
     if (burning) {
@@ -749,6 +762,7 @@ export class Brain {
     b.pos = body.origin.slice(); b.vel = body.velocity.slice();
     if (body.onGround && !jump) { if (b.tuck) b.ducked = false; b.jumped = false; b.tuck = 0; } // landed
     else if (tucking) b.ducked = true;
+    if (body.ducked && body.onGround && !b.ducked) b.ducked = true; // (under a low ceiling: no room to stand yet)
     b.airborne = !body.onGround && (b.jumped || b.vel[2] < -120); // jumping, or falling for real (not a step down)
     // Stuck: find the way again; after a few tries, stand still a moment (rather than turning back and forth between
     // new paths) and then try again.
@@ -768,6 +782,29 @@ export class Brain {
         this.stuckT = 0;
       }
     }
+  }
+
+  // Is there a low ceiling just ahead (a vent, a hole in a wall): standing it would bump into it, crouched it goes on?
+  lowAhead(dx, dy) {
+    const c = this.game.collision, p = this.bot.pos, a = [p[0], p[1], p[2] + 2], e = [p[0] + dx * 36, p[1] + dy * 36, p[2] + 2];
+    const stand = c.traceBox(a, e, [-16, -16, 0], [16, 16, 72], FLAG_PLAYER);
+    if (!stand.normal || stand.startsolid) return false;
+    const duck = c.traceBox(a, e, [-16, -16, 0], [16, 16, 54], FLAG_PLAYER);
+    return !duck.normal || duck.fraction > stand.fraction + 0.25;
+  }
+
+  // Breaks a breakable that's in its way: a shot at it (aimed straight at it, it's right there), or with no bullets (or
+  // a knife out) a slash.
+  breakPane(pane, t) {
+    const g = this.game, b = this.bot, gun = b.weapons[b.slot];
+    const [p, y] = angleTo(b.eye(), pane.center);
+    b.pitch = p; b.yaw = y;
+    if (gun && !gun.melee && !gun.reloading && gun.clip > 0) { if (t >= gun.nextAttack) g.botShoot(b, gun, t, 1); return; }
+    if (t < (this.slashAt || 0)) return;
+    this.slashAt = t + 0.5;
+    g.specAnim?.(b, 'lightHit');
+    g.botSound(b, 'Weapon_Knife.Hit', 0.8);
+    g.doors.breakPane(pane, pane.center, [Math.cos((y * Math.PI) / 180), Math.sin((y * Math.PI) / 180), 0]);
   }
 
   // The bot's movement (yours: see movement.js) at where the bot is. Anything else that put it somewhere (a spawn, a
@@ -808,7 +845,7 @@ export class Brain {
     const b = this.bot, g = this.game, p = this.path;
     let best = this.pi;
     for (let k = this.pi + 1; k < Math.min(p.length, this.pi + 6); k++) {
-      if (p[k].ladder || p[k - 1].ladder || p[k + 1]?.ladder || (k - 1 > this.pi && p[k - 1].jump)) break;
+      if (p[k].ladder || p[k - 1].ladder || p[k + 1]?.ladder || (k - 1 > this.pi && (p[k - 1].jump || p[k - 1].crouch))) break; // (not past a jump or into a crawl)
       if (!this.walkable(b.pos, p[k])) break;
       best = k;
     }
@@ -827,8 +864,8 @@ export class Brain {
       if (h === null) return false;
       z = h;
     }
-    // The body fits (from knee to head height, so steps and stairs don't count).
-    const tr = g.collision.traceBox([from[0], from[1], from[2] + 20], [to[0], to[1], Math.max(from[2], to[2]) + 20], [-15, -15, 0], [15, 15, 40], FLAG_PLAYER);
+    // The body fits standing (from knee to head height, so steps and stairs don't count, but a low ceiling does).
+    const tr = g.collision.traceBox([from[0], from[1], from[2] + 20], [to[0], to[1], Math.max(from[2], to[2]) + 20], [-15, -15, 0], [15, 15, 52], FLAG_PLAYER);
     return tr.fraction >= 1 && !tr.startsolid;
   }
 

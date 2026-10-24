@@ -37,6 +37,9 @@ const flashTex = () => canvasTexture(128, (g, s) => {
 
 const DUST = { concrete: 0xb8b0a4, rock: 0xb8b0a4, tile: 0xc8c0b4, sand: 0xd8c09a, dirt: 0xa08060, default: 0xb0a898 };
 
+// A breakable's pieces by what it's made of (see doors.js): their colour.
+const GIB_COLOR = { wood: 0x6e4c2c, metalvent: 0x5c6167, glass: 0xb9d3dc, glassbottle: 0x4f6b3c, pottery: 0x93583a, default: 0x77706a };
+
 export class Effects {
   constructor(scene, vmScene) {
     this.scene = scene;
@@ -56,6 +59,11 @@ export class Effects {
     this.particles = [];
     this.tracerMat = new THREE.LineBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.85 });
     this.tracers = [];
+    // Breakables' pieces: one box shape and a material a surface, shared (compiled with the rest: see warmUp).
+    this.gibGeo = new THREE.BoxGeometry(1, 1, 1);
+    this.gibMats = Object.fromEntries(Object.entries(GIB_COLOR).map(([k, c]) => [k, new THREE.MeshLambertMaterial({ color: c, emissive: new THREE.Color(c).multiplyScalar(0.35),
+      transparent: k === 'glass', opacity: k === 'glass' ? 0.55 : 1 })]));
+    this.gibList = [];
     // muzzle flash in the viewmodel scene
     this.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex(), color: 0xffd9a0, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, depthTest: false }));
     this.flash.visible = false;
@@ -97,6 +105,24 @@ export class Effects {
       s.scale.setScalar(size);
       this.group.add(s);
       this.particles.push({ s, v, life: sparks ? 0.25 : life, age: 0, size, grow: sparks ? 0 : 0.6, gravity: sparks ? 6 : -0.3 });
+    }
+  }
+
+  // A breakable going in pieces: chunks a few centimetres across thrown out of its box (more the way the hit went),
+  // tumbling down to the floor below it (floor: GL height) and gone after a couple of seconds. box: GL, dir: game axes.
+  gibs(box, surface, dir, floor = box.min.y) {
+    const mat = this.gibMats[surface] || this.gibMats.default, size = box.getSize(new THREE.Vector3());
+    const push = dir ? new THREE.Vector3(dir[1], dir[2], dir[0]) : new THREE.Vector3();
+    const n = Math.max(6, Math.min(18, Math.round((size.x + size.y + size.z) * 8)));
+    for (let i = 0; i < n; i++) {
+      const m = new THREE.Mesh(this.gibGeo, mat);
+      m.position.set(box.min.x + Math.random() * size.x, box.min.y + Math.random() * size.y, box.min.z + Math.random() * size.z);
+      const s = 0.03 + Math.random() * 0.07;
+      m.scale.set(s * (0.6 + Math.random()), s * (0.2 + Math.random() * 0.5), s * (0.6 + Math.random()));
+      m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+      this.group.add(m);
+      const v = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.8, Math.random() - 0.5).multiplyScalar(2.5).addScaledVector(push, 2 + Math.random() * 2);
+      this.gibList.push({ m, v, spin: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(14), age: 0, floor: Math.min(floor, box.min.y) + s * 0.2 });
     }
   }
 
@@ -148,9 +174,10 @@ export class Effects {
     if (on) {
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.puffTex, transparent: true, depthWrite: false }));
       const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0.01, 0)]), this.tracerMat);
-      this.warm = [s, l];
-      this.group.add(s, l);
-    } else for (const o of this.warm || []) { this.group.remove(o); if (o.isLine) o.geometry.dispose(); else this.keep = o.material; }
+      const gibs = Object.values(this.gibMats).map((m) => { const g = new THREE.Mesh(this.gibGeo, m); g.scale.setScalar(0.001); return g; });
+      this.warm = [s, l, ...gibs];
+      this.group.add(s, l, ...gibs);
+    } else for (const o of this.warm || []) { this.group.remove(o); if (o.isLine) o.geometry.dispose(); else if (o.isSprite) this.keep = o.material; }
     this.flash.visible = on;
   }
 
@@ -160,6 +187,8 @@ export class Effects {
     this.holeNext = 0;
     for (const p of this.particles) { this.group.remove(p.s); p.s.material.dispose(); }
     this.particles = [];
+    for (const g of this.gibList) this.group.remove(g.m);
+    this.gibList = [];
   }
 
   muzzleFlash(pos) {
@@ -188,6 +217,18 @@ export class Effects {
       if (t.age > 0.06) { this.group.remove(t.l); t.l.geometry.dispose(); t.l.material.dispose(); this.tracers.splice(i, 1); }
     }
     if (this.flashLeft > 0) { this.flashLeft -= dt; if (this.flashLeft <= 0) this.flash.visible = false; }
+    for (let i = this.gibList.length - 1; i >= 0; i--) {
+      const g = this.gibList[i], m = g.m;
+      g.age += dt;
+      if (g.age > 2.5) { this.group.remove(m); this.gibList.splice(i, 1); continue; }
+      if (m.position.y > g.floor) {
+        g.v.y -= 9.8 * dt;
+        m.position.addScaledVector(g.v, dt);
+        m.rotation.x += g.spin.x * dt; m.rotation.y += g.spin.y * dt; m.rotation.z += g.spin.z * dt;
+        if (m.position.y <= g.floor) { m.position.y = g.floor; g.v.set(0, 0, 0); }
+      }
+      if (g.age > 2) m.scale.multiplyScalar(Math.max(0, 1 - dt * 6)); // (shrinking away)
+    }
   }
 
   dispose() {
@@ -197,5 +238,7 @@ export class Effects {
     this.flash.material.map.dispose(); this.flash.material.dispose(); this.keep?.dispose();
     for (const p of this.particles) p.s.material.dispose();
     for (const t of this.tracers) { t.l.geometry.dispose(); t.l.material.dispose(); }
+    this.gibGeo.dispose();
+    for (const m of Object.values(this.gibMats)) m.dispose();
   }
 }

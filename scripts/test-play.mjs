@@ -486,6 +486,14 @@ function fakeGame() {
   ok(nav.path([50, 150, 80], [50, 50, 0]) !== null, 'nav: but you can drop down from it');
   ok(nav.groundAt(150, 50, 0) === null && nav.groundAt(150, 50, 0, 74) === 50 && nav.groundAt(50, 150, 0, 74) === null && nav.groundAt(-50, 50, 0) === 16,
     'nav: the ground a step (or a jump) up from where you are');
+  // A crawl (a crouch-only area between two rooms): the way in and out of it says to crouch.
+  const crawl = new NavMesh({ areas: [
+    { id: 1, flags: 0, c: sq(0, 0, 100, 100, 0), e: [[], [2], [], []] },
+    { id: 2, flags: 0x10000, c: sq(100, 30, 160, 70, 0), e: [[], [3], [], [1]] },
+    { id: 3, flags: 0, c: sq(160, 0, 260, 100, 0), e: [[], [], [], [2]] },
+  ] });
+  const through = crawl.path([50, 50, 0], [210, 50, 0]);
+  ok(through && through.points.filter((p) => p.crouch).length === 2 && !through.points[through.points.length - 1].crouch, 'nav: into and out of a crawl, the bot is told to crouch');
 }
 
 // Molotov fire: the flame flipbook and a fire's life.
@@ -545,6 +553,17 @@ function fakeGame() {
   ]);
   ok(breaks.length === 3 && breaks[0].surface === 'glass' && breaks[0].solid && JSON.stringify(breaks[1].nodes) === '[1]' && breaks[1].surface === 'metalvent' && breaks[1].solid
     && breaks[2].surface === 'glassbottle' && breaks[2].sound === 'GlassBottle.Break' && !breaks[2].solid, 'map export: breakable glass and props (a vent cover stops players, a bottle only bullets)');
+  // Mirage: sheet metal vent covers breakable by name, and the shutter's frame shown once it breaks.
+  const mjson = { nodes: [{ name: 'wall_hole_cover_sheetmetal', matrix: m(-1336, -974, -132) }, { name: 'shutter_window_l_breakable', matrix: m(-1919, -270, -72) },
+    { name: 'shutter_window_l_remainder', matrix: m(-1888, -276, -72) }, { name: 'shutter_window_r_remainder', matrix: m(-1952, -276, -72) }] };
+  const mirage = play.glassNodes(mjson, [
+    { classname: 'prop_dynamic', targetname: '[PR#]prop.breakable.01', model: 'resource_name:"models/props/de_mirage/wall_hole_cover_sheetmetal.vmdl"', origin: '[ -1336.0, -974.0, -132.0 ]' },
+    { classname: 'prop_dynamic', model: 'resource_name:"models/props/de_mirage/shutter_window_l_breakable.vmdl"', origin: '[ -1919.0, -270.0, -72.0 ]' },
+    { classname: 'prop_dynamic', startdisabled: 'true', model: 'resource_name:"models/props/de_mirage/shutter_window_l_remainder.vmdl"', origin: '[ -1888.0, -276.0, -72.0 ]' },
+    { classname: 'prop_dynamic', startdisabled: 'true', model: 'resource_name:"models/props/de_mirage/shutter_window_r_remainder.vmdl"', origin: '[ -1952.0, -276.0, -72.0 ]' },
+  ]);
+  ok(mirage.length === 2 && mirage[0].surface === 'metalvent' && mirage[0].solid && mirage[1].surface === 'wood' && JSON.stringify(mirage[1].remainder) === '[2,3]',
+    "map export: Mirage's vent covers (breakable by name) and the shutter, its frame left when it breaks");
   const impacts = play.surfaceImpacts('{ surfacePropertyName = "brass_bell_large" audiosounds = { bulletimpact = "inferno.bell_c" } }, { surfacePropertyName = "Glass" audiosounds = { bulletimpact = "Glass.BulletImpact" } }');
   ok(impacts.brass_bell_large === 'inferno.bell_c' && impacts.glass === 'Glass.BulletImpact', "map export: every surface's bullet impact sound (Inferno's bells)");
 }
