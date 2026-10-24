@@ -652,6 +652,9 @@ export class Game {
   onRoundStart(round, { halftime, pistol, overtime, respawn }) {
     if (!respawn) { this.balls?.reset(); this.doors?.reset(); }
     if (respawn) { this.startRespawnMode(); return; }
+    // The garbage play makes builds up to a full collection every few minutes (100 ms and more): collected here instead,
+    // as everyone respawns, where a pause doesn't show (see main.js).
+    window.gc?.();
     this.effects.clear();
     this.nades.clear();
     this.drops.clear();
