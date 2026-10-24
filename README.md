@@ -13,7 +13,15 @@ your own install with a bundled, patched build of [Source 2 Viewer](https://gith
 (`tools/s2v`), then runs CS2's own skin compositing shader (decompiled from your game files) in WebGL to
 bake each skin for the item's exact float and pattern seed (so blue gems, fades and Doppler phases match the
 game). Models/textures are extracted the first time you inspect each weapon and cached in
-`%APPDATA%/cs2-case-sim/cs2cache`. Nothing from the game is bundled with the app. Gloves are shown as CS2's
+`%APPDATA%/CS2 Case Simulator/cs2cache`. Nothing from the game is bundled with the app. **Settings → Prepare all
+CS2 content** exports everything up front instead (every map, weapon model and skin texture, sticker, case, agent,
+icon and sound), in the background while you play, with its progress, the cache's size and when it last ran; it can be
+stopped and carried on, and stops itself before the drive fills up. The cache survives CS2 updates: every cached file
+remembers the CRC of the game file it came from (the VPK listing has one per file), and a cache built from several
+(the paint kit index, weapon data, icons) a signature of them, so an update re-exports only what it changed, and a map
+whose VPK Steam rewrote with nothing in it changed (most of them, most updates) keeps its export. With "Keep everything
+prepared after CS2 updates" on, a CS2 update brings what was prepared up to date at the next start.
+`CS2SIM_SMOKE=prepare` times a map load and runs Prepare all for a while. Gloves are shown as CS2's
 glove models (just the gloves, posed by CS2's own glove inspect animation), with the skin baked per hand by CS2's
 glove compositing shader (csgo_customglove), including the newest gloves' layered materials. Agents still use the
 icon-based 3D view. Without CS2 installed, everything falls back to that view.

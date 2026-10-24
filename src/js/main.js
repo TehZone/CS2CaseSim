@@ -4,6 +4,7 @@ import { S, loadState, on, saveSync, save, idleRate, addMoney, isOnlineState } f
 import { itemValue } from './items.js';
 import { toast, topModal, openModal } from './ui.js';
 import { loadGameSounds } from './audio.js';
+import { keepPrepared } from './cs2/content.js';
 import { net, normalizeUrl } from './net/online.js';
 import { offlineEarnings as offlineFor, OFFLINE_CAP_S } from './engine/economy.js';
 import * as cases from './pages/cases.js';
@@ -164,6 +165,7 @@ async function boot() {
   startIdleLoop();
   updateAccount();
   net.resume();
+  setTimeout(keepPrepared, 10000); // after a CS2 update, everything prepared is brought up to date in the background
   if (S.stats.opened === 0 && S.inv.length === 0 && S.money === 10) {
     toast('Welcome! You start with <b class="green">$10.00</b>. Open a case, or earn more on the <b>Earn</b> tab.', 'gold');
   }

@@ -7,6 +7,7 @@ import { online } from '../backend.js';
 import { autoSellLabel, autoSellModal } from '../autosell.js';
 import { sfx } from '../audio.js';
 import { cs2Status } from '../cs2/api.js';
+import { prepareAll, prepareStatus, prepareCancel, cacheSize } from '../cs2/content.js';
 import { rankInfo } from '../engine/ranks.js';
 import { loadRankArt, emblemHtml, rankKey } from '../rank.js';
 
@@ -64,6 +65,13 @@ function draw() {
           <button class="btn ghost sm" data-a="resetprices" ${window.native ? '' : 'disabled'}>Use bundled prices</button>
         </div></div>
       <div class="setting"><div>Real CS2 models<p data-cs2>Checking for Counter-Strike 2…</p></div><button class="btn" data-a="cs2clear" ${window.native ? '' : 'disabled'}>Rebuild CS2 cache</button></div>
+      <div class="setting prepare-all" data-prep hidden><div style="flex:1;min-width:0">Prepare all CS2 content
+        <p>Exports every map, weapon model and skin texture, sticker, case, agent, icon and sound from your CS2 install now, so nothing has to be extracted the first time you open it. It runs in the background while you play, and can be stopped and carried on later. After a CS2 update only what the update changed is exported again.</p>
+        <div class="progress" data-prep-bar hidden style="margin:8px 0 4px"><i style="width:0%"></i></div>
+        <p data-prep-step></p>
+        <p data-prep-info></p>
+        <label class="prepare-keep"><input type="checkbox" data-s="keepPrepared" ${S.settings.keepPrepared !== false ? 'checked' : ''}> Keep everything prepared after CS2 updates</label></div>
+        <button class="btn primary" data-a="prepare">Prepare all</button></div>
       <div class="setting"><div>Image cache<p>Skin images are cached on disk after the first download so the game works offline.</p></div><button class="btn" data-a="clearcache" ${window.native ? '' : 'disabled'}>Clear cache</button></div>
       <div class="setting"><div>Reset progress<p>Deletes your money, inventory, upgrades and stats.</p></div><button class="btn danger" data-a="reset" ${online() ? 'disabled title="Log out to reset your offline save"' : ''}>Reset save</button></div>
     </div>
@@ -91,7 +99,36 @@ function draw() {
     el.textContent = st.available
       ? `Using your CS2 install (${st.gameDir}). Guns and knives are shown on their real models with CS2's own skin shader; models and textures are extracted the first time you inspect each weapon and cached.`
       : st.gameDir ? 'CS2 found, but the model extractor is missing. Showing icon-based 3D models.' : 'Counter-Strike 2 is not installed, so 3D inspect uses icon-based models.';
+    if (st.available && window.native?.cs2PrepareAll) { root.querySelector('[data-prep]').hidden = false; watchPrepare(root); }
   });
+}
+
+const gb = (b) => (b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.round(b / 1e6) + ' MB');
+
+// The "Prepare all" row, kept up to date while the page is open: its progress, the cache's size and when it last ran.
+function watchPrepare(r) {
+  const tick = async () => {
+    if (root !== r || !r.isConnected) return;
+    const st = await prepareStatus().catch(() => null);
+    const row = r.querySelector('[data-prep]');
+    if (!st || !row) return;
+    const bar = row.querySelector('[data-prep-bar]'), btn = row.querySelector('[data-a="prepare"]');
+    bar.hidden = !st.running;
+    bar.firstElementChild.style.width = `${Math.min(100, (100 * st.done) / (st.total || 1)).toFixed(1)}%`;
+    row.querySelector('[data-prep-step]').textContent = st.running ? `${st.step}${st.detail ? ' · ' + st.detail : ''} · ${Math.floor((100 * st.done) / (st.total || 1))}%`
+      : st.step && st.step !== 'Done' ? st.step : '';
+    btn.textContent = st.running ? 'Stop' : st.last && !st.last.outdated ? 'Check again' : 'Prepare all';
+    btn.classList.toggle('primary', !st.running);
+    const clear = r.querySelector('[data-a="cs2clear"]');
+    if (clear) clear.disabled = st.running;
+    const size = await cacheSize().catch(() => null);
+    const parts = [];
+    if (size) parts.push(`Cache: ${gb(size.bytes)}${size.free != null ? ` · ${gb(size.free)} free on the drive` : ''}`);
+    parts.push(st.last ? `Last prepared ${new Date(st.last.at).toLocaleString()}${st.last.skipped ? ` (${st.last.skipped} items weren't in your install)` : ''}${st.last.outdated ? ' · CS2 has been updated since' : ''}` : 'Not prepared yet');
+    row.querySelector('[data-prep-info]').textContent = parts.join(' · ');
+    setTimeout(tick, st.running ? 1000 : 5000);
+  };
+  tick();
 }
 
 async function action(a, btn) {
@@ -101,6 +138,15 @@ async function action(a, btn) {
     await resetSave();
     toast('Save reset. Fresh start with $10.', 'good');
     draw();
+  }
+  if (a === 'prepare') {
+    const st = await prepareStatus();
+    if (st?.running) { prepareCancel(); btn.textContent = 'Stopping…'; return; }
+    btn.disabled = true;
+    try {
+      if (await prepareAll()) toast('Preparing all CS2 content in the background. You can keep playing.', 'good');
+    } catch (e) { toast('Could not start: ' + e.message, 'bad'); }
+    btn.disabled = false;
   }
   if (a === 'cs2clear') {
     if (!(await confirmDialog('Delete the extracted CS2 models and textures? They are re-extracted from your CS2 install as needed.', { ok: 'Rebuild' }))) return;

@@ -121,15 +121,15 @@ class CS2Service {
     return this.cs2;
   }
 
-  // Viewmodel inspect clips in the game (listed once per game build).
+  // Viewmodel inspect clips in the game (listed again when a CS2 update changes them).
   async viewmodelClips() {
     const cs2 = this.ensureCS2();
     const file = path.join(this.cacheDir, 'fp', 'clips.json');
-    const stamp = cs2.vpkStamp();
-    try { const c = JSON.parse(fs.readFileSync(file, 'utf8')); if (c.stamp === stamp) return c.clips; } catch {}
+    const inputs = [/^animation\/anims\/viewmodel\/.*\.vnmclip_c$/];
+    const c = await cs2.cached(file, inputs);
+    if (c?.clips) return c.clips;
     const clips = (await cs2.list()).filter((f) => f.startsWith('animation/anims/viewmodel/') && f.endsWith('.vnmclip_c'));
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ stamp, clips }));
+    await cs2.save(file, { clips }, inputs);
     return clips;
   }
 
@@ -212,14 +212,15 @@ class CS2Service {
     return this.vanityJobs.get(id);
   }
 
-  // Container item id (items_game def index) -> its 3D crate model, read from items_game.txt once per game build.
+  // Container item id (items_game def index) -> its 3D crate model, read from items_game.txt (again when it changes).
   async crateModels() {
     if (!this.crateModelsJob) {
       this.crateModelsJob = (async () => {
         const cs2 = this.ensureCS2();
         const file = path.join(this.cacheDir, 'crates', 'models.json');
-        const stamp = cs2.vpkStamp();
-        try { const c = JSON.parse(fs.readFileSync(file, 'utf8')); if (c.stamp === stamp) return c.models; } catch {}
+        const inputs = ['scripts/items/items_game.txt'];
+        const c = await cs2.cached(file, inputs);
+        if (c?.models) return c.models;
         await this.ensureIndex(); // extracts items_game.txt
         const ig = parseKV1(fs.readFileSync(path.join(this.cacheDir, 'items_game.txt'), 'utf8')).items_game;
         const models = {};
@@ -229,8 +230,7 @@ class CS2Service {
             if (typeof m === 'string' && m.startsWith('models/props/crates/')) models[id] = m;
           }
         }
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, JSON.stringify({ stamp, models }));
+        await cs2.save(file, { models }, inputs);
         return models;
       })();
       this.crateModelsJob.catch(() => { this.crateModelsJob = null; });
@@ -381,24 +381,19 @@ class CS2Service {
     this.stickerBatch = [];
     this.stickerTimer = null;
     try {
-      const stamp = this.cs2.vpkStamp();
       const metaFile = (m) => path.join(this.cacheDir, 'stickers', m + '.json');
+      const inputs = (m) => [`stickers/${m}.vmat_c`];
       const metas = {};
       for (const { material } of batch) {
-        try {
-          const m = JSON.parse(fs.readFileSync(metaFile(material), 'utf8'));
-          if (m.version === STICKER_META_VERSION && m.stamp === stamp) metas[material] = m;
-        } catch {}
+        const m = await this.cs2.cached(metaFile(material), inputs(material), (c) => c.version === STICKER_META_VERSION);
+        if (m) metas[material] = m;
       }
-      const need = batch.map((b) => b.material).filter((m) => !metas[m]);
+      const need = [...new Set(batch.map((b) => b.material))].filter((m) => !metas[m]);
       if (need.length) {
         const found = await this.cs2.materialParams(need.map((m) => `stickers/${m}.vmat`));
         for (const m of need) {
           const p = found[`stickers/${m}.vmat`];
-          if (!p) continue;
-          metas[m] = { version: STICKER_META_VERSION, stamp, material: m, ...p };
-          fs.mkdirSync(path.dirname(metaFile(m)), { recursive: true });
-          fs.writeFileSync(metaFile(m), JSON.stringify(metas[m]));
+          if (p) metas[m] = await this.cs2.save(metaFile(m), { version: STICKER_META_VERSION, material: m, ...p }, inputs(m));
         }
       }
       const pick = (names) => [...new Set(Object.values(metas).flatMap((m) => names.map((n) => m.textures[n]).filter(Boolean)))];
@@ -515,6 +510,17 @@ class CS2Service {
       const say = (m) => { this.progress.set('map:' + id, m); this.log(`[play ${id}] ${m}`); };
       try {
         let meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+        // A CS2 update rewrites the map's VPK (and so its time), mostly with nothing in it changed: the export is kept
+        // when the files in it are the same. Exports made before the content was recorded learn it on this build.
+        if (meta.version >= 2 && (meta.stamp !== stamp ? meta.content : !meta.content)) {
+          let content = null;
+          try { content = await cs2.vpkContent(vpk); } catch (e) { this.log('map check: ' + e.message); }
+          if (content && (meta.stamp === stamp || content === meta.content)) {
+            if (meta.stamp !== stamp) this.log(`[play ${id}] CS2 rewrote the map, but nothing in it changed: keeping its export`);
+            meta = { ...meta, stamp, content };
+            fs.writeFileSync(metaFile, JSON.stringify(meta));
+          }
+        }
         // Older exports are brought up to date step by step; a step that fails (no disk space, say) leaves the export as
         // it was, still playable, rather than exporting the whole map again.
         if (meta.stamp === stamp && meta.version >= 2) {
@@ -527,6 +533,7 @@ class CS2Service {
       fs.rmSync(dir, { recursive: true, force: true });
       const tmp = path.join(dir, 'tmp');
       fs.mkdirSync(tmp, { recursive: true });
+      const content = await cs2.vpkContent(vpk).catch(() => null);
 
       say('Exporting the map from your CS2 install…');
       const glb = path.join(dir, 'world.glb');
@@ -593,7 +600,7 @@ class CS2Service {
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(entPhysFile, { force: true });
       const meta = {
-        version: play.PLAY_VERSION, stamp, id, name: nameOf(id), ...info, ...volumes, lightmap, sky, layers, lighting, hidden, hurts, doors, glass, sky3d,
+        version: play.PLAY_VERSION, stamp, content, id, name: nameOf(id), ...info, ...volumes, lightmap, sky, layers, lighting, hidden, hurts, doors, glass, sky3d,
         collision: { tris: col.tris, surfaces: col.surfaces, flags: { player: play.F_PLAYER, bullet: play.F_BULLET, grenade: play.F_GRENADE } },
       };
       fs.writeFileSync(metaFile, JSON.stringify(meta));
@@ -841,19 +848,21 @@ class CS2Service {
   // Latest progress line of a running Play mode export (null when idle).
   playProgress(key) { return this.progress.get(key) || null; }
 
-  // Weapon stats and sound events, read once per game build: { weapons, sounds }.
+  // Weapon stats and sound events, read again when a CS2 update changes them: { weapons, sounds }.
   playData() {
     return this.playJob('data', async () => {
       const cs2 = this.ensureCS2();
       const file = path.join(this.cacheDir, 'play', 'data.json');
-      const stamp = cs2.vpkStamp();
-      try { const c = JSON.parse(fs.readFileSync(file, 'utf8')); if (c.stamp === stamp && c.version === play.DATA_VERSION) return c; } catch {}
-      const tmp = path.join(this.cacheDir, 'play', 'tmp-data');
-      const files = ['scripts/weapons.vdata_c', 'soundevents/game_sounds_weapons.vsndevts_c', 'soundevents/game_sounds_player.vsndevts_c',
+      const fixed = ['scripts/weapons.vdata_c', 'soundevents/game_sounds_weapons.vsndevts_c', 'soundevents/game_sounds_player.vsndevts_c',
         'soundevents/game_sounds_physics.vsndevts_c', 'soundevents/game_sounds_footsteps.vsndevts_c', 'soundevents/game_sounds_ui.vsndevts_c',
         'soundevents/vo/announcer/game_sounds_cs2_classic.vsndevts_c', 'soundevents/music/valve_cs2_01/game_sounds_music.vsndevts_c',
-        ...['phoenix', 'leet', 'sas', 'seal'].map((a) => `soundevents/vo/agents/game_sounds_${a}.vsndevts_c`), // the bots' voices
-        ...(await cs2.list()).filter((f) => /^soundevents\/ambience\/[^/]+\.vsndevts_c$/.test(f))]; // the maps' own (Inferno's bells...)
+        ...['phoenix', 'leet', 'sas', 'seal'].map((a) => `soundevents/vo/agents/game_sounds_${a}.vsndevts_c`)]; // the bots' voices
+      const AMBIENCE = /^soundevents\/ambience\/[^/]+\.vsndevts_c$/; // the maps' own (Inferno's bells...)
+      const inputs = [...fixed, 'surfaceproperties/surfaceproperties.vsurf_c', AMBIENCE];
+      const c = await cs2.cached(file, inputs, (d) => d.version === play.DATA_VERSION);
+      if (c) return c;
+      const tmp = path.join(this.cacheDir, 'play', 'tmp-data');
+      const files = [...fixed, ...(await cs2.list()).filter((f) => AMBIENCE.test(f))];
       await cs2.run(['-i', cs2.vpk, '-f', [...files, 'surfaceproperties/surfaceproperties.vsurf_c'].join(','), '-d', '-o', tmp]);
       const read = (f) => fs.readFileSync(path.join(tmp, f.replace(/_c$/, '')), 'utf8');
       const weapons = play.weaponStats(read(files[0]));
@@ -862,10 +871,7 @@ class CS2Service {
       let impacts = {};
       try { impacts = play.surfaceImpacts(read('surfaceproperties/surfaceproperties.vsurf_c')); } catch (e) { this.log('surfaces: ' + e.message); }
       fs.rmSync(tmp, { recursive: true, force: true });
-      const data = { version: play.DATA_VERSION, stamp, weapons, sounds, impacts };
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(data));
-      return data;
+      return cs2.save(file, { version: play.DATA_VERSION, weapons, sounds, impacts }, inputs);
     });
   }
 
@@ -971,16 +977,17 @@ class CS2Service {
   }
 
   // CS2's equipment icons (the white silhouettes of every gun, knife, grenade and piece of gear that its buy menu and
-  // kill feed show), decompiled to SVG once per game build into play/icons/: { name: url } (ak47, knife_karambit,
-  // hegrenade, planted_c4...). Icons that draw nothing (world, trigger_hurt) are left out.
+  // kill feed show), decompiled to SVG into play/icons/ (again when a CS2 update changes them): { name: url } (ak47,
+  // knife_karambit, hegrenade, planted_c4...). Icons that draw nothing (world, trigger_hurt) are left out.
   playIcons() {
     return this.playJob('icons', async () => {
       const cs2 = this.ensureCS2();
       const dir = path.join(this.cacheDir, 'play', 'icons');
       const file = path.join(dir, 'icons.json');
-      const stamp = cs2.vpkStamp();
+      const inputs = [ICON_DIR + '/'];
       const result = (names) => Object.fromEntries(names.map((n) => [n, this.url(path.join(dir, n + '.svg'))]));
-      try { const c = JSON.parse(fs.readFileSync(file, 'utf8')); if (c.stamp === stamp) return result(c.names); } catch {}
+      const c = await cs2.cached(file, inputs);
+      if (c?.names) return result(c.names);
       fs.rmSync(dir, { recursive: true, force: true });
       const tmp = path.join(dir, 'tmp');
       await cs2.run(['-i', cs2.vpk, '-f', ICON_DIR + '/', '-d', '-o', tmp]);
@@ -996,7 +1003,7 @@ class CS2Service {
       }
       fs.rmSync(tmp, { recursive: true, force: true });
       if (!names.length) throw new Error('No equipment icons in this CS2 install');
-      fs.writeFileSync(file, JSON.stringify({ stamp, names }));
+      await cs2.save(file, { names }, inputs);
       return result(names);
     });
   }
@@ -1008,13 +1015,14 @@ class CS2Service {
       const cs2 = this.ensureCS2();
       const dir = path.join(this.cacheDir, 'play', 'ranks');
       const file = path.join(dir, 'ranks.json');
-      const stamp = cs2.vpkStamp();
+      const inputs = [RANK_DIR + '/'];
       const textures = async () => {
         const got = await cs2.extract(Object.values(RANKUP_TEXTURES));
         return Object.fromEntries(Object.entries(RANKUP_TEXTURES).map(([k, v]) => [k, got[v] ? this.url(got[v]) : null]));
       };
       const result = async (names) => ({ emblems: Object.fromEntries(names.map((n) => [n.replace(/^_/, ''), this.url(path.join(dir, 'skillgroup' + n + '.svg'))])), ...await textures() });
-      try { const c = JSON.parse(fs.readFileSync(file, 'utf8')); if (c.stamp === stamp) return result(c.names); } catch {}
+      const c = await cs2.cached(file, inputs);
+      if (c?.names) return result(c.names);
       fs.rmSync(dir, { recursive: true, force: true });
       const tmp = path.join(dir, 'tmp');
       await cs2.run(['-i', cs2.vpk, '-f', RANK_DIR + '/', '-d', '-o', tmp]);
@@ -1030,7 +1038,7 @@ class CS2Service {
       }
       fs.rmSync(tmp, { recursive: true, force: true });
       if (!names.length) throw new Error('No skill group emblems in this CS2 install');
-      fs.writeFileSync(file, JSON.stringify({ stamp, names }));
+      await cs2.save(file, { names }, inputs);
       return result(names);
     });
   }
@@ -1070,6 +1078,168 @@ class CS2Service {
       shader: { combo, layered: !!layered, source: await this.cs2.shaderSource(kit.shader, combo, { es: layered ? 310 : 300 }) },
     };
   }
+
+  // ---- Prepare all CS2 content ----------------------------------------------------------------------------------------
+  // Exports everything the game can show from the CS2 install up front (Settings), so nothing has to be exported the
+  // first time it's used. Runs in the CLI's background lane (what the player opens meanwhile doesn't wait for it), skips
+  // what's in the cache already, and can be stopped and run again to carry on. `content` comes from the renderer, which
+  // knows the game's items: { skins: [{ weapon, paint }], stickers: [materials], crates: [def ids], agents: [vmdls],
+  // anims: [paths], weapons: [ids] }. False when it's already running.
+  prepareAll(content = {}) {
+    if (this.preparing) return false;
+    const cs2 = this.ensureCS2();
+    const state = this.prepareState = { running: true, step: 'Starting…', done: 0, total: 1, skipped: 0, stop: false };
+    this.preparing = cs2.background(() => this.prepareSteps(content || {}, state))
+      .then(() => { if (!state.stop) this.writePrepared(state); })
+      .catch((e) => { state.error = e.message; this.log('prepare all: ' + e.message); })
+      .finally(() => {
+        state.running = false;
+        state.step = state.stop ? 'Stopped' : state.error ? 'Failed: ' + state.error : 'Done';
+        this.preparing = null;
+        this.sizeJob = null;
+      });
+    return true;
+  }
+
+  prepareCancel() { if (this.prepareState) this.prepareState.stop = true; return true; }
+
+  async prepareSteps(content, state) {
+    const uniq = (v) => [...new Set([].concat(v || []).filter((x) => x != null && x !== ''))];
+    const groups = (v, n) => { const out = []; for (let i = 0; i < v.length; i += n) out.push(v.slice(i, i + n)); return out; };
+    state.step = 'Reading your CS2 install…';
+    const index = await this.ensureIndex();
+    const data = await this.playData();
+    const crates = await this.crateModels();
+    const clips = await this.viewmodelClips();
+    const modelOf = (w) => index.weapons[w]?.model || EXTRA_MODELS[w];
+    const skins = [].concat(content.skins || []).filter((s) => s && modelOf(s.weapon));
+    const weapons = uniq(skins.map((s) => s.weapon));
+    const hasInspect = (w) => inspectClips(w, clips).length || pickClip(w, clips);
+    const playable = (w) => { const f = playClips(w, clips); return f.idle || f.draw; };
+    // Each set of things to make with its weight (roughly seconds each, for the progress bar): what cases and the
+    // inventory show first, then Play mode, then the stickers (there are thousands).
+    const steps = [
+      ['Icons and sounds', [1], 2, async () => { await this.playIcons(); await this.playRanks(); await this.sounds(); }],
+      ['Weapon models', uniq(skins.map((s) => modelOf(s.weapon))), 4, (m) => this.model(m)],
+      ['Skins', groups(skins, 40), 20, (g) => this.settle(g.map((s) => this.prepare(s)), state)],
+      ['Cases', uniq(content.crates).map(String).filter((id) => crates[id]), 4, (id) => this.crate(id)],
+      ['Inspect animations', weapons.filter(hasInspect), 2, (w) => this.firstPerson(w)],
+      ['StatTrak counters', weapons.filter((w) => /^weapon_/.test(w)), 1, (w) => this.statTrak(w)],
+      ['Glove animation', [1], 1, () => this.gloveClip()],
+      ['Inspect backdrops', this.vanityMaps().map((v) => v.id), 6, (id) => this.vanity(id)],
+      ['Maps', this.playMaps().map((m) => m.id), 60, (id) => { state.map = 'map:' + id; state.step += ': ' + nameOf(id); return this.playMap(id); }],
+      ['Map pictures', [1], 2, () => this.playMapImages()],
+      ['Play mode agents', uniq(content.agents), 4, (v) => this.playAgent(v)],
+      ['Play mode animations', [uniq(content.anims)].filter((a) => a.length), 20, (a) => this.playAnims(a)],
+      ['Play mode weapons', uniq(content.weapons).filter(playable), 2, (w) => this.playWeapon(w)],
+      ['Play mode sounds', groups(Object.keys(data.sounds), 250), 8, (g) => this.playSounds(g)],
+      ['Stickers', groups(uniq(content.stickers), 150), 25, (g) => this.settle(g.map((m) => this.sticker(m)), state)],
+    ];
+    state.total = steps.reduce((s, [, items, w]) => s + items.length * w, 0) || 1;
+    let spaceAt = 0;
+    for (const [label, items, weight, fn] of steps) {
+      for (let i = 0; i < items.length; i++) {
+        if (state.stop) return;
+        // It stops before the drive fills up.
+        if (Date.now() - spaceAt > 15000) {
+          spaceAt = Date.now();
+          const st = await fs.promises.statfs(this.cacheDir).catch(() => null);
+          if (st && st.bavail * st.bsize < 3e9) throw new Error('the drive is almost full (less than 3 GB free)');
+        }
+        state.step = items.length > 1 ? `${label} (${i + 1} of ${items.length})` : label;
+        state.map = null;
+        try { await fn(items[i]); } catch (e) { state.skipped++; this.log(`prepare all: ${label}: ${e.message}`); }
+        state.done += weight;
+      }
+    }
+  }
+
+  // Waits for a group of jobs, counting the ones that failed (a sticker this install doesn't have...).
+  async settle(jobs, state) {
+    const res = await Promise.allSettled(jobs);
+    const bad = res.filter((r) => r.status === 'rejected');
+    state.skipped += bad.length;
+    if (bad.length) this.log(`prepare all: ${bad.length} skipped (${bad[0].reason?.message})`);
+  }
+
+  mapStamp(id) {
+    try { const st = fs.statSync(path.join(this.gameDir, 'maps', id + '.vpk')); return `${st.size}-${Math.round(st.mtimeMs)}`; } catch { return null; }
+  }
+
+  // prepared.json: when everything was last prepared, and on which game build (so a CS2 update can be noticed).
+  writePrepared(state) {
+    const maps = Object.fromEntries(this.playMaps().map(({ id }) => [id, this.mapStamp(id)]));
+    try {
+      fs.writeFileSync(path.join(this.cacheDir, 'prepared.json'), JSON.stringify({ at: Date.now(), stamp: this.cs2.vpkStamp(), maps, skipped: state.skipped }));
+    } catch (e) { this.log('prepared.json: ' + e.message); }
+  }
+
+  // { running, step, detail (a map export's own progress), done, total, skipped, last: { at, skipped, outdated } | null }
+  // (outdated: CS2 was updated since).
+  prepareStatus() {
+    const s = this.prepareState;
+    let last = null;
+    try { last = JSON.parse(fs.readFileSync(path.join(this.cacheDir, 'prepared.json'), 'utf8')); } catch {}
+    let outdated = false;
+    if (last && this.status().available) {
+      try { outdated = last.stamp !== this.ensureCS2().vpkStamp() || this.playMaps().some(({ id }) => last.maps?.[id] !== this.mapStamp(id)); } catch {}
+    }
+    return {
+      running: !!s?.running, step: s?.step || null, detail: (s?.running && s.map && this.progress.get(s.map)) || null,
+      done: s?.done || 0, total: s?.total || 0, skipped: s?.skipped || 0,
+      last: last && { at: last.at, skipped: last.skipped || 0, outdated },
+    };
+  }
+
+  // The cache's size on disk and the free space where it is: { bytes, free } (counted again a minute later).
+  cacheSize() {
+    if (!this.sizeJob || Date.now() - this.sizeJob.at > 60000) {
+      const walk = async (dir) => {
+        let ents;
+        try { ents = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return 0; }
+        const sizes = await Promise.all(ents.map((e) => {
+          const p = path.join(dir, e.name);
+          return e.isDirectory() ? walk(p) : e.isFile() ? fs.promises.stat(p).then((st) => st.size, () => 0) : 0;
+        }));
+        return sizes.reduce((a, b) => a + b, 0);
+      };
+      const job = (async () => {
+        let free = null;
+        try { const st = await fs.promises.statfs(this.cacheDir); free = st.bavail * st.bsize; } catch {}
+        return { bytes: await walk(this.cacheDir), free };
+      })();
+      job.at = Date.now();
+      this.sizeJob = job;
+    }
+    return this.sizeJob;
+  }
+
+  // Caches made before they recorded what they were made from learn it now, in the background (a few CLI runs, once),
+  // so the next CS2 update keeps them rather than finding nothing to compare: each exported map's content, the index's
+  // and the other lists' signatures.
+  async learnSignatures() {
+    if (!this.status().available) return;
+    const cs2 = this.ensureCS2();
+    await cs2.background(async () => {
+      for (const { id } of this.playMaps()) {
+        const file = path.join(this.cacheDir, 'play', id, 'map.json');
+        const read = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+        let meta = read();
+        if (!meta || meta.content || meta.stamp !== this.mapStamp(id) || this.playJobs.has('map:' + id)) continue;
+        const content = await cs2.vpkContent(path.join(this.gameDir, 'maps', id + '.vpk')).catch(() => null);
+        meta = read(); // as it is now (a match may have started on it meanwhile)
+        if (content && meta && !meta.content && meta.stamp === this.mapStamp(id)) fs.writeFileSync(file, JSON.stringify({ ...meta, content }));
+      }
+      if (fs.existsSync(path.join(this.cacheDir, 'index.json'))) await this.ensureIndex();
+      for (const [file, fn] of [['play/data.json', () => this.playData()], ['crates/models.json', () => this.crateModels()],
+        ['fp/clips.json', () => this.viewmodelClips()], ['play/icons/icons.json', () => this.playIcons()], ['play/ranks/ranks.json', () => this.playRanks()]]) {
+        if (fs.existsSync(path.join(this.cacheDir, file))) await fn().catch(() => {});
+      }
+    });
+  }
+
+  // Writes the cache records out (the app is quitting).
+  flush() { this.cs2?.flush(); }
 }
 
 module.exports = { CS2Service };

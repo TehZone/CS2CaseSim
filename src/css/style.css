@@ -454,6 +454,8 @@ input[type=range] { accent-color: #d8dde2; }
 .settings { display: grid; gap: 8px; max-width: 760px; }
 .setting { display: flex; justify-content: space-between; align-items: center; gap: 16px; background: var(--panel-grad); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; }
 .setting p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.prepare-all p:empty { display: none; }
+.prepare-keep { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--muted); font-size: 12px; cursor: pointer; }
 .log { font-family: Consolas, monospace; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
 .bars { display: flex; flex-direction: column; gap: 6px; }
 .bars .b { display: grid; grid-template-columns: 160px 1fr 70px; gap: 10px; align-items: center; font-size: 12px; }

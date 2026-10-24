@@ -65,6 +65,14 @@ function weaponClip(id, kind) {
   const m = /^(.*)\/idle_([a-z0-9_]+)/.exec(holdPath(id));
   return m ? `${m[1]}/${kind}_${m[2]}` : null;
 }
+const LOCO_CLIPS = SETS.flatMap((s) => [`${s}/_default_${s}/idle_${s}`, `${s}/_default_${s}/idle_crouch_${s}`, `${s}/_default_${s}/inair_stand_${s}`, ...GAITS.flatMap((g) => DIRS.map((d) => locoPath(s, g, d)))]);
+// Every third-person clip bots use: locomotion, ladders, deaths, planting and defusing, gestures, and the hold pose of
+// each weapon in `holdsFor` (with `gestures`, each one's draw and reload too).
+export function botClips(holdsFor = [], { gestures = false } = {}) {
+  const ladders = SETS.map((s) => `${s}/_default_${s}/ladder_facing_slow_${s}`);
+  const own = gestures ? holdsFor.flatMap((id) => [weaponClip(id, 'draw'), weaponClip(id, 'reload')]).filter(Boolean) : [];
+  return [...LOCO_CLIPS, ...ladders, ...DEATHS, PLANT, DEFUSE, ...Object.values(SHARED), ...holdsFor.map(holdPath), ...own];
+}
 
 // Hitbox capsules between bones (radius in game units) and the hit group they count as.
 const HITBOXES = [
@@ -152,13 +160,11 @@ export class BotAssets {
         } catch (e) { console.warn('agent model failed', vmdl, e); }
       }
     }
-    const loco = SETS.flatMap((s) => [`${s}/_default_${s}/idle_${s}`, `${s}/_default_${s}/idle_crouch_${s}`, `${s}/_default_${s}/inair_stand_${s}`, ...GAITS.flatMap((g) => DIRS.map((d) => locoPath(s, g, d)))]);
-    const ladders = SETS.map((s) => `${s}/_default_${s}/ladder_facing_slow_${s}`);
-    const list = [...loco, ...ladders, ...DEATHS, PLANT, DEFUSE, ...Object.values(SHARED), ...holdsFor.map(holdPath)];
+    const loco = LOCO_CLIPS;
     // Clips also animate helper bones the agents don't have (attachments, the camera): those tracks are dropped.
     this.boneNames = new Set();
     for (const g of [...this.models.T, ...this.models.CT]) g.scene.traverse((o) => { if (o.isBone) this.boneNames.add(o.name); });
-    const urls = await cs2Play('anims', list);
+    const urls = await cs2Play('anims', botClips(holdsFor));
     await Promise.all(Object.entries(urls).map(async ([p, url]) => {
       try { this.clips[p] = this.fit((await loadGltf(url)).animations[0]); } catch {}
     }));

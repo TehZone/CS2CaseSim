@@ -1,13 +1,49 @@
 // Reads the player's local CS2 install (via Source 2 Viewer CLI) to build an index of paint kits, weapon
 // composite inputs and models, and extracts models/textures/shaders on demand into a local cache.
 // Used by the Electron main process and by dev scripts. Nothing from the game is bundled with the app.
+// Caches outlive CS2 updates: each remembers the CRCs of the game files it was made from (the VPK listing has one per
+// file), and only what was made from a file the update changed is made again.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 const { spawn, execFileSync } = require('child_process');
 const { parseKV1, splitDataDump } = require('./kv.cjs');
 const { listVanity, parseEntities, sceneInfo } = require('./vanity.cjs');
 
 const INDEX_VERSION = 4;
+// The pak01 files the index is made from (see CS2.signature).
+const INDEX_INPUTS = ['scripts/items/items_game.txt', 'weapons/paints/', 'gloves/paints/', 'materials/models/weapons/customization/paints/vmats/',
+  'workshop/paintkits/', 'items/assets/paintkits/', /composite_inputs\.vmat_c$/];
+
+// CLI runs made inside CS2.background() (Prepare all) go in a lane of their own, next to the player's (which never
+// wait for them), at a lower CPU priority.
+const lowPriority = new AsyncLocalStorage();
+
+// VPK paths in -f lists short enough for one command line (a background run is kept short: the player may be waiting
+// for a file it's extracting).
+function chunks(list, max) {
+  const out = [];
+  let cur = [], len = 0;
+  for (const f of list) {
+    if (cur.length && len + f.length + 1 > max) { out.push(cur); cur = []; len = 0; }
+    cur.push(f);
+    len += f.length + 1;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+const chunkSize = () => (lowPriority.getStore() ? 5000 : 24000);
+// A cached file's key in the CRC records: its path in the cache.
+const toKey = (cacheDir, file) => path.relative(cacheDir, file).replace(/\\/g, '/');
+
+function writeAtomic(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, text);
+  fs.renameSync(tmp, file);
+}
 // Parameters a weapon's composite_inputs material provides to the paint shader.
 const WEAPON_KEYS = ['g_tAmbientOcclusion', 'g_tColor', 'g_tMasks', 'g_tMetalness', 'g_tPosition', 'g_tSurface',
   'g_flUvScale1', 'g_flWeaponLength1', 'F_SEPARATE_CHANNEL_INPUTS'];
@@ -92,6 +128,64 @@ function gltfComplete(file) {
   } catch { return false; }
 }
 
+// What each cached file was made from and that file's CRC (<cache>/<name>.crc.json: { stamp, files: { key: [VPK path,
+// CRC] } }), so a CS2 update redoes only what it changed. The first time it's used after an update, every entry is
+// checked against the listing and the files made from a changed (or removed) VPK file are deleted (`drop`), to be made
+// again when next asked for. Files made before there was a record are taken as they are.
+class CrcRecord {
+  constructor(cs2, name, drop) {
+    this.cs2 = cs2;
+    this.file = path.join(cs2.cacheDir, name + '.crc.json');
+    this.drop = drop;
+    this.data = null;
+    this.checked = null;
+    this.timer = null;
+  }
+
+  // Checked once per run of the app (files it has handed out stay where they are until the next).
+  ready() {
+    this.checked ||= (async () => {
+      try { this.data = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch {}
+      if (!this.data?.files) this.data = { stamp: this.cs2.vpkStamp(), files: {} };
+      const stamp = this.cs2.vpkStamp();
+      if (this.data.stamp === stamp) return;
+      let files;
+      try { files = await this.cs2.listing(); } catch (e) { this.cs2.log('cache check: ' + e.message); return; }
+      let dropped = 0;
+      for (const [key, [src, crc]] of Object.entries(this.data.files)) {
+        if (files.get(src) === crc) continue;
+        try { this.drop(key, src); } catch {}
+        delete this.data.files[key];
+        dropped++;
+      }
+      this.data.stamp = stamp;
+      this.save(true);
+      this.cs2.log(`CS2 was updated: ${dropped} of the cached files in ${path.basename(this.file)} changed and will be made again`);
+    })();
+    return this.checked;
+  }
+
+  has(key) { return !!this.data?.files[key]; }
+
+  // Remembers the CRC a file was just made from (or, made before there was a record, is taken to be from).
+  async note(key, src) {
+    const crc = (await this.cs2.listing().catch(() => null))?.get(src);
+    if (!crc || !this.data) return;
+    this.data.files[key] = [src, crc];
+    this.save();
+  }
+
+  save(now = false) {
+    clearTimeout(this.timer);
+    this.timer = null;
+    const write = () => { this.timer = null; try { writeAtomic(this.file, JSON.stringify(this.data)); } catch (e) { this.cs2.log('cache record: ' + e.message); } };
+    if (now) write();
+    else { this.timer = setTimeout(write, 2000); this.timer.unref?.(); }
+  }
+
+  flush() { if (this.timer) this.save(true); }
+}
+
 class CS2 {
   constructor({ cli, gameDir, cacheDir, env = {}, log = () => {} }) {
     this.cli = cli;
@@ -101,14 +195,42 @@ class CS2 {
     this.cacheDir = cacheDir;
     this.env = env;
     this.log = log;
-    this.queue = Promise.resolve();
+    this.lanes = { fg: Promise.resolve(), bg: Promise.resolve() };
+    this.inflight = new Map(); // output file -> the job making it
+    this.batches = {}; // extract() requests waiting to share a CLI run, by root and lane
     fs.mkdirSync(cacheDir, { recursive: true });
+    this.extracted = new CrcRecord(this, 'files', (key, src) => {
+      const p = this.localPathFor(src, key.slice(0, key.indexOf('/')));
+      if (p) fs.rmSync(p, { force: true });
+    });
+    // Exported glTFs: a .gltf has a folder of its own (with its textures), a .glb is one file in a shared one.
+    this.exported = new CrcRecord(this, 'exports', (key) => {
+      const out = path.join(this.cacheDir, key);
+      fs.rmSync(key.endsWith('.gltf') ? path.dirname(out) : out, { recursive: true, force: true });
+    });
   }
 
-  // Runs the CLI (serialised; the tool preloads the whole VPK on each start).
+  // Writes the cache records out now (when the app quits).
+  flush() { this.extracted.flush(); this.exported.flush(); }
+
+  // Runs fn with every CLI run it makes in the background lane.
+  background(fn) { return lowPriority.run(true, fn); }
+
+  // One job per output at a time: an output another job is already making is waited for.
+  once(key, fn) {
+    if (!this.inflight.has(key)) {
+      const job = fn().finally(() => this.inflight.delete(key));
+      this.inflight.set(key, job);
+    }
+    return this.inflight.get(key);
+  }
+
+  // Runs the CLI, one run at a time in each lane (the tool preloads the whole VPK on each start).
   run(args, { capture = true, env = {} } = {}) {
+    const low = !!lowPriority.getStore();
     const job = () => new Promise((resolve, reject) => {
       const p = spawn(this.cli, args, { env: { ...process.env, ...this.env, ...env }, windowsHide: true });
+      if (low && p.pid) { try { os.setPriority(p.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {} }
       const out = [], err = [];
       p.stdout.on('data', (d) => capture && out.push(d));
       p.stderr.on('data', (d) => err.push(d));
@@ -119,14 +241,94 @@ class CS2 {
         else resolve(text);
       });
     });
-    const r = this.queue.then(job, job);
-    this.queue = r.catch(() => {});
+    const lane = low ? 'bg' : 'fg';
+    const r = this.lanes[lane].then(job, job);
+    this.lanes[lane] = r.catch(() => {});
     return r;
   }
 
+  // The game build (pak01's size and time): when it's the one a cache was made on, the cache holds.
   vpkStamp() {
     const st = fs.statSync(this.vpk);
     return `${st.size}-${Math.round(st.mtimeMs)}`;
+  }
+
+  // Every file in pak01 with its CRC and size ("crc:size"): Map(path -> crc), listed once per game build (kept in
+  // listing.txt).
+  listing() {
+    const stamp = this.vpkStamp();
+    if (this.listingJob?.stamp !== stamp) {
+      const file = path.join(this.cacheDir, 'listing.txt');
+      const job = (async () => {
+        let text = null;
+        try { const t = fs.readFileSync(file, 'utf8'); if (t.startsWith(stamp + '\n')) text = t.slice(stamp.length + 1); } catch {}
+        if (text == null) {
+          const lines = [];
+          for (const l of (await this.run(['-i', this.vpk, '-l'])).split(/\r?\n/)) {
+            const m = /^(.+) CRC:(\w+) size:(\d+)$/.exec(l);
+            if (m) lines.push(`${m[1]}\t${m[2]}:${m[3]}`);
+          }
+          if (!lines.length) throw new Error('Could not list the files in CS2');
+          text = lines.join('\n');
+          writeAtomic(file, stamp + '\n' + text);
+        }
+        const files = new Map();
+        for (const l of text.split('\n')) { const t = l.indexOf('\t'); if (t > 0) files.set(l.slice(0, t), l.slice(t + 1)); }
+        return files;
+      })();
+      job.stamp = stamp;
+      job.catch(() => { if (this.listingJob === job) this.listingJob = null; });
+      this.listingJob = job;
+    }
+    return this.listingJob;
+  }
+
+  // A signature of the pak01 files a cache is made from (`inputs`: paths, folders ending in '/', regexes), the same
+  // until one of them changes, is added or goes.
+  async signature(inputs) {
+    const files = await this.listing();
+    const exact = inputs.filter((s) => typeof s === 'string' && !s.endsWith('/'));
+    const folders = inputs.filter((s) => typeof s === 'string' && s.endsWith('/'));
+    const res = inputs.filter((s) => s instanceof RegExp);
+    const lines = exact.map((f) => `${f} ${files.get(f) || '-'}`);
+    if (folders.length || res.length) {
+      for (const [f, crc] of files) if (folders.some((p) => f.startsWith(p)) || res.some((r) => r.test(f))) lines.push(`${f} ${crc}`);
+    }
+    return crypto.createHash('sha1').update(lines.sort().join('\n')).digest('hex');
+  }
+
+  // A JSON cache made from pak01 files (`inputs`, see signature()) if it still holds: made on this game build, or on an
+  // earlier one from the same files (a CS2 update that left them alone: it's stamped with this build). null when it
+  // has to be made again (and written with save()). `ok(cache)`: is it the current format? The cache keeps the
+  // signature as `sig`.
+  async cached(file, inputs, ok = () => true) {
+    let c;
+    try { c = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+    if (!c || !ok(c)) return null;
+    const stamp = this.vpkStamp();
+    if (c.stamp === stamp && c.sig) return c;
+    let now;
+    try { now = await this.signature(inputs); } catch (e) { this.log('cache check: ' + e.message); return c.stamp === stamp ? c : null; }
+    if (c.stamp !== stamp && c.sig !== now) return null;
+    if (c.stamp !== stamp) this.log(`CS2 was updated, but not the files ${path.relative(this.cacheDir, file)} is made from: kept`);
+    c.stamp = stamp;
+    c.sig = now;
+    writeAtomic(file, JSON.stringify(c));
+    return c;
+  }
+
+  async save(file, data, inputs) {
+    const c = { ...data, stamp: this.vpkStamp(), sig: await this.signature(inputs).catch(() => undefined) };
+    writeAtomic(file, JSON.stringify(c));
+    return c;
+  }
+
+  // A map's (or any single VPK's) content signature: its files' CRCs. Steam rewrites every map's VPK in some CS2
+  // updates, most with nothing in them changed.
+  async vpkContent(vpk) {
+    const lines = (await this.run(['-i', vpk, '-l'])).split(/\r?\n/).filter((l) => / CRC:/.test(l)).sort();
+    if (!lines.length) throw new Error('Could not list ' + path.basename(vpk));
+    return crypto.createHash('sha1').update(lines.join('\n')).digest('hex');
   }
 
   async dump(filter, ext, vpk = this.vpk) {
@@ -135,23 +337,56 @@ class CS2 {
     return splitDataDump(await this.run(args));
   }
 
-  async list(vpk = this.vpk) {
-    const text = await this.run(['-i', vpk, '-l']);
-    return text.split(/\r?\n/).map((l) => l.split(' ')[0]).filter(Boolean);
-  }
+  // Every file in pak01.
+  async list() { return [...(await this.listing()).keys()]; }
 
   // Extract (and decompile) VPK files into the cache, preserving their paths. Returns local paths.
   // `raw` keeps textures exactly as the shaders sample them (no normal map reconstruction), in files-raw/.
   async extract(files, { raw = false } = {}) {
     const root = raw ? 'files-raw' : 'files';
     const want = [...new Set(files.map((f) => f.replace(/\\/g, '/').replace(/(\.v\w+)$/, '$1_c').replace(/_c_c$/, '_c')))];
+    await this.extracted.ready();
     const missing = want.filter((f) => !this.localPathFor(f, root));
-    for (let i = 0; i < missing.length; i += 40) {
-      const args = ['-i', this.vpk, '-f', missing.slice(i, i + 40).join(','), '-d', '-o', path.join(this.cacheDir, root)];
-      if (raw) args.push('--texture_decode_flags', 'none');
-      await this.run(args);
+    if (missing.length) await this.extractNow(root, raw, missing);
+    const out = {};
+    for (const f of want) {
+      out[f] = this.localPathFor(f, root);
+      if (out[f] && !this.extracted.has(root + '/' + f)) await this.extracted.note(root + '/' + f, f);
     }
-    return Object.fromEntries(want.map((f) => [f, this.localPathFor(f, root)]));
+    return out;
+  }
+
+  // Extracts files that aren't in the cache: requests made close together share CLI runs, and a file already on its
+  // way is waited for rather than extracted twice.
+  extractNow(root, raw, files) {
+    const lane = lowPriority.getStore() ? 'bg' : 'fg', key = root + ':' + lane;
+    let batch = this.batches[key];
+    if (!batch) {
+      let release;
+      batch = this.batches[key] = { files: [], done: new Promise((r) => { release = r; }) };
+      setTimeout(async () => {
+        delete this.batches[key];
+        try {
+          for (const list of chunks(batch.files, chunkSize())) {
+            const args = ['-i', this.vpk, '-f', list.join(','), '-d', '-o', path.join(this.cacheDir, root)];
+            if (raw) args.push('--texture_decode_flags', 'none');
+            await this.run(args).catch((e) => this.log('extract: ' + e.message));
+          }
+        } finally {
+          for (const f of batch.files) this.inflight.delete(root + '/' + f);
+          release();
+        }
+      }, 15);
+    }
+    const waits = new Set();
+    for (const f of files) {
+      const busy = this.inflight.get(root + '/' + f);
+      if (busy) { waits.add(busy); continue; }
+      batch.files.push(f);
+      this.inflight.set(root + '/' + f, batch.done);
+      waits.add(batch.done);
+    }
+    return Promise.all(waits);
   }
 
   // Decompiled texture lands as .png or .exr next to the VPK-relative path.
@@ -175,8 +410,8 @@ class CS2 {
   // Parameters of compiled materials ({ path: { shader, ints, floats, vectors, textures } }), many per CLI run.
   async materialParams(vmats) {
     const out = {};
-    for (let i = 0; i < vmats.length; i += 40) {
-      const docs = await this.dump(vmats.slice(i, i + 40).map((f) => f.replace(/\.vmat$/, '.vmat_c')).join(','), null);
+    for (const list of chunks(vmats.map((f) => f.replace(/\.vmat$/, '.vmat_c')), chunkSize())) {
+      const docs = await this.dump(list.join(','), null);
       for (const [p, mat] of Object.entries(docs)) {
         const { ints, floats, vectors, textures } = params(mat);
         out[p] = { shader: (mat.m_shaderName || '').replace(/\.vfx$/, ''), ints, floats, vectors, textures };
@@ -186,30 +421,43 @@ class CS2 {
   }
 
   async exportModel(vmdl) {
-    const name = base(vmdl);
+    const name = base(vmdl), src = vmdl.replace(/(\.vmdl)$/, '$1_c');
     const dir = path.join(this.cacheDir, 'models', name);
-    const file = path.join(dir, name + '.gltf');
-    if (fs.existsSync(file) && gltfComplete(file)) return file;
-    fs.rmSync(dir, { recursive: true, force: true });
-    fs.mkdirSync(dir, { recursive: true });
-    await this.run(['-i', this.vpk, '-f', vmdl.replace(/(\.vmdl)$/, '$1_c'), '-d', '-o', file,
-      '--gltf_export_format', 'gltf', '--gltf_export_materials', '--gltf_textures_adapt']);
-    if (!fs.existsSync(file)) throw new Error('Model export failed for ' + vmdl);
-    return file;
+    const file = path.join(dir, name + '.gltf'), key = toKey(this.cacheDir, file);
+    await this.exported.ready();
+    return this.once(file, async () => {
+      if (fs.existsSync(file) && gltfComplete(file)) {
+        if (!this.exported.has(key)) await this.exported.note(key, src);
+        return file;
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.mkdirSync(dir, { recursive: true });
+      await this.run(['-i', this.vpk, '-f', src, '-d', '-o', file, '--gltf_export_format', 'gltf', '--gltf_export_materials', '--gltf_textures_adapt']);
+      if (!fs.existsSync(file)) throw new Error('Model export failed for ' + vmdl);
+      await this.exported.note(key, src);
+      return file;
+    });
   }
 
   // Exports any model/animation resource to glTF in the cache (first-person arms and inspect clips).
   async exportGltf(file, rel, { materials = false, glb = false, animations = false } = {}) {
-    const out = path.join(this.cacheDir, rel);
-    if (fs.existsSync(out) && gltfComplete(out)) return out;
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    const args = ['-i', this.vpk, '-f', file.replace(/(\.v\w+)$/, '$1_c').replace(/_c_c$/, '_c'), '-o', out, '--gltf_export_format', glb ? 'glb' : 'gltf'];
-    if (materials) args.push('--gltf_export_materials', '--gltf_textures_adapt');
-    if (animations) args.push('--gltf_export_animations');
-    await this.run(args);
-    for (const f of fs.readdirSync(path.dirname(out))) if (/_physics.(glb|gltf)$/i.test(f)) fs.rmSync(path.join(path.dirname(out), f), { force: true });
-    if (!fs.existsSync(out)) throw new Error('Export failed for ' + file);
-    return out;
+    const out = path.join(this.cacheDir, rel), src = file.replace(/(\.v\w+)$/, '$1_c').replace(/_c_c$/, '_c'), key = toKey(this.cacheDir, out);
+    await this.exported.ready();
+    return this.once(out, async () => {
+      if (fs.existsSync(out) && gltfComplete(out)) {
+        if (!this.exported.has(key)) await this.exported.note(key, src);
+        return out;
+      }
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      const args = ['-i', this.vpk, '-f', src, '-o', out, '--gltf_export_format', glb ? 'glb' : 'gltf'];
+      if (materials) args.push('--gltf_export_materials', '--gltf_textures_adapt');
+      if (animations) args.push('--gltf_export_animations');
+      await this.run(args);
+      for (const f of fs.readdirSync(path.dirname(out))) if (/_physics.(glb|gltf)$/i.test(f)) fs.rmSync(path.join(path.dirname(out), f), { force: true });
+      if (!fs.existsSync(out)) throw new Error('Export failed for ' + file);
+      await this.exported.note(key, src);
+      return out;
+    });
   }
 
   // Exports many models/animation clips to .glb in one CLI run (each run reloads the VPK), keeping their VPK paths
@@ -217,10 +465,22 @@ class CS2 {
   async exportGlbBatch(files, rel) {
     const root = path.join(this.cacheDir, rel);
     const out = (f) => path.join(root, f.replace(/_c$/, '').replace(/\.[^./]+$/, '.glb'));
-    const missing = [...new Set(files)].filter((f) => !fs.existsSync(out(f)) || !gltfComplete(out(f)));
-    for (let i = 0; i < missing.length; i += 40) {
-      await this.run(['-i', this.vpk, '-f', missing.slice(i, i + 40).join(','), '-o', root, '--gltf_export_format', 'glb']);
+    await this.exported.ready();
+    const waits = [], missing = [];
+    for (const f of new Set(files)) {
+      if (this.inflight.has(out(f))) waits.push(this.inflight.get(out(f)));
+      else if (!fs.existsSync(out(f)) || !gltfComplete(out(f))) missing.push(f);
+      else if (!this.exported.has(toKey(this.cacheDir, out(f)))) await this.exported.note(toKey(this.cacheDir, out(f)), f);
     }
+    if (missing.length) {
+      const job = (async () => {
+        for (const list of chunks(missing, chunkSize())) await this.run(['-i', this.vpk, '-f', list.join(','), '-o', root, '--gltf_export_format', 'glb']);
+        for (const f of missing) if (fs.existsSync(out(f))) await this.exported.note(toKey(this.cacheDir, out(f)), f);
+      })().finally(() => { for (const f of missing) this.inflight.delete(out(f)); });
+      for (const f of missing) this.inflight.set(out(f), job);
+      waits.push(job);
+    }
+    await Promise.all(waits);
     return Object.fromEntries(files.map((f) => [f, fs.existsSync(out(f)) ? out(f) : null]));
   }
 
@@ -259,25 +519,24 @@ class CS2 {
     const key = `${shader}__${combo.replace(/[^\w=,]/g, '').replace(/[=,]/g, '_')}${es === 300 ? '' : '__es' + es}`;
     const file = path.join(this.cacheDir, 'shaders', key + '.frag');
     if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8');
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const text = await this.run(['-i', this.shaderVpk, '-f', `shaders/vfx/${shader}_vulkan_50_ps.vcs`, '--shader_combo', combo, '-q'],
-      { env: { VRF_GLSL_ES_VERSION: String(es) } });
-    if (!new RegExp(`#version ${es} es`).test(text)) throw new Error('Shader decompile failed: ' + text.slice(0, 300));
-    fs.writeFileSync(file, text);
-    return text;
+    return this.once(file, async () => {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const text = await this.run(['-i', this.shaderVpk, '-f', `shaders/vfx/${shader}_vulkan_50_ps.vcs`, '--shader_combo', combo, '-q'],
+        { env: { VRF_GLSL_ES_VERSION: String(es) } });
+      if (!new RegExp(`#version ${es} es`).test(text)) throw new Error('Shader decompile failed: ' + text.slice(0, 300));
+      fs.writeFileSync(file, text);
+      return text;
+    });
   }
 
   // ---------------------------------------------------------------------------------------
   async buildIndex() {
     const indexFile = path.join(this.cacheDir, 'index.json');
-    const stamp = this.vpkStamp();
-    try {
-      const cur = JSON.parse(fs.readFileSync(indexFile, 'utf8'));
-      if (cur.version === INDEX_VERSION && cur.stamp === stamp) return cur;
-    } catch {}
+    const igFile = path.join(this.cacheDir, 'items_game.txt');
+    const cur = fs.existsSync(igFile) && await this.cached(indexFile, INDEX_INPUTS, (c) => c.version === INDEX_VERSION);
+    if (cur) return cur;
 
     this.log('Reading items_game.txt…');
-    const igFile = path.join(this.cacheDir, 'items_game.txt');
     await this.run(['-i', this.vpk, '-f', 'scripts/items/items_game.txt', '-o', igFile]);
     const ig = parseKV1(fs.readFileSync(igFile, 'utf8')).items_game;
 
@@ -346,8 +605,7 @@ class CS2 {
       }
     }
 
-    const index = { version: INDEX_VERSION, stamp, builtAt: new Date().toISOString(), weapons, inputs: inputsByMaterial, paints };
-    fs.writeFileSync(indexFile, JSON.stringify(index));
+    const index = await this.save(indexFile, { version: INDEX_VERSION, builtAt: new Date().toISOString(), weapons, inputs: inputsByMaterial, paints }, INDEX_INPUTS);
     this.log(`Indexed ${Object.keys(paints).length} paint kits, ${Object.keys(inputsByMaterial).length} weapon materials.`);
     return index;
   }

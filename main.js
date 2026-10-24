@@ -183,7 +183,13 @@ function registerIpc() {
   ipcMain.handle('cs2:statTrak', (_e, weapon) => cs2.statTrak(weapon));
   ipcMain.handle('cs2:crate', (_e, id) => cs2.crate(id));
   ipcMain.handle('cs2:play', (_e, fn, arg) => playCall(fn, arg));
+  ipcMain.handle('cs2:prepareAll', (_e, content) => cs2.prepareAll(content));
+  ipcMain.handle('cs2:prepareStatus', () => cs2.prepareStatus());
+  ipcMain.handle('cs2:prepareCancel', () => cs2.prepareCancel());
+  ipcMain.handle('cs2:cacheSize', () => cs2.cacheSize());
   ipcMain.handle('cs2:clear', () => {
+    cs2.prepareCancel();
+    cs2.flush(); // nothing left to write into the folder once it's gone
     fs.rmSync(cs2Cache, { recursive: true, force: true });
     cs2 = new CS2Service({ cacheDir: cs2Cache, cliPath: cs2.cliPath, log: (m) => console.log('[cs2]', m), shrinkImages });
     return true;
@@ -230,6 +236,7 @@ function createWindow() {
     return { action: 'deny' };
   });
   win.loadURL('app://game/index.html');
+  setTimeout(() => cs2.learnSignatures().catch((e) => console.warn('[cs2] learn signatures:', e.message)), 20000);
   if (SMOKE) runSmokeTest(win);
 }
 
@@ -417,6 +424,48 @@ async function runMapsSmoke(win) {
     await js(`document.querySelector('.play-root [data-leave]')?.click(); 1`);
     await wait(2000);
   }
+  app.quit();
+}
+
+// `CS2SIM_SMOKE=prepare` checks "Prepare all CS2 content": times loading a Play map (the first of CS2SIM_SMOKE_MAPS;
+// none for "none") twice, then runs Prepare all from Settings for CS2SIM_SMOKE_SECONDS (default 60) logging its
+// progress, screenshots the Settings row into userData/prepare-*.png and stops it.
+async function runPrepareSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `prepare-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  const [id] = process.env.CS2SIM_SMOKE_MAPS === 'none' ? (await wait(3000), []) : await smokeMapIds(win);
+  for (const run of id ? [1, 2] : []) {
+    const t0 = Date.now();
+    const ok = await smokeStartMap(win, id, 'prepare');
+    console.log('SMOKE prepare map', id, 'load', run, ok ? 'took' : 'failed after', ((Date.now() - t0) / 1000).toFixed(1) + 's');
+    await js(`document.querySelector('.play-root [data-leave]')?.click(); 1`);
+    await wait(2000);
+  }
+  await js(`document.querySelector('#nav [data-page=stats]').click(); 1`);
+  for (let i = 0; i < 20 && !(await js(`!!document.querySelector('[data-prep]:not([hidden])')`)); i++) await wait(500);
+  await js(`document.querySelector('[data-prep]').scrollIntoView({ block: 'center' }); 1`);
+  await wait(6000);
+  console.log('SMOKE prepare row', await js(`document.querySelector('[data-prep]')?.innerText.replace(/\\n+/g, ' | ')`));
+  await shot('idle');
+  await js(`document.querySelector('[data-a=prepare]').click(); 1`);
+  const end = Date.now() + 1000 * (+process.env.CS2SIM_SMOKE_SECONDS || 60);
+  let last = '';
+  while (Date.now() < end) {
+    await wait(2000);
+    const st = await js(`window.native.cs2PrepareStatus()`);
+    const line = `${st.step}${st.detail ? ' · ' + st.detail : ''} ${Math.floor((100 * st.done) / (st.total || 1))}%`;
+    if (line !== last) console.log('SMOKE prepare', ((end - Date.now()) / 1000).toFixed(0) + 's left', line, 'skipped', st.skipped);
+    last = line;
+    if (!st.running) break;
+  }
+  await js(`document.querySelector('[data-prep]').scrollIntoView({ block: 'center' }); 1`);
+  await wait(1200);
+  await shot('running');
+  console.log('SMOKE prepare row', await js(`document.querySelector('[data-prep]')?.innerText.replace(/\\n+/g, ' | ')`));
+  await js(`window.native.cs2PrepareCancel()`);
+  for (let i = 0; i < 300 && (await js(`window.native.cs2PrepareStatus()`)).running; i++) await wait(1000);
+  console.log('SMOKE prepare stopped', JSON.stringify(await js(`window.native.cs2PrepareStatus()`)));
   app.quit();
 }
 
@@ -996,6 +1045,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'play') { win.webContents.once('did-finish-load', () => runPlaySmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'perf') { win.webContents.once('did-finish-load', () => runPerfSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'maps') { win.webContents.once('did-finish-load', () => runMapsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'prepare') { win.webContents.once('did-finish-load', () => runPrepareSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'crate') { win.webContents.once('did-finish-load', () => runCrateSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   win.webContents.once('did-finish-load', async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1066,3 +1116,4 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => app.quit());
+app.on('will-quit', () => cs2?.flush());
