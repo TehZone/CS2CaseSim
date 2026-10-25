@@ -99,6 +99,15 @@ export const sfx = {
     if (play('unlock')) return;
     noise(0.25, { gain: 0.25, freq: 800, q: 1 }); tone(140, 0.25, { type: 'sine', gain: 0.3, slide: -60 });
   },
+  // Matchmaking: the match is found (accept it), and accepting it.
+  matchReady() {
+    if (play('matchReady', 0.9)) return;
+    [659, 880, 1175].forEach((f, i) => tone(f, 0.32, { type: 'triangle', gain: 0.18, at: i * 0.12 }));
+  },
+  acceptBeep(gain = 1) {
+    if (play('accept', 0.8 * gain)) return;
+    tone(1046, 0.09, { type: 'square', gain: 0.07 * gain });
+  },
   sticker() { noise(0.12, { gain: 0.35, freq: 5000, q: 1.5 }); tone(300, 0.1, { type: 'sine', gain: 0.2, at: 0.04 }); },
   scrape() { noise(0.25, { gain: 0.35, freq: 6000, q: 0.8 }); },
   // A charm clipped on or off: the clasp, then the little chain's jingle.

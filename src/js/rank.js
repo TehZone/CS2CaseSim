@@ -16,10 +16,10 @@ export const rankArt = () => art;
 // The emblem to show for a rank (see engine/ranks.js rankInfo): its group, the '?' plate (0) until placed, 'expired'.
 export const rankKey = (info) => (info.expired ? 'expired' : info.group);
 
-// An emblem: a group 1..18, 0 for unranked or 'expired'. size: its height in pixels.
-export function emblemHtml(key, { size = 24 } = {}) {
+// An emblem: a group 1..18, 0 for unranked or 'expired'. size: its height in pixels. wingman: Wingman's own emblems.
+export function emblemHtml(key, { size = 24, wingman = false } = {}) {
   const name = typeof key === 'number' ? (key ? SKILL_GROUPS[key - 1] : 'Unranked') : 'Rank expired';
-  const url = art?.emblems?.[key];
+  const url = art?.emblems?.[wingman ? (typeof key === 'number' ? 'wingman' + key : 'wingman_' + key) : key];
   if (url) return `<img class="rank-emblem" src="${url}" alt="${esc(name)}" title="${esc(name)}" style="height:${size}px">`;
   return `<span class="rank-emblem text" title="${esc(name)}" style="--h:${size}px">${esc(typeof key === 'number' && key ? SHORT_NAMES[key - 1] : '?')}</span>`;
 }

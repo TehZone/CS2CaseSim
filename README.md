@@ -50,8 +50,26 @@ crate, or without CS2 installed, drop in as their icon). Turn it off under Setti
 ## Play (offline CS2 against bots)
 With CS2 installed, **Play** is a match against bots on any bomb defusal map in your install (Dust II, Mirage, Inferno,
 Nuke, Ancient, Anubis, Overpass, Train, Vertigo...; each map is prepared the first time you play it), with your equipped
-skins, gloves and knife. Four modes:
-- **Competitive**: you and bot teammates against bots (1v1 up to 5v5, four bot difficulties, first to 9 or first to
+skins, gloves and knife. Two ways in, like CS2's play menu:
+- **Matchmaking** (Premier, Competitive, Wingman, Deathmatch, Arms Race): pick the maps you'll play (Premier bans its
+  own from the Active Duty pool) and press Go. The search runs with its timer in the top bar while you use the rest of
+  the game; meanwhile the match it will find is set up (one of your maps at random, bots of your rank: around your
+  skill group, your Wingman rank or your CS Rating, or the hidden rating while you're unranked) and loaded out of
+  sight, so when it's found (accept it within 20 seconds) you're straight in. Matchmaking plays CS2's rules: MR12 with a
+  draw at 12:12 (Premier: overtime), friendly fire on.
+- **Private match**: everything up to you: the map, side, team size, length, overtime, friendly fire, and your
+  teammates' and opponents' ranks (a tier or one skill group). It pays a reward but moves no rank.
+
+In a match, Esc opens the menu over it and the match goes on (it never pauses): cases, the market, your inventory and the
+item database are all there, and the Play page has Resume, your settings and keys (used at once) and Leave. Leaving a
+ranked match (Premier, Competitive, Wingman) you can come back: Reconnect (top bar or Play page) puts you back in, at
+once in freeze time, else next round, and the first time your team calls a technical timeout that holds the next
+freeze time up to two minutes for you. Abandon it, or don't reconnect within 5 minutes (or close the game during it),
+and it counts as a loss with a cooldown from ranked matchmaking: 30 minutes, then 2 hours, a day and a week for each
+abandon within a week of the last.
+
+The modes:
+- **Competitive**: you and bot teammates against bots (1v1 up to 5v5 in a private match, first to 9 or first to
   13), with CS2's rounds: freeze time and buy time, the 1:55 round clock, the bomb (one terrorist carries it; plant it
   in a bomb site, 40 second fuse, defuse in 10 seconds or 5 with a kit; you can still plant it after the round is over,
   as in CS2, without changing the result), win by elimination, bomb, defuse or time,
@@ -116,8 +134,9 @@ What's in a match:
   your K/D/A, ADR, headshots, accuracy, MVPs and multi-kills. You can inspect your weapon during freeze time.
 - Sound carries like CS2's: gunshots over much of the map, footsteps about 1100 units, smaller sounds less, fading with
   distance and muffled through walls; the round's music and the radio play one at a time.
-- CS:GO's competitive ranks, one for all maps: Silver I to The Global Elite, with CS2's own emblems. Competitive matches
-  move a hidden rating (more for a bigger win, and depending on the bots' difficulty); the rank shows after 10 wins and
+- CS:GO's competitive ranks, one for all maps: Silver I to The Global Elite, with CS2's own emblems; Wingman has its own
+  rank with its own emblems. Matchmade matches move a hidden rating (more for a bigger win, and depending on the other
+  team's ranks); the rank shows after 10 wins and
   then moves a group at a time, with CS:GO's rank-up (or down) at the end of the match. It's in the lobby, the
   scoreboard (each bot's rank comes from its skill) and your stats, saved with your progress (online too), and
   shows as expired after 30 days without a win.
@@ -129,8 +148,8 @@ What's in a match:
   scoreboard and the result screen.
 - The bots are real players: the pros of the game's Major autograph stickers (their autograph as the picture, their
   team), or the players in src/data/bot-players.json when it's there (Liquipedia's data, credited), nobody twice in a
-  match. Their skill comes from their rank (Bot skill in the lobby: Silver to Global Elite, each bot its own rank in
-  it): reaction time, aim error and spray control, where the crosshair rests (head height or the floor), how quickly
+  match. Their skill comes from their rank (matchmaking finds them around yours; a private match's are the ranks you
+  pick, each bot its own rank): reaction time, aim error and spray control, where the crosshair rests (head height or the floor), how quickly
   they stop to shoot (counter-strafing), how much utility they throw and how well, patience, and how fast they trade.
 - They play as teams. Each round the team makes an economy call (save, force or full buy, a rifle dropped to a teammate
   who couldn't afford one) and a plan its best player calls in the chat. Terrorists rush a site, execute one (gathering
@@ -143,7 +162,8 @@ What's in a match:
   throw spots, aims, strengths and jump-throws with the game's own grenade physics, the steadiest kept, and checked
   again on each match's collision. A bot stands on the spot, aims (off by its rank's error: Silvers misthrow) and throws.
   `CS2SIM_SMOKE=bots` watches rounds at chosen ranks and logs the plans and where every lineup landed;
-  `CS2SIM_SMOKE=premier` plays through the pick/ban and a match.
+  `CS2SIM_SMOKE=premier` plays through the pick/ban and a match; `CS2SIM_SMOKE=mm` goes through matchmaking (search,
+  accept, Esc's menu, leave, reconnect, abandon and the cooldown).
 - Finished matches pay into your wallet when you play offline: kills, assists, MVPs, rounds won and the win, more
   against harder bots. The lobby shows your record.
 - The lobby shows CS2's own screenshot of each map.
@@ -213,7 +233,7 @@ What's in a match:
 - Bots are CS2 agent models with per-bone hitboxes (head, chest, stomach, arms, legs) and armor.
 - Keys (rebindable in the settings, or with bind in the console): WASD, Space, Ctrl (or C) crouch, Shift walk, Mouse1/Mouse2, R, F inspect, B buy, E defuse/pick up,
   G drop, 1/2/3 (3 again for the Zeus), 4 (grenades), 5 (the bomb: hold Mouse1 in a site to plant), Q and the mouse
-  wheel switch weapons, Z/X/V radio, Tab scores, Esc pause. Mouse sensitivity uses CS2's scale, so your CS2 sensitivity
+  wheel switch weapons, Z/X/V radio, Tab scores, Esc menu (the match goes on). Mouse sensitivity uses CS2's scale, so your CS2 sensitivity
   feels the same.
 
 ## Features

@@ -21,11 +21,11 @@ export function render(r) {
 }
 export function destroy() { root = null; }
 
-// Your CS:GO rank from Play's competitive matches: the emblem and its name (or the wins it still needs).
-function competitiveRank() {
-  const info = rankInfo(S.rank);
+// Your CS:GO rank from Play's competitive (or wingman) matches: the emblem and its name (or the wins it still needs).
+function competitiveRank(wingman = false) {
+  const info = rankInfo(wingman ? S.wingman : S.rank);
   const text = info.expired ? 'Expired' : info.group ? info.name : `Unranked · ${info.needWins} wins to go`;
-  return `<span class="stat-rank">${emblemHtml(rankKey(info), { size: 28 })}${esc(text)}</span>`;
+  return `<span class="stat-rank">${emblemHtml(rankKey(info), { size: 28, wingman })}${esc(text)}</span>`;
 }
 
 function draw() {
@@ -39,7 +39,7 @@ function draw() {
     ['Cases opened', st.opened.toLocaleString()], ['Spent on cases', money(st.spent)], ['Sold items for', money(st.sold)],
     ['Knives & gloves unboxed', st.knives], ['Best drop', st.bestName ? `${esc(st.bestName)}<br><span class="green">${money(st.bestValue)}</span>` : '—'],
     ['Stickers applied', st.stickersApplied], ['Clicks', st.clicks.toLocaleString()], ['Earned by clicking', money(st.clickEarned)],
-    ['Earned passively', money(st.passiveEarned)], ['Rank', rankName()], ['Competitive rank (Play)', competitiveRank()], ['Per click / per second', `${money(clickValue())} / ${money(idleRate())}`],
+    ['Earned passively', money(st.passiveEarned)], ['Rank', rankName()], ['Competitive rank (Play)', competitiveRank()], ['Wingman rank (Play)', competitiveRank(true)], ['Per click / per second', `${money(clickValue())} / ${money(idleRate())}`],
     ['Trade-ups signed', st.tradeups || 0], ['Armory redemptions', st.armory || 0], ['Player packs opened', st.packs || 0], ['Team matches', st.matches || 0],
     ['Case battles', st.battles || 0], ['Gambled', money(st.gambleWagered || 0)], ['Gambling result', `<span class="${(st.gambleWon || 0) >= 0 ? 'green' : 'red'}">${money(st.gambleWon || 0)}</span>`],
   ];

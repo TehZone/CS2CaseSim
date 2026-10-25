@@ -98,7 +98,7 @@ export class Match {
     this.time = this.rules.freeze;
     this.roundStart = this.game.now;
     this.bomb = { state: 'carried', carrier: null, pos: null, site: null, plantedAt: 0, defuser: null, defuseEnd: 0, beepAt: 0 };
-    const ts = this.game.combatants.filter((c) => c.team === 'T');
+    const ts = this.game.combatants.filter((c) => c.team === 'T' && !c.away); // (not a player who left the match)
     for (const c of this.game.combatants) {
       c.roundKills = 0;
       c.roundDamage.clear();
@@ -125,8 +125,17 @@ export class Match {
   get buyOpen() { return (this.phase === 'freeze' || (this.phase === 'live' && this.rules.roundTime - this.time < this.rules.buyTime)) && this.phase !== 'end'; }
   get roundTimeLeft() { return this.phase === 'planted' ? null : this.time; }
 
+  // A technical timeout (CS2's, when a player leaves): the next freeze time (or this one) holds for `secs`, unless it's
+  // ended sooner (the player is back).
+  techTimeout(secs) { this.timeout = { left: secs, pending: this.phase !== 'freeze' }; }
+
   tick(dt) {
     if (this.phase === 'over') return;
+    if (this.timeout && this.phase === 'freeze') {
+      this.timeout.pending = false;
+      if ((this.timeout.left -= dt) <= 0) this.timeout = null;
+      return;
+    }
     this.time -= dt;
     const b = this.bomb;
     if (this.phase === 'freeze' && this.time <= 0) { this.phase = 'live'; this.time = this.rules.roundTime; this.game.onLive(); }

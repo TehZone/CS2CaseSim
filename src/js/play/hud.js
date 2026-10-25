@@ -222,7 +222,7 @@ export class Hud {
     }
     const ranked = players.some((p) => p.rank !== undefined || p.rating !== undefined);
     const rows = (side) => players.filter((p) => p.team === side).sort((a, b) => b.score - a.score).map((p) => `
-      <tr class="${p.alive ? '' : 'dead'} ${p.me ? 'me' : ''}">${ranked ? `<td class="rank">${p.rating !== undefined ? ratingHtml(p.rating, { size: 12 }) : emblemHtml(p.rank, { size: 18 })}</td>` : ''}<td>${who(p)}</td><td>${p.team === myTeam ? '$' + p.money : ''}</td>
+      <tr class="${p.alive ? '' : 'dead'} ${p.me ? 'me' : ''}">${ranked ? `<td class="rank">${p.rating !== undefined ? ratingHtml(p.rating, { size: 12 }) : emblemHtml(p.rank, { size: 18, wingman: p.wingman })}</td>` : ''}<td>${who(p)}</td><td>${p.team === myTeam ? '$' + p.money : ''}</td>
       <td>${p.kills}</td><td>${p.deaths}</td><td>${p.assists}</td><td>${Math.round(p.damage / Math.max(1, round - 1 || 1))}</td><td>${p.mvps ? '★' + p.mvps : ''}</td><td>${p.score}</td></tr>`).join('');
     const table = (side, name) => `<div class="sb-team ${side.toLowerCase()}"><div class="sb-head"><b>${scores[side] ?? 0}</b> ${name}</div>
       <table><thead><tr>${ranked ? '<th class="rank">Rank</th>' : ''}<th>Player</th><th>Money</th><th>K</th><th>D</th><th>A</th><th>ADR</th><th>MVP</th><th>Score</th></tr></thead><tbody>${rows(side)}</tbody></table></div>`;

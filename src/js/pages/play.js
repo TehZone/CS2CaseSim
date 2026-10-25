@@ -1,100 +1,180 @@
-// Play: offline CS2 practice against bots on real CS2 maps, with your equipped skins, gloves and knife.
+// Play: CS2 against bots on real CS2 maps from your install, with your equipped skins, gloves and knife. Matchmaking
+// (CS2's Premier, Competitive, Wingman, Deathmatch and Arms Race) finds a match on the maps you pick, against bots of
+// your rank (see matchmaking.js); a private match has everything up to you, the bots' ranks too, and moves no rank.
+// In a match this page is its menu (Esc): Resume, your settings and keys, Leave, and Reconnect / Abandon once you've
+// left a ranked one.
 import { esc } from '../util.js';
-import { cs2Status, cs2Play } from '../cs2/api.js';
-import { toast } from '../ui.js';
+import { cs2Play } from '../cs2/api.js';
 import { MODES } from '../play/modes.js';
 import { S } from '../state.js';
-import { settingsHtml, bindSettings, matchSettings, SETTINGS_DEFAULTS } from './play-settings.js';
+import { settingsHtml, bindSettings, playPrefs, savePlayPrefs, privateRanks } from './play-settings.js';
 import { rankInfo, PLACEMENT_WINS } from '../engine/ranks.js';
 import { loadRankArt, emblemHtml, rankKey, ratingHtml } from '../rank.js';
-import { premierInfo, ACTIVE_DUTY, VETO } from '../engine/premier.js';
-import { BOT_TIERS, tierOf, botSkill, ratingOfSkill, groupOfSkill } from '../play/skill.js';
-import { botIdentities, pickIdentities, needsCredit, CREDIT } from '../play/identity.js';
+import { premierInfo, ACTIVE_DUTY } from '../engine/premier.js';
+import { isRanked, cooldownLeft, formatWait, RECONNECT_S } from '../engine/matchmaking.js';
+import { PRIVATE_RANKS } from '../play/skill.js';
+import * as mm from '../matchmaking.js';
 
 // Map art colours for the lobby cards (any other installed map gets a neutral card).
 const MAP_TINT = { de_dust2: '#c9a46a, #7b5a33', de_mirage: '#d8b98a, #8a6a45', de_inferno: '#c98a5a, #6b3f22', de_nuke: '#8fa5b5, #3e4b57',
   de_ancient: '#7fa36a, #3c5a35', de_anubis: '#d6b97a, #6d5a3a', de_overpass: '#9fb0a0, #4a5a4c', de_vertigo: '#a8b8c8, #4c5a6a', de_train: '#9a9a8a, #4a4a40',
   cs_office: '#a0a8b8, #404858', cs_italy: '#d8a878, #7a5030' };
+const MM_MODES = ['premier', 'competitive', 'wingman', 'deathmatch', 'armsrace'];
+const PRIVATE_MODES = ['competitive', 'wingman', 'deathmatch', 'armsrace'];
+// What matchmaking plays in each mode (CS2's rules: no options).
+const MM_RULES = { premier: '5v5 · MR12, overtime on a tie · friendly fire', competitive: '5v5 · MR12, a draw on 12:12 · friendly fire',
+  wingman: '2v2 on one bomb site · first to 9 · friendly fire', deathmatch: 'Free for all · 10 minutes', armsrace: 'Free for all · first to a knife kill' };
+const KEYS = 'WASD move · Space jump · Ctrl crouch · Shift walk · W into a ladder climbs it · Mouse1 fire · Mouse2 scope / silencer / burst mode · R reload · F inspect · B buy · E defuse / pick up · G drop · 1/2/3 weapons (3 again for the Zeus) · 4 grenades (Mouse1 throw, Mouse2 lob) · 5 bomb (hold Mouse1 in a site) · Z / X / V radio (commands, reports, responses: your bots follow orders) · Middle mouse ping · Tab scores · Esc menu (the match goes on)';
 let mapList = null, mapImages = null; // the installed maps, and CS2's screenshot of each ({ id: url })
 let rankAsked = false;
-
-const PREFS_KEY = 'cs2sim.play';
-const DEFAULTS = { map: 'de_dust2', mode: 'competitive', site: 'A', ffa: 'ffa', minutes: 10, team: 'CT', teamSize: 5, difficulty: 'gold', length: 'short', overtime: 'on', friendlyFire: 'off', sensitivity: 1.25, quality: 'balanced', ...SETTINGS_DEFAULTS };
-function prefs() {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULTS }; }
-}
-const savePrefs = (p) => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch {} };
-
-let root = null, session = null;
+let root = null, unsub = null, ticker = null;
+const nameOf = (id) => mapList?.find((m) => m.id === id)?.name || id;
 
 export function render(r) {
   root = r;
-  const p = prefs();
   if (!mapList) {
     mapList = [{ id: 'de_dust2', name: 'Dust II' }];
     cs2Play('maps').then((list) => {
       const bomb = (list || []).filter((m) => /^de_/.test(m.id)); // bomb defusal maps
-      if (bomb.length) { mapList = bomb; if (root === r) render(r); }
+      if (bomb.length) { mapList = bomb; mm.setMaps({ maps: mapList, images: mapImages, nameOf }); if (root === r) render(r); }
     }).catch(() => {});
   }
   if (!rankAsked) { rankAsked = true; loadRankArt().then((a) => { if (a && root === r) render(r); }); }
   if (!mapImages) {
     mapImages = {};
-    cs2Play('mapImages').then((imgs) => { mapImages = imgs || {}; if (root === r) render(r); }).catch(() => {});
+    cs2Play('mapImages').then((imgs) => { mapImages = imgs || {}; mm.setMaps({ maps: mapList, images: mapImages, nameOf }); if (root === r) render(r); }).catch(() => {});
   }
-  // A tile's background: the map's screenshot (an absolute URL: relative ones in a custom property resolve against the
-  // stylesheet), over its tint.
-  const tileStyle = (id) => [mapImages[id] && `--img: url('${new URL(mapImages[id], location.href).href}')`, MAP_TINT[id] && `--tint: linear-gradient(160deg, ${MAP_TINT[id]} 70%, #1a1712)`].filter(Boolean).join(';');
-  const opts = (list, cur) => list.map(([id, n]) => `<option value="${id}" ${id === cur ? 'selected' : ''}>${esc(n)}</option>`).join('');
-  const mode = MODES[p.mode] ? p.mode : 'competitive', rounds = !MODES[mode].respawn, premier = mode === 'premier';
+  mm.setMaps({ maps: mapList, images: mapImages, nameOf });
+  unsub ||= mm.onMatchmaking(() => { if (root) render(root); });
+  clearInterval(ticker);
+  ticker = setInterval(tick, 500);
+  const live = mm.liveMatch();
+  if (live && !live.loading) liveHtml(r, live); else lobbyHtml(r);
+  tick();
+}
+
+export function destroy() { root = null; unsub?.(); unsub = null; clearInterval(ticker); }
+
+// The times that count down on the page: the search, the cooldown, the time left to reconnect.
+function tick() {
+  if (!root) return;
+  const s = mm.searching(), live = mm.liveMatch(), clock = (ms) => { const t = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+  const go = root.querySelector('[data-go]');
+  if (go && s) go.innerHTML = `${s.state === 'found' ? 'Match found' : `Searching ${clock(Date.now() - s.started)}`}<small>Cancel</small>`;
+  const cd = root.querySelector('[data-cooldown]');
+  if (cd) {
+    const left = cooldownLeft(S.mm);
+    if (left) cd.textContent = formatWait(left); else render(root);
+  }
+  const rc = root.querySelector('[data-reconnect-left]');
+  if (rc && live?.away) rc.textContent = clock(RECONNECT_S * 1000 - (Date.now() - live.away.since));
+  const sc = root.querySelector('[data-live-score]');
+  if (sc && live?.game.match) sc.textContent = mm.scoreLine(live.game);
+}
+
+// A map tile's background: the map's screenshot (an absolute URL: relative ones in a custom property resolve against
+// the stylesheet), over its tint.
+const tileStyle = (id) => [mapImages[id] && `--img: url('${new URL(mapImages[id], location.href).href}')`, MAP_TINT[id] && `--tint: linear-gradient(160deg, ${MAP_TINT[id]} 70%, #1a1712)`].filter(Boolean).join(';');
+const opts = (list, cur) => list.map(([id, n]) => `<option value="${id}" ${id === cur ? 'selected' : ''}>${esc(n)}</option>`).join('');
+
+// ---- the lobby ----------------------------------------------------------------------------------------------------------
+function lobbyHtml(r) {
+  const p = playPrefs(), priv = p.lobby === 'private';
+  const modes = priv ? PRIVATE_MODES : MM_MODES;
+  const mode = modes.includes(p.mode) ? p.mode : 'competitive';
+  const search = mm.searching(), busy = !!search || !!mm.liveMatch();
+  const premier = !priv && mode === 'premier';
+  const pool = priv ? [] : mm.poolOf(p, mode);
+  const cooldown = !priv && isRanked(mode) ? cooldownLeft(S.mm) : 0;
+  const tiles = (premier ? mapList.filter((m) => ACTIVE_DUTY.includes(m.id)) : mapList).map(({ id, name }) => {
+    const on = priv ? id === p.map : !premier && pool.includes(id);
+    const sub = premier ? 'Active Duty: picked by banning' : priv ? (id === 'de_dust2' ? 'Recommended' : 'The first match prepares the map (a couple of minutes)')
+      : on ? 'In your search' : 'Click to add to your search';
+    return `<button class="play-map ${on ? 'active' : ''} ${priv ? '' : 'pick'}" data-map="${id}" style="${tileStyle(id)}" ${premier || (busy && !priv) ? 'disabled' : ''}>
+      <span>${esc(name)}</span><small>${sub}</small></button>`;
+  }).join('');
   r.innerHTML = `<div class="page play-page">
-    <div class="page-head"><h1>Play</h1><span class="sub">Offline CS2 against bots, on real CS2 maps from your install, with your equipped skins, gloves and knife.</span></div>
+    <div class="page-head"><h1>Play</h1><span class="sub">CS2 against bots, on real CS2 maps from your install, with your equipped skins, gloves and knife.</span></div>
+    <div class="play-tabs">
+      <button class="${priv ? '' : 'active'}" data-lobby="mm"><b>Matchmaking</b><small>Bots of your rank, on the maps you pick</small></button>
+      <button class="${priv ? 'active' : ''}" data-lobby="private"><b>Private match</b><small>Your rules and the bots' ranks; no rank</small></button>
+    </div>
     <div class="play-lobby">
-      <div class="play-maps ${premier ? 'veto-pool' : ''}">${(premier ? mapList.filter((m) => ACTIVE_DUTY.includes(m.id)) : mapList).map(({ id, name }) => `<button class="play-map ${!premier && id === p.map ? 'active' : ''}" data-map="${id}" style="${tileStyle(id)}" ${premier ? 'disabled' : ''}>
-          <span>${esc(name)}</span><small>${premier ? 'Active Duty: picked by banning' : id === 'de_dust2' ? 'Recommended' : 'The first match prepares the map (a couple of minutes)'}</small></button>`).join('')}</div>
+      <div class="play-maps ${premier ? 'veto-pool' : ''}">${tiles}</div>
       <div class="play-setup panel">
-        <div class="play-modes">${Object.entries(MODES).map(([id, m]) => `<button class="${id === mode ? 'active' : ''}" data-mode="${id}"><b>${esc(m.name)}</b><small>${esc(m.blurb)}</small></button>`).join('')}</div>
-        ${mode !== 'armsrace' && !premier && !(mode === 'deathmatch' && p.ffa === 'ffa') ? `<label>Side<select class="input" data-k="team"><option value="CT" ${p.team === 'CT' ? 'selected' : ''}>Counter-Terrorists</option><option value="T" ${p.team === 'T' ? 'selected' : ''}>Terrorists</option></select></label>` : ''}
-        ${mode === 'wingman' ? `<label>Bomb site<select class="input" data-k="site">${opts([['A', 'A'], ['B', 'B']], p.site)}</select></label>`
-          : premier ? '' : `<label>${rounds || p.ffa !== 'ffa' ? 'Players per team' : 'Players'}<select class="input" data-k="teamSize">${opts([['5', rounds || p.ffa !== 'ffa' ? '5v5' : '10'], ['4', rounds || p.ffa !== 'ffa' ? '4v4' : '8'], ['3', rounds || p.ffa !== 'ffa' ? '3v3' : '6'], ['2', rounds || p.ffa !== 'ffa' ? '2v2' : '4'], ['1', rounds || p.ffa !== 'ffa' ? '1v1' : '2']], String(p.teamSize))}</select></label>`}
-        ${mode === 'deathmatch' ? `<label>Deathmatch<select class="input" data-k="ffa">${opts([['ffa', 'Free for all'], ['team', 'Teams']], p.ffa)}</select></label>` : ''}
-        ${!rounds ? `<label>Length<select class="input" data-k="minutes">${opts([['5', '5 minutes'], ['10', '10 minutes'], ['15', '15 minutes']], String(p.minutes))}</select></label>` : ''}
-        <label>Bot skill (their ranks)<select class="input" data-k="difficulty">${opts(Object.entries(BOT_TIERS).map(([id, t]) => [id, t.name]), tierOf(p.difficulty))}</select></label>
-        ${mode === 'competitive' ? `<label>Match length<select class="input" data-k="length">${opts([['short', 'Short (first to 9)'], ['long', 'Long (first to 13)']], p.length)}</select></label>` : ''}
-        ${rounds && !premier ? `<label>Overtime<select class="input" data-k="overtime">${opts([['on', 'On (MR3, $12,500)'], ['off', 'Off (ties are draws)']], p.overtime)}</select></label>` : ''}
-        ${rounds || p.ffa !== 'ffa' ? `<label>Friendly fire<select class="input" data-k="friendlyFire">${opts([['off', 'Off'], ['on', 'On (CS2 competitive)']], p.friendlyFire)}</select></label>` : ''}
+        <div class="play-modes">${modes.map((id) => `<button class="${id === mode ? 'active' : ''}" data-mode="${id}" ${busy && !priv ? 'disabled' : ''}><b>${esc(MODES[id].name)}</b><small>${esc(priv ? MODES[id].blurb : MM_RULES[id])}</small></button>`).join('')}</div>
+        ${priv ? privateOptions(p, mode) : mmOptions(p, mode, pool, premier)}
         <label>Sensitivity (CS2)<input class="input" type="number" min="0.05" max="20" step="0.05" data-k="sensitivity" value="${p.sensitivity}"></label>
         <label>Graphics<select class="input" data-k="quality">${opts([['high', 'High (full resolution, soft shadows)'], ['balanced', 'Medium'], ['performance', 'Low (no 3D skybox, no anti-aliasing)']], p.quality)}</select></label>
-        <button class="btn primary big" data-start>Play</button>
-        ${premier ? premierCard() : rankCard(mode)}
+        ${cooldown ? `<div class="play-cooldown"><b>Ranked cooldown</b><span>You abandoned a match: no Premier, Competitive or Wingman for <b data-cooldown>${formatWait(cooldown)}</b>.</span></div>` : ''}
+        ${priv ? `<button class="btn primary big" data-start ${busy ? 'disabled' : ''}>Start</button>${search ? '<div class="muted">Cancel your search to start a private match.</div>' : ''}`
+          : search ? `<button class="btn primary big searching" data-go></button>`
+          : `<button class="btn primary big" data-go ${cooldown || busy || (!premier && !pool.length) ? 'disabled' : ''}>Go</button>`}
+        ${priv ? '<div class="muted play-private-note">Private matches are practice: they pay a reward but move no rank.</div>' : rankCard(mode)}
         ${record()}
-        <div class="muted play-keys">WASD move · Space jump · Ctrl crouch · Shift walk · W into a ladder climbs it · Mouse1 fire · Mouse2 scope / silencer / burst mode · R reload · F inspect · B buy · E defuse / pick up · G drop · 1/2/3 weapons (3 again for the Zeus) · 4 grenades (Mouse1 throw, Mouse2 lob) · 5 bomb (hold Mouse1 in a site) · Z / X / V radio (commands, reports, responses: your bots follow orders) · Middle mouse ping · Tab scores · Esc pause</div>
+        <div class="muted play-keys">${KEYS}</div>
       </div>
     </div>
     ${settingsHtml(p)}
   </div>`;
-  bindSettings(r, prefs, savePrefs, () => render(r));
-  r.querySelectorAll('[data-map]').forEach((b) => b.addEventListener('click', () => { const q = prefs(); q.map = b.dataset.map; savePrefs(q); render(r); }));
-  r.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => { const q = prefs(); q.mode = b.dataset.mode; savePrefs(q); render(r); }));
+  bindSettings(r, playPrefs, savePlayPrefs, () => render(r));
+  const set = (fn) => { const q = playPrefs(); fn(q); savePlayPrefs(q); render(r); };
+  r.querySelectorAll('[data-lobby]').forEach((b) => b.addEventListener('click', () => set((q) => { q.lobby = b.dataset.lobby; })));
+  r.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => set((q) => { q.mode = b.dataset.mode; })));
+  r.querySelectorAll('[data-map]').forEach((b) => b.addEventListener('click', () => set((q) => {
+    if (priv) { q.map = b.dataset.map; return; }
+    // Matchmaking: the maps the search picks from, each on or off (CS2 keeps a list per mode).
+    const list = new Set(mm.poolOf(q, mode));
+    if (list.has(b.dataset.map)) list.delete(b.dataset.map); else list.add(b.dataset.map);
+    q.pools = { ...(q.pools || {}), [mode]: [...list] };
+  })));
+  r.querySelectorAll('[data-pool]').forEach((b) => b.addEventListener('click', () => set((q) => { q.pools = { ...(q.pools || {}), [mode]: b.dataset.pool === 'all' ? mapList.map((m) => m.id) : [] }; })));
   r.querySelectorAll('[data-k]').forEach((el) => el.addEventListener('change', () => {
-    const q = prefs();
-    q[el.dataset.k] = el.type === 'number' || el.dataset.k === 'teamSize' || el.dataset.k === 'minutes' ? Number(el.value) : el.value;
-    savePrefs(q);
-    if (el.dataset.k === 'ffa') render(r);
+    const q = playPrefs(), k = el.dataset.k;
+    if (k.startsWith('ranks.')) q.ranks = { ...privateRanks(q), [k.slice(6)]: el.value };
+    else q[k] = el.type === 'number' || k === 'teamSize' || k === 'minutes' ? Number(el.value) : el.value;
+    savePlayPrefs(q);
+    if (k === 'ffa' || k === 'mode') render(r);
   }));
-  r.querySelector('[data-start]').addEventListener('click', () => start());
+  r.querySelector('[data-start]')?.addEventListener('click', () => mm.startPrivate());
+  r.querySelector('[data-go]')?.addEventListener('click', () => (mm.searching() ? mm.cancelSearch() : mm.startSearch()));
 }
 
-export function destroy() { root = null; }
+// Matchmaking's choices: only the maps (none at all for Premier, which bans).
+function mmOptions(p, mode, pool, premier) {
+  if (premier) return '<div class="play-pool muted">Premier picks its map from the Active Duty pool by banning, once the match is found.</div>';
+  return `<div class="play-pool"><span><b>${pool.length}</b> map${pool.length === 1 ? '' : 's'} in your search${pool.length ? `: ${esc(pool.map(nameOf).join(', '))}` : ''}</span>
+    <span><button class="btn ghost sm" data-pool="all">All</button><button class="btn ghost sm" data-pool="none">None</button></span></div>`;
+}
 
-// Your competitive rank (CS:GO's, one for all maps): the emblem, and the wins still needed to get one.
+// A private match's choices: the side, the team size, the rules and the bots' ranks.
+function privateOptions(p, mode) {
+  const rounds = !MODES[mode].respawn, ffa = mode === 'armsrace' || (mode === 'deathmatch' && p.ffa === 'ffa');
+  const ranks = privateRanks(p);
+  const rankSelect = (k, label) => `<label>${label}<select class="input" data-k="ranks.${k}">${PRIVATE_RANKS.map((t) => `<optgroup label="${esc(t.name)}">
+      <option value="${t.id}" ${ranks[k] === t.id ? 'selected' : ''}>Any ${esc(t.name)}</option>${t.groups.map(([id, n]) => `<option value="${id}" ${ranks[k] === id ? 'selected' : ''}>${esc(n)}</option>`).join('')}</optgroup>`).join('')}</select></label>`;
+  const per = rounds || !ffa;
+  return `${!ffa ? `<label>Side<select class="input" data-k="team"><option value="CT" ${p.team === 'CT' ? 'selected' : ''}>Counter-Terrorists</option><option value="T" ${p.team === 'T' ? 'selected' : ''}>Terrorists</option></select></label>` : ''}
+    ${mode === 'wingman' ? `<label>Bomb site<select class="input" data-k="site">${opts([['A', 'A'], ['B', 'B']], p.site)}</select></label>`
+      : `<label>${per ? 'Players per team' : 'Players'}<select class="input" data-k="teamSize">${opts([5, 4, 3, 2, 1].map((n) => [String(n), per ? `${n}v${n}` : String(n * 2)]), String(p.teamSize))}</select></label>`}
+    ${mode === 'deathmatch' ? `<label>Deathmatch<select class="input" data-k="ffa">${opts([['ffa', 'Free for all'], ['team', 'Teams']], p.ffa)}</select></label>` : ''}
+    ${!rounds ? `<label>Length<select class="input" data-k="minutes">${opts([['5', '5 minutes'], ['10', '10 minutes'], ['15', '15 minutes']], String(p.minutes))}</select></label>` : ''}
+    ${ffa ? rankSelect('B', "Bots' ranks") : `${rankSelect('A', "Your teammates' ranks")}${rankSelect('B', "Opponents' ranks")}`}
+    ${mode === 'competitive' ? `<label>Match length<select class="input" data-k="length">${opts([['short', 'Short (first to 9)'], ['long', 'Long (first to 13)']], p.length)}</select></label>` : ''}
+    ${rounds ? `<label>Overtime<select class="input" data-k="overtime">${opts([['on', 'On (MR3, $12,500)'], ['off', 'Off (ties are draws)']], p.overtime)}</select></label>` : ''}
+    ${!ffa ? `<label>Friendly fire<select class="input" data-k="friendlyFire">${opts([['off', 'Off'], ['on', 'On (CS2 competitive)']], p.friendlyFire)}</select></label>` : ''}`;
+}
+
+// Your rank in the mode (Wingman has its own; Premier is a CS Rating), and how the bots are found.
 function rankCard(mode) {
-  const r = S.rank || {}, info = rankInfo(r);
+  if (mode === 'premier') return premierCard();
+  if (mode !== 'competitive' && mode !== 'wingman') return `<div class="play-rank off"><div><small>${esc(MODES[mode].name)}</small><b>No rank</b><span>Bots around your competitive rank. Casual: leave whenever you like.</span></div></div>`;
+  const wingman = mode === 'wingman', r = (wingman ? S.wingman : S.rank) || {}, info = rankInfo(r);
   const name = info.expired ? 'Rank expired' : info.group ? info.name : 'Unranked';
-  const sub = info.needWins ? `${info.needWins} more competitive win${info.needWins === 1 ? '' : 's'} to get your rank (${PLACEMENT_WINS - info.needWins}/${PLACEMENT_WINS})`
-    : info.expired ? 'Win a competitive match to show it again' : `${r.wins || 0} wins · ${r.losses || 0} losses · ${r.ties || 0} ties`;
-  return `<div class="play-rank ${mode === 'competitive' ? '' : 'off'}" title="${mode === 'competitive' ? 'Competitive matches move your rank' : 'Only competitive matches move your rank'}">
-    ${emblemHtml(rankKey(info), { size: 46 })}<div><small>Competitive rank</small><b>${esc(name)}</b><span>${esc(sub)}</span></div></div>`;
+  const sub = info.needWins ? `${info.needWins} more ${wingman ? 'wingman' : 'competitive'} win${info.needWins === 1 ? '' : 's'} to get your rank (${PLACEMENT_WINS - info.needWins}/${PLACEMENT_WINS})`
+    : info.expired ? 'Win a match to show it again' : `${r.wins || 0} wins · ${r.losses || 0} losses · ${r.ties || 0} ties`;
+  return `<div class="play-rank">${emblemHtml(rankKey(info), { size: 46, wingman })}<div><small>${wingman ? 'Wingman rank' : 'Competitive rank'}</small><b>${esc(name)}</b><span>${esc(sub)}</span>
+    <span class="play-rank-bots">${info.group ? 'Bots are matched to your rank' : 'Bots are matched to your hidden rating until you\'re placed'}</span></div></div>`;
 }
 
 // Your CS Rating (Premier): the badge, or the wins still needed to get one.
@@ -102,149 +182,44 @@ function premierCard() {
   const p = S.premier || {}, info = premierInfo(p);
   const sub = info.rated ? `${p.wins || 0} wins · ${p.losses || 0} losses · ${p.ties || 0} ties${p.best ? ' · best ' + ratingHtml(p.best, { size: 11 }) : ''}`
     : `${info.needWins} more Premier win${info.needWins === 1 ? '' : 's'} to get your CS Rating (${PLACEMENT_WINS - info.needWins}/${PLACEMENT_WINS})`;
-  return `<div class="play-rank premier"><div class="play-rating">${ratingHtml(info.rating, { size: 22 })}</div><div><small>CS Rating · Premier</small><b>${info.rated ? 'Rated' : 'Unrated'}</b><span>${sub}</span></div></div>`;
+  return `<div class="play-rank premier"><div class="play-rating">${ratingHtml(info.rating, { size: 22 })}</div><div><small>CS Rating · Premier</small><b>${info.rated ? 'Rated' : 'Unrated'}</b><span>${sub}</span>
+    <span class="play-rank-bots">${info.rated ? 'Bots are matched to your CS Rating' : 'Bots are matched to your hidden rating until you\'re rated'}</span></div></div>`;
 }
 
 // Your Play record (offline matches): played, won, kills and what they paid.
 function record() {
   const st = S.stats || {};
-  if (!st.playMatches) return '<div class="muted play-record">Finished matches pay into your wallet (offline): kills, MVPs, rounds and wins, more on harder bots.</div>';
+  if (!st.playMatches) return '<div class="muted play-record">Finished matches pay into your wallet (offline): kills, MVPs, rounds and wins, more against better bots.</div>';
   return `<div class="play-record"><span><b>${st.playMatches}</b> matches</span><span><b>${st.playWins || 0}</b> wins</span><span><b>${st.playKills || 0}</b> kills</span><span><b>$${(st.playEarned || 0).toFixed(2)}</b> earned</span></div>`;
 }
 
-async function start() {
-  const st = await cs2Status();
-  if (!st.available) { toast(st.gameDir ? 'The model extractor is missing.' : 'Play mode needs Counter-Strike 2 installed on this PC.', 'bad'); return; }
-  if (session) return;
-  let p = prefs();
-  let roster = null;
-  if (p.mode === 'premier') {
-    // Premier: the two teams and the map, picked by banning.
-    const veto = await premierVeto(p).catch((e) => { console.error(e); toast('Could not set up the match: ' + esc(e.message), 'bad'); return null; });
-    if (!veto) return;
-    p = { ...p, map: veto.map, team: veto.team, teamSize: 5 };
-    roster = veto.roster;
-  }
-  const { Game } = await import('../play/game.js');
-  const overlay = document.createElement('div');
-  overlay.className = 'play-root';
-  overlay.innerHTML = `<div class="play-loading"><div class="spinner"></div><div data-status>Loading…</div><button class="btn ghost" data-cancel>Cancel</button></div>
-    <div class="play-pause hidden"><div class="play-pause-box"><h2>Paused</h2><div class="play-stats" data-stats></div>
-      <label class="play-sens">Sensitivity <input class="input" type="number" min="0.05" max="20" step="0.05" data-sens value="${p.sensitivity}"></label>
-      <button class="btn primary" data-resume>Resume</button><button class="btn danger" data-leave>Leave match</button></div></div>`;
-  document.body.appendChild(overlay);
-  const statusEl = overlay.querySelector('[data-status]');
-  const leave = () => {
-    session?.game.dispose();
-    session = null;
-    overlay.remove();
-    if (root) render(root); // the lobby again, with the rank and record the match changed
-  };
-  overlay.querySelector('[data-cancel]').addEventListener('click', leave);
-  overlay.querySelector('[data-leave]').addEventListener('click', leave);
-  overlay.querySelector('[data-resume]').addEventListener('click', () => session?.game.resume());
-  const game = new Game(overlay, { map: p.map, mode: p.mode, site: p.site, ffa: p.ffa !== 'team', minutes: p.minutes, team: p.team, teamSize: p.teamSize, difficulty: p.difficulty, roster, length: p.length, overtime: p.overtime !== 'off', friendlyFire: p.friendlyFire === 'on', sensitivity: p.sensitivity, quality: p.quality, settings: { ...matchSettings(p), onBinds: (t) => { const q = prefs(); q.keybinds = t; savePrefs(q); } }, onStatus: (m) => { statusEl.textContent = m; } });
-  session = { game, overlay };
-  const showStats = () => {
-    const me = game.me, m = game.match;
-    overlay.querySelector('[data-stats]').innerHTML = me && m ? `<span>Round <b>${m.round}</b></span><span><b>${me.kills}</b> kills</span><span><b>${me.deaths}</b> deaths</span>${me.shots ? `<span><b>${Math.round(((me.hits || 0) / me.shots) * 100)}%</b> accuracy</span>` : ''}` : '';
-  };
-  game.on((type, data) => {
-    if (type === 'pause') { overlay.querySelector('.play-pause').classList.toggle('hidden', !data); if (data) showStats(); }
-    if (type === 'over') {
-      overlay.querySelector('.play-pause h2').textContent = data.draw ? 'Draw' : data.won ? 'Victory' : 'Defeat';
-      overlay.querySelector('[data-resume]').classList.add('hidden');
-      overlay.querySelector('.play-sens').classList.add('hidden');
-      overlay.querySelector('[data-leave]').textContent = 'Back to lobby';
-      overlay.querySelector('.play-pause').classList.add('over');
-      overlay.querySelector('.play-pause').classList.remove('hidden');
-    }
+// ---- in a match: its menu ---------------------------------------------------------------------------------------------
+function liveHtml(r, live) {
+  const p = playPrefs(), away = !!live.away, name = MODES[live.mode]?.name || live.mode;
+  const links = [['cases', 'Cases'], ['market', 'Market'], ['inventory', 'Inventory'], ['database', 'Item Database']];
+  r.innerHTML = `<div class="page play-page">
+    <div class="page-head"><h1>${away ? 'Match in progress' : 'In a match'}</h1><span class="sub">${esc(name)}${live.private ? ' (private)' : ''} · ${esc(nameOf(live.map))}</span></div>
+    <div class="play-live panel ${away ? 'away' : ''}">
+      <div class="play-live-score"><small>${esc(name)} · ${esc(nameOf(live.map))}</small><b data-live-score></b></div>
+      ${away ? `<p>You left the match: it's going on without you. Reconnect within <b data-reconnect-left></b> or it's abandoned: a loss, and a cooldown from ranked matchmaking.</p>
+        <div class="play-live-actions"><button class="btn primary big" data-reconnect>Reconnect</button><button class="btn danger" data-abandon>Abandon match</button></div>`
+      : `<p>${live.game.matchOver ? 'The match is over.' : 'The match goes on while you\'re in the menu.'} ${live.ranked && !live.game.matchOver ? 'Leaving it, you can reconnect for 5 minutes.' : ''}</p>
+        <div class="play-live-actions">${live.game.matchOver ? '' : '<button class="btn primary big" data-resume>Resume</button>'}<button class="btn ${live.ranked && !live.game.matchOver ? 'danger' : ''}" data-leave>${live.game.matchOver ? 'Back to the lobby' : 'Leave match'}</button></div>`}
+      <div class="play-live-links">${links.map(([id, n]) => `<button class="btn ghost" data-page-go="${id}">${n}</button>`).join('')}</div>
+    </div>
+    <div class="play-setup panel play-live-opts"><label>Sensitivity (CS2)<input class="input" type="number" min="0.05" max="20" step="0.05" data-k="sensitivity" value="${p.sensitivity}"></label></div>
+    ${settingsHtml(p, { open: true })}
+  </div>`;
+  const save = (q) => { savePlayPrefs(q); mm.settingsChanged(); };
+  bindSettings(r, playPrefs, save, () => render(r));
+  r.querySelector('[data-k=sensitivity]').addEventListener('change', (e) => {
+    const q = playPrefs();
+    q.sensitivity = Math.max(0.05, Math.min(20, Number(e.target.value) || 1));
+    save(q);
   });
-  overlay.querySelector('[data-sens]').addEventListener('change', (e) => {
-    const v = Math.max(0.05, Math.min(20, Number(e.target.value) || 1));
-    game.setSensitivity(v);
-    const q = prefs(); q.sensitivity = v; savePrefs(q);
-  });
-  try {
-    await game.load();
-  } catch (e) {
-    console.error(e);
-    toast('Could not start the match: ' + esc(e.message || String(e)), 'bad');
-    leave();
-    return;
-  }
-  if (!session) return;
-  overlay.querySelector('.play-loading').remove();
-  overlay.querySelector('.play-pause').classList.remove('hidden');
-  overlay.querySelector('.play-pause h2').textContent = 'Ready';
-  overlay.querySelector('[data-resume]').textContent = 'Click to play';
-  game.on((type) => { if (type === 'pause') { overlay.querySelector('.play-pause h2').textContent = 'Paused'; overlay.querySelector('[data-resume]').textContent = 'Resume'; } });
-  game.start();
-  if (window.__cs2Debug) window.__playGame = game;
-}
-
-// Premier's map veto: both teams (you and four bots against five, real players each with a CS Rating, listed like a
-// leaderboard), then CS2's pick/ban over the Active Duty maps installed: the first team bans two, the second three, the
-// first one more, and the map that's left is played; the second team picks its starting side. You ban on your team's
-// turns; the other team bans by itself. Resolves to { map, team, roster } (see Game), or null if you back out.
-async function premierVeto(p) {
-  const tier = tierOf(p.difficulty);
-  const ids = pickIdentities(await botIdentities(), 9);
-  const bot = (identity) => { const skill = botSkill(identity.name, tier); return { identity, skill, rating: ratingOfSkill(skill), group: groupOfSkill(skill) }; };
-  const mine = ids.slice(0, 4).map(bot), theirs = ids.slice(4, 9).map(bot);
-  const pool = ACTIVE_DUTY.filter((id) => mapList.some((m) => m.id === id)).slice(0, 7);
-  if (!pool.length) throw new Error('none of the Active Duty maps is installed');
-  const meFirst = Math.random() < 0.5;
-  const teamOf = (ab) => (ab === 'A') === meFirst ? 'mine' : 'theirs';
-  const steps = Array.from({ length: pool.length - 1 }, (_, i) => VETO[i]?.[0] || (i % 2 ? 'B' : 'A')).map(teamOf);
-  const sidePicker = teamOf('B');
-  const banned = new Map(); // map -> 'mine' | 'theirs'
-  const you = premierInfo(S.premier);
-  const nameOf = (id) => mapList.find((m) => m.id === id)?.name || id;
-  const avg = (list) => Math.round(list.reduce((s, x) => s + x.rating, 0) / list.length);
-  const row = (x) => `<li>${x.identity?.avatar ? `<img class="veto-avatar" src="${esc(x.identity.avatar)}" alt="">` : '<span class="veto-avatar you"></span>'}
-    <span class="veto-name">${esc(x.identity?.name || 'You')}<small>${esc([x.identity?.team, x.identity?.country].filter(Boolean).join(' · ') || (x.identity ? '' : you.rated ? 'You' : `You · ${you.needWins} wins to a rating`))}</small></span>${ratingHtml(x.rating)}</li>`;
-  const team = (label, list, cls, extra = []) => `<div class="veto-team ${cls}"><h3>${label}<small>average ${ratingHtml(avg(list), { size: 12 })}</small></h3>
-    <ol>${[...extra, ...list].sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1)).map(row).join('')}</ol></div>`;
-  const youRow = { identity: null, rating: you.rating };
-
-  const el = document.createElement('div');
-  el.className = 'play-root veto-root';
-  document.body.appendChild(el);
-  return new Promise((resolve) => {
-    let side = null, enemyTimer = null;
-    const done = (v) => { clearTimeout(enemyTimer); el.remove(); resolve(v); };
-    const turn = () => steps[banned.size] || null;
-    const left = () => pool.filter((id) => !banned.has(id));
-    const draw = () => {
-      const t = turn(), map = !t ? left()[0] : null;
-      const status = t === 'mine' ? '<b>Your turn:</b> ban a map' : t === 'theirs' ? 'The other team is banning…'
-        : sidePicker === 'mine' && !side ? `<b>${esc(nameOf(map))}</b> it is. Pick your starting side` : `<b>${esc(nameOf(map))}</b> · you start as <b>${side === 'CT' ? 'Counter-Terrorists' : 'Terrorists'}</b>`;
-      el.innerHTML = `<div class="veto panel">
-        <div class="veto-head"><h2>Premier</h2><span class="veto-status">${status}</span><button class="btn ghost sm" data-veto-cancel>Cancel</button></div>
-        <div class="veto-body">
-          ${team('Your team', mine, 'mine', [youRow])}
-          <div class="veto-maps">${pool.map((id) => `<button class="veto-map ${banned.has(id) ? 'banned' : ''} ${map === id ? 'picked' : ''}" data-vmap="${id}" ${t !== 'mine' || banned.has(id) ? 'disabled' : ''}
-            style="${mapImages?.[id] ? `--img: url('${new URL(mapImages[id], location.href).href}')` : ''}"><span>${esc(nameOf(id))}</span>${banned.has(id) ? `<em>Banned by ${banned.get(id) === 'mine' ? 'your team' : 'the other team'}</em>` : map === id ? '<em>Picked</em>' : ''}</button>`).join('')}
-            <div class="veto-order">${steps.map((s, i) => `<i class="${i < banned.size ? 'done' : i === banned.size ? 'now' : ''} ${s}">${s === 'mine' ? 'You' : 'Them'}</i>`).join('')}<i class="${!t ? 'now' : ''} ${sidePicker}">Side</i></div>
-          </div>
-          ${team('Other team', theirs, 'theirs')}
-        </div>
-        <div class="veto-foot">${!t ? (sidePicker === 'mine' && !side
-          ? '<button class="btn" data-side="CT">Start as Counter-Terrorists</button><button class="btn" data-side="T">Start as Terrorists</button>'
-          : '<button class="btn primary big" data-veto-go>Play</button>') : ''}</div>
-        ${needsCredit(ids) ? `<div class="muted veto-credit">${esc(CREDIT)}</div>` : ''}
-      </div>`;
-      el.querySelector('[data-veto-cancel]').addEventListener('click', () => done(null));
-      el.querySelectorAll('[data-vmap]').forEach((b) => b.addEventListener('click', () => { if (turn() === 'mine' && !banned.has(b.dataset.vmap)) { banned.set(b.dataset.vmap, 'mine'); next(); } }));
-      el.querySelectorAll('[data-side]').forEach((b) => b.addEventListener('click', () => { side = b.dataset.side; draw(); }));
-      el.querySelector('[data-veto-go]')?.addEventListener('click', () => done({ map, team: side, roster: { A: mine, B: theirs } }));
-    };
-    const next = () => {
-      if (turn() === 'theirs') enemyTimer = setTimeout(() => { const opts = left(); banned.set(opts[Math.floor(Math.random() * opts.length)], 'theirs'); next(); }, 900 + Math.random() * 700);
-      else if (!turn() && sidePicker === 'theirs') side = Math.random() < 0.5 ? 'T' : 'CT'; // (their pick: you're on the other side)
-      draw();
-    };
-    next();
-  });
+  r.querySelector('[data-resume]')?.addEventListener('click', () => mm.resume());
+  r.querySelector('[data-leave]')?.addEventListener('click', () => mm.leave());
+  r.querySelector('[data-reconnect]')?.addEventListener('click', () => mm.reconnect());
+  r.querySelector('[data-abandon]')?.addEventListener('click', () => mm.abandon());
+  r.querySelectorAll('[data-page-go]').forEach((b) => b.addEventListener('click', () => window.dispatchEvent(new CustomEvent('app:go', { detail: b.dataset.pageGo }))));
 }

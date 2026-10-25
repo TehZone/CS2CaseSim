@@ -21,6 +21,7 @@ import * as coop from './pages/coop.js';
 import * as stats from './pages/stats.js';
 import * as database from './pages/database.js';
 import * as play from './pages/play.js';
+import { initMatchmaking } from './matchmaking.js';
 
 const PAGES = { play, cases, inventory, tradeup, armory, clicker, market, database, gamble, team, trade, coop, stats };
 let current = null, currentName = 'cases';
@@ -167,6 +168,11 @@ async function boot() {
     if (e.key === 'Escape' && topModal() && !document.querySelector('.inspect')) topModal().close();
   });
   window.addEventListener('beforeunload', () => saveSync());
+  // Matchmaking (matchmaking.js) opens a page (the Play page when Esc brings up the menu over a match) and draws the
+  // page again when a match ends.
+  window.addEventListener('app:go', (e) => go(e.detail));
+  window.addEventListener('app:refresh', () => go(currentName));
+  initMatchmaking();
   go('cases');
   offlineEarnings();
   startIdleLoop();

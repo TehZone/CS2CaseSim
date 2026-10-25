@@ -346,6 +346,54 @@ function tierFreq(box, n) {
   check('ranks: play.rank updates the save and sends the rank', st.rank.wins === 1 && d.set.rank?.wins === 1 && res.change === null && bad instanceof ACT.GameError);
 }
 
+// ---- matchmaking: bots found around your rank, Wingman's own rank, abandoning ----------------------------------------
+{
+  const R = await E('ranks');
+  const MM = await E('matchmaking');
+  const K = await import(new URL('../src/js/play/skill.js', import.meta.url));
+  let back = true;
+  for (let g = 1; g <= 18; g += 0.25) if (!near(R.groupValue(R.mmrOfGroup(g)), g, 1e-9)) back = false;
+  check('matchmaking: a rating\'s place among the groups, and back', back && R.groupValue(R.matchmakingMmr({ ...R.freshRank(), group: 9, mmr: 1500 })) === 9
+    && R.matchmakingMmr({ ...R.freshRank(), mmr: 1234 }) === 1234);
+  // A Gold Nova III's bots (and a CS Rating 14,000's): around them.
+  const r2 = mulberry32(7), mmr = R.matchmakingMmr({ ...R.freshRank(), group: 9 });
+  const groups = Array.from({ length: 2000 }, () => K.groupOfSkill(K.matchedSkill({ mmr }, r2)));
+  const within = groups.filter((g) => Math.abs(g - 9) <= 1).length / groups.length;
+  check('matchmaking: bots are found around your rank', within > 0.85 && Math.min(...groups) >= 6 && Math.max(...groups) <= 12, `${Math.round(within * 100)}% within a group, ${Math.min(...groups)}..${Math.max(...groups)}`);
+  const ratings = Array.from({ length: 2000 }, () => K.ratingOfSkill(K.matchedSkill({ rating: 14000 }, r2)));
+  const avg = ratings.reduce((s, x) => s + x, 0) / ratings.length;
+  check('matchmaking: Premier\'s bots are found around your CS Rating', near(avg, 14000, 700), String(Math.round(avg)));
+  const g7 = Array.from({ length: 200 }, () => K.groupOfSkill(K.privateSkill('group:7', '', r2)));
+  check('matchmaking: a private match\'s bots are the rank you pick', g7.every((g) => g === 7) && K.PRIVATE_RANKS.length === 6 && K.PRIVATE_RANKS[0].groups[0][0] === 'group:1');
+  // Cooldowns: 30 minutes, 2 hours, a day, then a week; a week without one and it's the shortest again.
+  const t0 = Date.UTC(2026, 0, 1);
+  let mm = MM.freshMM();
+  const lens = [];
+  for (let i = 0; i < 5; i++) { const a = MM.abandon(mm, t0 + i * 3600e3); lens.push(a.ms); mm = a.mm; }
+  const later = MM.abandon(mm, t0 + 30 * 864e5);
+  check('matchmaking: each abandon\'s cooldown is longer, and a week later the shortest again', lens.join() === [30 * 60e3, 2 * 3600e3, 864e5, 7 * 864e5, 7 * 864e5].join()
+    && later.ms === 30 * 60e3 && MM.cooldownLeft(later.mm, t0 + 30 * 864e5 + 60e3) === 29 * 60e3 && MM.formatWait(2 * 3600e3 - 60e3) === '1 hour 59 minutes');
+  // The actions, on a save.
+  const st = freshState(), t = Date.now();
+  const run = (name, args, now) => { const ctx = ACT.makeCtx(st, { rng, now }); const res = ACT.runAction(ctx, name, args); return { res, d: ACT.delta(ctx) }; };
+  run('play.queue', { mode: 'wingman' }, t);
+  run('play.join', { mode: 'wingman', opponent: 1000 }, t);
+  const won = run('play.rank', { mode: 'wingman', result: 'win', roundsFor: 9, roundsAgainst: 4, opponent: 1000 }, t + 1);
+  check('matchmaking: Wingman has its own rank, and a finished match isn\'t yours to abandon any more', st.wingman.wins === 1 && st.rank.wins === 0 && st.mm.match === null
+    && !!won.d.set.wingman && !!won.d.set.mm);
+  run('play.join', { mode: 'competitive', opponent: 1000 }, t + 2);
+  const q = run('play.queue', { mode: 'competitive' }, t + 3).res; // (the game closed during that match)
+  let refused = null; try { run('play.join', { mode: 'premier', opponent: 8000 }, t + 4); } catch (e) { refused = e; }
+  const dm = run('play.queue', { mode: 'deathmatch' }, t + 5).res;
+  check('matchmaking: a match the game closed during is abandoned: a loss, and no ranked matchmaking for a while', q.settled?.mode === 'competitive' && st.rank.losses === 1
+    && q.cooldown === 30 * 60e3 && refused?.code === 'cooldown' && dm.cooldown === 0 && !dm.settled);
+  run('play.join', { mode: 'premier', opponent: 9000 }, t + 31 * 60e3);
+  const ab = run('play.abandon', { roundsFor: 3, roundsAgainst: 8 }, t + 31 * 60e3 + 5).res;
+  let twice = null; try { run('play.abandon', {}, t + 31 * 60e3 + 6); } catch (e) { twice = e; }
+  check('matchmaking: abandoning a match is a loss for its rank, and the next cooldown is longer', ab.mode === 'premier' && ab.cooldown === 2 * 3600e3 && st.premier.losses === 1
+    && st.mm.match === null && twice instanceof ACT.GameError);
+}
+
 // ---- Premier: the CS Rating ------------------------------------------------------------------------
 {
   const P = await E('premier');

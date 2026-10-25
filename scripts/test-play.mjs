@@ -232,6 +232,24 @@ function fakeGame() {
   while (m.phase !== 'over') { m.endRound('T', 'time'); m.tick(SHORT_RULES.endDelay + 0.01); }
   ok(m.winnerSquad() === 'A' && m.score.A >= SHORT_RULES.winsNeeded, 'match ends at ' + SHORT_RULES.winsNeeded + ' wins: ' + JSON.stringify(m.score));
 }
+// leaving the match: a technical timeout holds the next freeze time (once), you never carry the bomb while you're gone
+{
+  const g = fakeGame(), m = new Match(g, SHORT_RULES);
+  g.combatants.forEach((c) => { c.team = c === g.me || c.name === 'ct2' ? 'T' : 'CT'; });
+  g.me.away = true;
+  let mine = 0;
+  for (let i = 0; i < 40; i++) { m.round = 0; m.startRound(); if (g.me.hasC4) mine++; }
+  m.tick(SHORT_RULES.freeze + 0.01);
+  m.techTimeout(120);
+  const pending = m.timeout?.pending;
+  m.endRound('CT', 'time'); m.tick(SHORT_RULES.endDelay + 0.01);
+  m.tick(60);
+  const held = m.phase === 'freeze' && near(m.time, SHORT_RULES.freeze, 1e-6) && m.timeout?.left > 0;
+  m.tick(61); m.tick(SHORT_RULES.freeze - 0.5);
+  ok(mine === 0 && pending && held && m.phase === 'freeze' && !m.timeout, `left the match: never the bomb carrier (${mine}), the next freeze time held 2 minutes, then counted down`);
+  m.tick(1);
+  ok(m.phase === 'live', 'after the technical timeout the round starts');
+}
 // overtime: 8-8 goes to MR3 overtimes ($12,500, swap after 3); without overtime it's a draw
 {
   const play = (rules, wins) => {

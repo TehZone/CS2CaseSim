@@ -38,12 +38,13 @@ import { S } from '../state.js';
 import { rankInfo, SKILL_GROUPS } from '../engine/ranks.js';
 import { loadRankArt, rankArt, emblemHtml, rankKey, ratingHtml } from '../rank.js';
 import { botIdentities, pickIdentities } from './identity.js';
-import { tierOf, TO_DIFFICULTY, botSkill, groupOfSkill, ratingOfSkill, skillParams } from './skill.js';
+import { tierOf, TO_DIFFICULTY, botSkill, groupOfSkill, ratingOfSkill, skillParams, tierOfGroup, mmrOfSkill } from './skill.js';
 import { premierInfo, formatRating } from '../engine/premier.js';
 import { loadLineups } from './utility.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
 export const TICK = 1 / 64;
+const TECH_TIMEOUT = 120; // seconds a technical timeout (you left the match) holds the freeze time for you to come back
 // A CS2 field of view (horizontal degrees at 4:3) as three.js's vertical FOV; wider screens see more, like CS2.
 const vfov = (fov43) => (2 * Math.atan(Math.tan((fov43 * Math.PI) / 360) * 0.75) * 180) / Math.PI;
 const FOV = 90;
@@ -76,11 +77,13 @@ const MUSIC = 'valve_cs2_01';
 const _frustum = new THREE.Frustum(), _m4 = new THREE.Matrix4(), _sphere = new THREE.Sphere(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _euler = new THREE.Euler();
 
 export class Game {
-  // difficulty: the bots' rank tier (skill.js: silver .. global; the old easy .. expert work too). roster (Premier, from
-  // the map veto): { A: your teammates, B: the other team } as [{ identity, skill }] (else they're picked here).
+  // difficulty: the bots' rank tier (skill.js: silver .. global; the old easy .. expert work too). roster (matchmaking,
+  // a private match, Premier's veto): { A: your teammates, B: the other team (everyone in free for all) } as
+  // [{ identity?, skill }] (else they're picked here, from the tier). ranked: matchmade Premier, Competitive or Wingman
+  // (the result moves your rank). quiet: no sound until it's shown (loading behind the menu while you search).
   constructor(root, { map = 'de_dust2', mode = 'competitive', team = 'CT', teamSize = 5, difficulty = 'gold', length = 'short', overtime = true, friendlyFire = false,
-    site = 'A', minutes = 10, ffa = true, sensitivity = 1.25, quality = 'balanced', settings = {}, roster = null, onStatus = () => {} } = {}) {
-    Object.assign(this, { root, mapId: map, team, onStatus });
+    site = 'A', minutes = 10, ffa = true, sensitivity = 1.25, quality = 'balanced', settings = {}, roster = null, ranked = false, quiet = false, onStatus = () => {} } = {}) {
+    Object.assign(this, { root, mapId: map, team, onStatus, ranked: !!ranked, quiet: !!quiet });
     this.enemyTeam = team === 'T' ? 'CT' : 'T';
     this.mode = MODES[mode] ? mode : 'competitive';
     this.respawnMode = !!MODES[this.mode].respawn;
@@ -216,6 +219,7 @@ export class Game {
     this.post.setGrading({ tone: map.info.lighting?.tonemap, exposure: map.info.exposure, lut: lut && { data: new Uint8Array(lut), size: map.info.lighting.lut.size } });
     this.resize();
     this.sounds = new SoundBank();
+    if (this.quiet) this.sounds.ctx.suspend().catch(() => {});
     this.stats = await cs2Play('stats');
     this.impacts = await cs2Play('impacts').catch(() => ({}));
     await loadRankArt();
@@ -227,9 +231,11 @@ export class Game {
     this.botAssets.coverage = this.msaa > 0;
     await this.botAssets.load(['weapon_glock', 'weapon_usp_silencer', 'weapon_ak47', 'weapon_m4a1', 'weapon_m4a1_silencer', 'weapon_awp', 'weapon_knife', 'weapon_c4']);
     if (this.disposed) return;
-    // Who the bots are: real players (identity.js), each its own rank in the tier (Premier's come from the veto).
+    // Who the bots are: real players (identity.js), each its own rank: the roster's (matchmaking finds them around yours,
+    // Premier's veto shows them), else from the tier.
     const names = BOT_NAMES.slice().sort(() => Math.random() - 0.5);
-    const ids = this.roster ? [] : pickIdentities(await botIdentities().catch(() => []), this.teamSize * 2 - 1);
+    const listed = [...(this.roster?.A || []), ...(this.roster?.B || [])];
+    const ids = listed.length && listed.every((r) => r.identity) ? [] : pickIdentities(await botIdentities().catch(() => []), this.teamSize * 2 - 1);
     const slots = { A: 0, B: 0 };
     this.bots = [];
     const addBot = (team, squad) => {
@@ -251,6 +257,11 @@ export class Game {
       for (let i = 0; i < this.teamSize; i++) addBot(this.enemyTeam, 'B');
     }
     this.combatants = [this.me, ...this.bots.map((b) => b.c)];
+    // What the match's reward goes by: the other team's ranks (everyone's in free for all).
+    if (this.roster) {
+      const them = this.bots.filter((b) => b.c.squad === 'B');
+      this.difficulty = TO_DIFFICULTY[tierOfGroup(groupOfSkill(them.reduce((s, b) => s + b.c.skill, 0) / Math.max(1, them.length)))];
+    }
     this.radio = new Radio(this);
     // Your own body, seen where you fell while you spectate.
     this.myBody = new Bot(this.botAssets, this.me, 1);
@@ -706,9 +717,9 @@ export class Game {
     this.removeBomb();
     this.planting = null; this.defusing = false;
     this.deathCam = null; this.spectating = null;
-    // Spawns: everyone gets a different spot on their side.
+    // Spawns: everyone gets a different spot on their side (not you while you've left the match).
     for (const side of ['T', 'CT']) {
-      const list = this.combatants.filter((c) => c.team === side);
+      const list = this.combatants.filter((c) => c.team === side && !c.away);
       const top = Math.max(...this.map.info.spawns[side].map((s) => s.priority));
       const spawns = this.map.info.spawns[side].slice().sort((a, b) => (b.priority === top) - (a.priority === top) || Math.random() - 0.5);
       list.forEach((c, i) => {
@@ -949,13 +960,13 @@ export class Game {
     const stats = [`${me.kills} / ${me.deaths} / ${me.assists} K/D/A`, this.respawnMode ? `${me.points || 0} points` : `${Math.round(me.damage / rounds)} ADR`, `${hs}% headshots`,
       me.shots ? `${Math.round(((me.hits || 0) / me.shots) * 100)}% accuracy` : '', this.respawnMode ? '' : `${me.mvps} MVPs`, multi].filter(Boolean).join(' · ');
     this.reward = this.payReward(won);
-    const ranked = this.mode === 'competitive' || this.premier;
+    // (Only matchmaking moves a rank: a private match is practice.)
+    const ranked = this.ranked;
     this.hud.endScreen(`<h1 class="${draw ? '' : won ? 'win' : 'loss'}">${draw ? 'Draw' : won ? 'Victory' : 'Defeat'}</h1>
       <div class="final">${final}</div><div class="sub">${stats}</div><div class="reward" data-reward>${online() ? 'Rewards are paid for offline play' : 'Adding up your reward…'}</div>
       ${ranked ? '<div class="rank-result" data-rank></div>' : ''}`);
     this.reward.then((r) => { const el = this.hud.q('[data-reward]'); if (el && r) el.innerHTML = `Reward: <b>+$${r.earned.toFixed(2)}</b> to your wallet`; });
-    if (this.premier) this.ratePremier(draw ? 'tie' : won ? 'win' : 'loss');
-    else if (ranked) this.rateMatch(draw ? 'tie' : won ? 'win' : 'loss');
+    this.rated = !ranked ? Promise.resolve(null) : this.premier ? this.ratePremier(draw ? 'tie' : won ? 'win' : 'loss') : this.rateMatch(draw ? 'tie' : won ? 'win' : 'loss');
     this.hud.scoreboard(true, this.scoreData());
     this.input.unlock();
     this.emit('over', { won, draw });
@@ -973,9 +984,9 @@ export class Game {
     const m = this.match, them = this.combatants.filter((c) => c.squad === 'B');
     const opponent = Math.round(them.reduce((s, c) => s + (c.rating || 0), 0) / Math.max(1, them.length));
     let r;
-    try { r = await act('play.premier', { result, roundsFor: Math.min(60, m.score.A), roundsAgainst: Math.min(60, m.score.B), opponent }); } catch (e) { console.warn('premier', e); return; }
+    try { r = await act('play.premier', { result, roundsFor: Math.min(60, m.score.A), roundsAgainst: Math.min(60, m.score.B), opponent }); } catch (e) { console.warn('premier', e); return null; }
     const el = this.hud.q('[data-rank]');
-    if (!el || this.disposed) return;
+    if (!el || this.disposed) return r;
     const info = premierInfo(r.premier);
     const title = r.placed ? 'CS Rating revealed' : info.rated ? 'CS Rating' : 'Premier';
     const line = info.rated ? `${ratingHtml(info.rating, { size: 30 })}${r.placed ? '' : ` <b class="${r.delta >= 0 ? 'green' : 'red'}">${r.delta >= 0 ? '+' : ''}${formatRating(r.delta)}</b>`}`
@@ -984,29 +995,40 @@ export class Game {
     el.innerHTML = `<div class="text"><small>${title}</small><span>${line}</span></div>`;
     if (r.placed) this.sounds.play('UIPanorama.XP.NewSkillGroup', { volume: 0.8 });
     this.hud.scoreboard(true, this.scoreData());
+    return r;
+  }
+  // The other team's average rating (what a result is worth): their CS Rating in Premier, else their hidden rating.
+  opponentRating() {
+    const them = this.combatants.filter((c) => c.squad === 'B');
+    const avg = (f) => Math.round(them.reduce((s, c) => s + f(c), 0) / Math.max(1, them.length));
+    return this.premier ? avg((c) => c.rating || 0) : avg((c) => mmrOfSkill(c.skill ?? 0.5));
   }
 
-  // A finished competitive match moves your rank (CS:GO's, one for all maps): shown under the result like CS:GO's end of
-  // match, with its rank-up (or down) screen when it changes and the placement once you have 10 wins.
+  // A finished competitive (or wingman) match moves that rank (CS:GO's, one for all maps): shown under the result like
+  // CS:GO's end of match, with its rank-up (or down) screen when it changes and the placement once you have 10 wins.
   async rateMatch(result) {
-    const m = this.match;
+    const m = this.match, wingman = this.mode === 'wingman';
     let r;
-    try { r = await act('play.rank', { result, roundsFor: Math.min(60, m.score.A), roundsAgainst: Math.min(60, m.score.B), difficulty: this.difficulty }); } catch (e) { console.warn('rank', e); return; }
+    try {
+      r = await act('play.rank', { mode: wingman ? 'wingman' : 'competitive', result, roundsFor: Math.min(60, m.score.A), roundsAgainst: Math.min(60, m.score.B),
+        difficulty: this.difficulty, opponent: this.opponentRating() });
+    } catch (e) { console.warn('rank', e); return null; }
     const el = this.hud.q('[data-rank]');
-    if (!el || this.disposed) return;
+    if (!el || this.disposed) return r;
     const info = rankInfo(r.rank), art = rankArt();
-    const big = emblemHtml(rankKey(info), { size: 64 });
-    const title = r.change === 'up' ? 'Rank up!' : r.change === 'down' ? 'Rank down' : r.change === 'placed' ? 'Rank revealed' : info.group ? 'Competitive rank' : 'Unranked';
+    const big = emblemHtml(rankKey(info), { size: 64, wingman });
+    const title = r.change === 'up' ? 'Rank up!' : r.change === 'down' ? 'Rank down' : r.change === 'placed' ? 'Rank revealed' : info.group ? (wingman ? 'Wingman rank' : 'Competitive rank') : 'Unranked';
     const line = r.change === 'up' ? `You've been promoted to <b>${SKILL_GROUPS[r.after - 1]}</b>`
       : r.change === 'down' ? `You've been demoted to <b>${SKILL_GROUPS[r.after - 1]}</b>`
       : r.change === 'placed' ? `Your skill group: <b>${SKILL_GROUPS[r.after - 1]}</b>`
-      : info.group ? `<b>${SKILL_GROUPS[info.group - 1]}</b>` : `${info.needWins} more competitive win${info.needWins === 1 ? '' : 's'} to get your rank`;
+      : info.group ? `<b>${SKILL_GROUPS[info.group - 1]}</b>` : `${info.needWins} more ${wingman ? 'wingman' : 'competitive'} win${info.needWins === 1 ? '' : 's'} to get your rank`;
     const fancy = r.change === 'up' || r.change === 'placed';
     el.className = 'rank-result ' + (r.change || 'same');
     el.innerHTML = `${fancy && art?.halo ? `<img class="halo" src="${art.halo}" alt="">` : ''}${fancy && art?.flag ? `<img class="flag" src="${art.flag}" alt="">` : ''}
       <div class="emblem">${big}</div><div class="text"><small>${title}</small><span>${line}</span></div>`;
     if (r.change) this.sounds.play(r.change === 'down' ? 'UIPanorama.XP.RankDown' : 'UIPanorama.XP.NewSkillGroup', { volume: 0.8 });
     this.hud.scoreboard(true, this.scoreData());
+    return r;
   }
 
   // A finished match pays into your case-opening money (offline only): kills, assists, MVPs, rounds won and the win,
@@ -1158,6 +1180,8 @@ export class Game {
   start() {
     this.last = performance.now();
     this.acc = 0;
+    this.paused = false; // (from now on it never stops: Esc opens the menu over it, like CS2's)
+    this.setQuiet(false);
     const frame = (now) => {
       if (this.disposed) return;
       this.raf = requestAnimationFrame(frame);
@@ -1170,14 +1194,80 @@ export class Game {
     this.raf = requestAnimationFrame(frame);
   }
 
+  // The mouse let go (Esc): the menu opens over the match, which goes on (CS2 doesn't pause either); taken again, back
+  // in. (The buy menu, the console and chat show the cursor too: not the menu.)
   lockChanged(locked) {
-    if (this.input.menu || this.matchOver) return; // the buy menu shows the cursor; that's not a pause
-    this.paused = !locked;
-    if (locked) this.sounds?.ctx.resume().catch(() => {});
-    this.emit('pause', !locked);
+    if (locked && !this.quiet) this.sounds?.ctx.resume().catch(() => {});
+    if (this.input.menu || this.matchOver) return;
+    this.emit('menu', !locked);
   }
   resume() { this.input.lock(); }
   setSensitivity(v) { this.baseSensitivity = v; this.camera.userData.fov = null; }
+  // No sound (a match loading behind the menu, or one you've left), or sound again.
+  setQuiet(q) {
+    this.quiet = !!q;
+    if (q) this.sounds?.ctx.suspend().catch(() => {}); else this.sounds?.ctx.resume().catch(() => {});
+  }
+  // Your settings changed in the menu (see play-settings.js matchSettings): used at once.
+  applySettings(s, sensitivity) {
+    Object.assign(this.settings, { ...s, onBinds: this.settings.onBinds });
+    this.hud.setCrosshairStyle(s.crosshair);
+    this.vm = { ...VIEWMODEL, ...(s.viewmodel || {}) };
+    this.setViewmodelFov(this.vm.fov);
+    this.musicVolume = s.musicVolume ?? 1;
+    this.voiceVolume = s.voiceVolume ?? 1;
+    if (s.keybinds) this.input.setBinds(s.keybinds);
+    this.cv.fps_max = s.fpsMax || 0;
+    if (!s.netGraph) { this.hud.netGraph(null); this.renderer.info.autoReset = true; }
+    const q = this.quality, pr = (q === 'high' ? Math.min(window.devicePixelRatio, 2) : q === 'performance' ? 0.75 : 1) * (s.renderScale || 1);
+    if (Math.abs(this.renderer.getPixelRatio() - pr) > 1e-3) { this.renderer.setPixelRatio(pr); this.resize(); }
+    if (sensitivity) this.setSensitivity(sensitivity);
+  }
+
+  // ---- leaving and coming back (matchmaking) ----------------------------------------------------------------------
+  // You left the match (you can reconnect, see matchmaking.js). It goes on without you, nothing drawn: you're out of the
+  // round (your weapons drop, the bomb too) and don't spawn while you're gone. The first time, your team calls a
+  // technical timeout: the next freeze time waits for you (CS2's, once a match).
+  disconnect() {
+    if (this.away) return;
+    this.away = this.me.away = true;
+    if (this.buyMenu.isOpen) { this.buyMenu.close(); this.input.menu = false; } // (not closeBuyMenu: that takes the mouse again)
+    this.input.unlock();
+    this.input.releaseAll();
+    const me = this.me;
+    if (me.alive && !this.respawnMode) {
+      this.planting = null; this.defusing = false;
+      if (this.match.bomb?.defuser === me) this.match.bomb.defuser = null;
+      this.dropOnDeath(me);
+      if (me.hasC4) this.match.dropBomb(me, this.player.origin);
+      me.alive = false; me.health = 0;
+      me.resetWeapons = true;
+      this.myBody.root.visible = false;
+    }
+    this.hud.chatLine({ system: true, text: 'You left the match' });
+    if (!this.timeoutUsed && !this.respawnMode && this.match.phase !== 'over') { this.timeoutUsed = true; this.match.techTimeout(TECH_TIMEOUT); }
+    this.setQuiet(true);
+  }
+  // Back in: in freeze time you spawn at once (with a pistol: what you had dropped), else at the next round. A technical
+  // timeout waiting for you ends in a few seconds.
+  reconnect() {
+    if (!this.away) return;
+    this.away = this.me.away = false;
+    this.setQuiet(false);
+    this.hud.chatLine({ system: true, text: 'You reconnected' });
+    const m = this.match;
+    if (m.timeout) { if (m.timeout.pending) m.timeout = null; else m.timeout.left = Math.min(m.timeout.left, 3); }
+    if (m.phase === 'freeze' && !this.me.alive && !this.respawnMode) {
+      const me = this.me, spawns = this.map.info.spawns[me.team];
+      const mates = this.combatants.filter((c) => c !== me && c.team === me.team && c.alive).map((c) => this.positionOf(c));
+      const sp = spawns.slice().sort((a, b) => Math.min(...mates.map((p) => Math.hypot(p[0] - b.origin[0], p[1] - b.origin[1])), 1e9)
+        - Math.min(...mates.map((p) => Math.hypot(p[0] - a.origin[0], p[1] - a.origin[1])), 1e9))[0];
+      me.alive = true; me.health = 100;
+      this.deathCam = null; this.spectating = null;
+      this.respawnMe(sp, true);
+      me.resetWeapons = false;
+    }
+  }
 
   tick() {
     const inp = this.input, m = this.match, me = this.me;
@@ -2008,6 +2098,7 @@ export class Game {
     this.effects.update(dt);
     this.nades.update(dt, a);
     this.vmSun.intensity = this.world.sun.intensity * this.sunVis;
+    if (this.away) { this.emit('frame', dt); return; } // (left the match: it goes on, nothing drawn)
 
     // The world (with the smokes and the flashbang's afterimage), then your weapon on top.
     const flashLeft = (this.flashUntil || 0) - this.now;
@@ -2075,7 +2166,8 @@ export class Game {
       const lead = this.combatants.slice().sort((a, b) => m.rank(b) - m.rank(a))[0];
       const val = (c) => (this.armsRace ? `level ${Math.min(c.level, ARMS_RACE.length - 1) + 1}/${ARMS_RACE.length}` : `${c.points || 0} pts`);
       hud.mode(this.ffa ? `You ${val(me)} · Leader: ${lead === me ? 'you' : lead.name} ${val(lead)}` : `${MODES[this.mode].name} · kills per team`);
-    } else hud.mode(this.mode === 'wingman' ? 'Wingman' : '');
+    } else if (m.timeout && m.phase === 'freeze') hud.mode(`Technical timeout · ${this.away ? 'waiting for you to reconnect' : 'resuming'}`);
+    else hud.mode(this.mode === 'wingman' ? 'Wingman' : '');
     // (Everyone's picture by the clock: the list made again only when someone lives or dies, joins or changes sides.)
     let rosterKey = this.combatants.length;
     for (const c of this.combatants) rosterKey = (rosterKey * 4 + (c.alive ? 2 : 0) + (c.team === 'CT' ? 1 : 0)) % 2147483647;
@@ -2088,7 +2180,7 @@ export class Game {
       ct: sideScore('CT'), t: sideScore('T'),
       aliveCT: m.alive('CT').length, aliveT: m.alive('T').length,
       totalCT: this.combatants.filter((c) => c.team === 'CT').length, totalT: this.combatants.filter((c) => c.team === 'T').length,
-      clock: m.phase === 'end' ? 0 : m.time, planted: m.phase === 'planted', phase: m.phase,
+      clock: m.phase === 'end' ? 0 : m.timeout && m.phase === 'freeze' ? m.timeout.left : m.time, planted: m.phase === 'planted', phase: m.phase,
       roster: this.ffa ? null : this.roster, rosterKey,
     });
     const s = this.spectating && !me.alive ? this.spectating.c : me;
@@ -2128,8 +2220,9 @@ export class Game {
     return {
       myTeam: this.me.team, round: this.match.round, scores: { CT: side('CT'), T: side('T') }, ffa: this.ffa, respawn: this.respawnMode,
       players: this.combatants.map((c) => ({ name: c.name, team: c.team, money: this.respawnMode ? null : c.money, points: c.points || 0, level: c.level || 0, kills: c.kills, deaths: c.deaths, assists: c.assists, damage: c.damage, mvps: c.mvps, score: c.score, alive: c.alive, me: c === this.me,
-        // Competitive: everyone's skill group (yours, and the bots' from their skill); Premier: their CS Rating.
-        rank: this.mode !== 'competitive' ? undefined : c === this.me ? rankKey(rankInfo(S.rank)) : groupOfSkill(c.skill),
+        // Competitive and Wingman: everyone's skill group (yours, and the bots' from their skill); Premier: their CS Rating.
+        rank: this.mode !== 'competitive' && this.mode !== 'wingman' ? undefined : c === this.me ? rankKey(rankInfo(this.mode === 'wingman' ? S.wingman : S.rank)) : groupOfSkill(c.skill),
+        wingman: this.mode === 'wingman',
         rating: !this.premier ? undefined : c === this.me ? premierInfo(S.premier).rating : c.rating,
         avatar: c.identity?.avatar || null, org: c.identity?.team || null, country: c.identity?.country || null })),
     };

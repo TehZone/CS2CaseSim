@@ -32,19 +32,25 @@
 }
 .play-loading .spinner { width: 46px; height: 46px; border-radius: 50%; border: 3px solid rgba(255, 255, 255, .12); border-top-color: #fff; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.play-pause { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(4, 6, 8, .62); z-index: 4; }
-.play-pause.hidden { display: none; }
-.play-pause-box {
-  display: flex; flex-direction: column; gap: 8px; min-width: 300px; padding: 22px 24px; text-align: center; border-radius: var(--radius);
-  background: linear-gradient(180deg, rgba(40, 48, 57, .97), rgba(24, 29, 35, .97)); border: 1px solid rgba(255, 255, 255, .12); border-top-color: rgba(255, 255, 255, .22);
-  box-shadow: 0 30px 80px rgba(0, 0, 0, .6);
+/* A match loading behind the menu (a search), one you've left (it goes on, unseen), and the menu over one (Esc): the
+   match drops behind the app, dimmed, the HUD hidden, and the game's pages show on top of it like CS2's. */
+.play-root.behind { visibility: hidden; pointer-events: none; z-index: -1; }
+.play-root.away { display: none; }
+.play-scrim { position: absolute; inset: 0; z-index: 7; display: none; background: radial-gradient(ellipse at 50% 40%, rgba(6, 9, 12, .45), rgba(4, 6, 8, .82)); pointer-events: none; }
+body.match-menu .play-root { z-index: 0; pointer-events: none; }
+body.match-menu .play-root .play-scrim { display: block; }
+body.match-menu .play-root .play-hud, body.match-menu .play-root .play-radar, body.match-menu .play-root .play-click { visibility: hidden; }
+body.match-menu #menu-bg { visibility: hidden; }
+.play-click {
+  position: absolute; left: 50%; top: 58%; translate: -50% 0; z-index: 6; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 12px 26px; border: 1px solid rgba(255, 255, 255, .25); border-radius: var(--radius); background: rgba(8, 10, 13, .72); color: #fff; cursor: pointer;
 }
-.play-pause-box h2 { margin: 0 0 6px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; font-family: var(--font-cond); font-size: 30px; color: #fff; }
-.play-stats { display: flex; gap: 16px; justify-content: center; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
-.play-stats:empty { display: none; }
-.play-stats b { color: var(--hi); font-size: 17px; font-family: var(--font-cond); }
-.play-sens { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; font-weight: 600; }
-.play-sens .input { width: 90px; }
+.play-click b { font-family: var(--font-cond); font-size: 24px; letter-spacing: .2em; text-transform: uppercase; }
+.play-click small { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; opacity: .7; }
+.play-click.hidden { display: none; }
+.play-over { position: absolute; left: 0; right: 0; bottom: 6%; z-index: 8; display: flex; justify-content: center; }
+.play-over.hidden { display: none; }
+.play-over .btn.big { min-width: 260px; height: 52px; font-size: 22px; letter-spacing: .22em; font-family: var(--font-cond); }
 
 /* ---------- HUD (CS2's layout) ---------- */
 .play-hud { position: absolute; inset: 0; pointer-events: none; z-index: 2; font-family: var(--font); color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .8); }
@@ -452,3 +458,72 @@
 .veto-foot { display: flex; justify-content: center; gap: 10px; min-height: 44px; }
 .veto-credit { text-align: center; font-size: 11px; }
 @media (max-width: 900px) { .veto-body { grid-template-columns: 1fr; } }
+
+/* ---------- Play: matchmaking (the lobby's tabs and map pool, the search in the top bar, the accept popup, a match's menu) ---------- */
+.play-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.play-tabs button {
+  flex: 0 1 300px; text-align: left; padding: 9px 14px; border-radius: var(--radius); border: 1px solid rgba(255, 255, 255, .08); background: rgba(0, 0, 0, .3); color: var(--muted);
+  transition: border-color .12s, background .12s;
+}
+.play-tabs button b { display: block; font-family: var(--font-cond); font-size: 19px; letter-spacing: .12em; text-transform: uppercase; color: var(--text); }
+.play-tabs button small { font-size: 11.5px; }
+.play-tabs button:hover { border-color: rgba(255, 255, 255, .3); }
+.play-tabs button.active { border-color: rgba(255, 255, 255, .5); background: linear-gradient(180deg, rgba(255, 255, 255, .14), rgba(255, 255, 255, .04)); box-shadow: inset 0 -2px 0 #fff; }
+.play-tabs button.active b { color: #fff; }
+.play-map.pick:not(.active) { filter: saturate(.55) brightness(.8); }
+.play-map.pick:not(.active):hover { filter: saturate(.8) brightness(.95); }
+.play-map:disabled { cursor: default; }
+.play-modes button:disabled { opacity: .5; cursor: default; }
+.play-pool { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
+.play-pool > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.play-pool b { color: var(--hi); }
+.play-pool .btn { margin-left: 4px; }
+.play-setup .btn.big.searching { display: flex; align-items: center; justify-content: center; gap: 12px; background: linear-gradient(180deg, #4d6b3d, #34492a); }
+.play-setup .btn.big small { font-family: var(--font); font-size: 11px; letter-spacing: .1em; opacity: .75; }
+.play-cooldown { display: flex; flex-direction: column; gap: 2px; padding: 9px 12px; border: 1px solid rgba(235, 75, 75, .45); background: rgba(235, 75, 75, .12); font-size: 12.5px; }
+.play-cooldown > b { color: #ff8a80; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+.play-rank .play-rank-bots { margin-top: 3px; font-size: 11px; opacity: .55; }
+.play-private-note { font-size: 12px; }
+
+.mm-bar { display: flex; align-items: center; gap: 10px; padding: 0 14px; border-left: 1px solid rgba(255, 255, 255, .08); font-variant-numeric: tabular-nums; }
+.mm-bar[hidden] { display: none; }
+.mm-bar.searching { background: linear-gradient(180deg, rgba(95, 168, 63, .2), rgba(95, 168, 63, .06)); box-shadow: inset 0 -2px 0 #5fa83f; }
+.mm-bar.away { background: linear-gradient(180deg, rgba(235, 160, 60, .2), rgba(235, 160, 60, .05)); box-shadow: inset 0 -2px 0 #e8a33c; }
+.mm-bar.live { background: linear-gradient(180deg, rgba(255, 255, 255, .1), rgba(255, 255, 255, .02)); }
+.mm-txt { display: flex; flex-direction: column; line-height: 1.15; white-space: nowrap; }
+.mm-txt small { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.mm-txt b { font-family: var(--font-cond); font-size: 19px; color: var(--hi); letter-spacing: .04em; }
+.mm-spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .15); border-top-color: #8ee06e; animation: spin 1s linear infinite; flex: none; }
+.mm-x { background: none; border: 0; color: var(--muted); font-size: 15px; padding: 4px 6px; }
+.mm-x:hover { color: #fff; }
+
+.mm-accept { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-start; justify-content: center; padding-top: 18vh; background: rgba(3, 5, 7, .5); animation: fade .15s ease; }
+.mm-accept-box {
+  width: min(460px, 92vw); padding: 22px 26px 18px; text-align: center; border-radius: var(--radius); color: #fff;
+  background: linear-gradient(180deg, rgba(44, 52, 62, .98), rgba(24, 29, 35, .98)); border: 1px solid rgba(255, 255, 255, .14); border-top-color: rgba(255, 255, 255, .26);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, .7);
+}
+.mm-accept-box small { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.mm-accept-box h2 { margin: 2px 0 14px; font-family: var(--font-cond); font-size: 32px; letter-spacing: .1em; text-transform: uppercase; }
+.mm-slots { display: flex; justify-content: center; gap: 6px; margin-bottom: 16px; }
+.mm-slots i { width: 22px; height: 22px; border-radius: 1px; border: 1px solid rgba(255, 255, 255, .25); background: rgba(0, 0, 0, .35); transition: background .15s, border-color .15s; }
+.mm-slots i.on { background: #5fa83f; border-color: #8ee06e; box-shadow: 0 0 10px rgba(142, 224, 110, .45); }
+.mm-accept-btn {
+  width: 100%; height: 58px; border: 0; border-radius: var(--radius); background: linear-gradient(180deg, #6fbf4a, #4a8a2f); color: #fff;
+  font-family: var(--font-cond); font-size: 30px; font-weight: 700; letter-spacing: .22em; text-transform: uppercase; box-shadow: 0 0 24px rgba(111, 191, 74, .35);
+}
+.mm-accept-btn:hover:not(:disabled) { filter: brightness(1.1); }
+.mm-accept-btn:disabled { background: #2d3a28; color: #9fd38a; box-shadow: none; cursor: default; }
+.mm-accept-time { height: 4px; margin-top: 12px; background: rgba(255, 255, 255, .1); }
+.mm-accept-time i { display: block; height: 100%; width: 100%; background: #8ee06e; transition: width .1s linear; }
+
+.play-live { display: flex; flex-direction: column; gap: 12px; padding: 18px 20px; margin-bottom: 14px; }
+.play-live.away { border-color: rgba(232, 163, 60, .5); }
+.play-live p { margin: 0; color: var(--muted); }
+.play-live p b { color: var(--hi); font-variant-numeric: tabular-nums; }
+.play-live-score small { display: block; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.play-live-score b { font-family: var(--font-cond); font-size: 30px; letter-spacing: .06em; color: #fff; }
+.play-live-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.play-live-actions .btn.big { min-width: 220px; height: 50px; font-size: 22px; letter-spacing: .2em; font-family: var(--font-cond); }
+.play-live-links { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .07); }
+.play-live-opts { max-width: 360px; margin-bottom: 14px; }

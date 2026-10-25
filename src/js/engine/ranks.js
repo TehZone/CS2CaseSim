@@ -1,6 +1,7 @@
 // CS:GO's competitive ranks: one skill group for all maps (not CS2's rating per map), from Silver I to The Global
-// Elite. A hidden rating (MMR, Elo-like) moves with every competitive match against the bots: up on a win, down on a
-// loss, a little either way on a tie, more for a bigger round difference and depending on how strong the bots were.
+// Elite; Wingman has its own rank on the same groups. A hidden rating (MMR, Elo-like) moves with every matchmade match
+// against the bots: up on a win, down on a loss, a little either way on a tie, more for a bigger round difference and
+// depending on how strong the bots were (matchmaking finds them around your rank: see matchmakingMmr).
 // The rank is hidden until 10 wins ("need wins", like CS:GO's placement), then moves at most one group a match: up
 // only after a win, down only after a loss. It shows as expired after 30 days without a win, until the next one.
 // Pure (no DOM): the same code runs on the local save and on the server.
@@ -42,13 +43,34 @@ export function rankInfo(r, now = Date.now()) {
   };
 }
 
-// A finished competitive match: result 'win' | 'loss' | 'tie', the rounds each side won, the bots' difficulty.
+// A rating's place among the groups as one number: 1 (Silver I) .. 18 (The Global Elite), fractions in between, each
+// group's middle rating on its whole number (the first and last groups' a half-width past their edge). And back.
+const MIDDLES = [STARTS[0] - 30, ...STARTS.slice(1).map((s, i) => (STARTS[i] + s) / 2), STARTS[STARTS.length - 1] + 40];
+export function groupValue(mmr) {
+  if (mmr <= MIDDLES[0]) return 1;
+  for (let i = 1; i < MIDDLES.length; i++) if (mmr < MIDDLES[i]) return i + (mmr - MIDDLES[i - 1]) / (MIDDLES[i] - MIDDLES[i - 1]);
+  return MIDDLES.length;
+}
+export function mmrOfGroup(g) {
+  g = Math.max(1, Math.min(MIDDLES.length, g));
+  const i = Math.min(MIDDLES.length - 2, Math.floor(g) - 1);
+  return MIDDLES[i] + (MIDDLES[i + 1] - MIDDLES[i]) * (g - 1 - i);
+}
+// The rating matchmaking finds your opponents by: your rank's (its group's middle) once you have one, else the hidden
+// one your placement will go by.
+export function matchmakingMmr(r) {
+  r = { ...freshRank(), ...(r || {}) };
+  return r.group ? MIDDLES[r.group - 1] : r.mmr;
+}
+
+// A finished competitive (or wingman) match: result 'win' | 'loss' | 'tie', the rounds each side won, and how strong
+// the other team was: opponent (their average rating) or, from before matchmaking, the bots' difficulty.
 // Returns the new rank and what happened: { rank, delta (rating), change: 'up' | 'down' | 'placed' | null, before, after }.
-export function rateMatch(r, { result, roundsFor = 0, roundsAgainst = 0, difficulty = 'normal', now = Date.now() }) {
+export function rateMatch(r, { result, roundsFor = 0, roundsAgainst = 0, difficulty = 'normal', opponent = null, now = Date.now() }) {
   r = { ...freshRank(), ...(r || {}) };
   const before = r.group;
   const score = result === 'win' ? 1 : result === 'tie' ? 0.5 : 0;
-  const opp = BOT_MMR[difficulty] ?? BOT_MMR.normal;
+  const opp = Number.isFinite(opponent) ? opponent : BOT_MMR[difficulty] ?? BOT_MMR.normal;
   const expected = 1 / (1 + 10 ** ((opp - r.mmr) / 400));
   // Placement moves faster; a bigger win (or loss) moves further.
   const k = r.group ? 25 : 40;

@@ -77,6 +77,9 @@ const CASE_SOUNDS = {
   revealLegendary: 'sounds/ui/panorama/case_reveal_legendary_01.vsnd',
   revealAncient: 'sounds/ui/panorama/case_reveal_ancient_01.vsnd',
   knife: 'sounds/ui/panorama/item_showcase_knife_01.vsnd',
+  // (and matchmaking's: a match found, and a player accepting it)
+  matchReady: 'sounds/ui/panorama/game_ready_01.vsnd',
+  accept: 'sounds/ui/competitive_accept_beep.vsnd',
 };
 
 // CS2's weapon and gear icons (vsvg_c, which the CLI decompiles to SVG).
@@ -1118,8 +1121,9 @@ class CS2Service {
     return result(names);
   }
 
-  // CS:GO's competitive rank art in this install: the skill group emblems (skillgroup0..18, none, need_wins, expired) as
-  // SVGs, and the rank-up screen's flag and flare: { emblems: { name: url }, flag, halo }.
+  // CS:GO's competitive rank art in this install: the skill group emblems (skillgroup0..18, none, need_wins, expired) and
+  // Wingman's (wingman0..18, none, expired: under 'wingman1'...) as SVGs, and the rank-up screen's flag and flare:
+  // { emblems: { name: url }, flag, halo }.
   playRanks() {
     return this.playJob('ranks', async () => {
       const cs2 = this.ensureCS2();
@@ -1130,20 +1134,22 @@ class CS2Service {
         const got = await cs2.extract(Object.values(RANKUP_TEXTURES));
         return Object.fromEntries(Object.entries(RANKUP_TEXTURES).map(([k, v]) => [k, got[v] ? this.url(got[v]) : null]));
       };
-      const result = async (names) => ({ emblems: Object.fromEntries(names.map((n) => [n.replace(/^_/, ''), this.url(path.join(dir, 'skillgroup' + n + '.svg'))])), ...await textures() });
+      const fileOf = (n) => (n.startsWith('wingman') ? n : 'skillgroup' + n) + '.svg';
+      const result = async (names) => ({ emblems: Object.fromEntries(names.map((n) => [n.replace(/^_/, ''), this.url(path.join(dir, fileOf(n)))])), ...await textures() });
       const c = await cs2.cached(file, inputs);
-      if (c?.names) return result(c.names);
+      if (c?.names?.some((n) => n.startsWith('wingman'))) return result(c.names);
       fs.rmSync(dir, { recursive: true, force: true });
       const tmp = path.join(dir, 'tmp');
       await cs2.run(['-i', cs2.vpk, '-f', RANK_DIR + '/', '-d', '-o', tmp]);
       const src = path.join(tmp, ...RANK_DIR.split('/'));
       const names = [];
       for (const f of fs.existsSync(src) ? fs.readdirSync(src) : []) {
-        const name = /^skillgroup(\d+|_none|_need_wins|_expired)\.svg$/i.exec(f)?.[1].toLowerCase();
+        const m = /^(?:skillgroup(\d+|_none|_need_wins|_expired)|(wingman(?:\d+|_none|_expired)))\.svg$/i.exec(f);
+        const name = (m?.[1] || m?.[2])?.toLowerCase();
         if (!name) continue;
         const svg = fs.readFileSync(path.join(src, f), 'utf8');
         if (!/<svg\b/.test(svg)) continue;
-        fs.writeFileSync(path.join(dir, 'skillgroup' + name + '.svg'), svg);
+        fs.writeFileSync(path.join(dir, fileOf(name)), svg);
         names.push(name);
       }
       fs.rmSync(tmp, { recursive: true, force: true });

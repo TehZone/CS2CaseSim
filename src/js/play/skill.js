@@ -1,9 +1,10 @@
 // How good a bot is, from its rank: one number, skill (0 a Silver I, 1 The Global Elite), that sets everything it does —
 // how fast it reacts and turns, how far off its first shot is and how it controls a spray, where its crosshair rests,
 // how quickly it stops to shoot (counter-strafing), how much utility it throws and how well, how patient it is and how
-// quickly it trades a teammate. A match's bots come from the tier you pick in the lobby, each its own rank within it:
-// a skill group in Competitive, a CS Rating in Premier (see ranks.js, premier.js).
-import { SKILL_GROUPS } from '../engine/ranks.js';
+// quickly it trades a teammate. Matchmaking finds a match's bots around your own rank (matchedSkill); a private match's
+// come from the ranks you pick, each its own rank within it: a skill group in Competitive and Wingman, a CS Rating in
+// Premier (see ranks.js, premier.js).
+import { SKILL_GROUPS, groupValue, mmrOfGroup } from '../engine/ranks.js';
 
 export const BOT_TIERS = {
   silver: { name: 'Silver', groups: [1, 6] },
@@ -30,6 +31,11 @@ const along = (x, knots) => {
   }
   return knots[0][1];
 };
+// A skill for a (hidden) competitive rating, and back.
+export const skillOfMmr = (mmr) => skillOfGroup(groupValue(mmr));
+export const mmrOfSkill = (s) => Math.round(mmrOfGroup(1 + Math.max(0, Math.min(1, s)) * (SKILL_GROUPS.length - 1)));
+// The tier a skill group is in.
+export const tierOfGroup = (g) => Object.keys(BOT_TIERS).find((t) => g <= BOT_TIERS[t].groups[1]) || 'global';
 export const ratingOfSkill = (s) => Math.round(along(1 + Math.max(0, Math.min(1, s)) * (SKILL_GROUPS.length - 1), RATING_KNOTS));
 export const skillOfRating = (r) => Math.max(0, Math.min(1, (along(r, RATING_KNOTS.map(([g, v]) => [v, g])) - 1) / (SKILL_GROUPS.length - 1)));
 
@@ -41,6 +47,28 @@ export function botSkill(name, tier, rng = Math.random) {
   if (r < 0.15) g--; else if (r > 0.85) g++;
   g = Math.max(1, Math.min(SKILL_GROUPS.length, g));
   return Math.max(0, Math.min(1, skillOfGroup(g) + (rng() - 0.5) * 0.03));
+}
+
+// A matchmade bot: its own rank near yours, the spread CS2's matchmaking puts in a lobby. mmr: your competitive or
+// wingman rating to match (see ranks.js matchmakingMmr), or rating: your CS Rating (Premier). Mostly within a skill
+// group either way (about 1,000 CS Rating), now and then one or two.
+export function matchedSkill({ mmr = null, rating = null }, rng = Math.random) {
+  const off = (rng() + rng() + rng() - 1.5) * 1.3; // (-2..2, mostly within one)
+  if (rating != null) return skillOfRating(Math.max(0, Math.min(35000, rating + off * 1100)));
+  return skillOfMmr(mmr + off * 55);
+}
+
+// The bot ranks a private match can have: a tier (each bot its own rank in it) or one skill group, as 'tier:gold' or
+// 'group:7'. [{ id, name, groups: [[id, name]] }] for the lobby's list.
+export const PRIVATE_RANKS = Object.entries(BOT_TIERS).map(([id, t]) => ({
+  id: 'tier:' + id, name: t.name,
+  groups: Array.from({ length: t.groups[1] - t.groups[0] + 1 }, (_, i) => ['group:' + (t.groups[0] + i), SKILL_GROUPS[t.groups[0] + i - 1]]),
+}));
+// A private match's bot of that rank (a tier as before, the old Easy..Expert too; a skill group a little either side).
+export function privateSkill(choice, name, rng = Math.random) {
+  const g = /^group:(\d+)$/.exec(choice || '');
+  if (g) return Math.max(0, Math.min(1, skillOfGroup(Number(g[1])) + (rng() - 0.5) * 0.03));
+  return botSkill(name, tierOf(String(choice || '').replace(/^tier:/, '')), rng);
 }
 
 const lerp = (a, b, t) => a + (b - a) * t;

@@ -3,6 +3,7 @@
 import { esc } from '../util.js';
 import { CROSSHAIR, crosshairHtml } from '../play/hud.js';
 import { ACTIONS, COMMANDS, bindTable, keyName, keyLabel } from '../play/input.js';
+import { tierOf } from '../play/skill.js';
 
 // keybinds: your binds (CS2 key name -> command), null for the defaults; binds: older saves' per-action keys.
 export const SETTINGS_DEFAULTS = { crosshair: { ...CROSSHAIR }, viewmodel: { fov: 68, x: 1, y: 1, z: -1 }, keybinds: null, binds: {}, musicVolume: 1, voiceVolume: 1, showFps: true,
@@ -17,7 +18,8 @@ const PRESETS = { desktop: { fov: 68, x: 1, y: 1, z: -1 }, couch: { fov: 68, x: 
 
 let open = false, listening = null;
 
-export function settingsHtml(p) {
+// show: { open } to have it open (the match's menu).
+export function settingsHtml(p, show = {}) {
   const c = { ...CROSSHAIR, ...p.crosshair }, v = { ...SETTINGS_DEFAULTS.viewmodel, ...p.viewmodel };
   const range = (k, label, min, max, step, val, group) => `<label class="ps-range">${label} <b data-out="${group}.${k}">${val}</b>
     <input type="range" min="${min}" max="${max}" step="${step}" value="${val}" data-s="${group}.${k}"></label>`;
@@ -29,7 +31,7 @@ export function settingsHtml(p) {
     return `<div class="ps-bind"><span>${esc(label)}</span><span class="ps-keys">${keys.map((k) => `<button class="ps-key" data-unbind="${esc(k)}" title="Unbind ${esc(keyLabel(k))}">${esc(keyLabel(k))} <i>✕</i></button>`).join('')}
       <button class="btn ghost sm ps-add" data-bind="${a}">${listening === a ? 'Press a key…' : '+'}</button></span></div>`;
   }).join('');
-  return `<details class="play-settings panel" ${open ? 'open' : ''}><summary>Settings: crosshair, viewmodel, keys, sound and video</summary>
+  return `<details class="play-settings panel" ${open || show.open ? 'open' : ''}><summary>Settings: crosshair, viewmodel, keys, sound and video</summary>
     <div class="ps-grid">
       <section><h4>Crosshair</h4>
         <div class="ps-xhair-preview"><div class="ps-xhair">${crosshairHtml(c)}</div></div>
@@ -112,6 +114,18 @@ export function bindSettings(el, prefs, savePrefs, rerender) {
     }, 0);
   }));
 }
+
+// Play's saved preferences (the lobby's choices and these settings), shared by the lobby and the match's menu.
+// lobby: 'mm' (matchmaking) or 'private'; pools: each matchmaking mode's selected maps; ranks: a private match's bot
+// ranks ({ A: teammates, B: opponents }, see skill.js PRIVATE_RANKS; at first the older difficulty's tier).
+const PREFS_KEY = 'cs2sim.play';
+export const PREFS_DEFAULTS = { lobby: 'mm', map: 'de_dust2', mode: 'competitive', pools: {}, site: 'A', ffa: 'ffa', minutes: 10,
+  team: 'CT', teamSize: 5, difficulty: 'gold', length: 'short', overtime: 'on', friendlyFire: 'off', sensitivity: 1.25, quality: 'balanced', ...SETTINGS_DEFAULTS };
+export function playPrefs() {
+  try { return { ...PREFS_DEFAULTS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...PREFS_DEFAULTS }; }
+}
+export const savePlayPrefs = (p) => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch {} };
+export const privateRanks = (p) => { const t = 'tier:' + tierOf(p.difficulty); return { A: t, B: t, ...(p.ranks || {}) }; };
 
 // What a match gets from the saved preferences.
 export function matchSettings(p) {

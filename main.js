@@ -341,12 +341,14 @@ async function smokeMapIds(win) {
   return ids;
 }
 
-// Starts a competitive match on a map (exporting it first if needed): whether it's running (window.__playGame).
+// Starts a competitive match on a map (exporting it first if needed), a private one (it starts at once, with the
+// lobby's settings): whether it's running (window.__playGame).
 async function smokeStartMap(win, id, label) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const js = (code) => win.webContents.executeJavaScript(code);
-  await js(`window.__cs2Debug = true; window.__playGame = null; document.querySelector('[data-map="${id}"]')?.click();
-    setTimeout(() => document.querySelector('[data-start]').click(), 400); 1`);
+  await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, lobby: 'private' })); })();
+    window.__cs2Debug = true; window.__playGame = null; document.querySelector('#topbar [data-page=play]').click();
+    setTimeout(() => { document.querySelector('[data-map="${id}"]')?.click(); setTimeout(() => document.querySelector('[data-start]').click(), 400); }, 300); 1`);
   for (let i = 0; i < 900; i++) {
     await wait(1000);
     if (await js(`!!window.__playGame?.raf`)) return true;
@@ -1060,11 +1062,16 @@ async function runPremierSmoke(win) {
   const js = (code) => win.webContents.executeJavaScript(code);
   const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `premier-${name}.png`), (await win.webContents.capturePage()).toPNG());
   await wait(3000);
-  await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'premier', difficulty: '${process.env.CS2SIM_SMOKE_TIERS || 'mg'}', quality: 'balanced' })); })(); 1`);
+  await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, lobby: 'mm', mode: 'premier', quality: 'balanced' })); })(); 1`);
   await js(`document.querySelector('#topbar [data-page=play]').click(); 1`);
   await wait(2500);
   await shot('lobby');
-  await js(`window.__cs2Debug = true; document.querySelector('[data-start]').click(); 1`);
+  // Matchmaking: the search finds the match (at once here), accepted, then the veto. (No cooldown left from another run.)
+  await js(`(async () => { const { S } = await import('./js/state.js'); S.mm = { ...S.mm, until: 0, match: null }; window.__cs2Debug = true; window.__mmWait = 2000;
+    document.querySelector('#topbar [data-page=play]').click(); setTimeout(() => document.querySelector('[data-go]').click(), 500); return 1; })()`);
+  for (let i = 0; i < 60 && !(await js(`!!document.querySelector('[data-accept]')`)); i++) await wait(500);
+  await js(`document.querySelector('[data-accept]')?.click(); 1`);
+  for (let i = 0; i < 60 && !(await js(`!!document.querySelector('.veto')`)); i++) await wait(500);
   for (let i = 0; i < 60; i++) {
     await wait(700);
     const st = JSON.parse(await js(`JSON.stringify({ veto: !!document.querySelector('.veto'), mine: !!document.querySelector('.veto-map:not(:disabled)'), side: !!document.querySelector('[data-side]'), go: !!document.querySelector('[data-veto-go]'), status: document.querySelector('.veto-status')?.textContent || '' })`));
@@ -1091,6 +1098,105 @@ async function runPremierSmoke(win) {
     await shot('result');
     console.log('SMOKE premier result', await js(`document.querySelector('[data-rank]')?.innerText.replace(/\\n+/g, ' ')`), 'before', before, 'after', await js(`(async () => JSON.stringify((await import('./js/state.js')).S.premier))()`));
   }
+  app.quit();
+}
+
+// `CS2SIM_SMOKE=mm` goes through matchmaking: a Competitive search on CS2SIM_SMOKE_MAP (default Dust II; the timer in
+// the top bar while you look at the inventory, the map loading behind), the match found and accepted, Esc's menu over
+// the match (still going on, the pages on top), leaving it (a technical timeout, the reconnect timer), reconnecting,
+// leaving again and abandoning it (a loss, the cooldown, no ranked search), and the private lobby; screenshots of each
+// into userData/mm-*.png.
+async function runMatchmakingSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `mm-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  const map = process.env.CS2SIM_SMOKE_MAP || 'de_dust2';
+  const state = () => js(`(async () => { const { S } = await import('./js/state.js'), mm = await import('./js/matchmaking.js'), s = mm.searching(), l = mm.liveMatch(), g = l?.game;
+    return JSON.stringify({ search: s && { state: s.state, ready: s.ready, map: s.map, secs: Math.round((Date.now() - s.started) / 1000) },
+      live: l && { mode: l.mode, ranked: l.ranked, menu: l.menu, away: !!l.away, phase: g.match?.phase, time: +(g.match?.time ?? 0).toFixed(2), now: +g.now.toFixed(2), round: g.match?.round,
+        alive: g.me.alive, timeout: g.match?.timeout && { left: Math.round(g.match.timeout.left), pending: g.match.timeout.pending }, overlay: l.overlay.className, body: document.body.className },
+      bar: document.querySelector('.mm-bar')?.innerText.replace(/\\s+/g, ' ') || '', mm: S.mm, rank: { wins: S.rank.wins, losses: S.rank.losses, mmr: S.rank.mmr } }); })()`).then(JSON.parse);
+  await wait(3000);
+  await js(`(async () => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, lobby: 'mm', mode: 'competitive', pools: { competitive: ['${map}'] }, quality: 'balanced' }));
+    const { S } = await import('./js/state.js'); S.mm = { ...S.mm, until: 0, match: null }; return 1; })()`); // (no cooldown left from another run)
+  await js(`document.querySelector('#topbar [data-page=play]').click(); 1`);
+  await wait(2500);
+  await shot('lobby');
+  console.log('SMOKE mm lobby', await js(`document.querySelector('.play-setup')?.innerText.replace(/\\s+/g, ' ').slice(0, 400)`));
+  await js(`window.__cs2Debug = true; window.__mmWait = 8000; document.querySelector('[data-go]').click(); 1`);
+  await wait(2500);
+  await js(`document.querySelector('#topbar [data-page=inventory]').click(); 1`);
+  await wait(2000);
+  await shot('searching');
+  console.log('SMOKE mm searching', JSON.stringify(await state()));
+  for (let i = 0; i < 400 && !(await js(`!!document.querySelector('[data-accept]')`)); i++) { await wait(1000); if (i % 20 === 19) console.log('SMOKE mm still searching', JSON.stringify((await state()).search)); }
+  await wait(1200);
+  await shot('found');
+  await js(`document.querySelector('[data-accept]')?.click(); 1`);
+  for (let i = 0; i < 60 && !(await js(`!!window.__playGame?.raf`)); i++) await wait(500);
+  await wait(2500);
+  await shot('in-match');
+  const a = await state();
+  console.log('SMOKE mm in the match', JSON.stringify(a));
+  // Esc: the menu over the match (the mouse was never taken here, so the game's own event stands in for it).
+  await js(`window.__playGame.emit('menu', true); 1`);
+  await wait(1500);
+  await shot('menu');
+  const t1 = await state();
+  await wait(2000);
+  const t2 = await state();
+  console.log('SMOKE mm menu', JSON.stringify(t1.live), 'match went on:', t2.live.now > t1.live.now + 1.5, `(${t1.live.now} -> ${t2.live.now})`);
+  await js(`document.querySelector('[data-page-go=inventory]')?.click(); 1`);
+  await wait(2000);
+  await shot('menu-inventory');
+  await js(`document.querySelector('#topbar .more-btn')?.click(); setTimeout(() => document.querySelector('.more-panel [data-page=database]')?.click(), 300); 1`);
+  await wait(2000);
+  await shot('menu-database');
+  // Resume (the bar's button), then the menu again and Leave.
+  await js(`document.querySelector('[data-mm-resume]')?.click(); 1`);
+  await wait(800);
+  console.log('SMOKE mm resumed', JSON.stringify((await state()).live));
+  await js(`window.__playGame.emit('menu', true); 1`);
+  await wait(800);
+  await js(`document.querySelector('[data-leave]')?.click(); 1`);
+  await wait(800);
+  await shot('leave-confirm');
+  await js(`document.querySelector('.modal [data-ok]')?.click(); 1`);
+  await wait(2500);
+  await shot('away');
+  const away = await state();
+  console.log('SMOKE mm left the match', JSON.stringify(away));
+  await wait(3000);
+  console.log('SMOKE mm away, still going', JSON.stringify((await state()).live));
+  await js(`document.querySelector('[data-mm-reconnect]')?.click(); 1`);
+  await wait(2500);
+  await shot('reconnected');
+  console.log('SMOKE mm reconnected', JSON.stringify((await state()).live));
+  // Leave again (no second timeout) and abandon.
+  await js(`window.__playGame.emit('menu', true); 1`);
+  await wait(800);
+  await js(`document.querySelector('[data-leave]')?.click(); 1`);
+  await wait(800);
+  await js(`document.querySelector('.modal [data-ok]')?.click(); 1`);
+  await wait(2000);
+  console.log('SMOKE mm left again', JSON.stringify((await state()).live));
+  await js(`document.querySelector('[data-abandon]')?.click(); 1`);
+  await wait(800);
+  await js(`document.querySelector('.modal [data-ok]')?.click(); 1`);
+  await wait(2500);
+  await shot('abandoned');
+  const ab = await state();
+  console.log('SMOKE mm abandoned', JSON.stringify(ab), 'toast:', await js(`[...document.querySelectorAll('.toast')].map((t) => t.innerText).join(' / ')`));
+  await js(`document.querySelector('#topbar [data-page=play]').click(); 1`);
+  await wait(1500);
+  await shot('cooldown');
+  console.log('SMOKE mm cooldown', await js(`JSON.stringify({ banner: document.querySelector('.play-cooldown')?.innerText.replace(/\\s+/g, ' '), go: document.querySelector('[data-go]')?.disabled })`));
+  // Wingman's emblems, and the private lobby.
+  console.log('SMOKE mm wingman emblems', await js(`(async () => { const a = await (await import('./js/rank.js')).loadRankArt(); return Object.keys(a?.emblems || {}).filter((k) => k.startsWith('wingman')).length; })()`));
+  await js(`document.querySelector('[data-lobby=private]')?.click(); 1`);
+  await wait(1200);
+  await shot('private');
+  console.log('SMOKE mm private lobby', await js(`document.querySelector('.play-setup')?.innerText.replace(/\\s+/g, ' ').slice(0, 400)`));
   app.quit();
 }
 
@@ -1724,6 +1830,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'breakables') { win.webContents.once('did-finish-load', () => runBreakSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'look') { win.webContents.once('did-finish-load', () => runLookSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'mm') { win.webContents.once('did-finish-load', () => runMatchmakingSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'premier') { win.webContents.once('did-finish-load', () => runPremierSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'hitch') { win.webContents.once('did-finish-load', () => runHitchSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'prepare') { win.webContents.once('did-finish-load', () => runPrepareSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }

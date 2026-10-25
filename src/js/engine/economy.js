@@ -3,6 +3,7 @@
 import { round2 } from './util.js';
 import { chickenIncome } from './chickens.js';
 import { freshRank } from './ranks.js';
+import { freshMM } from './matchmaking.js';
 
 // Auto-sell rules for new drops: sell anything worth less than `below` dollars and/or of the rarity ranks in
 // `ranks` (0 Consumer ... 5 Covert). Knives, gloves and other ★ items are never auto-sold.
@@ -23,6 +24,8 @@ export function freshState() {
     serials: {}, // offline serial counters: items.serialKey -> last number given
     serialsBackfilled: true, // (older saves get their unboxed items numbered once on load)
     rank: freshRank(), // CS:GO competitive rank from Play (see ranks.js)
+    wingman: freshRank(), // and Wingman's own
+    mm: freshMM(), // matchmaking: an abandon's cooldown, the ranked match you're in (see matchmaking.js)
     stats: {
       opened: 0, spent: 0, sold: 0, clicks: 0, clickEarned: 0, passiveEarned: 0,
       bestValue: 0, bestName: '', drops: {}, knives: 0, stickersApplied: 0,
@@ -46,6 +49,7 @@ export function upgradeState(saved) {
   st.team = { ...freshTeam(), ...(saved.team || {}) };
   st.team.slots = { ...freshTeam().slots, ...(st.team.slots || {}) };
   st.loadout = { ...(saved.loadout || {}) };
+  st.mm = { ...freshMM(), ...(saved.mm || {}) };
   st.serialsBackfilled = !!saved.serialsBackfilled; // saves from before serials get theirs on load (items.backfillSerials)
   st.v = base.v;
   return st;

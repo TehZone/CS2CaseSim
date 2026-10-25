@@ -13,6 +13,7 @@ import * as G from './gamble.js';
 import * as MK from './market.js';
 import * as R from './ranks.js';
 import * as P from './premier.js';
+import * as MM from './matchmaking.js';
 import { rand, round2, uid as newUid } from './util.js';
 
 export class GameError extends Error {
@@ -20,6 +21,35 @@ export class GameError extends Error {
 }
 const fail = (m, code) => { throw new GameError(m, code); };
 const PLAY_DIFFICULTY = { easy: 0.5, normal: 1, hard: 1.6, expert: 2.5 };
+const PLAY_MODES = ['premier', 'competitive', 'wingman', 'deathmatch', 'armsrace'];
+const MODE_NAMES = { premier: 'Premier', competitive: 'Competitive', wingman: 'Wingman' };
+const RANK_KEY = { competitive: 'rank', wingman: 'wingman' }; // (the state's field for each mode's rank)
+
+// The ranked match you were in is over: nothing left to abandon.
+function finishMatch(ctx) {
+  if (!ctx.st.mm?.match) return;
+  ctx.st.mm = { ...ctx.st.mm, match: null };
+  ctx.dirty.add('mm');
+}
+// A ranked match abandoned: a loss for its mode's rank (or CS Rating) and the cooldown.
+function abandonMatch(ctx, { roundsFor = 0, roundsAgainst = 0 } = {}) {
+  const m = ctx.st.mm.match, result = 'loss';
+  let rated;
+  if (m.mode === 'premier') {
+    rated = P.ratePremier(ctx.st.premier, { result, roundsFor, roundsAgainst, opponent: m.opponent ?? P.START_RATING });
+    ctx.st.premier = rated.premier;
+    ctx.dirty.add('premier');
+  } else {
+    const key = RANK_KEY[m.mode] || 'rank';
+    rated = R.rateMatch(ctx.st[key], { result, roundsFor, roundsAgainst, opponent: m.opponent ?? null, now: ctx.now });
+    ctx.st[key] = rated.rank;
+    ctx.dirty.add(key);
+  }
+  const { mm, ms } = MM.abandon(ctx.st.mm, ctx.now);
+  ctx.st.mm = mm;
+  ctx.dirty.add('mm');
+  return { mode: m.mode, cooldown: ms, until: mm.until, rated };
+}
 
 export function makeCtx(st, opts = {}) {
   return {
@@ -269,14 +299,43 @@ export const ACTIONS = {
     s.playEarned = round2((s.playEarned || 0) + earned);
     return { earned };
   },
-  // A finished competitive match against the bots moves your CS:GO rank (one for all maps; online too: it's only the rank).
-  'play.rank'(ctx, { result, roundsFor = 0, roundsAgainst = 0, difficulty = 'normal' }) {
+  // Searching for a match. A ranked match still open from before (the game closed during it) was abandoned: settled
+  // first, a loss and the cooldown. Returns { settled, cooldown } (ms left of an abandon's cooldown, for a ranked mode:
+  // no searching until it's over).
+  'play.queue'(ctx, { mode }) {
+    if (!PLAY_MODES.includes(mode)) fail('Invalid mode');
+    const settled = ctx.st.mm?.match ? abandonMatch(ctx) : null;
+    return { settled, cooldown: MM.isRanked(mode) ? MM.cooldownLeft(ctx.st.mm, ctx.now) : 0 };
+  },
+  // A ranked match starts: it's yours until it's finished (a quit game, or not coming back to it, is an abandon).
+  // opponent: the other team's average rating.
+  'play.join'(ctx, { mode, opponent = 0 }) {
+    if (!MM.isRanked(mode)) fail('Invalid mode');
+    const left = MM.cooldownLeft(ctx.st.mm, ctx.now);
+    if (left) fail(`You can't play ${MODE_NAMES[mode]} for ${MM.formatWait(left)}: you abandoned a match`, 'cooldown');
+    if (ctx.st.mm?.match) fail('You are already in a match');
+    ctx.st.mm = { ...MM.freshMM(), ...(ctx.st.mm || {}), match: { mode, opponent: int(opponent, 0, P.MAX_RATING, 'rating'), at: ctx.now } };
+    ctx.dirty.add('mm');
+    return { ok: true };
+  },
+  // Leaving the ranked match you're in for good (or not reconnecting in time): it counts as a loss, and the cooldown.
+  'play.abandon'(ctx, { roundsFor = 0, roundsAgainst = 0 }) {
+    if (!ctx.st.mm?.match) fail('Not in a ranked match');
+    return abandonMatch(ctx, { roundsFor: int(roundsFor, 0, 60, 'rounds'), roundsAgainst: int(roundsAgainst, 0, 60, 'rounds') });
+  },
+  // A finished competitive or wingman match against the bots moves that mode's rank (CS:GO's skill groups, one for all
+  // maps; online too: it's only the rank). opponent: the other team's average rating (else the old difficulty's).
+  'play.rank'(ctx, { result, roundsFor = 0, roundsAgainst = 0, difficulty = 'normal', opponent = null, mode = 'competitive' }) {
     if (!['win', 'loss', 'tie'].includes(result)) fail('Invalid result');
     if (!Object.hasOwn(R.BOT_MMR, difficulty)) fail('Invalid difficulty');
-    const r = R.rateMatch(ctx.st.rank, { result, roundsFor: int(roundsFor, 0, 60, 'rounds'), roundsAgainst: int(roundsAgainst, 0, 60, 'rounds'), difficulty, now: ctx.now });
-    ctx.st.rank = r.rank;
-    ctx.dirty.add('rank');
-    return { change: r.change, before: r.before, after: r.after, rank: r.rank };
+    const key = RANK_KEY[mode];
+    if (!key) fail('Invalid mode');
+    const r = R.rateMatch(ctx.st[key], { result, roundsFor: int(roundsFor, 0, 60, 'rounds'), roundsAgainst: int(roundsAgainst, 0, 60, 'rounds'), difficulty,
+      opponent: opponent == null ? null : int(opponent, 0, 5000, 'rating'), now: ctx.now });
+    ctx.st[key] = r.rank;
+    ctx.dirty.add(key);
+    finishMatch(ctx);
+    return { change: r.change, before: r.before, after: r.after, rank: r.rank, delta: r.delta };
   },
   // A finished Premier match against the bots moves your CS Rating (online too: it's only the rating).
   'play.premier'(ctx, { result, roundsFor = 0, roundsAgainst = 0, opponent = P.START_RATING }) {
@@ -284,6 +343,7 @@ export const ACTIONS = {
     const r = P.ratePremier(ctx.st.premier, { result, roundsFor: int(roundsFor, 0, 60, 'rounds'), roundsAgainst: int(roundsAgainst, 0, 60, 'rounds'), opponent: int(opponent, 0, P.MAX_RATING, 'rating') });
     ctx.st.premier = r.premier;
     ctx.dirty.add('premier');
+    finishMatch(ctx);
     return { delta: r.delta, before: r.before, after: r.after, placed: r.placed, premier: r.premier };
   },
   // A kill in Play with a StatTrak™ gun or knife counts on its counter (online too: it changes nothing but the count).
