@@ -1,5 +1,6 @@
-// Charms in 3D: CS2's charm model hung from a gun's "keychain" attachment (it rides along in first person and Play),
-// swinging as the gun moves and turned about its chain by its pattern; and a charm on its own (a charm item's inspect).
+// Charms in 3D: CS2's charm model hung from a point on a gun (it rides along in first person and Play), swinging as the
+// gun moves and turned about its chain by its pattern; and a charm on its own (a charm item's inspect). Where it hangs is
+// the charm's own place on the gun (moved in the inspect), else the gun model's default spot (CS2's KeychainMarkup).
 // A charm model is a short chain of three joints from the clasp (at its origin) with the charm on the end, hanging
 // along its -Y (CS2's -Z). A Sticker Slab is the clear case model with its sticker printed on the card inside.
 // Charms are drawn with their csgo_weapon materials as CS2 does: tint, colour adjustments and roughness, most of them
@@ -7,10 +8,11 @@
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2Charm, cs2CharmAttach } from './api.js';
-import { loadGltf } from './rig.js';
+import { loadGltf, skinningBone } from './rig.js';
+import { weaponMarkup } from './markup.js';
 import { UniformRandomStream } from './rng.js';
 import { D } from '../engine/data.js';
-import { itemDef, CHARM_PATTERNS } from '../engine/items.js';
+import { itemDef, charmPlacement, CHARM_PATTERNS } from '../engine/items.js';
 import { imgUrl, loadImage } from '../util.js';
 
 const INCH = 0.0254;
@@ -28,6 +30,8 @@ const SWING_LENGTH = 0.06;
 // FWD_MAX forward or back along the gun.
 const DEG = Math.PI / 180;
 const OUT_MIN = 6 * DEG, OUT_MAX = 65 * DEG, FWD_MAX = 30 * DEG;
+// How far out from the gun's surface the clasp is: its ring hooks around the edge it hangs from.
+const CLASP_GAP = 0.002; // metres
 
 // The Sticker Slab's case: the card inside its window is the top left of the case's colour map.
 const SLAB_CARD = { x: 12 / 1024, y: 123 / 1024, w: 486 / 1024, h: 487 / 1024 };
@@ -377,7 +381,7 @@ function gunSurface(root) {
   const pts = [], v = new THREE.Vector3(), c = new THREE.Vector3();
   root.traverse((o) => {
     if (!o.isMesh || o.userData.decal) return;
-    for (let n = o; n; n = n.parent) if (!n.visible) return;
+    for (let n = o; n; n = n.parent) if (!n.visible || n.userData.charm) return; // not a charm already on it
     const pos = o.geometry.attributes.position, idx = o.geometry.index, local = new Array(pos.count);
     for (let i = 0; i < pos.count; i++) {
       o.getVertexPosition(i, v);
@@ -442,35 +446,107 @@ function clearance(surface, toHolder, down, out, m, turn, key) {
   return lean;
 }
 
+// The gun model's own frame (CS2's model space): its top bone's parent. glTF's axes there are CS2's turned Y-up: x is
+// CS2's y (the gun's left), y its z (up), z its x (forward).
+function modelFrame(root) {
+  let top = null;
+  root.traverse((o) => { if (!top && o.isBone) top = o; });
+  while (top?.parent?.isBone) top = top.parent;
+  return top?.parent || null;
+}
+const toFrame = ([x, y, z]) => new THREE.Vector3(y, z, x);
+const fromFrame = (v) => [v.z, v.x, v.y];
+
+// The gun model's default spot for a charm: the middle of its default KeychainMarkup quad (the legacy model's or not),
+// facing out from the side it's on.
+function defaultPlacement(mk, legacy) {
+  const quads = mk?.keychain || [];
+  const q = quads.find((k) => k.def && k.legacy === legacy) || quads.find((k) => k.def);
+  if (!q) return null;
+  const [a, b, c, d] = q.corners.map((v) => new THREE.Vector3(...v));
+  const p = a.clone().add(b).add(c).add(d).multiplyScalar(0.25);
+  const n = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).normalize();
+  if (n.y * p.y < 0 || (Math.abs(p.y) < 0.05 && n.z < 0)) n.negate();
+  return { b: q.bone, p: p.toArray(), n: n.toArray() };
+}
+
+// A place on the gun from a ray hit on its model (the inspect's charm placement): the point, the surface's outward
+// normal and the bone that carries it (a pistol's slide, say), in the model's space in inches. Null if it can't tell.
+export function placementFromHit(model, hit) {
+  const frame = model?.userData.root && modelFrame(model.userData.root);
+  if (!frame || !hit?.face) return null;
+  frame.updateWorldMatrix(true, false);
+  const inv = frame.matrixWorld.clone().invert();
+  const p = hit.point.clone().applyMatrix4(inv).divideScalar(INCH);
+  const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).transformDirection(inv);
+  return charmPlacement({ b: skinningBone(hit) || 'weapon_offset', p: fromFrame(p), n: fromFrame(n) });
+}
+
+// Hangs a gun model's charm (an inspect's model, see skin.js buildCS2Model) again, e.g. moved (charm.o).
+export async function rehangCharm(model, charm) {
+  const root = model?.userData.root;
+  if (!root) return null;
+  const old = [];
+  root.traverse((o) => { if (o.userData.charm) old.push(o); });
+  const hung = await addCharm(root, model.userData.weapon, model.userData.mesh || '', { ...charm, t: 'charm' });
+  for (const o of old) {
+    o.removeFromParent();
+    o.traverse((x) => { if (x.isMesh) for (const mm of [].concat(x.material || [])) mm.dispose(); });
+  }
+  return hung;
+}
+
 // Hangs a gun's charm on its model (root: the gun's glTF scene; wid: weapon id; mesh: the model's mesh name). Returns
-// the holder, or null when the model has no keychain attachment.
+// the holder, or null when it has nowhere to hang.
 export async function addCharm(root, wid, mesh, charm) {
-  const [at, m] = await Promise.all([cs2CharmAttach(wid), charmModel(charm)]);
-  const a = (/legacy/.test(mesh) && at.legacy) || at.attach;
-  if (!a) return null;
-  let bone = null;
-  root.traverse((o) => { if (!bone && o.isBone && o.name === a.bone) bone = o; });
-  if (!bone) return null;
+  const legacy = /legacy/.test(mesh);
+  const [mk, m] = await Promise.all([weaponMarkup(wid), charmModel(charm)]);
+  const place = charmPlacement(charm.o) || defaultPlacement(mk, legacy);
+  const frame = place && modelFrame(root);
+  root.updateWorldMatrix(true, true);
   const holder = new THREE.Group();
-  holder.position.set(a.offset[0] * INCH, a.offset[1] * INCH, a.offset[2] * INCH);
-  holder.quaternion.set(...a.rotation).multiply(GLTF_TO_BONE);
+  const findBone = (name) => { let b = null; root.traverse((o) => { if (!b && o.isBone && o.name === name) b = o; }); return b; };
+  let bone = frame ? findBone(place.b) || findBone('weapon_offset') : null, down = null, out = null;
+  if (bone) {
+    // On the gun's surface, the clasp just out from it; the holder turned like the model, so its down is the gun's.
+    const p = toFrame(place.p).multiplyScalar(INCH), n = toFrame(place.n).normalize();
+    holder.position.copy(bone.worldToLocal(frame.localToWorld(p.clone().addScaledVector(n, CLASP_GAP))));
+    holder.quaternion.copy(bone.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(frame.getWorldQuaternion(new THREE.Quaternion())));
+    // Outward is the surface's way out from the gun, or (on its top or underside) the side it's on.
+    down = DOWN.clone();
+    out = new THREE.Vector3(n.x, 0, n.z);
+    if (out.length() < 0.35) out.set(Math.sign(p.x) || 1, 0, 0);
+    out.normalize();
+  } else {
+    // Without CS2's placement data: the gun's "keychain" attachment.
+    const at = await cs2CharmAttach(wid);
+    const a = (legacy && at.legacy) || at.attach;
+    bone = a && findBone(a.bone);
+    if (!bone) return null;
+    holder.position.set(a.offset[0] * INCH, a.offset[1] * INCH, a.offset[2] * INCH);
+    holder.quaternion.set(...a.rotation).multiply(GLTF_TO_BONE);
+  }
   bone.add(holder);
-  // The gun's down and outward in the holder's frame: the gun model stands up along its +Y with its sides along X, and
-  // the attachment is on one side of it (the left on every CS2 gun), so outward is from the gun's middle to that side.
   holder.updateWorldMatrix(true, false);
   const surface = gunSurface(root);
   const rel = root.matrixWorld.clone().invert().multiply(holder.matrixWorld);
-  const pos = new THREE.Vector3(), rq = new THREE.Quaternion();
-  rel.decompose(pos, rq, new THREE.Vector3());
-  rq.invert();
-  let x0 = Infinity, x1 = -Infinity;
-  for (const s of surface) { if (s.x < x0) x0 = s.x; if (s.x > x1) x1 = s.x; }
-  const down = DOWN.clone().applyQuaternion(rq), out = new THREE.Vector3(Math.sign(pos.x - (x0 + x1) / 2) || 1, 0, 0).applyQuaternion(rq);
-  out.addScaledVector(down, -out.dot(down)).normalize();
+  if (!out) {
+    // The gun's down and outward in the holder's frame: the gun model stands up along its +Y with its sides along X,
+    // and the attachment is on one side of it (the left on every CS2 gun), so outward is from its middle to that side.
+    const pos = new THREE.Vector3(), rq = new THREE.Quaternion();
+    rel.decompose(pos, rq, new THREE.Vector3());
+    rq.invert();
+    let x0 = Infinity, x1 = -Infinity;
+    for (const s of surface) { if (s.x < x0) x0 = s.x; if (s.x > x1) x1 = s.x; }
+    down = DOWN.clone().applyQuaternion(rq);
+    out = new THREE.Vector3(Math.sign(pos.x - (x0 + x1) / 2) || 1, 0, 0).applyQuaternion(rq);
+    out.addScaledVector(down, -out.dot(down)).normalize();
+  }
   // The charm's face (its +X) turned to face outward when it hangs down the gun, then by its pattern.
   const face = out.clone().applyQuaternion(new THREE.Quaternion().setFromUnitVectors(DOWN, down).invert());
   const turn = Math.atan2(-face.z, face.x) + patternTurn(charm.pat);
-  const outMin = clearance(surface, rel.clone().invert(), down, out, m, turn, `${wid}|${mesh}|${itemDef(charm)?.mdl}|${turn.toFixed(3)}`);
+  const where = place ? `${place.b}:${place.p.join(',')}` : 'attach';
+  const outMin = clearance(surface, rel.clone().invert(), down, out, m, turn, `${wid}|${mesh}|${itemDef(charm)?.mdl}|${turn.toFixed(3)}|${where}`);
   bone.remove(holder);
   const hung = holderFor(m, turn, { down: down.toArray(), out: out.toArray(), outMin });
   hung.position.copy(holder.position);

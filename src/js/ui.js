@@ -6,7 +6,8 @@ import { S, emit, save } from './state.js';
 import { act } from './backend.js';
 import { sfx } from './audio.js';
 import { inspectView } from './inspect.js';
-import { cs2VanityMaps } from './cs2/api.js';
+import { cs2VanityMaps, cs2Status } from './cs2/api.js';
+import { placementFromHit, rehangCharm } from './cs2/charm.js';
 import { composeItem, alphaBox } from './composite.js';
 import { chickenIncome, featherMult, HAT, BREED } from './chickens.js';
 import { openStickerEditor } from './stickerEditor.js';
@@ -262,6 +263,7 @@ export function itemContextMenu(e, item, { onChange } = {}) {
     items.push(item.kc
       ? { label: 'Remove charm', icon: 'keychain_removal', hint: I.nameParts(I.attachedCharm(item)).bottom, action: async () => done(await detachCharm(item)) }
       : { label: 'Attach charm', icon: 'move_keychain', action: async () => done(await attachCharmTo(item)) });
+    if (item.kc) items.push({ label: 'Move charm', icon: 'move_keychain', action: () => openInspect(item, { placeCharm: true }) });
   }
   if (item.t === 'charm') items.push({ label: 'Attach to a gun', icon: 'move_keychain', action: async () => done(await hangCharm(item)) });
   if (item.t === 'sticker' && D.slab) items.push({ label: 'Sticker Slab', icon: 'sticker', hint: money(D.slab.p), action: async () => done(await slabSticker(item)) });
@@ -286,9 +288,12 @@ function chooseItem(title, items, { empty = 'Nothing to choose from.', note = ''
 }
 const byValue = (a, b) => I.itemValue(b) - I.itemValue(a);
 async function attach(gun, charm) {
-  if (!(await tryAct('charms.attach', { uid: gun.uid, charm: charm.uid }))) return false;
+  const r = await tryAct('charms.attach', { uid: gun.uid, charm: charm.uid });
+  if (!r) return false;
   sfx.charm();
   toast(`Attached ${esc(I.itemName(charm))} to ${esc(I.itemName(gun))}`, 'good');
+  // Then where it hangs, on the gun's real model.
+  if ((await cs2Status().catch(() => null))?.available) openInspect(r.item, { placeCharm: true });
   return true;
 }
 // Picks one of your charms for a gun.
@@ -296,7 +301,7 @@ async function attachCharmTo(gun) {
   const charms = S.inv.filter((i) => i.t === 'charm' && !i.lk).sort(byValue);
   const c = await chooseItem(`Attach a charm to ${esc(I.itemName(gun))}`, charms, {
     empty: 'You have no charms. Get them from the Armory’s charm collections or the market, or seal a sticker in a Sticker Slab.',
-    note: 'A charm hangs off the gun’s keychain point (one per gun). Taking it off again uses a Charm Detachment.',
+    note: 'A charm hangs anywhere you put it on the gun (one per gun). Taking it off again uses a Charm Detachment.',
   });
   return c ? attach(gun, c) : false;
 }
@@ -411,7 +416,7 @@ function detailBody(item) {
       <div class="actions">
         <button class="btn gold" data-a="inspect">Inspect in 3D</button>
         ${I.canHaveStickers(item) ? `<button class="btn" data-a="stickers">Stickers (${item.stk?.length || 0}/${I.MAX_STICKERS})</button>` : ''}
-        ${I.canHaveCharm(item) ? (item.kc ? '<button class="btn" data-a="charm-off">Remove charm</button>' : '<button class="btn" data-a="charm-on">Attach charm</button>') : ''}
+        ${I.canHaveCharm(item) ? (item.kc ? '<button class="btn" data-a="charm-move">Move charm</button><button class="btn" data-a="charm-off">Remove charm</button>' : '<button class="btn" data-a="charm-on">Attach charm</button>') : ''}
         ${item.t === 'charm' ? '<button class="btn" data-a="charm-hang">Attach to a gun</button>' : ''}
         ${item.t === 'sticker' && D.slab ? `<button class="btn" data-a="slab" title="Seal it in a clear case: a charm you can hang on a gun">Sticker Slab (${money(D.slab.p)})</button>` : ''}
         ${I.loadoutSlot(item) ? (isEquipped(item)
@@ -469,6 +474,7 @@ export function showItemDetail(item, { onChange } = {}) {
       if (a === 'stickers') openStickerEditor(item, { onDone: () => { emit('inv'); refresh(); } });
       if (a === 'charm-on' && await attachCharmTo(item)) refresh();
       if (a === 'charm-off' && await detachCharm(item)) refresh();
+      if (a === 'charm-move') openInspect(item, { placeCharm: true });
       // The charm or sticker itself is used up: the details close.
       if (a === 'charm-hang' && await hangCharm(item)) m.close();
       if (a === 'slab' && await slabSticker(item)) m.close();
@@ -480,7 +486,8 @@ export function showItemDetail(item, { onChange } = {}) {
 }
 
 // ---- 3D inspect overlay --------------------------------------------------------------------
-export function openInspect(item) {
+// placeCharm: start with the gun's charm ready to move.
+export function openInspect(item, { placeCharm = false } = {}) {
   const r = I.rarityInfo(item);
   const pat = I.patternInfo(item);
   const wrap = document.createElement('div');
@@ -496,6 +503,7 @@ export function openInspect(item) {
       <span class="spacer"></span>
       <select class="input bg-pick" data-bg data-tip="Background (CS2's own maps)" style="display:none"></select>
       <button class="insp-btn" data-a="fp" data-tip="First person (V)" style="display:none">${iconHtml('first_person')}<span>First person</span></button>
+      <button class="insp-btn" data-a="charm" data-tip="Move the charm (C)" style="display:none">${iconHtml('move_keychain')}<span>Move charm</span></button>
       <button class="insp-btn" data-a="inspect" data-tip="Inspect (F)">${iconHtml('rotate_weapon')}<span>Inspect</span></button>
       <button class="insp-btn" data-a="flip" data-tip="Flip (B)">${iconHtml('refresh')}<span>Flip</span></button>
       <button class="insp-btn" data-a="reset" data-tip="Reset the view (R)">${iconHtml('undo')}<span>Reset</span></button>
@@ -550,6 +558,11 @@ export function openInspect(item) {
       wrap.querySelector('.loading.model')?.remove();
       // First person is available for real CS2 guns and knives.
       if (inspectView.model?.userData.weapon || inspectView.model?.userData.gloveItem) wrap.querySelector('[data-a=fp]').style.display = '';
+      // A charm can be moved on a gun's real model.
+      if (item.kc && inspectView.model?.userData.root) {
+        wrap.querySelector('[data-a=charm]').style.display = '';
+        if (placeCharm) startPlacing();
+      }
     })
     .catch((e) => { wrap.querySelector('.loading.model').textContent = 'Could not load model: ' + e.message; });
   const fpBtn = wrap.querySelector('[data-a=fp]');
@@ -572,7 +585,59 @@ export function openInspect(item) {
     }
     fpBusy = false;
   };
+  // Moving the charm: a click on the gun hangs it there (a draft until saved).
+  let placing = null;
+  const rehang = async (o) => {
+    const model = inspectView.model;
+    if (!model || placing?.busy) return;
+    if (placing) placing.busy = true;
+    try {
+      await rehangCharm(model, { ...item.kc, o: o || undefined });
+      // First person copies the gun when it starts: copy it again.
+      model.userData.fp?.dispose();
+      model.userData.fp = null;
+    } catch (e) { toast('Could not move the charm: ' + esc(e.message), 'bad'); }
+    if (placing) placing.busy = false;
+  };
+  const startPlacing = () => {
+    if (placing || !item.kc || !inspectView.model?.userData.root) return;
+    if (inspectView.fp) toggleFP();
+    placing = { draft: item.kc.o || null, busy: false };
+    wrap.classList.add('placing');
+    const bar = document.createElement('div');
+    bar.className = 'charm-place';
+    bar.innerHTML = `<span>Click anywhere on the gun to hang the charm there</span>
+      <button class="btn ghost" data-cp="default" data-tip="Where CS2 hangs a charm on this gun">Gun’s own spot</button>
+      <button class="btn ghost" data-cp="cancel">Cancel</button>
+      <button class="btn primary" data-cp="save">Save</button>`;
+    wrap.appendChild(bar);
+    bar.querySelectorAll('[data-cp]').forEach((b) => b.addEventListener('click', () => placeAct(b.dataset.cp)));
+    inspectView.setPick(async (hit) => {
+      const o = placementFromHit(inspectView.model, hit);
+      if (!o || placing?.busy) return;
+      placing.draft = o;
+      sfx.charm();
+      await rehang(o);
+    });
+  };
+  const stopPlacing = () => {
+    placing = null;
+    inspectView.setPick(null);
+    wrap.classList.remove('placing');
+    wrap.querySelector('.charm-place')?.remove();
+  };
+  const placeAct = async (a) => {
+    if (!placing || placing.busy) return;
+    if (a === 'default') { placing.draft = null; await rehang(null); return; }
+    if (a === 'cancel') { const o = item.kc.o; stopPlacing(); await rehang(o); return; }
+    const r = await tryAct('charms.place', { uid: item.uid, o: placing.draft });
+    if (!r) return;
+    item = r.item;
+    stopPlacing();
+    toast(`Moved ${esc(I.nameParts(I.attachedCharm(item)).bottom)}`, 'good');
+  };
   const close = () => {
+    stopPlacing();
     inspectView.unmount();
     wrap.remove();
     window.removeEventListener('keydown', onKey, true);
@@ -583,10 +648,12 @@ export function openInspect(item) {
     if (a === 'fp') toggleFP();
     if (a === 'flip') inspectView.flip();
     if (a === 'reset') inspectView.reset();
+    if (a === 'charm') placing ? placeAct('cancel') : startPlacing();
   };
   const onKey = (e) => {
     const k = e.key.toLowerCase();
-    const map = { escape: 'close', f: 'inspect', b: 'flip', r: 'reset', v: 'fp' };
+    if (placing && k === 'escape') { e.stopPropagation(); e.preventDefault(); placeAct('cancel'); return; }
+    const map = { escape: 'close', f: 'inspect', b: 'flip', r: 'reset', v: 'fp', c: 'charm' };
     if (map[k]) { e.stopPropagation(); e.preventDefault(); act(map[k]); }
   };
   window.addEventListener('keydown', onKey, true);

@@ -96,3 +96,15 @@ export function bonesByName(scene) {
   scene.traverse((o) => { if (o.name && !bones[o.name]) bones[o.name] = o; });
   return bones;
 }
+
+// The bone that moves the surface a ray hit (the strongest skin weight over the hit triangle's corners), e.g. the
+// magazine's for a sticker on the mag; null for an unskinned mesh.
+export function skinningBone(hit) {
+  const o = hit?.object, face = hit?.face, si = o?.geometry?.attributes.skinIndex, sw = o?.geometry?.attributes.skinWeight;
+  if (!o?.isSkinnedMesh || !face || !si || !sw) return null;
+  const sum = new Map();
+  for (const v of [face.a, face.b, face.c]) for (let k = 0; k < 4; k++) { const w = sw.getComponent(v, k); if (w > 0) sum.set(si.getComponent(v, k), (sum.get(si.getComponent(v, k)) || 0) + w); }
+  let best = null, bw = 0;
+  for (const [i, w] of sum) if (w > bw) { bw = w; best = i; }
+  return best == null ? null : o.skeleton.bones[best]?.name || null;
+}

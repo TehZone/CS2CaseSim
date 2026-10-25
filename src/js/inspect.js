@@ -324,11 +324,11 @@ class InspectView {
 
   bindInput(el) {
     el.style.touchAction = 'none';
-    let lx = 0, ly = 0;
+    let lx = 0, ly = 0, sx = 0, sy = 0;
     el.addEventListener('pointerdown', (e) => {
       el.setPointerCapture(e.pointerId);
       this.state.dragging = true; this.state.anim = null;
-      lx = e.clientX; ly = e.clientY;
+      lx = sx = e.clientX; ly = sy = e.clientY;
       el.style.cursor = 'grabbing';
     });
     el.addEventListener('pointermove', (e) => {
@@ -339,7 +339,11 @@ class InspectView {
       this.state.yaw += this.state.vy; this.state.pitch = clamp(this.state.pitch + this.state.vp, -1.35, 1.35);
       this.state.lastInput = performance.now();
     });
-    const up = () => { this.state.dragging = false; el.style.cursor = 'grab'; this.state.lastInput = performance.now(); };
+    const up = (e) => {
+      this.state.dragging = false; el.style.cursor = this.pick ? 'crosshair' : 'grab'; this.state.lastInput = performance.now();
+      // A click rather than a drag picks a point on the gun while something wants one (placing a charm).
+      if (this.pick && e.type === 'pointerup' && Math.hypot(e.clientX - sx, e.clientY - sy) < 5) this.pickAt(e);
+    };
     el.addEventListener('pointerup', up);
     el.addEventListener('pointercancel', up);
     el.addEventListener('wheel', (e) => {
@@ -348,6 +352,26 @@ class InspectView {
     }, { passive: false });
     el.addEventListener('dblclick', () => this.reset());
     el.style.cursor = 'grab';
+  }
+
+  // While set, a click on the gun calls fn with the ray's hit on it (its own surface, not a charm or sticker).
+  setPick(fn) {
+    this.pick = fn || null;
+    if (this.renderer) this.renderer.domElement.style.cursor = fn ? 'crosshair' : 'grab';
+  }
+  pickAt(e) {
+    if (!this.model || this.fp) return;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), this.camera);
+    const targets = [];
+    this.model.traverse((o) => {
+      if (!o.isMesh || o.userData.decal) return;
+      for (let n = o; n; n = n.parent) if (!n.visible || n.userData.charm) return;
+      targets.push(o);
+    });
+    const hit = ray.intersectObjects(targets, false)[0];
+    if (hit) this.pick(hit);
   }
 
   mount(container) {
@@ -367,6 +391,7 @@ class InspectView {
   }
 
   unmount() {
+    this.setPick(null);
     this.running = false;
     cancelAnimationFrame(this.raf);
     if (this.container) this.resizeObs.unobserve(this.container);

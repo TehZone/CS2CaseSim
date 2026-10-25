@@ -2,6 +2,7 @@
 import { loadImage, imgUrl, mulberry32, clamp, smoothstep } from './util.js';
 import { D } from './data.js';
 import { itemDef, patternInfo } from './items.js';
+import { weaponMarkup, placeSouvenirStickers } from './cs2/markup.js';
 
 export const STICKER_BASE = 0.15; // sticker width as a fraction of the weapon image width at scale 1
 
@@ -197,7 +198,11 @@ export async function composeItem(item, { size = 'l', stickers = true } = {}) {
       applyWear(id.data, W, H, base, item.fl, item.sd, def.cat === 'gloves');
       ctx.putImageData(id, 0, 0);
     }
-    if (stickers && item.stk?.length) await drawStickers(ctx, W, H, item.stk, null, def);
+    if (stickers && item.stk?.length) {
+      // Souvenir stickers in the gun's own slots when CS2 is there to say where they are.
+      const stk = item.sv ? placeSouvenirStickers(item, await weaponMarkup(def.wid), stickerBase(def)) : item.stk;
+      await drawStickers(ctx, W, H, stk, null, def);
+    }
     return c;
   })();
   cache.set(key, job);

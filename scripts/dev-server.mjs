@@ -29,7 +29,7 @@ const cs2 = new CS2Service({
   shrinkImages: (files, max) => require('../cs2/png.cjs').shrinkPNGs(files, max),
 });
 const json = (res, code, body) => res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(body));
-const HOSTS = /^https:\/\/(community\.(akamai|cloudflare|fastly)\.steamstatic\.com|raw\.githubusercontent\.com)\//;
+const HOSTS = /^https:\/\/(community\.(akamai|cloudflare|fastly)\.steamstatic\.com\/|cdn\.steamstatic\.com\/apps\/730\/|raw\.githubusercontent\.com\/)/;
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
@@ -76,6 +76,9 @@ http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/cs2/charm-attach') {
       try { return json(res, 200, await cs2.charmAttach(url.searchParams.get('weapon'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
+    }
+    if (url.pathname === '/api/cs2/markup') {
+      try { return json(res, 200, await cs2.weaponMarkup(url.searchParams.get('weapon'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
     }
     if (url.pathname === '/api/cs2/crate') {
       try { return json(res, 200, await cs2.crate(url.searchParams.get('id'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }

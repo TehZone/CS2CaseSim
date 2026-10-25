@@ -116,6 +116,19 @@ export function cs2CharmAttach(weapon) {
   return charmAttaches.get(weapon);
 }
 
+// A gun model's own placement data: where a charm may hang ({ keychain: [{ bone, corners, legacy, def }] }, in the model's
+// space in inches), its sticker slots ({ stickers, regions }, see markup.js) and its inventory camera.
+const markups = new Map();
+export function cs2WeaponMarkup(weapon) {
+  if (!markups.has(weapon)) {
+    const p = window.native?.cs2WeaponMarkup ? window.native.cs2WeaponMarkup(weapon)
+      : fetch(`api/cs2/markup?weapon=${encodeURIComponent(weapon)}`).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); });
+    markups.set(weapon, p);
+    p.catch(() => markups.delete(weapon));
+  }
+  return markups.get(weapon);
+}
+
 // A container's 3D crate model (CS2's "fall" and "open" animations included), or null: { model, name }.
 const crates = new Map();
 export function cs2Crate(id) {

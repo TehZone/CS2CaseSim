@@ -8,10 +8,11 @@ import { imgUrl, loadImage } from '../util.js';
 import { UniformRandomStream } from './rng.js';
 import { cs2Prepare, cs2GloveClip, cs2StatTrak } from './api.js';
 import { gloveMaterials } from './glove.js';
-import { loadGltf as loadRig, rebind, bonesByName, forearmTwist, hidePoints } from './rig.js';
+import { loadGltf as loadRig, rebind, bonesByName, forearmTwist, hidePoints, skinningBone } from './rig.js';
 import { loadSource, texture, whiteTex } from './textures.js';
 import { stickerSurface, contentBox } from './sticker.js';
 import { addCharm } from './charm.js';
+import { weaponMarkup, placeSouvenirStickers } from './markup.js';
 import { stickerBase } from '../composite.js';
 import { D } from '../data.js';
 
@@ -514,6 +515,7 @@ export async function buildCS2Model(item, def, renderer, { statTrak = true, quic
   wrap.userData.unitScale = 4 / longest; // scene units per glTF metre (lines up CS2 inspect backdrops)
   wrap.userData.weapon = wid; // for the first-person inspect
   wrap.userData.root = root;
+  wrap.userData.mesh = prep.mesh;
   if (item.stt && statTrak) {
     try { wrap.userData.statTrak = await addStatTrak(root, wid, prep, item.kills || 0); } catch (e) { console.warn('StatTrak counter failed', e); }
   }
@@ -649,65 +651,60 @@ function stickerMaterial(def, map) {
 async function addStickerDecals(wrap, item, def) {
   const icon = await alphaBounds(imgUrl(def.img, 'm'));
   wrap.updateMatrixWorld(true);
+  // The gun's own visible surfaces: not a hanging charm.
   const targets = [];
   wrap.traverse((o) => {
     let shown = o.visible;
-    for (let n = o.parent; n && shown; n = n.parent) shown = n.visible;
+    for (let n = o; n && shown; n = n.parent) shown = n.visible && !n.userData.charm;
     if (o.isMesh && shown) targets.push(o);
   });
   const box = new THREE.Box3();
   for (const t of targets) box.expandByObject(t, true);
-  const W = box.max.x - box.min.x, H = box.max.y - box.min.y;
   const ray = new THREE.Raycaster();
-  const { D } = await import('../data.js');
-  for (const s of item.stk) {
-    const sd = D.stickers[s.id];
-    if (!sd) continue;
-    const u = (s.x - icon.x0) / Math.max(1e-6, icon.x1 - icon.x0);
-    const v = (s.y - icon.y0) / Math.max(1e-6, icon.y1 - icon.y0);
-    if (s.m) {
-      // Placed on the model's own side view (sticker editor with CS2 models): exact mapping.
-      await placeDecal(wrap, targets, ray, box, sd, s, box.min.x + s.x * W, box.max.y - s.y * H, stickerBase(def) * (s.s || 1) * W);
-      continue;
-    }
-    const cx = box.min.x + u * W;
-    // Map height within the weapon's local top/bottom edges at this column (icons are tilted 3/4 views).
-    let cy = box.max.y - v * H;
-    const ic = icon.column(s.x);
-    if (ic && ic.bottom > ic.top) {
-      let top = null, bottom = null;
-      for (let k = 0; k <= 80; k++) {
-        const y = box.max.y - (k / 80) * H;
-        ray.set(new THREE.Vector3(cx, y, box.max.z + 1), new THREE.Vector3(0, 0, -1));
-        if (ray.intersectObjects(targets, false).length) { if (top === null) top = y; bottom = y; }
-      }
-      if (top !== null && top > bottom) {
-        const lv = Math.min(1, Math.max(0, (s.y - ic.top) / (ic.bottom - ic.top)));
-        cy = top - lv * (top - bottom);
-      }
-    }
-    // The icon is a 3/4 render, so the mapped point can land in a gap: spiral outwards to the nearest surface.
-    let hit = null;
-    for (let i = 0; i < 60 && !hit; i++) {
-      const rad = i === 0 ? 0 : 0.012 * W * Math.sqrt(i), ang = i * 2.4;
-      ray.set(new THREE.Vector3(cx + Math.cos(ang) * rad, cy + Math.sin(ang) * rad, box.max.z + 1), new THREE.Vector3(0, 0, -1));
-      hit = ray.intersectObjects(targets, false)[0] || null;
-    }
-    if (!hit) continue;
-    await placeDecal(wrap, targets, ray, box, sd, s, hit.point.x, hit.point.y, (stickerBase(def) * (s.s || 1) * W) / Math.max(0.05, icon.x1 - icon.x0), hit);
+  // Souvenir stickers sit in the model's own slots.
+  const mk = item.sv ? await weaponMarkup(wrap.userData.weapon) : null;
+  for (const s of placeSouvenirStickers(item, mk, stickerBase(def), /legacy/.test(wrap.userData.mesh || ''))) {
+    // One sticker that fails (say its icon won't load) leaves the others on the gun.
+    try { await addStickerDecal(wrap, targets, ray, box, icon, def, s); } catch (e) { console.warn('sticker decal failed', s.id, e); }
   }
 }
 
-// The bone that moves the surface a ray hit (the strongest skin weight over the hit triangle's corners), e.g. the
-// magazine's for a sticker on the mag; null for an unskinned mesh.
-function skinningBone(hit) {
-  const o = hit?.object, face = hit?.face, si = o?.geometry?.attributes.skinIndex, sw = o?.geometry?.attributes.skinWeight;
-  if (!o?.isSkinnedMesh || !face || !si || !sw) return null;
-  const sum = new Map();
-  for (const v of [face.a, face.b, face.c]) for (let k = 0; k < 4; k++) { const w = sw.getComponent(v, k); if (w > 0) sum.set(si.getComponent(v, k), (sum.get(si.getComponent(v, k)) || 0) + w); }
-  let best = null, bw = 0;
-  for (const [i, w] of sum) if (w > bw) { bw = w; best = i; }
-  return best == null ? null : o.skeleton.bones[best]?.name || null;
+async function addStickerDecal(wrap, targets, ray, box, icon, def, s) {
+  const sd = D.stickers[s.id];
+  if (!sd) return;
+  const W = box.max.x - box.min.x, H = box.max.y - box.min.y;
+  if (s.m) {
+    // Placed on the model's own side view (sticker editor with CS2 models): exact mapping.
+    await placeDecal(wrap, targets, ray, box, sd, s, box.min.x + s.x * W, box.max.y - s.y * H, stickerBase(def) * (s.s || 1) * W);
+    return;
+  }
+  const u = (s.x - icon.x0) / Math.max(1e-6, icon.x1 - icon.x0);
+  const v = (s.y - icon.y0) / Math.max(1e-6, icon.y1 - icon.y0);
+  const cx = box.min.x + u * W;
+  // Map height within the weapon's local top/bottom edges at this column (icons are tilted 3/4 views).
+  let cy = box.max.y - v * H;
+  const ic = icon.column(s.x);
+  if (ic && ic.bottom > ic.top) {
+    let top = null, bottom = null;
+    for (let k = 0; k <= 80; k++) {
+      const y = box.max.y - (k / 80) * H;
+      ray.set(new THREE.Vector3(cx, y, box.max.z + 1), new THREE.Vector3(0, 0, -1));
+      if (ray.intersectObjects(targets, false).length) { if (top === null) top = y; bottom = y; }
+    }
+    if (top !== null && top > bottom) {
+      const lv = Math.min(1, Math.max(0, (s.y - ic.top) / (ic.bottom - ic.top)));
+      cy = top - lv * (top - bottom);
+    }
+  }
+  // The icon is a 3/4 render, so the mapped point can land in a gap: spiral outwards to the nearest surface.
+  let hit = null;
+  for (let i = 0; i < 60 && !hit; i++) {
+    const rad = i === 0 ? 0 : 0.012 * W * Math.sqrt(i), ang = i * 2.4;
+    ray.set(new THREE.Vector3(cx + Math.cos(ang) * rad, cy + Math.sin(ang) * rad, box.max.z + 1), new THREE.Vector3(0, 0, -1));
+    hit = ray.intersectObjects(targets, false)[0] || null;
+  }
+  if (!hit) return;
+  await placeDecal(wrap, targets, ray, box, sd, s, hit.point.x, hit.point.y, (stickerBase(def) * (s.s || 1) * W) / Math.max(0.05, icon.x1 - icon.x0), hit);
 }
 
 async function placeDecal(wrap, targets, ray, box, sd, s, x, y, width, hit = null) {
@@ -757,7 +754,8 @@ async function placeDecal(wrap, targets, ray, box, sd, s, x, y, width, hit = nul
 // Orthographic side view of the item on its real model, framed exactly to the model's visible bounding
 // box, so normalised image coordinates equal the model-space sticker coordinates used by decals.
 export async function renderSideView(item, def, renderer, env, size = 1400) {
-  const model = await buildCS2Model(item, def, renderer, { statTrak: false });
+  // Without a charm, so the frame is the gun's alone (the one sticker decals are placed in).
+  const model = await buildCS2Model({ ...item, kc: undefined }, def, renderer, { statTrak: false });
   if (!model) return null;
   model.updateMatrixWorld(true);
   const box = new THREE.Box3();

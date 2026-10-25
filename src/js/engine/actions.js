@@ -425,11 +425,24 @@ export const ACTIONS = {
     }
     ctx.st.charmDetach--;
     ctx.dirty.add('charmDetach');
-    const charm = { ...gun.kc, uid: newUid(), t: 'charm', nw: true };
+    const { o: _o, ...kc } = gun.kc; // its place was on this gun
+    const charm = { ...kc, uid: newUid(), t: 'charm', nw: true };
     give(ctx, [charm]);
     delete gun.kc;
     touch(ctx, gun);
     return { item: gun, charm, bought, left: ctx.st.charmDetach };
+  },
+  // Moves a gun's charm: to a point on the gun (o, see items.js charmPlacement), or back to the gun's own spot (no o).
+  'charms.place'(ctx, { uid, o = null }) {
+    const gun = findOwned(ctx, String(uid));
+    if (!gun.kc) fail(`${I.itemName(gun)} has no charm`);
+    if (ctx.reserved?.has(gun.uid)) fail(`${I.itemName(gun)} is in a pending trade offer`, 'reserved');
+    const place = o == null ? null : I.charmPlacement(o);
+    if (o != null && !place) fail('That isn’t a place on the gun');
+    const { o: _o, ...kc } = gun.kc;
+    gun.kc = place ? { ...kc, o: place } : kc;
+    touch(ctx, gun);
+    return { item: gun };
   },
   'charms.buyDetach'(ctx) {
     spend(ctx, I.DETACH_PACK.price);

@@ -185,6 +185,7 @@ function registerIpc() {
   ipcMain.handle('cs2:statTrak', (_e, weapon) => cs2.statTrak(weapon));
   ipcMain.handle('cs2:charm', (_e, mdl, mat) => cs2.charm(mdl, mat));
   ipcMain.handle('cs2:charmAttach', (_e, weapon) => cs2.charmAttach(weapon));
+  ipcMain.handle('cs2:weaponMarkup', (_e, weapon) => cs2.weaponMarkup(weapon));
   ipcMain.handle('cs2:crate', (_e, id) => cs2.crate(id));
   ipcMain.handle('cs2:play', (_e, fn, arg) => playCall(fn, arg));
   ipcMain.handle('cs2:prepareAll', (_e, content) => cs2.prepareAll(content));

@@ -65,6 +65,14 @@ export const DETACH_PACK = { n: 3, price: 0.99 };
 export const canHaveCharm = (item) => item.t === 'skin' && STICKER_CATS.has(itemDef(item)?.cat);
 // The charm on a gun, as a charm item (item.kc keeps the charm item without its uid while it's attached).
 export const attachedCharm = (item) => (item.kc ? { ...item.kc, t: 'charm' } : null);
+// Where a charm hangs on its gun ({ b: bone, p: point, n: the surface's outward normal }, in the gun model's space in
+// inches, see cs2/charm.js), checked and rounded; null if it isn't one.
+export function charmPlacement(o) {
+  const vec = (v, max) => (Array.isArray(v) && v.length === 3 && v.every((x) => Number.isFinite(x) && Math.abs(x) <= max) ? v.map((x) => Math.round(x * 1000) / 1000) : null);
+  const b = typeof o?.b === 'string' && /^[\w.-]{1,48}$/.test(o.b) ? o.b : null;
+  const p = vec(o?.p, 100), n = vec(o?.n, 1.01);
+  return b && p && n && Math.hypot(...n) > 0.5 ? { b, p, n } : null;
+}
 // Low and fun patterns are collected: #1, #2-10, #11-100, #101-1000, and numbers like 77777, 12345 or 100000.
 const FUN_PATTERNS = new Set([69, 420, 777, 1337, 6969, 12345, 42069, 69420, 100000]);
 export function charmPattern(pat) {

@@ -544,6 +544,20 @@ function tierFreq(box, n) {
     && near(st.money, 100 - I.DETACH_PACK.price, 1e-9) && d.d.set.charmDetach === 2);
   run('charms.attach', { uid: 'g', charm: back.uid });
   check('a charmed gun can’t go in a trade-up', tryRun('tradeup.sign', { uids: ['g'] })?.message?.includes('charm'));
+  const spot = { b: 'weapon_offset', p: [0.93312, 0.4129, 1.6333], n: [0.118, 0.993, -0.021] };
+  run('charms.place', { uid: 'g', o: spot });
+  const placed = gun.kc.o;
+  const badSpots = [{ ...spot, p: [1, 2] }, { ...spot, n: [0, 0, 0] }, { ...spot, b: 'a b' }, { ...spot, p: [1e6, 0, 0] }];
+  check('a charm can be moved anywhere on its gun (and only to a real place)', placed?.b === 'weapon_offset' && placed.p[0] === 0.933 && gun.kc.pat === 4242
+    && badSpots.every((o) => tryRun('charms.place', { uid: 'g', o }) instanceof Error) && gun.kc.o === placed
+    && tryRun('charms.place', { uid: 'g', o: spot }, { reserved: new Set(['g']) }) instanceof Error && tryRun('charms.place', { uid: 'k', o: spot }) instanceof Error);
+  run('charms.place', { uid: 'g', o: null });
+  const reset = !gun.kc.o && gun.kc.pat === 4242;
+  run('charms.place', { uid: 'g', o: spot });
+  run('charms.detach', { uid: 'g' });
+  const off = st.inv.find((i) => i.t === 'charm' && i.pat === 4242);
+  check('moving it back to the gun’s own spot, and taking it off, forget where it hung', reset && off && !off.o && !gun.kc);
+  run('charms.attach', { uid: 'g', charm: off.uid });
 
   const stk = Object.values(D.stickers).find((s) => !s.so && s.p > 0.5);
   st.inv.push({ uid: 's1', t: 'sticker', id: stk.id, at: 0 });
