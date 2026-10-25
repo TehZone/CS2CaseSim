@@ -742,6 +742,21 @@ function fakeGame() {
   ok(renderReverb([], 48000) === null, 'reverb: the null preset is none');
   const tail = (fb) => { const r = renderReverb([{ type: 'box', min: 20, max: 100, complexity: 8, feedback: fb, cutoff: 8000, gain: 0, parallel: true }], 8000); let last = 0; r.left.forEach((v, i) => { if (Math.abs(v) > 1e-3) last = i; }); return last; };
   ok(tail(0.9) > tail(0.5) * 2 && renderReverb([{ type: 'freeverb', size: 0.6, damp: 0.1, width: 0.5, late: 0.4 }], 8000).right.some((v) => Math.abs(v) > 1e-4), 'reverb: a room rings longer the more it feeds back (and Freeverb rings)');
+  // CS2's EQ on the room: its lows and highs mostly gone, its middle kept.
+  const { ROOM_EQ } = await import('../src/js/play/reverb.js');
+  const eqd = renderReverb(ROOM_EQ, 48000).left;
+  const at_ = (f) => { let re = 0, im = 0; eqd.forEach((v, i) => { re += v * Math.cos((2 * Math.PI * f * i) / 48000); im -= v * Math.sin((2 * Math.PI * f * i) / 48000); }); return 20 * Math.log10(Math.hypot(re, im)); };
+  ok(at_(60) < -25 && Math.abs(at_(700)) < 1.5 && at_(1374) < -1 && at_(1374) > -4 && at_(14000) < -18, `reverb: CS2's EQ on the room (60 Hz ${at_(60).toFixed(1)}, 700 Hz ${at_(700).toFixed(1)}, 1.4 kHz ${at_(1374).toFixed(1)}, 14 kHz ${at_(14000).toFixed(1)} dB)`);
+  // CS2's reverb compressor: the room down while the sounds are loud, back once they stop; nothing for quiet ones.
+  let Ducker = null;
+  Object.assign(globalThis, { AudioWorkletProcessor: class {}, sampleRate: 48000, registerProcessor: (n, C) => { Ducker = C; } });
+  const { duckBy } = await import('../src/js/play/ducker.worklet.js');
+  const block = (v) => [new Float32Array(128).fill(v), new Float32Array(128).fill(v)];
+  const run = (d, key, secs) => { let out; for (let i = 0; i < (secs * 48000) / 128; i++) { out = block(0); d.process([block(1), key], [out]); } return out[0][127]; };
+  const loud = new Ducker(), quiet = new Ducker();
+  const down = run(loud, block(0.5), 1.5), back = run(loud, [], 1.5), steps = run(quiet, block(0.03), 1.5);
+  ok(near(20 * Math.log10(down), duckBy(20 * Math.log10(0.5)), 0.3) && down < 0.25 && back > 0.95 && steps > 0.99 && duckBy(-40) === 0 && near(duckBy(-23.875 + 1.5625), duckBy(-23.875 + 1.5626), 1e-3),
+    `room ducking: under a loud sound ${(20 * Math.log10(down)).toFixed(1)} dB, back after ${back.toFixed(2)}, a quiet one ${steps.toFixed(3)}`);
   // The soundscape you're in: the nearest you can hear (inside its radius, nothing in between); you keep it out of range.
   const played = [], rooms = [], faded = [];
   const bank = { info, events: files, ctx: { currentTime: 0 }, has: (e) => !!files[e]?.length, play: (e, o) => { played.push([e, o]); return Promise.resolve({ gainNode: { gain: { setTargetAtTime() {} } } }); },

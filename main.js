@@ -838,6 +838,14 @@ async function runHitchSmoke(win) {
       console.log(`SMOKE hitch the match holds ${(all / 1e6).toFixed(0)} MB it made; by own allocations:\n` + [...self].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, b]) => `  ${mb(b)} MB  ${k}`).join('\n'));
       console.log('SMOKE hitch what it holds by total (with what they call):\n' + [...total].filter(([k]) => /\.m?js:/.test(k)).sort((a, b) => b[1] - a[1]).slice(0, 50).map(([k, b]) => `  ${mb(b)} MB  ${k}`).join('\n'));
     }
+    // The room's ducking (CS2's reverb compressor, an audio worklet): the game's is running, and a loud sound turns it
+    // down as far as it should.
+    console.log('SMOKE hitch room ducking', await js(`(async () => { const c = new OfflineAudioContext(2, 48000, 48000); await c.audioWorklet.addModule('./js/play/ducker.worklet.js');
+      const d = new AudioWorkletNode(c, 'cs2-room-ducker', { numberOfInputs: 2, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit' });
+      const room = new ConstantSourceNode(c, { offset: 0.1 }), key = new ConstantSourceNode(c, { offset: 0.5 });
+      room.connect(d, 0, 0); key.connect(d, 0, 1); d.connect(c.destination); room.start(); key.start();
+      const out = (await c.startRendering()).getChannelData(0);
+      return 'in the game: ' + (window.__playGame.sounds.ducker ? 'running' : 'not running') + '; under a loud sound the room is ' + (20 * Math.log10(out[out.length - 1] / 0.1)).toFixed(1) + ' dB'; })()`));
     await js(`(() => { const g = window.__playGame, gl = g.renderer.getContext(), now = () => performance.now();
       document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
       g.console.run('sv_cheats 1');

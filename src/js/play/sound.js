@@ -8,7 +8,7 @@
 // music when the next part starts).
 import { cs2Play } from '../cs2/api.js';
 import { S } from '../state.js';
-import { renderReverb } from './reverb.js';
+import { renderReverb, ROOM_EQ } from './reverb.js';
 
 // How far the events CS2 has no distance curve for carry (game units), like CS2's sound levels: past that a sound
 // isn't played at all; it fades out towards the edge.
@@ -25,7 +25,9 @@ const RANGES = [
 const DEFAULT_RANGE = 900;
 export const soundRange = (event) => RANGES.find(([re]) => re.test(event))?.[1] ?? DEFAULT_RANGE;
 const MAX_HEAR = 8000; // nothing further away is heard (a gunshot's distant layer is, across most of a map)
-const REVERB_RETURN = 0.4; // how loud the room comes back
+// How loud the room comes back, after CS2's EQ and compressor (see roomOut). (CS2's at full; this a little under, where
+// a footstep's room is a touch quieter than it was before those, and a gunshot's a lot.)
+const REVERB_RETURN = 0.6;
 const ROOM_FADE = 1; // seconds the reverb takes to change to another room's
 
 // A curve's value at x: straight lines between its points, flat before the first and after the last.
@@ -67,6 +69,9 @@ export class SoundBank {
     this.ctx = new AudioContext();
     this.out = this.ctx.createGain();
     this.out.connect(this.ctx.destination);
+    // Every sound but the music and the radio (CS2's AllVoices): what the room is ducked under (see roomOut).
+    this.dry = this.ctx.createGain();
+    this.dry.connect(this.out);
     this.events = {}; // event -> [urls]
     this.info = {}; // event -> how CS2 plays it
     this.buffers = new Map(); // url -> Promise<AudioBuffer>
@@ -76,10 +81,28 @@ export class SoundBank {
     this.lastStart = new Map(); // event|source -> when it last started (blocks)
     // The room: every sound sends some of itself here, and the reverb of the soundscape you're in plays it back.
     this.verbIn = this.ctx.createGain();
+    this.verbOut = this.ctx.createGain(); // the room's reverb, on its way out
     this.verbs = new Map(); // preset -> AudioBuffer | null
     this.rooms = new Map(); // preset -> { name, conv, gain, wired, off } (see roomFor)
     this.room = null; // the one you're in
+    this.roomOut();
     this.setVolume();
+  }
+
+  // The room comes out through CS2's reverb compressor (ducker.worklet.js), turned down while the sounds themselves are
+  // loud, as CS2's main mix has it; straight out until it has loaded (or without one).
+  roomOut() {
+    const ctx = this.ctx;
+    this.verbOut.connect(this.out);
+    ctx.audioWorklet?.addModule(new URL('./ducker.worklet.js', import.meta.url)).then(() => {
+      if (ctx.state === 'closed') return;
+      const duck = new AudioWorkletNode(ctx, 'cs2-room-ducker', { numberOfInputs: 2, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit' });
+      this.verbOut.disconnect();
+      this.verbOut.connect(duck, 0, 0);
+      this.dry.connect(duck, 0, 1);
+      duck.connect(this.out);
+      this.ducker = duck;
+    }).catch(() => {});
   }
 
   setVolume() { this.out.gain.value = S.settings?.volume ?? 0.6; }
@@ -115,7 +138,8 @@ export class SoundBank {
   // Plays a random variation of an event, and the events it plays along with it. opts: { volume, pos (game units),
   // listener (Game: its ear and walls), rate, source (who's playing it: its own instances and blocks; by default yours
   // or the world's), startIf (checked once the sound has loaded), loop, fadeIn (seconds), occlude (false: never muffled),
-  // alone (not the events it plays along with it) }. Resolves to its source node (src.gainNode: its volume).
+  // alone (not the events it plays along with it), bypass (not one the room ducks under: music, the radio) }. Resolves to
+  // its source node (src.gainNode: its volume).
   async play(event, opts = {}) {
     const { volume: vol = 1, pos = null, listener = null, rate = 1, source = null, startIf = null, loop = false, fadeIn = 0, occlude = true } = opts;
     const info = this.info[event], urls = this.events[event];
@@ -151,7 +175,7 @@ export class SoundBank {
     this.last.set(event, i);
     const buf = await this.buffer(urls[i]);
     if (!buf || (startIf && !startIf())) return;
-    const ctx = this.ctx, t = ctx.currentTime + (info?.dl || 0);
+    const ctx = this.ctx, t = ctx.currentTime + (info?.dl || 0), dest = opts.bypass ? this.out : this.dry;
     this.lastStart.set(key, t);
     // One source plays so many of an event at once: a new one fades out the oldest.
     if (info?.n) {
@@ -179,7 +203,7 @@ export class SoundBank {
       // Up close a sound is plain stereo, further away positioned; the panner only gives the direction, distance is in
       // the volume above.
       const stereo = info?.s ? Math.max(0, Math.min(1, curveAt(info.s, d))) : 0;
-      if (stereo > 0) { const s = ctx.createGain(); s.gain.value = stereo; last.connect(s); s.connect(this.out); }
+      if (stereo > 0) { const s = ctx.createGain(); s.gain.value = stereo; last.connect(s); s.connect(dest); }
       if (stereo < 1) {
         const p = ctx.createPanner();
         p.panningModel = 'HRTF';
@@ -189,9 +213,9 @@ export class SoundBank {
         p.positionX.value = pos[0]; p.positionY.value = pos[2]; p.positionZ.value = -pos[1];
         const s = ctx.createGain();
         s.gain.value = 1 - stereo;
-        last.connect(s); s.connect(p); p.connect(this.out);
+        last.connect(s); s.connect(p); p.connect(dest);
       }
-    } else last.connect(this.out);
+    } else last.connect(dest);
     src.start(t, loop && opts.offset ? opts.offset * buf.duration : 0);
     src.gainNode = g;
     if (info?.n) {
@@ -217,7 +241,7 @@ export class SoundBank {
   async channel(name, event, opts = {}, fade = 0.5) {
     this.stop(name, fade);
     const ch = this.channels.get(name);
-    const src = await this.play(event, { ...opts, alone: true, startIf: () => this.channels.get(name) === ch && !ch.src });
+    const src = await this.play(event, { ...opts, alone: true, bypass: true, startIf: () => this.channels.get(name) === ch && !ch.src });
     if (src) { ch.src = src; src.onended = () => { if (ch.src === src) ch.src = null; }; }
     return src;
   }
@@ -267,12 +291,13 @@ export class SoundBank {
   wire(room, on) {
     if (!room.conv || room.wired === on) return;
     room.wired = on;
-    if (on) { this.verbIn.connect(room.conv); room.gain.connect(this.out); } else { try { this.verbIn.disconnect(room.conv); room.gain.disconnect(this.out); } catch {} }
+    if (on) { this.verbIn.connect(room.conv); room.gain.connect(this.verbOut); } else { try { this.verbIn.disconnect(room.conv); room.gain.disconnect(this.verbOut); } catch {} }
   }
-  // A preset's impulse response (made once).
+  // A preset's impulse response, with CS2's EQ on the room after it (made once).
   reverb(name, presets) {
     if (!this.verbs.has(name)) {
-      const r = renderReverb(presets?.[name], this.ctx.sampleRate);
+      const chain = presets?.[name];
+      const r = renderReverb(chain?.length ? [...chain, ...ROOM_EQ] : null, this.ctx.sampleRate);
       let buf = null;
       if (r) { buf = this.ctx.createBuffer(2, r.left.length, this.ctx.sampleRate); buf.copyToChannel(r.left, 0); buf.copyToChannel(r.right, 1); }
       this.verbs.set(name, buf);

@@ -8,6 +8,15 @@
 const db = (x) => Math.pow(10, (x || 0) / 20);
 const MAX_SECONDS = 4;
 
+// What CS2's main mix (sounds/graphs/__main__.vmix, audio.EQ81) does to the room on its way out, whichever preset it
+// is: its lows (30 dB off under 225 Hz) and highs (21 dB off over 5.8 kHz) taken out, and a little at 1.4 kHz. Goes
+// after a preset's own processors (see SoundBank.reverb).
+export const ROOM_EQ = [
+  { type: 'filter', kind: 'low_shelf', cutoff: 224.55, q: 1.034, gain: -30, poles: 2 },
+  { type: 'filter', kind: 'peaking', cutoff: 1374.38, q: 1.6665, gain: -2.83, poles: 2 },
+  { type: 'filter', kind: 'high_shelf', cutoff: 5832.68, q: 1, gain: -21.35, poles: 2 },
+];
+
 // How long a preset rings for (until it's 60 dB down), roughly.
 export function reverbLength(chain) {
   let t = 0.05;

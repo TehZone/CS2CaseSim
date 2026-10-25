@@ -143,7 +143,9 @@ What's in a match:
   shots' tails). The round's music and the radio play one at a time.
 - The map's soundscapes (CS2's env_soundscape: Dust II has a hundred) set the reverb where you are, one of CS2's own
   reverb presets (its delays, diffusors and rooms rendered as an impulse response): Dust II's tunnels ring, its long A
-  echoes off the walls, B site is open. They also play the map's ambience: the wind, a distant city where it is in the
+  echoes off the walls, B site is open. The room comes out as CS2's main mix has it: its lows and highs taken out, and
+  turned down while the sounds themselves are loud (CS2's reverb compressor: a spray's echo stays under the spray, a
+  footstep's doesn't). They also play the map's ambience: the wind, a distant city where it is in the
   world, sand blowing over a car or rocks falling somewhere near you now and then.
 - CS:GO's competitive ranks, one for all maps: Silver I to The Global Elite, with CS2's own emblems; Wingman has its own
   rank with its own emblems. Matchmade matches move a hidden rating (more for a bigger win, and depending on the other
