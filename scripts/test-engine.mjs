@@ -438,7 +438,11 @@ function tierFreq(box, n) {
   const r = DB.floatRanks(copies);
   check('float ranks: the three lowest and highest floats of an item', r.get('b').low === 1 && r.get('e').low === 2 && r.get('a').low === 3
     && r.get('f').high === 1 && r.get('c').high === 2 && r.get('g').high === 3 && !r.has('d') && r.get('b').of === 7);
-  check('float ranks: StatTrak and Souvenir copies are ranked apart, vanillas not at all', r.get('st').low === 1 && r.get('st').high === 1 && r.get('st').of === 1 && r.get('sv').low === 1 && !r.has('v'));
+  check('float ranks: StatTrak and Souvenir copies are ranked apart (a lone copy not at all), vanillas not at all', !r.has('st') && !r.has('sv') && !r.has('v'));
+  const r2 = DB.floatRanks([...copies, mk('st2', 0.3, { stt: true })]);
+  check('float ranks: two StatTrak copies rank against each other only', r2.get('st2').low === 1 && r2.get('st').low === 2 && r2.get('st').high === 1 && r2.get('st').of === 2 && r2.get('b').of === 7);
+  const inv = DB.inventoryRanks([...copies.map((c) => c.item), { uid: 'o1', t: 'skin', id: 'other', fl: 0.5 }, { uid: 'o2', t: 'skin', id: 'other', fl: 0.4 }]);
+  check('float ranks: a whole inventory, each skin among its own copies', inv.get('b').low === 1 && inv.get('o2').low === 1 && inv.get('o1').high === 1 && inv.get('o1').of === 2);
   const tie = DB.floatRanks([mk('x', 0.1, { at: 5 }), mk('y', 0.1, { at: 2 })]);
   check('float ranks: an equal float ranks by who had it first', tie.get('y').low === 1 && tie.get('x').low === 2);
   const n = DB.countCopies([...copies.map((c) => c.item), { t: 'sticker', id: 'k' }, { t: 'chicken', id: 'h' }]);

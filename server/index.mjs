@@ -229,6 +229,26 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
         WHERE it->'stk' @> $1::jsonb LIMIT 5000`, [JSON.stringify([{ id }])])).rows;
       return { r: { copies: rows.map(row), applied: applied.map(row) } };
     }
+    if (m === 'db.ranks') {
+      // Every copy of the skins you own, ranked by float in its category (lowest and highest, as floatRanks does it):
+      // { uid: { low?, high?, of, cat } } for your copies in a top three.
+      await dbFresh();
+      const { rows } = await db.query(`WITH c AS (
+          SELECT u.id AS owner, it->>'uid' AS uid, it->>'id' AS sid, (it->>'fl')::float8 AS fl, COALESCE((it->>'at')::float8, 0) AS at,
+            CASE WHEN it->>'sv' = 'true' THEN 'sv' WHEN it->>'stt' = 'true' THEN 'st' ELSE 'n' END AS cat
+          FROM users u, jsonb_array_elements(COALESCE(u.state->'inv', '[]'::jsonb)) AS it
+          WHERE it->>'t' = 'skin' AND it->>'fl' IS NOT NULL AND it->>'id' IN (
+            SELECT mine->>'id' FROM users me, jsonb_array_elements(COALESCE(me.state->'inv', '[]'::jsonb)) AS mine WHERE me.id = $1 AND mine->>'t' = 'skin')
+        ), r AS (
+          SELECT owner, uid, cat, COUNT(*) OVER w AS n,
+            ROW_NUMBER() OVER (PARTITION BY sid, cat ORDER BY fl ASC, at ASC, uid ASC) AS low,
+            ROW_NUMBER() OVER (PARTITION BY sid, cat ORDER BY fl DESC, at DESC, uid DESC) AS high
+          FROM c WINDOW w AS (PARTITION BY sid, cat))
+        SELECT uid, cat, n::int AS n, low::int AS low, high::int AS high FROM r WHERE owner = $1 AND n >= 2 AND (low <= 3 OR high <= 3)`, [user.id]);
+      const out = {};
+      for (const x of rows) out[x.uid] = { ...(x.low <= 3 ? { low: x.low } : {}), ...(x.high <= 3 ? { high: x.high } : {}), of: x.n, cat: x.cat };
+      return { r: out };
+    }
     if (m === 'ladder') {
       await store.flush().catch(() => {});
       const { rows } = await db.query(`SELECT name, state->'team'->>'name' AS team, (state->'team'->>'elo')::int AS elo,

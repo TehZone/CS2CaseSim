@@ -8,6 +8,7 @@ import { SELL_RANKS } from '../autosell.js';
 import { MAIN_SLOTS, GUN_GROUPS, ZEUS_SLOT, equipped, equippedUids, slotName } from '../loadout.js';
 import { cs2Play } from '../cs2/api.js';
 import { iconFor } from '../play/icons.js';
+import { refreshRanks } from '../floatranks.js';
 
 const view = { type: 'all', sort: 'new', q: '', select: false, selected: new Set(), limit: 150 };
 const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['pro', 'Players'], ['chicken', 'Chickens']];
@@ -63,6 +64,7 @@ function draw() {
   const selItems = S.inv.filter((i) => view.selected.has(i.uid));
   const selValue = selItems.reduce((s, i) => s + I.itemValue(i), 0);
   const scroll = root.scrollTop;
+  refreshRanks().then((changed) => { if (changed && root) draw(); }); // (the float rank badges)
 
   root.innerHTML = `<div class="page">
     <div class="page-head"><h1>Inventory</h1></div>

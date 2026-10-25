@@ -185,6 +185,12 @@ input[type=range] { accent-color: #d8dde2; }
 .tag.pat.t0, .tag.pat.t1 { color: #1a1306; background: linear-gradient(90deg, var(--gold2), var(--gold)); border-color: var(--gold2); }
 .tag.new { background: #fff; color: #111; border-color: #fff; }
 .tag.lock { background: rgba(8, 10, 13, .72); }
+/* a float rank (#1-#3 lowest or highest of its item's copies): gold, silver, bronze */
+.tag.frk.low::before { content: "▼ "; font-size: 8px; }
+.tag.frk.high::before { content: "▲ "; font-size: 8px; }
+.tag.frk.r1 { color: #1c1404; background: linear-gradient(90deg, #f7d774, #e4ae39); border-color: #f7d774; }
+.tag.frk.r2 { color: #111; background: linear-gradient(90deg, #e9edf1, #b9c2cc); border-color: #e9edf1; }
+.tag.frk.r3 { color: #1b0f05; background: linear-gradient(90deg, #e3a473, #b8703c); border-color: #e3a473; }
 .card .stickers { position: absolute; bottom: 3px; left: 5px; display: flex; gap: 1px; z-index: 2; }
 .card .stickers img { width: 26px; height: 20px; object-fit: contain; filter: drop-shadow(0 1px 2px #000); }
 .card.selected { border-color: #fff; box-shadow: 0 0 0 1px #fff inset, 0 0 18px rgba(255, 255, 255, .15); }

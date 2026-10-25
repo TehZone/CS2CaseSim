@@ -12,6 +12,8 @@ import { chickenIncome, featherMult, HAT, BREED } from './chickens.js';
 import { openStickerEditor } from './stickerEditor.js';
 import { TIER_LABEL } from './patterns.js';
 import { isEquipped, slotName } from './loadout.js';
+import { floatRankOf } from './floatranks.js';
+import { CATEGORY_NAME } from './engine/database.js';
 
 // ---- toasts --------------------------------------------------------------------------------
 export function toast(msg, type = '') {
@@ -85,6 +87,18 @@ export function floatBar(item) {
     <div class="floatlabels">${WEARS.map((w) => `<span style="left:${((w.min + w.max) / 2) * 100}%" title="${w.n}">${w.k}</span>`).join('')}</div></div>`;
 }
 
+// A skin's float rank (see floatranks.js): #1-#3 lowest float (or highest) of its item's copies, gold, silver, bronze.
+function floatRankText(r) {
+  const of = `of ${r.of.toLocaleString()} ${CATEGORY_NAME[r.cat] || ''} copies`.replace('  ', ' ');
+  return [r.low && `#${r.low} lowest float ${of}`, r.high && `#${r.high} highest float ${of}`].filter(Boolean).join(', ');
+}
+function floatRankTag(item) {
+  const r = item.t === 'skin' && floatRankOf(item.uid);
+  if (!r) return '';
+  const [side, n] = r.low ? ['low', r.low] : ['high', r.high];
+  return `<span class="tag frk ${side} r${n}" title="${esc(floatRankText(r))}">#${n} ${side === 'low' ? 'Low' : 'High'}</span>`;
+}
+
 export function itemCard(item, { selectable = false, selected = false, extra = '' } = {}) {
   const r = I.rarityInfo(item);
   const np = I.nameParts(item);
@@ -96,7 +110,7 @@ export function itemCard(item, { selectable = false, selected = false, extra = '
   const stk = item.stk?.length ? `<div class="stickers">${item.stk.map((s) => `<img src="${imgUrl(D.stickers[s.id]?.img, 's')}">`).join('')}</div>` : '';
   return `<div class="card ${selected ? 'selected' : ''} ${extra}" data-uid="${item.uid}" style="--rc:${r.c}">
     ${selectable ? '<div class="sel"></div>' : ''}
-    <div class="tags">${item.nw ? '<span class="tag new">New</span>' : ''}${item.stt ? '<span class="tag st">ST™</span>' : ''}${item.sv ? '<span class="tag sv">Souvenir</span>' : ''}${patternTag(pat)}${item.lk ? '<span class="tag lock">🔒</span>' : ''}${isEquipped(item) ? '<span class="tag eq">Equipped</span>' : ''}${item.sn ? `<span class="tag sn ${item.sn <= 100 || I.isSpecialSerial(item.sn) ? 'low' : ''}" title="Serial number: unboxed #${item.sn}">#${item.sn}</span>` : ''}</div>
+    <div class="tags">${item.nw ? '<span class="tag new">New</span>' : ''}${item.stt ? '<span class="tag st">ST™</span>' : ''}${item.sv ? '<span class="tag sv">Souvenir</span>' : ''}${patternTag(pat)}${item.lk ? '<span class="tag lock">🔒</span>' : ''}${isEquipped(item) ? '<span class="tag eq">Equipped</span>' : ''}${floatRankTag(item)}${item.sn ? `<span class="tag sn ${item.sn <= 100 || I.isSpecialSerial(item.sn) ? 'low' : ''}" title="Serial number: unboxed #${item.sn}">#${item.sn}</span>` : ''}</div>
     <div class="img"><img loading="lazy" src="${I.itemImage(item, 'm')}" alt="">${stk}</div>
     <div class="rbar"></div>
     ${item.t === 'skin' && item.fl != null ? `<div class="floatline"><i style="left:${item.fl * 100}%"></i></div>` : ''}
@@ -137,6 +151,8 @@ function detailBody(item) {
       kv.push(['Exterior', WEAR_BY_KEY[wearOf(item.fl)].n]);
       kv.push(['Float', `<span class="money">${I.floatString(item.fl)}</span>`]);
       kv.push(['Pattern template', item.sd]);
+      const fr = floatRankOf(item.uid);
+      if (fr) kv.push(['Float rank', `<span class="tag frk ${fr.low ? 'low' : 'high'} r${fr.low || fr.high}">#${fr.low || fr.high} ${fr.low ? 'Low' : 'High'}</span> ${esc(floatRankText(fr))}`]);
     }
     if (d.ph) kv.push(['Phase', d.ph]);
     kv.push(['Finish style', d.st || '—']);

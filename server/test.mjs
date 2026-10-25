@@ -112,6 +112,13 @@ try {
     check('item database lists each copy with its owner and float', copies.length === mine && copies.every((c) => c.owner === 'alice' && !c.me && c.item.fl === A.st.inv.find((x) => x.uid === c.item.uid)?.fl));
     let e = null; try { await B.rpc('social', 'db.item', { t: 'chicken', id: 'x' }); } catch (x) { e = x; }
     check('item database refuses unknown kinds', /Unknown item/.test(e?.message || ''));
+    // Float ranks for your own items, among everyone's copies: as the database page works them out.
+    const DB = await import('../src/js/engine/database.js');
+    const mineRanks = await A.rpc('social', 'db.ranks', {});
+    const all = DB.inventoryRanks(A.st.inv.concat((await serverState(B.user.id)).inv));
+    const expect = Object.fromEntries(A.st.inv.filter((i) => all.has(i.uid)).map((i) => [i.uid, all.get(i.uid)]));
+    check('item database: your float ranks among every copy on the server', JSON.stringify(Object.keys(mineRanks).sort()) === JSON.stringify(Object.keys(expect).sort())
+      && Object.entries(expect).every(([uid, r]) => mineRanks[uid].low === r.low && mineRanks[uid].high === r.high && mineRanks[uid].of === r.of), `${Object.keys(mineRanks).length} ranked`);
     const stk = await B.rpc('social', 'db.item', { t: 'sticker', id: Object.keys(D.stickers)[0] });
     check('item database: a sticker, held and applied to guns', Array.isArray(stk.copies) && Array.isArray(stk.applied));
   }

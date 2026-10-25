@@ -10,9 +10,10 @@ export const copyCategory = (item) => (item.sv ? 'sv' : item.stt ? 'st' : 'n');
 export const CATEGORY_NAME = { n: 'Normal', st: 'StatTrak™', sv: 'Souvenir' };
 
 // The three lowest and three highest floats among the copies of one item, in each category. copies: [{ item }] (items
-// with fl). Returns Map uid -> { low?: 1..3, high?: 1..3, of: copies in its category } (a copy can be both when there
-// are few). Equal floats rank by who had it first (at), then uid, so a rank doesn't flip back and forth.
-export function floatRanks(copies, top = 3) {
+// with fl). Returns Map uid -> { low?: 1..3, high?: 1..3, of: copies in its category, cat } (a copy can be both when
+// there are few; the only copy in its category has none). Equal floats rank by who had it first (at), then uid, so a
+// rank doesn't flip back and forth.
+export function floatRanks(copies, top = 3, min = 2) {
   const out = new Map(), groups = new Map();
   for (const c of copies) {
     const it = c.item || c;
@@ -21,12 +22,21 @@ export function floatRanks(copies, top = 3) {
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(it);
   }
-  for (const list of groups.values()) {
+  for (const [cat, list] of groups) {
+    if (list.length < min) continue;
     list.sort((a, b) => a.fl - b.fl || (a.at || 0) - (b.at || 0) || String(a.uid).localeCompare(String(b.uid)));
-    const of = list.length, rank = (it) => out.get(it.uid) || out.set(it.uid, { of }).get(it.uid);
+    const of = list.length, rank = (it) => out.get(it.uid) || out.set(it.uid, { of, cat }).get(it.uid);
     for (let i = 0; i < Math.min(top, of); i++) rank(list[i]).low = i + 1;
     for (let i = 0; i < Math.min(top, of); i++) rank(list[of - 1 - i]).high = i + 1;
   }
+  return out;
+}
+
+// The float ranks of every skin in an inventory (each among its own item's copies): Map uid -> rank (see floatRanks).
+export function inventoryRanks(items) {
+  const byItem = new Map(), out = new Map();
+  for (const it of items) if (it.t === 'skin' && it.fl != null) { const k = itemKey(it); if (!byItem.has(k)) byItem.set(k, []); byItem.get(k).push(it); }
+  for (const list of byItem.values()) for (const [uid, r] of floatRanks(list)) out.set(uid, r);
   return out;
 }
 
