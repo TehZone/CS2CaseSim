@@ -3,6 +3,7 @@
 //   node scripts/test-play.mjs
 import { CollisionWorld, FLAG_PLAYER, FLAG_BULLET, FLAG_GRENADE } from '../src/js/play/collision.js';
 import { PlayerMovement, MOVE } from '../src/js/play/movement.js';
+import { Game } from '../src/js/play/game.js';
 import { Match, Combatant, SHORT_RULES } from '../src/js/play/match.js';
 import { SmokeField } from '../src/js/play/smoke.js';
 import { Deathmatch, ARMS_RACE } from '../src/js/play/modes.js';
@@ -97,6 +98,31 @@ const tryLedge = (crouch) => {
 ok(tryLedge(false).origin[2] < 1, 'a plain jump does not reach the 60-unit ledge');
 const cj = tryLedge(true);
 ok(near(cj.origin[2], 60, 0.5), 'a crouch-jump reaches the 60-unit ledge: ' + cj.origin[2].toFixed(1));
+{
+  const q = run(new PlayerMovement(W, [0, 1600, 0]), 1, { jump: true, jumpPress: true });
+  let top = 0;
+  for (let i = 0; i < 64; i++) { run(q, 1, { jump: true, duck: true }); top = Math.max(top, q.origin[2]); }
+  ok(near(top, 66, 0.6), "a crouch-jump lifts the feet 66 (CS2's), short of a standing player's 72: " + top.toFixed(1));
+}
+// Other players are solid, and walking into one isn't a ladder: on a map with ladders (found by their surface), a trace
+// for ladders went by the players too, and you climbed a bot you walked into.
+{
+  const LW = world([[[-2000, -2000, -64], [2000, 2000, 0]]]);
+  LW.ladders = new Set([1]); // a map with ladders (none here)
+  const me = { alive: true }, bot = { alive: true }, b = { pos: [0, 0, 0], ducked: false };
+  const g = { collision: LW, combatants: [me, bot], me, botOf: () => b, traceBodies: Game.prototype.traceBodies };
+  const walkInto = (cmd = () => ({})) => {
+    g.player = new PlayerMovement(Game.prototype.bodyWorld.call(g, () => me), [-100, 0, 0]);
+    let stood = 0; // the highest it stood
+    for (let i = 0; i < 64 * 3; i++) { run(g.player, 1, { forward: 1, ...cmd(i, g.player) }); if (g.player.onGround) stood = Math.max(stood, g.player.origin[2]); }
+    return stood;
+  };
+  ok(walkInto() < 1 && near(g.player.origin[0], -32, 0.1) && !g.player.onLadder, 'walking into a player stops at them, without climbing them: ' + g.player.origin.map((v) => v.toFixed(1)));
+  const cjump = (i, p) => ({ jump: true, jumpPress: p.onGround, duck: !p.onGround });
+  ok(walkInto(cjump) < 1, "crouch-jumping at a standing player doesn't get onto their head");
+  b.ducked = true;
+  ok(near(walkInto(cjump), 54, 0.1), "a crouching one's it does");
+}
 // crouch speed
 p = new PlayerMovement(W, [0, 900, 0]);
 run(p, 128, { forward: 1, yaw: 0, duck: true });
@@ -665,6 +691,66 @@ function fakeGame() {
   const list = Array.from({ length: 30 }, (_, i) => ({ id: 'p' + i, name: 'P' + i }));
   const picked = pickIdentities(list, 9);
   ok(picked.length === 9 && new Set(picked.map((x) => x.id)).size === 9 && pickIdentities(list.slice(0, 4), 9).length === 4, "identity: a match's bots are different players");
+}
+
+// ---- sounds as CS2 plays them: each event's own settings, the soundscapes, and their reverb ---------------------------
+{
+  const { curveAt, distanceGain } = await import('../src/js/play/sound.js');
+  const { renderReverb } = await import('../src/js/play/reverb.js');
+  const { Soundscapes } = await import('../src/js/play/soundscape.js');
+  const play = (await import('node:module')).createRequire(import.meta.url)('../cs2/play.cjs');
+  const c = [[25, 0.8], [30, 1], [176, 1], [440, 0.735], [1288, 0.331], [2500, 0.015]];
+  ok(curveAt(c, 0) === 0.8 && curveAt(c, 100) === 1 && near(curveAt(c, 864), 0.533, 0.001) && curveAt(c, 9000) === 0.015, 'sound: a distance curve between its points, flat past its ends');
+  ok(distanceGain('Weapon_AK47.Single', { d: c }, 1288) === 0.331 && distanceGain('Weapon_AK47.Single', { d: c }, 9000) === 0 && distanceGain('X.Step', null, 5000) === 0
+    && distanceGain('CT_Concrete.StepLeft', null, 100) === 1, "sound: an event's volume by distance (its curve, else how far its kind carries)");
+  // The install's sound events -> how each plays.
+  const ev = {
+    'Base.Step': { volume: 0.9, volume_random_min: -0.1, volume_random_max: 0, occlusion_intensity: 0.375, use_distance_volume_mapping_curve: true, distance_volume_mapping_curve: [[50, 0.45, 0, 0, 1, 1], [1100, 0, 0, 0, 1, 1]] },
+    'CT_Wood.StepLeft': { base: 'Base.Step', vsnd_files_track_01: ['a.vsnd', 'b.vsnd'], volume: 0.8 },
+    'Weapon_T.Single': { vsnd_files_track_01: ['t.vsnd'], soundevent_01: ['Weapon_T.SingleDistant', 'Nope'], instance_limit: 1, reverb_wet: 1, enable_child_events: true, pitch_random_min: 0.02, pitch_random_max: -0.02,
+      use_distance_unfiltered_stereo_mapping_curve: true, distance_unfiltered_stereo_mapping_curve: [[35, 1, 0, 0, 0, 0], [300, 0, 0, 0, 0, 0]], fadetime_volume_mapping_curve: [[0, 1, 0, 0, 0, 0], [0.1, 0, 0, 0, 0, 0]] },
+    'Weapon_T.SingleDistant': { vsnd_files_track_01: ['td.vsnd'], volume: 0.5, occlusion_intensity: 0 },
+    'Weapon_T.Alias': { soundevent_01: 'Weapon_T.SingleDistant' },
+    'UI.Thing': { vsnd_files_track_01: ['u.vsnd'], reverb_wet: 1, mixgroup: 'UI' },
+    'map.Street': { dsp_preset: 'reverb_21_outsideStreet', soundevent_01: ['map.wind', 'map.car'], use_time_volume_mapping_curve: true, time_volume_mapping_curve: [[0, 0, 0, 0, 2, 2], [0.36, 1, 0, 0, 2, 3]] },
+    'map.wind': { vsnd_files_track_01: ['w.vsnd'], volume: 0.15 },
+    'map.car': { vsnd_files_track_01: ['c.vsnd'], enable_retrigger: true, retrigger_interval_min: 13, retrigger_interval_max: 35, use_world_position: true, position: [10, 20, 30] },
+  };
+  const files = play.soundEventFiles(ev), info = play.soundEventInfo(ev, files);
+  ok(info['CT_Wood.StepLeft'].v === 0.8 && info['CT_Wood.StepLeft'].o === 0.375 && JSON.stringify(info['CT_Wood.StepLeft'].vr) === '[-0.1,0]' && info['CT_Wood.StepLeft'].d.length === 2, "sound info: an event gets its base's settings, then its own");
+  const t = info['Weapon_T.Single'];
+  ok(JSON.stringify(t.c) === '["Weapon_T.SingleDistant"]' && t.n === 1 && t.fo === 0.1 && t.s[0][1] === 1 && JSON.stringify(t.pr) === '[-0.02,0.02]', 'sound info: a gunshot plays its distant layer, one at a time, plain stereo up close');
+  ok(info['Weapon_T.Alias'].v === 0.5 && JSON.stringify(files['Weapon_T.Alias']) === '["td.vsnd"]' && info['UI.Thing'].r === 0, "sound info: an alias plays as what it stands for; UI sounds aren't in the room");
+  ok(JSON.stringify(files['map.Street']) === '[]' && info['map.Street'].dsp === 'reverb_21_outsidestreet' && info['map.Street'].c.length === 2 && info['map.Street'].fi === 0.36
+    && JSON.stringify(info['map.car'].rt) === '[13,35]' && JSON.stringify(info['map.car'].wp) === '[10,20,30]', "sound info: a soundscape: its reverb, and its children (a car's sand now and then, where it is)");
+  ok(JSON.stringify(play.mapSoundscapes([{ classname: 'env_soundscape', origin: '1 2 3', radius: '300', soundevent: 'map.Street', enablesoundevent: 'true' },
+    { classname: 'env_soundscape', origin: '0 0 0', soundevent: 'x', enablesoundevent: 'false' }, { classname: 'info_target', origin: '0 0 0' }])) === '[{"o":[1,2,3],"r":300,"e":"map.Street"}]', "map: its soundscapes (env_soundscape's that play a soundscape event)");
+  // Reverb presets: an echo comes back when it says, as loud as it says; nothing for the null preset.
+  const echo = renderReverb([{ type: 'delay', ms: 250, direct: -60, gain: -2.21, feedback: -20, cutoff: 5254, width: 0 }], 48000);
+  let at = 0;
+  for (let i = 1; i < echo.left.length; i++) if (Math.abs(echo.left[i]) > Math.abs(echo.left[at])) at = i;
+  ok(at === 12000 && near(echo.left[at], 0.775, 0.002) && Math.abs(echo.left[0]) < 1e-6, 'reverb: an echo 250 ms later, 2.2 dB down: ' + at + ' ' + echo.left[at].toFixed(3));
+  ok(renderReverb([], 48000) === null, 'reverb: the null preset is none');
+  const tail = (fb) => { const r = renderReverb([{ type: 'box', min: 20, max: 100, complexity: 8, feedback: fb, cutoff: 8000, gain: 0, parallel: true }], 8000); let last = 0; r.left.forEach((v, i) => { if (Math.abs(v) > 1e-3) last = i; }); return last; };
+  ok(tail(0.9) > tail(0.5) * 2 && renderReverb([{ type: 'freeverb', size: 0.6, damp: 0.1, width: 0.5, late: 0.4 }], 8000).right.some((v) => Math.abs(v) > 1e-4), 'reverb: a room rings longer the more it feeds back (and Freeverb rings)');
+  // The soundscape you're in: the nearest you can hear (inside its radius, nothing in between); you keep it out of range.
+  const played = [], rooms = [], faded = [];
+  const bank = { info, events: files, ctx: { currentTime: 0 }, has: (e) => !!files[e]?.length, play: (e, o) => { played.push([e, o]); return Promise.resolve({ gainNode: { gain: { setTargetAtTime() {} } } }); },
+    setRoom: (r) => rooms.push(r), fadeOut: (v) => faded.push(v), reverb() {}, load: async () => {} };
+  let ear = [0, 0, 0];
+  const wall = (p) => p[0] > 900; // something between you and anything over there
+  const ss = new Soundscapes({ sounds: bank, earPos: () => ear, soundBlocked: (e, p) => wall(p) }, [
+    { o: [100, 0, 0], r: 500, e: 'map.Street' }, { o: [1000, 0, 0], r: 5000, e: 'Other' }, { o: [0, 600, 0], r: 300, e: 'Far' }, { o: [0, 0, 0], r: 0, e: 'Off', off: true },
+  ]);
+  ss.update(0.6);
+  ok(ss.active?.e === 'map.Street' && rooms[0] === 'reverb_21_outsidestreet' && played.length === 1 && played[0][0] === 'map.wind' && played[0][1].loop && played[0][1].volume === 0.15,
+    'soundscape: the one you are in sets the reverb and starts its loops (the wind)');
+  ear = [3000, 3000, 0];
+  ss.update(0.6);
+  ok(ss.active?.e === 'map.Street', 'soundscape: out of every one, you keep the last');
+  bank.ctx.currentTime = 40;
+  ss.update(0.1);
+  ok(played.some(([e, o]) => e === 'map.car' && JSON.stringify(o.pos) === '[10,20,30]'), 'soundscape: its one-shots play now and then, where they are');
 }
 
 // ---- the lineups (src/data/lineups.json) still land on today's maps (those exported in the cache) ---------------------

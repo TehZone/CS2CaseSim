@@ -12,6 +12,7 @@ import { PlayerMovement, HULL_STAND as BOT_HULL } from './movement.js';
 import { loadWorld, toGl, fromGl } from './world.js';
 import { Input, bindTable } from './input.js';
 import { SoundBank } from './sound.js';
+import { Soundscapes } from './soundscape.js';
 import { buildViewmodel } from './viewmodel.js';
 import { Arsenal, Gun, basis, refillAmmo } from './weapons.js';
 import { BotAssets, Bot, BOT_NAMES, rayCapsule, bindBounds } from './bots.js';
@@ -219,7 +220,8 @@ export class Game {
     this.post.setGrading({ tone: map.info.lighting?.tonemap, exposure: map.info.exposure, lut: lut && { data: new Uint8Array(lut), size: map.info.lighting.lut.size } });
     this.resize();
     this.sounds = new SoundBank();
-    if (this.quiet) this.sounds.ctx.suspend().catch(() => {});
+    if (this.quiet) this.setQuiet(true);
+    this.soundscapes = new Soundscapes(this, map.info.soundscapes);
     this.stats = await cs2Play('stats');
     this.impacts = await cs2Play('impacts').catch(() => ({}));
     await loadRankArt();
@@ -274,7 +276,7 @@ export class Game {
     this.player = new PlayerMovement(this.bodyWorld(() => this.me), this.map.info.spawns[this.team][0].origin);
     this.prevEye = this.player.eye();
     await Promise.all([
-      this.sounds.load(this.commonSounds()),
+      this.sounds.load(this.commonSounds()), this.soundscapes.load(),
       this.vmData(this.knifeId(this.team)), this.vmData(DEFAULT_PISTOL.CT), this.vmData(DEFAULT_PISTOL.T), this.vmData('weapon_c4'),
     ]);
     if (this.disposed) return;
@@ -1206,6 +1208,7 @@ export class Game {
   // No sound (a match loading behind the menu, or one you've left), or sound again.
   setQuiet(q) {
     this.quiet = !!q;
+    if (this.sounds) this.sounds.hold = this.quiet; // (a sound played meanwhile doesn't wake it)
     if (q) this.sounds?.ctx.suspend().catch(() => {}); else this.sounds?.ctx.resume().catch(() => {});
   }
   // Your settings changed in the menu (see play-settings.js matchSettings): used at once.
@@ -1339,6 +1342,7 @@ export class Game {
     this.sunVis += ((this.sunTarget ?? 1) - this.sunVis) * 0.2;
     const ear = basis(inp.pitch, inp.yaw);
     this.sounds.setListener(this.camEye || this.player.eye(), ear.fwd);
+    this.soundscapes.update(TICK);
   }
 
   // Walking over a gun picks it up when its slot is free (you and bots).
@@ -1473,9 +1477,10 @@ export class Game {
   // Bots are solid: you can't walk through them.
   // Players block each other like CS2's, without pushing: a movement trace (FLAG_PLAYER) also stops at the other living
   // players' hulls (sliding along them, standing on a head), but not at one it already overlaps (it can walk out of it).
-  traceBodies(start, end, mins, maxs, flags, self, extra) {
-    const tr = this.collision.traceBox(start, end, mins, maxs, flags, extra);
-    if (!(flags & FLAG_PLAYER) || !this.combatants || (self === this.me && this.noclip)) return tr;
+  // A trace for some surfaces only (only: ladders) never stops at a player: walking into one isn't a ladder to climb.
+  traceBodies(start, end, mins, maxs, flags, self, only) {
+    const tr = this.collision.traceBox(start, end, mins, maxs, flags, only);
+    if (!(flags & FLAG_PLAYER) || only || !this.combatants || (self === this.me && this.noclip)) return tr;
     const d = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
     let best = tr.normal ? tr.fraction : 1, axis = -1, sign = 0;
     for (const c of this.combatants) {
@@ -1504,7 +1509,7 @@ export class Game {
   bodyWorld(who) {
     const w = Object.create(this.collision);
     w.of = this.collision;
-    w.traceBox = (s, e, mins, maxs, flags, extra) => this.traceBodies(s, e, mins, maxs, flags, who(), extra);
+    w.traceBox = (s, e, mins, maxs, flags, only) => this.traceBodies(s, e, mins, maxs, flags, who(), only);
     return w;
   }
 
@@ -1648,7 +1653,7 @@ export class Game {
   noise(pos, loud, source) {
     for (const b of this.bots) if (b.c.alive && (!source || this.hostile(b.c, source))) b.brain.hear(pos, loud, this.now);
   }
-  botSound(b, event, volume = 1) { this.sounds.play(event, { pos: b.eye(), listener: this, volume }); }
+  botSound(b, event, volume = 1) { this.sounds.play(event, { pos: b.eye(), listener: this, volume, source: b }); }
   // Where you hear from (your eye, or the camera while dead), and whether a wall is between you and a sound.
   earPos() { return this.camEye || this.player.eye(); }
   soundBlocked(ear, pos) {
@@ -1686,7 +1691,7 @@ export class Game {
     gun.recoilIndex++;
     if (st.unzoomsAfterShot) gun.zoom = 0; // (the AWP and the Scout: scoped again for the next shot)
     const ev = gun.silenced ? (gun.id === 'weapon_usp_silencer' ? 'Weapon_USP.SilencedShot' : 'Weapon_M4A1.Silenced') : st.shootSound;
-    this.sounds.play(ev, { pos: eye, listener: this, volume: 1 });
+    this.sounds.play(ev, { pos: eye, listener: this, volume: 1, source: b });
     this.specAnim(b, 'shoot');
     this.effects.worldFlash(b.muzzle());
     this.noise(eye, gun.silenced ? 900 : 2600, b.c);

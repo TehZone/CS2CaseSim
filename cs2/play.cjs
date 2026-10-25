@@ -9,12 +9,13 @@ const { readEXR } = require('./exr.cjs');
 const { decodePNG, encodePNG } = require('./png.cjs');
 
 const IN = 0.0254; // the exporter writes game inches as metres
-const PLAY_VERSION = 10; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading;
+const PLAY_VERSION = 11; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading;
 // 4: entities that start switched off left out, trigger_hurt volumes; 5: csgo_environment(_blend)'s other layers and height maps;
 // 6: doors and breakable glass; 7: the 3D skybox; 8: no texture over 1024 after it; 9: breakable props too; 10: props named
-// breakable (Mirage's vent covers) and what's left of a breakable once broken (Mirage's shutter frame))
+// breakable (Mirage's vent covers) and what's left of a breakable once broken (Mirage's shutter frame); 11: soundscapes)
 const PROBE_MAX = 8; // probe irradiance is stored as 8-bit sRGB of value / PROBE_MAX
-const DATA_VERSION = 6; // weapon stats + sound events (6: maps' ambience sounds, every surface's bullet impact sound)
+const DATA_VERSION = 7; // weapon stats + sound events (6: maps' ambience sounds, every surface's bullet impact sound; 7: how CS2
+// plays each event, and its reverb presets)
 // Collision flags per triangle: what it stops.
 const F_PLAYER = 1, F_BULLET = 2, F_GRENADE = 4;
 // The irradiance lightmap is stored as 8-bit sRGB of value / IRR_MAX.
@@ -474,7 +475,7 @@ function weaponStats(text) {
 
 // Sound event files (*.vsndevts) -> { "Weapon_AK47.Single": ["sounds/weapons/ak47/ak47_01.vsnd", ...], ... }.
 function soundEventFiles(text) {
-  const root = parseKV3(text);
+  const root = typeof text === 'string' ? parseKV3(text) : text;
   const out = {};
   for (const [name, ev] of Object.entries(root)) {
     if (!ev || typeof ev !== 'object') continue;
@@ -483,14 +484,104 @@ function soundEventFiles(text) {
       if (/^vsnd_files/.test(k)) files.push(...[].concat(v).filter((f) => typeof f === 'string'));
     }
     if (files.length) out[name] = files;
-    else if (ev.soundevent_01) out[name] = { alias: [].concat(ev.soundevent_01)[0] };
+    else if (ev.soundevent_01) out[name] = ev.dsp_preset ? [] : { alias: [].concat(ev.soundevent_01)[0] }; // (a soundscape plays all of its children: see soundEventInfo)
   }
   for (const [name, v] of Object.entries(out)) if (v.alias) out[name] = Array.isArray(out[v.alias]) ? out[v.alias] : [];
   return out;
 }
 
+// How CS2 plays each sound event (events: every file's events, by name; files: soundEventFiles' result, the events
+// there's something to play for), compact: { v volume, p pitch, pr / vr [min, max] added to the pitch / volume at
+// random, dl delay (s), o occlusion (0..1: how much a wall in between muffles it), r reverb (how much of it the room
+// gets), n instances one source plays at once (a new one fades out the oldest), bl seconds the same source can't play it
+// again, d volume by distance [[units, volume]...], s how much of it is plain stereo by distance (not positioned: up
+// close), c the events it plays along with it (a gunshot's distant layer), fo seconds it fades out over when stopped;
+// soundscapes (an env_soundscape's event and what it plays): dsp its reverb preset (ov: false, only as a default),
+// fi seconds it fades in over, rt [min, max] seconds between plays of a one-shot (no rt: a loop), wp where in the world it
+// is, rr [min, max] how far from you it plays (at random), rs the loop starts somewhere in the middle }.
+// An event with a base gets the base's settings, then its own; one with no files of its own plays its first child's.
+function soundEventInfo(events, files) {
+  const merged = (name, depth = 0) => {
+    const ev = events[name];
+    if (!ev || typeof ev !== 'object') return {};
+    return typeof ev.base === 'string' && ev.base && depth < 4 ? { ...merged(ev.base, depth + 1), ...ev } : ev;
+  };
+  const num = (x) => (typeof x === 'number' && Number.isFinite(x) ? x : undefined);
+  const round = (x, k = 1000) => Math.round(x * k) / k;
+  const curve = (c) => (Array.isArray(c) ? c.filter((p) => Array.isArray(p) && p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1])).map((p) => [round(p[0], 100), round(p[1])]) : []);
+  const lastX = (c) => { const pts = curve(c); return pts.length ? pts[pts.length - 1][0] : undefined; };
+  const kids = (ev) => Object.keys(ev).filter((k) => /^soundevent_\d+$/.test(k)).flatMap((k) => [].concat(ev[k])).filter((c) => typeof c === 'string' && c);
+  const out = {};
+  for (const name of Object.keys(files)) {
+    let ev = merged(name);
+    const own = Object.keys(ev).some((k) => /^vsnd_files/.test(k));
+    const children = ev.enable_child_events === false ? [] : kids(ev);
+    if (!own && !children.length) continue;
+    if (!own && files[name]?.length) ev = { ...merged(children[0]), ...Object.fromEntries(Object.entries(ev).filter(([k]) => !/^soundevent_/.test(k))) }; // an alias
+    const i = {};
+    const set = (k, v) => { if (v !== undefined) i[k] = v; };
+    set('v', num(ev.volume)); set('p', num(ev.pitch));
+    if (num(ev.pitch_random_min) || num(ev.pitch_random_max)) i.pr = [num(ev.pitch_random_min) ?? 0, num(ev.pitch_random_max) ?? 0].sort((a, b) => a - b);
+    if (num(ev.volume_random_min) || num(ev.volume_random_max)) i.vr = [num(ev.volume_random_min) ?? 0, num(ev.volume_random_max) ?? 0].sort((a, b) => a - b);
+    if (num(ev.delay) > 0) i.dl = ev.delay;
+    set('o', num(ev.occlusion_intensity));
+    // UI, voices and music aren't in the room.
+    set('r', /^(UI|VO)$|Music|Movie/i.test(ev.mixgroup || '') ? 0 : num(ev.reverb_wet));
+    if (num(ev.instance_limit) >= 1) i.n = ev.instance_limit;
+    if (ev.block_matching_events === true && num(ev.block_duration) > 0) i.bl = ev.block_duration;
+    if (ev.use_distance_volume_mapping_curve !== false && curve(ev.distance_volume_mapping_curve).length) i.d = curve(ev.distance_volume_mapping_curve);
+    if (ev.use_distance_unfiltered_stereo_mapping_curve && curve(ev.distance_unfiltered_stereo_mapping_curve).length) i.s = curve(ev.distance_unfiltered_stereo_mapping_curve);
+    const fo = lastX(ev.fadetime_volume_mapping_curve);
+    if (fo > 0) i.fo = fo;
+    if (own) { const c = children.filter((k) => k !== name && files[k]); if (c.length) i.c = c; }
+    else if (!files[name]?.length) i.c = children.filter((k) => k !== name); // a soundscape: nothing of its own, all children
+    if (typeof ev.dsp_preset === 'string' && ev.dsp_preset) { i.dsp = ev.dsp_preset.toLowerCase(); if (ev.override_dsp_preset === false) i.ov = false; }
+    if (ev.use_time_volume_mapping_curve && lastX(ev.time_volume_mapping_curve) > 0) i.fi = lastX(ev.time_volume_mapping_curve);
+    if (ev.enable_retrigger) i.rt = [num(ev.retrigger_interval_min) ?? 5, num(ev.retrigger_interval_max) ?? num(ev.retrigger_interval_min) ?? 10];
+    if (ev.use_world_position && Array.isArray(ev.position) && ev.position.some((x) => x)) i.wp = ev.position.map((x) => round(x, 10));
+    if (num(ev.randomize_position_max_radius) > 0) i.rr = [num(ev.randomize_position_min_radius) ?? 0, ev.randomize_position_max_radius];
+    if (ev.randomize_start_time) i.rs = true;
+    out[name] = i;
+  }
+  return out;
+}
+
+// One of CS2's reverb presets (sounds/graphs/reverb_*.vmix): its processors, run one after the other, as
+// { name: [{ type: 'delay', ms, direct, gain, feedback (dB), cutoff (Hz: a lowpass on the repeats), width } |
+//   { type: 'diffusor', size (0..1), complexity, feedback (dB), gain } |
+//   { type: 'box', min, max (ms: the shoebox's delay lines), complexity, feedback (0..1), cutoff, gain (dB), parallel } |
+//   { type: 'plate', decay, damp, diffusion (0..1: Dattorro's plate) } | { type: 'freeverb', size, damp, width, late } |
+//   { type: 'filter', kind (lowpass, highpass, high_shelf...), cutoff, q, gain (dB), poles (1, 2 or 8: 6 to 48 dB an octave) }] }.
+function reverbPreset(text) {
+  const graph = parseKV3(text)?.Graphs?.[0];
+  if (!graph?.Name) return {};
+  const chain = [];
+  for (const p of graph.m_Processors || []) {
+    const d = p.m_desc || {};
+    const cls = String(p._class || '');
+    if (/Delay/.test(cls)) chain.push({ type: 'delay', ms: d.m_flDelay, direct: d.m_flDirectGain, gain: d.m_flDelayGain, feedback: d.m_flFeedbackGain,
+      cutoff: d.m_bEnableFilter && d.m_feedbackFilter?.m_bEnabled ? d.m_feedbackFilter.m_flCutoffFreq : 20000, width: d.m_flWidth || 0 });
+    else if (/Diffusor/.test(cls)) chain.push({ type: 'diffusor', size: d.m_flSize, complexity: d.m_flComplexity, feedback: d.m_flFeedback, gain: d.m_flOutputGain || 0 });
+    else if (/Boxverb/.test(cls)) chain.push({ type: 'box', min: d.m_flSizeMin, max: d.m_flSizeMax, complexity: d.m_flComplexity, feedback: d.m_flFeedbackScale,
+      cutoff: d.m_filterType?.m_bEnabled ? d.m_filterType.m_flCutoffFreq : 20000, gain: d.m_flOutputGain || 0, parallel: !!d.m_bParallel });
+    else if (/PlateReverb/.test(cls)) chain.push({ type: 'plate', decay: d.m_flDecay ?? 0.5, damp: d.m_flDamp ?? 0.5, diffusion: d.m_flInputDiffusion1 ?? 0.5 });
+    else if (/Freeverb/.test(cls)) chain.push({ type: 'freeverb', size: d.m_flRoomSize ?? 0.5, damp: d.m_flDamp ?? 0.5, width: d.m_flWidth ?? 1, late: d.m_flLateReflections ?? 1 });
+    else if (/Filter/.test(cls) && d.m_bEnabled !== false) chain.push({ type: 'filter', kind: String(d.m_nFilterType || 'FILTER_LOWPASS').replace(/^FILTER_/, '').toLowerCase(),
+      cutoff: d.m_flCutoffFreq, q: d.m_flQ || Math.SQRT1_2, gain: d.m_fldbGain || 0, poles: /1POLE/.test(d.m_nFilterSlope) ? 1 : /48dB/.test(d.m_nFilterSlope) ? 8 : /24dB/.test(d.m_nFilterSlope) ? 4 : 2 });
+  }
+  return { [graph.Name.toLowerCase()]: chain };
+}
+
+// The map's soundscapes (env_soundscape, CS2's: each plays a soundscape event, and sets the reverb, where it's heard
+// from): [{ o: origin, r: radius, e: event, off: starts switched off }].
+function mapSoundscapes(ents) {
+  return ents.filter((e) => /^env_soundscape/.test(e.classname) && e.soundevent && !/^(false|0)$/.test(String(e.enablesoundevent ?? 'true')))
+    .map((e) => ({ o: vec(e.origin), r: +e.radius || 0, e: String(e.soundevent), ...(/^(true|1)$/.test(String(e.startdisabled)) ? { off: true } : {}) }))
+    .filter((s) => s.o.length === 3);
+}
+
 module.exports = {
   PLAY_VERSION, DATA_VERSION, F_PLAYER, F_BULLET, F_GRENADE, IRR_MAX, readGlb, buildCollision, brushSolid, gameVolumes, mapInfo, bakeLightmap, bakeSky,
   probeVolumes, bakeProbes, toneMapping, disabledNodes, hurtVolume, surfaceImpacts, doorNodes, glassNodes,
-  weaponStats, soundEventFiles, parseEntities, compactNav, NAV_VERSION,
+  weaponStats, soundEventFiles, soundEventInfo, reverbPreset, mapSoundscapes, parseEntities, compactNav, NAV_VERSION, parseKV3,
 };

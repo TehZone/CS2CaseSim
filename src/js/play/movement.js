@@ -13,6 +13,10 @@ export const HULL_STAND = { mins: [-16, -16, 0], maxs: [16, 16, 72] };
 export const HULL_DUCK = { mins: [-16, -16, 0], maxs: [16, 16, 54] };
 export const EYE_STAND = 64.06, EYE_DUCK = 46.05;
 const DUCK_DIFF = HULL_STAND.maxs[2] - HULL_DUCK.maxs[2];
+// Crouching in the air brings the legs up half of that (and the head down the other half): a crouch-jump is 57 + 9 = 66
+// high, CS2's, short of a standing player's 72 (you can't jump onto one's head, only a crouching one's). TUCK_AMOUNT: how
+// much of the crouch that is, so the view stays where it was as the legs come up (and goes on down with the crouch).
+const TUCK = DUCK_DIFF / 2, TUCK_AMOUNT = TUCK / (EYE_STAND - EYE_DUCK);
 const NON_JUMP_VELOCITY = 140;
 const DUCK_SPEED = 8, DUCK_SPEED_MIN = 1.5, DUCK_SPAM = 2, DUCK_RECOVER = 3; // CS2's duck speed (see duck)
 
@@ -267,17 +271,16 @@ export class PlayerMovement {
     this.duckHeld = !!want;
     if (want) {
       if (!this.ducked) {
-        if (!this.onGround) this.origin[2] += DUCK_DIFF; // keep the head where it is
+        if (!this.onGround) { this.origin[2] += TUCK; this.duckAmount = Math.min(1, this.duckAmount + TUCK_AMOUNT); }
         this.ducked = true;
-        if (!this.onGround) this.duckAmount = 1;
       }
       this.duckAmount = Math.min(1, this.duckAmount + dt * this.duckSpeed);
     } else {
       if (this.ducked) {
         // Stand up only if there's room (in the air, by dropping the legs back down).
-        const start = this.onGround ? this.origin : [this.origin[0], this.origin[1], this.origin[2] - DUCK_DIFF];
+        const start = this.onGround ? this.origin : [this.origin[0], this.origin[1], this.origin[2] - TUCK];
         if (this.fits(start, HULL_STAND)) {
-          if (!this.onGround) { this.origin = start.slice(); this.duckAmount = 0; }
+          if (!this.onGround) { this.origin = start.slice(); this.duckAmount = Math.max(0, this.duckAmount - TUCK_AMOUNT); }
           this.ducked = false;
         } else if (!this.onGround && this.fits(this.origin, HULL_STAND)) this.ducked = false; // no room to drop the legs: standing in place
       }

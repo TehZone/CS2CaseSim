@@ -612,7 +612,7 @@ class CS2Service {
         // Older exports are brought up to date step by step; a step that fails (no disk space, say) leaves the export as
         // it was, still playable, rather than exporting the whole map again.
         if (meta.stamp === stamp && meta.version >= 2) {
-          const steps = { 2: 'upgradeMapLighting', 3: 'upgradeMapHidden', 4: 'upgradeMapLayers', 5: 'upgradeMapDoors', 6: 'upgradeMapSky3d', 7: 'upgradeMapTextureSizes', 8: 'upgradeMapBreakables', 9: 'upgradeMapBreakables2' };
+          const steps = { 2: 'upgradeMapLighting', 3: 'upgradeMapHidden', 4: 'upgradeMapLayers', 5: 'upgradeMapDoors', 6: 'upgradeMapSky3d', 7: 'upgradeMapTextureSizes', 8: 'upgradeMapBreakables', 9: 'upgradeMapBreakables2', 10: 'upgradeMapSoundscapes' };
           try { while (steps[meta.version]) meta = await this[steps[meta.version]](id, vpk, dir, meta, say); } catch (e) { this.log('map upgrade: ' + e.message); }
           this.progress.delete('map:' + id);
           return result(meta);
@@ -689,6 +689,7 @@ class CS2Service {
       fs.rmSync(entPhysFile, { force: true });
       const meta = {
         version: play.PLAY_VERSION, stamp, content, id, name: nameOf(id), ...info, ...volumes, lightmap, sky, layers, lighting, hidden, hurts, doors, glass, sky3d,
+        soundscapes: play.mapSoundscapes(ents),
         collision: { tris: col.tris, surfaces: col.surfaces, flags: { player: play.F_PLAYER, bullet: play.F_BULLET, grenade: play.F_GRENADE } },
       };
       fs.writeFileSync(metaFile, JSON.stringify(meta));
@@ -837,6 +838,19 @@ class CS2Service {
     return next;
   }
 
+  // Version 10 gets version 11's soundscapes (where the map's ambience and reverb change), from the entity lump.
+  async upgradeMapSoundscapes(id, vpk, dir, meta, say) {
+    say('Updating the map\'s sounds…');
+    const tmp = path.join(dir, 'tmp-ents');
+    await this.ensureCS2().run(['-i', vpk, '-f', `maps/${id}/entities/default_ents.vents_c`, '-d', '-o', tmp]);
+    const entFile = path.join(tmp, 'maps', id, 'entities', 'default_ents.vents');
+    const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
+    fs.rmSync(tmp, { recursive: true, force: true });
+    const next = { ...meta, soundscapes: play.mapSoundscapes(ents), version: 11 };
+    fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
+    return next;
+  }
+
   // Maps exported as version 8 get version 9's breakable props (with the doors and glass again).
   upgradeMapBreakables(id, vpk, dir, meta, say) { return this.upgradeMapDoors(id, vpk, dir, meta, say, 9); }
   // Version 9 gets version 10's breakables (props named breakable, and what's left of one when broken).
@@ -947,33 +961,54 @@ class CS2Service {
         'soundevents/game_sounds_physics.vsndevts_c', 'soundevents/game_sounds_footsteps.vsndevts_c', 'soundevents/game_sounds_ui.vsndevts_c',
         'soundevents/vo/announcer/game_sounds_cs2_classic.vsndevts_c', 'soundevents/music/valve_cs2_01/game_sounds_music.vsndevts_c',
         ...['phoenix', 'leet', 'sas', 'seal'].map((a) => `soundevents/vo/agents/game_sounds_${a}.vsndevts_c`)]; // the bots' voices
-      const AMBIENCE = /^soundevents\/ambience\/[^/]+\.vsndevts_c$/; // the maps' own (Inferno's bells...)
-      const inputs = [...fixed, 'surfaceproperties/surfaceproperties.vsurf_c', AMBIENCE];
+      const AMBIENCE = /^soundevents\/ambience\/[^/]+\.vsndevts_c$/; // the maps' own (Inferno's bells, the soundscapes...)
+      const REVERBS = /^sounds\/graphs\/reverb_\d+_[^/]+\.vmix_c$/; // CS2's reverb presets (a soundscape picks one)
+      const inputs = [...fixed, 'surfaceproperties/surfaceproperties.vsurf_c', AMBIENCE, REVERBS];
       const c = await cs2.cached(file, inputs, (d) => d.version === play.DATA_VERSION);
       if (c) return c;
       const tmp = path.join(this.cacheDir, 'play', 'tmp-data');
-      const files = [...fixed, ...(await cs2.list()).filter((f) => AMBIENCE.test(f))];
-      await cs2.run(['-i', cs2.vpk, '-f', [...files, 'surfaceproperties/surfaceproperties.vsurf_c'].join(','), '-d', '-o', tmp]);
+      const listing = await cs2.list();
+      const files = [...fixed, ...listing.filter((f) => AMBIENCE.test(f))], graphs = listing.filter((f) => REVERBS.test(f));
+      await cs2.run(['-i', cs2.vpk, '-f', [...files, ...graphs, 'surfaceproperties/surfaceproperties.vsurf_c'].join(','), '-d', '-o', tmp]);
       const read = (f) => fs.readFileSync(path.join(tmp, f.replace(/_c$/, '')), 'utf8');
       const weapons = play.weaponStats(read(files[0]));
-      const sounds = {};
-      for (const f of files.slice(1)) { try { Object.assign(sounds, play.soundEventFiles(read(f))); } catch (e) { this.log(`${f}: ${e.message}`); } }
+      const sounds = {}, events = {};
+      for (const f of files.slice(1)) {
+        try { const root = play.parseKV3(read(f)); Object.assign(events, root); Object.assign(sounds, play.soundEventFiles(root)); } catch (e) { this.log(`${f}: ${e.message}`); }
+      }
+      const soundInfo = play.soundEventInfo(events, sounds);
+      const reverbs = {};
+      for (const f of graphs) { try { Object.assign(reverbs, play.reverbPreset(read(f))); } catch (e) { this.log(`${f}: ${e.message}`); } }
       let impacts = {};
       try { impacts = play.surfaceImpacts(read('surfaceproperties/surfaceproperties.vsurf_c')); } catch (e) { this.log('surfaces: ' + e.message); }
       fs.rmSync(tmp, { recursive: true, force: true });
-      return cs2.save(file, { version: play.DATA_VERSION, weapons, sounds, impacts }, inputs);
+      return cs2.save(file, { version: play.DATA_VERSION, weapons, sounds, soundInfo, reverbs, impacts }, inputs);
     });
   }
 
   // Sound events -> { event: [urls] } (each event's variations, extracted from the install).
   async playSounds(events) {
-    const { sounds } = await this.playData();
-    const want = [...new Set(events)].filter((e) => sounds[e]);
-    const files = await this.ensureCS2().extract(want.flatMap((e) => sounds[e]));
+    const data = await this.playData(), { sounds } = data;
+    const want = [...new Set(events)].map((e) => [e, this.soundName(data, e)]).filter(([, k]) => k);
+    const files = await this.ensureCS2().extract(want.flatMap(([, k]) => sounds[k]));
     const out = {};
-    for (const e of want) out[e] = sounds[e].map((f) => files[f + '_c']).filter(Boolean).map((f) => this.url(f));
+    for (const [e, k] of want) out[e] = sounds[k].map((f) => files[f + '_c']).filter(Boolean).map((f) => this.url(f));
     return out;
   }
+  // How CS2 plays those events (play.soundEventInfo): { event: info }.
+  async playSoundInfo(events) {
+    const data = await this.playData(), { soundInfo = {} } = data;
+    return Object.fromEntries([...new Set(events)].map((e) => [e, soundInfo[this.soundName(data, e)]]).filter(([, i]) => i));
+  }
+  // An event's name as the install has it: CS2's are any case (a map's soundscape may ask for Mirage.X, mirage.X's).
+  soundName(data, e) {
+    if (data.sounds[e]) return e;
+    this.soundNames ||= new WeakMap();
+    if (!this.soundNames.has(data)) this.soundNames.set(data, new Map(Object.keys(data.sounds).map((k) => [k.toLowerCase(), k])));
+    return this.soundNames.get(data).get(String(e).toLowerCase()) || null;
+  }
+  // CS2's reverb presets (play.reverbPreset): { name: processors }.
+  async playReverbs() { return (await this.playData()).reverbs || {}; }
 
   // Everything to hold and fire a weapon in first person: { stats, clips: { role: url | [urls] }, arms, sounds }.
   playWeapon(weapon) {

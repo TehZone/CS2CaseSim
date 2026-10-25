@@ -39,6 +39,7 @@ function initPaths() {
 const PLAY_CALLS = {
   maps: () => cs2.playMaps(), mapImages: () => cs2.playMapImages(), map: (id) => cs2.playMap(id), progress: (key) => cs2.playProgress(key), weapon: (id) => cs2.playWeapon(id),
   agent: (vmdl) => cs2.playAgent(vmdl), anims: (list) => cs2.playAnims(list), sounds: (events) => cs2.playSounds(events),
+  soundInfo: (events) => cs2.playSoundInfo(events), reverbs: () => cs2.playReverbs(),
   agentModel: (id) => cs2.agentModel(id), stats: () => cs2.playStats(), impacts: () => cs2.playImpacts(), voices: () => cs2.playVoices(), icons: () => cs2.playIcons(),
   ranks: () => cs2.playRanks(), menuIcons: () => cs2.menuIcons(), menuBackdrop: (id) => cs2.menuBackdrop(id),
 };
@@ -358,6 +359,53 @@ async function smokeStartMap(win, id, label) {
   console.log('SMOKE', label, id, 'did not load:', await js(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' / ')`));
   await js(`document.querySelector('.play-root [data-cancel]')?.click(); 1`);
   return false;
+}
+
+// `CS2SIM_SMOKE=sound` starts a match on Dust II (CS2SIM_SMOKE_MAP) and takes you to some of its soundscapes
+// (CS2SIM_SMOKE_PLACES: LowerTunnel,Bbomb...; else the first few): the one you're in, its reverb, and its ambience
+// playing; walks you into a bot (you stop at it); then the sounds of the match for a while (gunshots with their
+// distant layers) and how CS2 plays some of them.
+async function runSoundSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const map = process.env.CS2SIM_SMOKE_MAP || 'de_dust2';
+  await wait(3000);
+  if (!(await smokeStartMap(win, map, 'sound'))) { app.quit(); return; }
+  const state = () => js(`(() => { const g = window.__playGame, s = g.soundscapes, b = g.sounds;
+    return JSON.stringify({ ctx: b.ctx.state, soundscapes: s.list.length, active: s.active?.e || null, room: b.room?.name || null, reverbs: [...b.verbs.keys()].length,
+      voices: [...s.voices].map(([e, v]) => e.replace(/^[^.]+\\./, '') + (v.info.rt ? '(now and then)' : v.src ? '(playing)' : '(waiting)')).join(', ') }); })()`);
+  await wait(2000);
+  console.log('SMOKE sound at the spawn', await state());
+  console.log('SMOKE sound info', await js(`JSON.stringify(Object.fromEntries(['Weapon_AK47.Single', 'Weapon_AK47.SingleDistant', 'CT_Concrete.StepLeft'].map((e) => [e, window.__playGame.sounds.info[e] || null])))`));
+  const places = process.env.CS2SIM_SMOKE_PLACES ? process.env.CS2SIM_SMOKE_PLACES.split(',')
+    : JSON.parse(await js(`JSON.stringify([...new Set(window.__playGame.soundscapes.list.map((s) => s.e.replace(/^[^.]+\\./, '')))].slice(0, 6))`));
+  for (const where of places) {
+    const ok = await js(`(() => { const g = window.__playGame, s = g.soundscapes.list.find((x) => x.e.toLowerCase().endsWith('.' + ${JSON.stringify(where.toLowerCase())}));
+      if (!s) return false; g.player.teleport([s.o[0], s.o[1], s.o[2] - 40]); return true; })()`);
+    if (!ok) { console.log('SMOKE sound no soundscape', where); continue; }
+    await wait(2500);
+    console.log('SMOKE sound in', where, await state());
+  }
+  // Walking into a bot (bot_stop): you stop at it, you don't climb it (as on a ladder, on a map with ladders).
+  console.log('SMOKE sound walk into a bot', await js(`(() => { const g = window.__playGame, hull = g.player.hull;
+    for (const b of g.bots.filter((x) => x.c.alive)) for (const yaw of [0, 90, 180, 270]) {
+      const p = b.pos, a = yaw * Math.PI / 180, from = [p[0] - Math.cos(a) * 120, p[1] - Math.sin(a) * 120, p[2] + 1];
+      if (g.collision.traceBox(from, [p[0] - Math.cos(a) * 33, p[1] - Math.sin(a) * 33, p[2] + 1], hull.mins, hull.maxs).fraction < 1) continue; // (a wall in between)
+      g.cv.bot_stop = 1; g.player.teleport(from);
+      let rise = 0, ladder = false;
+      for (let i = 0; i < 64 * 3; i++) { g.player.tick(1 / 64, { forward: 1, side: 0, yaw, pitch: 0, maxSpeed: 250 }); rise = Math.max(rise, g.player.origin[2] - p[2]); ladder ||= !!g.player.onLadder; }
+      const gap = Math.hypot(g.player.origin[0] - p[0], g.player.origin[1] - p[1]);
+      g.cv.bot_stop = 0;
+      return JSON.stringify({ mapHasLadders: g.collision.ladders.size > 0, rise: +rise.toFixed(1), onLadder: ladder, gap: +gap.toFixed(1) });
+    }
+    return 'no bot with room in front'; })()`));
+  // What plays over a while of the match: each event, how often, and how far away.
+  await js(`(() => { const g = window.__playGame, b = g.sounds, play = b.play.bind(b); window.__heard = {};
+    b.play = (e, o = {}) => { const ear = g.earPos(), d = o.pos ? Math.round(Math.hypot(o.pos[0] - ear[0], o.pos[1] - ear[1], o.pos[2] - ear[2])) : 0;
+      const h = (window.__heard[e] ||= { n: 0, near: 1e9, far: 0 }); h.n++; h.near = Math.min(h.near, d); h.far = Math.max(h.far, d); return play(e, o); }; return 1; })()`);
+  await wait(+(process.env.CS2SIM_SMOKE_LISTEN || 30000));
+  console.log('SMOKE sound heard', await js(`JSON.stringify(Object.entries(window.__heard).sort((a, b) => b[1].n - a[1].n).slice(0, 40).map(([e, h]) => e + ' x' + h.n + (h.far ? ' ' + h.near + '-' + h.far : '')))`));
+  app.quit();
 }
 
 async function runMapsSmoke(win) {
@@ -1830,6 +1878,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'breakables') { win.webContents.once('did-finish-load', () => runBreakSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'look') { win.webContents.once('did-finish-load', () => runLookSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'sound') { win.webContents.once('did-finish-load', () => runSoundSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'mm') { win.webContents.once('did-finish-load', () => runMatchmakingSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'premier') { win.webContents.once('did-finish-load', () => runPremierSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'hitch') { win.webContents.once('did-finish-load', () => runHitchSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }

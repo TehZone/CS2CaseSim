@@ -132,8 +132,15 @@ What's in a match:
   no-scope and blinded kills), scoreboard (Tab), damage direction, death cam and spectating teammates (first person
   with their gun, like CS2; Jump for third person), CS2's announcer, round music and bomb sounds, and an end screen with
   your K/D/A, ADR, headshots, accuracy, MVPs and multi-kills. You can inspect your weapon during freeze time.
-- Sound carries like CS2's: gunshots over much of the map, footsteps about 1100 units, smaller sounds less, fading with
-  distance and muffled through walls; the round's music and the radio play one at a time.
+- Sound plays the way CS2 plays it, by each sound event's own settings in your install: its volume by distance (a
+  gunshot loud up close and gone by 2500 units as its distant version takes over, footsteps gone by 1100), the events it
+  plays along with it (a gunshot's distant layer, a landing's thud), random pitch and volume, how much a wall in
+  between muffles it, plain stereo up close, and how many of it one player plays at once (a spray doesn't pile up its
+  shots' tails). The round's music and the radio play one at a time.
+- The map's soundscapes (CS2's env_soundscape: Dust II has a hundred) set the reverb where you are, one of CS2's own
+  reverb presets (its delays, diffusors and rooms rendered as an impulse response): Dust II's tunnels ring, its long A
+  echoes off the walls, B site is open. They also play the map's ambience: the wind, a distant city where it is in the
+  world, sand blowing over a car or rocks falling somewhere near you now and then.
 - CS:GO's competitive ranks, one for all maps: Silver I to The Global Elite, with CS2's own emblems; Wingman has its own
   rank with its own emblems. Matchmade matches move a hidden rating (more for a bigger win, and depending on the other
   team's ranks); the rank shows after 10 wins and
@@ -163,7 +170,9 @@ What's in a match:
   again on each match's collision. A bot stands on the spot, aims (off by its rank's error: Silvers misthrow) and throws.
   `CS2SIM_SMOKE=bots` watches rounds at chosen ranks and logs the plans and where every lineup landed;
   `CS2SIM_SMOKE=premier` plays through the pick/ban and a match; `CS2SIM_SMOKE=mm` goes through matchmaking (search,
-  accept, Esc's menu, leave, reconnect, abandon and the cooldown).
+  accept, Esc's menu, leave, reconnect, abandon and the cooldown); `CS2SIM_SMOKE=sound` goes through a map's
+  soundscapes (`CS2SIM_SMOKE_MAP`, Dust II by default: the reverb and ambience in each), walks you into a bot and lists
+  what a match sounds like.
 - Finished matches pay into your wallet when you play offline: kills, assists, MVPs, rounds won and the win, more
   against harder bots. The lobby shows your record.
 - The lobby shows CS2's own screenshot of each map.
@@ -225,7 +234,9 @@ What's in a match:
   `CS2SIM_SMOKE=hitch` plays rounds on Dust II, Inferno and Nuke and logs every frame over 33 ms with what ran in it
   (`CS2SIM_SMOKE_PROFILE` and `CS2SIM_SMOKE_ALLOC` add a CPU and an allocation profile).
 - Movement ported from Source's: CS2's acceleration, friction, air strafing, 18-unit steps, jumping (no auto bunny
-  hop), crouching, crouch-jumps, walking and ladders, with the weapon's own speed; footsteps by surface.
+  hop), crouching, crouch-jumps (66 units: short of a standing player's head, onto a crouching one's), walking and
+  ladders, with the weapon's own speed; footsteps by surface. Players are solid to each other: you stop at them (you
+  don't climb them).
 - Weapons use CS2's data from `scripts/weapons.vdata` (damage, range falloff, armor penetration, fire rate,
   magazine, inaccuracy, spread, recovery, burst and reload timings) with Source's recoil (each gun's recoil seed, aim
   punch and view punch), CS2's viewmodel animations (draw, idle, shoot, reload, inspect, silencer, knife slashes and
