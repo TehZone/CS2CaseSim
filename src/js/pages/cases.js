@@ -316,7 +316,7 @@ function renderCase(root, c) {
       </div>
     </div>
     <div class="section-title">Contains one of the following</div>
-    <div class="grid">${contents}${c.rare ? `<div class="card rare-tile" style="--rc:#e4ae39" data-scroll-rare><div class="img"><img class="rare-icon" src="img/rare-item.png" alt=""></div><div class="rbar"></div><div class="meta"><div class="n1">Exceedingly rare</div><div class="n2">★ Rare Special Item</div><div class="row"><span class="wear">${c.rareKind === 'gloves' ? 'Gloves' : c.rareKind === 'mixed' ? 'Knives & gloves' : 'Knives'}</span><span class="dim">${(rareW * 100).toFixed(2)}%</span></div></div></div>` : ''}</div>
+    <div class="grid">${contents}${c.rare ? `<div class="card rare-tile" style="--rc:#e4ae39" data-scroll-rare><div class="img"><img class="rare-icon" src="img/rare-item.svg" alt=""></div><div class="rbar"></div><div class="meta"><div class="n1">Exceedingly rare</div><div class="n2">★ Rare Special Item</div><div class="row"><span class="wear">${c.rareKind === 'gloves' ? 'Gloves' : c.rareKind === 'mixed' ? 'Knives & gloves' : 'Knives'}</span><span class="dim">${(rareW * 100).toFixed(2)}%</span></div></div></div>` : ''}</div>
     ${c.rare ? `<div class="section-title" id="rare-list">Rare special items (${c.rare.length})</div><div class="grid">${rareTiles}</div>` : ''}
     <p class="dim" style="margin-top:22px;font-size:12px">Tip: click any item for prices, odds and a 3D inspect.</p>
   </div>`;
@@ -573,7 +573,7 @@ export async function openCase(c, n) {
 
 function slotHTML(entry, showAll = false) {
   if (entry.t === 'rare-placeholder' || (!showAll && entry.t === 'skin' && D.skins[entry.id]?.star)) {
-    return `<div class="slot rare" style="--rc:#e4ae39"><img class="rare-icon" src="img/rare-item.png" alt=""><div class="sn">★ Rare Special Item ★</div></div>`;
+    return `<div class="slot rare" style="--rc:#e4ae39"><img class="rare-icon" src="img/rare-item.svg" alt=""><div class="sn">★ Rare Special Item ★</div></div>`;
   }
   const r = I.rarityInfo(entry);
   const np = I.nameParts(entry);

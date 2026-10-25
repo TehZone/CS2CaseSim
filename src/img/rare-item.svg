@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 198">
+  <!-- The rare special item emblem (knives and gloves in a case): a gold medallion with a question mark. Drawn for this
+       app; not Valve's artwork. -->
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffd76a" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#ffd76a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff3bd"/>
+      <stop offset=".45" stop-color="#e4ae39"/>
+      <stop offset="1" stop-color="#7a4d0c"/>
+    </linearGradient>
+    <radialGradient id="face" cx="42%" cy="34%" r="70%">
+      <stop offset="0" stop-color="#fff7d2"/>
+      <stop offset=".5" stop-color="#f0c24a"/>
+      <stop offset="1" stop-color="#a8740f"/>
+    </radialGradient>
+  </defs>
+  <circle cx="128" cy="99" r="96" fill="url(#glow)"/>
+  <!-- the rim: notched like a coin's edge -->
+  <circle cx="128" cy="99" r="76" fill="url(#rim)"/>
+  <circle cx="128" cy="99" r="76" fill="none" stroke="#5c3a08" stroke-width="3" stroke-dasharray="4 5" opacity=".55"/>
+  <circle cx="128" cy="99" r="64" fill="#5c3a08"/>
+  <circle cx="128" cy="99" r="61" fill="url(#face)"/>
+  <circle cx="128" cy="99" r="53" fill="none" stroke="#fff3bd" stroke-width="1.5" opacity=".6"/>
+  <!-- the question mark, with a light edge -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M107 81c0-26 44-30 44-3 0 16-23 18-23 36" stroke="#4a2f05" stroke-width="17"/>
+    <path d="M107 81c0-26 44-30 44-3 0 16-23 18-23 36" stroke="#7a4d0c" stroke-width="11"/>
+    <path d="M110 78c3-16 33-17 35 0" stroke="#fff3bd" stroke-width="3" opacity=".7"/>
+  </g>
+  <circle cx="128" cy="137" r="10" fill="#4a2f05"/>
+  <circle cx="128" cy="137" r="6.5" fill="#7a4d0c"/>
+  <!-- sparkles -->
+  <path d="M202 34l4 11 11 4-11 4-4 11-4-11-11-4 11-4z" fill="#fff6c9"/>
+  <path d="M58 140l3 8 8 3-8 3-3 8-3-8-8-3 8-3z" fill="#fff6c9" opacity=".85"/>
+  <path d="M196 150l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill="#fff6c9" opacity=".7"/>
+</svg>
