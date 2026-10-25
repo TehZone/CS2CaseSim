@@ -391,6 +391,7 @@ export class Bot {
       this.armsAction = this.mixer.clipAction(arms);
       this.armsAction.setLoop(THREE.LoopRepeat, Infinity);
       this.armsAction.play();
+      if (this.mode !== 'move') this.armsAction.setEffectiveWeight(0); // (planting or defusing: it waits, see setMode)
     }
     if (draw && changed && this.mode === 'move') this.assets.gesture(id, 'draw').then((c) => { if (c && this.holding === id) this.gesture(c); });
   }
@@ -458,7 +459,12 @@ export class Bot {
       this.armsAction?.fadeOut(0.1);
       this.gestureAction?.fadeOut(0.1);
       this.gestureAction = null;
-    }
+    } else if (mode === 'plant' || mode === 'defuse') {
+      // The whole body plants (or defuses): blended with the walk and the gun's hold pose it only got half way there.
+      this.armsAction?.fadeOut(0.12);
+      this.gestureAction?.fadeOut(0.12);
+      this.gestureAction = null;
+    } else if (mode === 'move' && this.armsAction) { this.armsAction.enabled = true; this.armsAction.play(); this.armsAction.fadeIn(0.15); }
     if (clip) {
       const a = this.mixer.clipAction(clip);
       a.reset();
@@ -483,7 +489,8 @@ export class Bot {
       if (this.climbing) this.armsAction.fadeOut(0.15); else { this.armsAction.play(); this.armsAction.fadeIn(0.15); }
     }
     this.wasClimbing = !!this.climbing;
-    if (l && this.mode === 'move' && (this.climbing || this.airborne)) {
+    if (l && (this.mode === 'plant' || this.mode === 'defuse')) for (const a of l.all) a.setEffectiveWeight(0); // (see setMode)
+    else if (l && this.mode === 'move' && (this.climbing || this.airborne)) {
       // Climbing a ladder (the clip runs with the climbing speed) or in the air (falling off a ledge).
       const k = this.climbing ? 'ladder' : 'air';
       for (const a of l.all) a.setEffectiveWeight(a === l[k] ? 1 : 0);

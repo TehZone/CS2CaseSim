@@ -1026,7 +1026,7 @@ export class Game {
     const m = this.match, feet = this.player.origin;
     const ok = holding && m.canPlant(this.me, feet) && this.player.onGround;
     if (!ok) {
-      if (this.planting) { this.planting = null; this.arsenal.guns.c4?.vm.play('idle', { loop: true }); }
+      if (this.planting) { this.planting = null; const c4 = this.arsenal.guns.c4; if (c4) { c4.animEnd = 0; c4.vm.play('idle', { loop: true }); this.c4Screen(c4.vm.rig, 0); } }
       if (holding && m.phase === 'live' && !m.siteAt(feet) && t - (this.siteWarnAt || -9) > 2) {
         this.siteWarnAt = t;
         this.hud.message('You must be at a bomb site to plant the bomb', 2000);
@@ -1035,14 +1035,17 @@ export class Game {
     }
     if (!this.planting) {
       this.planting = { start: t };
-      this.arsenal.guns.c4?.vm.play('plant');
+      // The plant clip (kneel, type the code, set it down) for as long as it takes: nothing puts the idle back meanwhile.
+      const c4 = this.arsenal.guns.c4;
+      if (c4) { c4.animEnd = Infinity; c4.vm.play(c4.vm.has('plant') ? 'plant' : 'idle', { speed: (c4.vm.length('plant') || m.rules.plantTime) / m.rules.plantTime }); this.c4Screen(c4.vm.rig, 1); }
       this.sounds.play('c4.initiate', { volume: 0.7 });
       this.beepKeys = 0;
     }
     const k = (t - this.planting.start) / m.rules.plantTime;
-    if (k * 7 > this.beepKeys + 1) { this.beepKeys++; this.sounds.play('c4.keypressquiet', { volume: 0.6 }); }
+    if (k * 7 > this.beepKeys + 1) { this.beepKeys++; this.sounds.play('c4.keypressquiet', { volume: 0.6 }); this.c4Screen(this.arsenal.guns.c4?.vm.rig, 1 + this.beepKeys); } // (a digit a key)
     if (k >= 1) {
       this.planting = null;
+      this.c4Screen(this.arsenal.guns.c4?.vm.rig, 0); // (the next C4 you carry starts blank)
       m.planted(this.me, this.player.origin);
       this.arsenal.remove('c4', t);
     }
@@ -1071,9 +1074,10 @@ export class Game {
   }
   botCancelObjective(b) { if (b.mode === 'plant' || b.mode === 'defuse') b.setMode('move'); }
 
-  onPlanted(c, bomb) {
+  onPlanted(c, bomb, { late = false } = {}) {
     this.placeBomb(bomb.pos, c === this.me ? this.input.yaw : this.botOf(c)?.yaw || 0);
     this.sounds.play('c4.plant', { pos: bomb.pos, listener: this, volume: 0.8 });
+    if (late) { bomb.beepAt = this.now + 1; return; } // (after the round: no announcement, no music)
     this.sounds.play('Event.BombPlanted', { volume: 0.9 });
     this.sounds.channel('music', `Music.BombPlanted.${MUSIC}`, { volume: 0.35 * this.musicVolume }, 0.6);
     this.hud.message('The bomb has been planted', 3000, 'bomb');
@@ -1103,13 +1107,13 @@ export class Game {
     }
     this.shake = 1;
   }
-  onBombDropped(bomb) { this.placeBomb(bomb.pos, 0); }
+  onBombDropped(bomb) { this.placeBomb(bomb.pos, 0, false); }
   onBombPickedUp(c) {
     this.removeBomb();
     if (c === this.me) { this.giveMe('c4', 'weapon_c4', false); this.sounds.play('Player.PickupC4', { volume: 0.7 }); this.hud.message('You picked up the bomb', 2000); }
     else this.botOf(c).weapons.c4 = botGun('weapon_c4', this.stats.weapon_c4);
   }
-  async placeBomb(pos, yaw) {
+  async placeBomb(pos, yaw, planted = true) {
     this.removeBomb();
     const token = (this.bombToken = {});
     const tpl = await this.bombTemplate;
@@ -1119,6 +1123,7 @@ export class Game {
     m.position.set(0, 0, 0); m.rotation.set(0, 0, 0); m.scale.set(1, 1, 1); // drop the inspect framing
     m.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
     this.botAssets.light(m);
+    this.c4Screen(m, planted ? 8 : 0); // (the code on a planted bomb's screen)
     const g = new THREE.Group();
     g.add(m);
     // Sit it on the ground (the model is centred on its middle).
@@ -1132,6 +1137,19 @@ export class Game {
     this.bombModel = g;
   }
   removeBomb() { this.bombToken = null; this.bombModel?.removeFromParent(); this.bombModel = null; }
+
+  // The C4's screen: a frame of its digits sheet, a row a frame (a sixteenth of the sheet): 0 blank, 1 the seven stars,
+  // then the code a digit at a time up to 8, 7355608. Its screen mesh gets its own copy of its (12-vertex) geometry and
+  // that's moved down the sheet; the material and texture, shared with every other C4, stay as they are.
+  c4Screen(root, frame) {
+    let o = null;
+    root?.traverse((x) => { if (!o && x.isMesh && /c4_screen/.test(x.name + ' ' + (x.parent?.name || ''))) o = x; });
+    if (!o?.geometry.attributes.uv) return;
+    if (!o.userData.digitsUv) { o.geometry = o.geometry.clone(); o.userData.digitsUv = o.geometry.attributes.uv.array.slice(); }
+    const uv = o.geometry.attributes.uv, base = o.userData.digitsUv;
+    for (let i = 1; i < base.length; i += 2) uv.array[i] = base[i] + frame / 16;
+    uv.needsUpdate = true;
+  }
 
   // ---- the simulation ---------------------------------------------------------------------------------------------
   start() {
@@ -1215,7 +1233,7 @@ export class Game {
     this.input.endTick(); // a mouse wheel notch's +jump (or other + command) lets go
     this.pickups();
     // The planted bomb beeps faster as it gets closer to going off.
-    if (m.phase === 'planted' && this.now >= m.bomb.beepAt) {
+    if ((m.phase === 'planted' || (m.phase === 'end' && m.bomb?.state === 'planted')) && this.now >= m.bomb.beepAt) {
       const left = m.rules.bombTime - (this.now - m.bomb.plantedAt);
       this.sounds.play('C4.PlantSound', { pos: m.bomb.pos, listener: this, volume: 0.7 });
       m.bomb.beepAt = this.now + Math.max(0.1, 0.15 + 0.85 * Math.pow(Math.max(0, left) / m.rules.bombTime, 1.4));

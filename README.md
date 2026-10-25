@@ -49,7 +49,8 @@ Nuke, Ancient, Anubis, Overpass, Train, Vertigo...; each map is prepared the fir
 skins, gloves and knife. Four modes:
 - **Competitive**: you and bot teammates against bots (1v1 up to 5v5, four bot difficulties, first to 9 or first to
   13), with CS2's rounds: freeze time and buy time, the 1:55 round clock, the bomb (one terrorist carries it; plant it
-  in a bomb site, 40 second fuse, defuse in 10 seconds or 5 with a kit), win by elimination, bomb, defuse or time,
+  in a bomb site, 40 second fuse, defuse in 10 seconds or 5 with a kit; you can still plant it after the round is over,
+  as in CS2, without changing the result), win by elimination, bomb, defuse or time,
   halftime side swap and overtime (MR3 with $12,500, sides swapping after 3; or ties as draws).
 - **Wingman**: 2v2 on one bomb site, 90-second rounds, first to 9.
 - **Deathmatch**: free-for-all or teams for 5, 10 or 15 minutes. You respawn after two seconds away from enemies, every
@@ -227,7 +228,8 @@ What's in a match:
 - Item Database (like CSFloat's): search every skin, knife, glove, sticker, agent and pro card in the game; open one to
   see every copy that exists with its owner, float, seed, pattern and stickers (online: everyone on the server;
   offline: your inventory), its float rank (#1-#3 lowest and highest, StatTrak™ and Souvenir copies ranked apart), the
-  guns a sticker is applied to, and a skin's current Market listings
+  guns a sticker is applied to, and a skin's current Market listings. Your own top floats carry the same #1-#3 badge
+  in your inventory and the item details (a lone copy has no rank)
 - Rare Special Items (knives and gloves) show CS:GO's classic gold "?" medallion in case contents and the roulette
 - Serial numbers on everything you unbox (cases, packages, capsules, the Armory, case battles), counted per item in
   unboxing order (offline in your save, online across the whole server). Market buys and trade-ups have none; unboxed

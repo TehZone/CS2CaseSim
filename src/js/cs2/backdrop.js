@@ -3,6 +3,7 @@
 // CS2's inspect camera looks the same way as ours, and drawn blurred like the game's depth of field.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { hidePoints } from './rig.js';
 import { cs2Vanity } from './api.js';
 
 const IN = 0.0254; // the exporter writes game inches as metres
@@ -20,7 +21,7 @@ function loadScene(id) {
   if (!loaded.has(id)) {
     const p = (async () => {
       const { glb, info } = await cs2Vanity(id);
-      const gltf = await new GLTFLoader().loadAsync(glb);
+      const gltf = hidePoints(await new GLTFLoader().loadAsync(glb));
       const world = gltf.scene;
       world.traverse((o) => {
         if (o.isLight) o.visible = false; // the exported sun is in physical units; we light the scene ourselves

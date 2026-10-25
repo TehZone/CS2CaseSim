@@ -8,7 +8,7 @@ import { imgUrl, loadImage } from '../util.js';
 import { UniformRandomStream } from './rng.js';
 import { cs2Prepare, cs2GloveClip, cs2StatTrak } from './api.js';
 import { gloveMaterials } from './glove.js';
-import { loadGltf as loadRig, rebind, bonesByName, forearmTwist } from './rig.js';
+import { loadGltf as loadRig, rebind, bonesByName, forearmTwist, hidePoints } from './rig.js';
 import { loadSource, texture, whiteTex } from './textures.js';
 import { stickerSurface, contentBox } from './sticker.js';
 import { stickerBase } from '../composite.js';
@@ -340,7 +340,7 @@ function addPearlescence(material, scale) {
 const gltfCache = new Map();
 function loadGltf(url) {
   if (!gltfCache.has(url)) {
-    const job = new GLTFLoader().loadAsync(url);
+    const job = new GLTFLoader().loadAsync(url).then(hidePoints);
     gltfCache.set(url, job);
     job.catch(() => gltfCache.delete(url));
   }
@@ -471,10 +471,13 @@ export async function buildCS2Model(item, def, renderer, { statTrak = true, quic
   const meshes = [];
   root.traverse((o) => { if (o.isMesh) meshes.push(o); });
   const inBody = (o) => { for (let n = o; n; n = n.parent) if (n.name.includes(prep.mesh)) return true; return false; };
+  // (The C4's screen is a mesh of its own beside the body, kept; its Panorama panel, which CS2 draws live, exports as a
+  // test grid: hidden. The screen shows the code from its digits sheet: see Game.c4Screen.)
+  const extra = (o) => /c4_screen/.test(o.name + ' ' + (o.parent?.name || ''));
   for (const o of meshes) {
-    const owner = inBody(o) || meshes.length === 1;
+    const owner = inBody(o) || meshes.length === 1 || extra(o);
     const matName = o.material?.name || '';
-    if (!owner || /sticker_gaps/.test(matName)) { o.visible = false; continue; }
+    if (!owner || /sticker_gaps|panorama/.test(matName)) { o.visible = false; continue; }
     if (skin && matName === prep.material) o.material = skin;
     else o.material = await plainMaterial(prep.materials[matName]);
     o.frustumCulled = false;

@@ -6,8 +6,16 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 const loader = new GLTFLoader();
 const files = new Map();
 export function loadGltf(url) {
-  if (!files.has(url)) { const p = loader.loadAsync(url); files.set(url, p); p.catch(() => files.delete(url)); }
+  if (!files.has(url)) { const p = loader.loadAsync(url).then(hidePoints); files.set(url, p); p.catch(() => files.delete(url)); }
   return files.get(url);
+}
+
+// CS2's models carry point clouds that stand in for nothing ("empty_mesh_reference": a weapon's, the arms', an agent's):
+// three draws each point as a white pixel, so a few white dots rode along with every gun, the arms and the bots. Hidden
+// as a model loads (every loader passes its glTF through this).
+export function hidePoints(gltf) {
+  gltf?.scene?.traverse((o) => { if (o.isPoints) o.visible = false; });
+  return gltf;
 }
 
 // A bone the clip doesn't animate (forearm twist helpers, the body, extra weapon bones) is copied onto its parent

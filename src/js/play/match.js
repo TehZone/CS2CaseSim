@@ -151,7 +151,8 @@ export class Match {
   }
 
   // ---- bomb -------------------------------------------------------------------------------------------------------
-  canPlant(c, pos) { return this.phase === 'live' && c.alive && c.hasC4 && this.siteAt(pos); }
+  // Planting: while the round's on, and still after it ends (as in CS2: it goes down and ticks, but the round is decided).
+  canPlant(c, pos) { return (this.phase === 'live' || this.phase === 'end') && c.alive && c.hasC4 && this.siteAt(pos); }
   siteAt(pos) {
     return (this.game.map.info.bombsites || []).find((s) => pos[0] >= s.min[0] && pos[0] <= s.max[0] && pos[1] >= s.min[1] && pos[1] <= s.max[1]
       && pos[2] >= s.min[2] - 40 && pos[2] <= s.max[2] + 10) || null;
@@ -160,6 +161,7 @@ export class Match {
     const b = this.bomb;
     b.state = 'planted'; b.pos = pos.slice(); b.site = this.siteAt(pos)?.site || '?'; b.plantedAt = this.game.now; b.carrier = null; b.planter = c;
     c.hasC4 = false;
+    if (this.phase === 'end') { this.game.onPlanted(c, b, { late: true }); return; } // (no bonus, the round stays decided)
     c.money = Math.min(this.rules.maxMoney, c.money + PLANT_BONUS);
     c.score += 2;
     this.phase = 'planted';

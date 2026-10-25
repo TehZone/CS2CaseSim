@@ -7,6 +7,7 @@
 // Coordinates: the scene stays in the exporter's glTF metres (Y up); gameplay runs in game units.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { hidePoints } from '../cs2/rig.js';
 import { TextureArrays, slotsOf, batchMaterial, materialTable, addPieces, SLOTS, SRGB } from './batch.js';
 import { ProbeField } from './probes.js';
 
@@ -614,7 +615,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   const info = map.info;
   onProgress('Loading the map…');
   const [gltf, lightMap, sky, probeData] = await Promise.all([
-    new GLTFLoader().loadAsync(map.world, (e) => e.total && onProgress(`Loading the map… ${Math.round((e.loaded / e.total) * 100)}%`)),
+    new GLTFLoader().loadAsync(map.world, (e) => e.total && onProgress(`Loading the map… ${Math.round((e.loaded / e.total) * 100)}%`)).then(hidePoints),
     map.lightmap ? loadLightmap(map.lightmap, info.lightmap.size) : null,
     map.sky ? new THREE.TextureLoader().loadAsync(map.sky) : null,
     map.probes ? fetch(map.probes).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null) : null,

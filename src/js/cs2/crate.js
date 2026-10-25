@@ -2,6 +2,7 @@
 // animations that ship with CS2's crate models (exported from the player's install).
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { hidePoints } from './rig.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2Crate, cs2Status } from './api.js';
@@ -10,7 +11,7 @@ import { texture } from './textures.js';
 const loader = new GLTFLoader();
 const gltfs = new Map();
 const loadGltf = (url) => {
-  if (!gltfs.has(url)) { const p = loader.loadAsync(url); gltfs.set(url, p); p.catch(() => gltfs.delete(url)); }
+  if (!gltfs.has(url)) { const p = loader.loadAsync(url).then(hidePoints); gltfs.set(url, p); p.catch(() => gltfs.delete(url)); }
   return gltfs.get(url);
 };
 
