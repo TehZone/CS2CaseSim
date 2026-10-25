@@ -303,6 +303,26 @@ body:not(.is-online) .online-only { display: none !important; }
 .inspect.fp [data-a=flip], .inspect.fp [data-a=reset] { display: none; }
 .inspect.fp .help { visibility: hidden; }
 
+/* ---------- charms ---------- */
+/* the charm on a gun: in its card's bottom-right corner (stickers are bottom-left), and in its details */
+.card .img .kc-badge { position: absolute; right: 5px; bottom: 3px; width: 34px; height: 34px; z-index: 2; display: grid; place-items: center; }
+.card .img .kc-badge img { width: 100%; height: 100%; filter: drop-shadow(0 1px 2px #000); }
+.kv .kc-badge { display: inline-grid; width: 26px; height: 26px; vertical-align: middle; margin-right: 4px; }
+.kv .kc-badge img { width: 100%; height: 100%; object-fit: contain; }
+.kc-badge.slab img { padding: 3px; border: 1px solid rgba(220, 235, 255, .6); border-radius: 3px; background: rgba(255, 255, 255, .08); box-sizing: border-box; }
+/* a Sticker Slab: its sticker sealed in a clear case with a ring at the top */
+.card .img.slab img, .detail .big.slab img { width: 34%; height: 50%; margin-top: 9%; }
+.card .img.slab::before, .detail .big.slab::before {
+  content: ""; position: absolute; left: 50%; top: 55%; width: 42%; height: 74%; transform: translate(-50%, -50%); z-index: 2; pointer-events: none;
+  border: 2px solid rgba(214, 228, 245, .6); border-radius: 9%/7%;
+  background: linear-gradient(155deg, rgba(255, 255, 255, .3) 0%, rgba(255, 255, 255, .05) 32%, transparent 58%, rgba(255, 255, 255, .1) 100%);
+  box-shadow: inset 0 0 0 3px rgba(255, 255, 255, .07), inset 0 0 14px rgba(190, 215, 255, .14), 0 6px 14px rgba(0, 0, 0, .45);
+}
+.card .img.slab::after, .detail .big.slab::after {
+  content: ""; position: absolute; left: 50%; top: 9%; width: 7%; aspect-ratio: 1; transform: translateX(-50%); z-index: 2; pointer-events: none;
+  border: 2px solid #c8cdd5; border-radius: 50%; box-shadow: 0 1px 2px rgba(0, 0, 0, .6);
+}
+
 /* ---------- phone width ---------- */
 @media (max-width: 760px) {
   .two-col, .offer-sides, .match, .opps { grid-template-columns: 1fr; }

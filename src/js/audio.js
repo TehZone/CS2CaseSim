@@ -101,6 +101,8 @@ export const sfx = {
   },
   sticker() { noise(0.12, { gain: 0.35, freq: 5000, q: 1.5 }); tone(300, 0.1, { type: 'sine', gain: 0.2, at: 0.04 }); },
   scrape() { noise(0.25, { gain: 0.35, freq: 6000, q: 0.8 }); },
+  // A charm clipped on or off: the clasp, then the little chain's jingle.
+  charm() { noise(0.05, { gain: 0.25, freq: 7000, q: 2 }); tone(2100, 0.07, { type: 'triangle', gain: 0.1, at: 0.04 }); tone(2650, 0.12, { type: 'triangle', gain: 0.08, at: 0.09 }); tone(1850, 0.14, { type: 'sine', gain: 0.07, at: 0.15 }); },
   reveal(rank) {
     const name = rank >= 5 ? 'revealAncient' : rank === 4 ? 'revealLegendary' : rank === 3 ? 'revealMythical' : 'revealRare';
     if (play(name)) return;

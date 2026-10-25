@@ -5,6 +5,7 @@ import { CHICKEN_COOP } from './chickens.js';
 
 export const D = {
   cases: [], skins: {}, stickers: {}, agents: {}, collections: [], events: {}, proTeams: {}, pros: {},
+  charms: {}, charmCollections: [], slab: null,
   keyPrice: 2.49, generatedAt: '', pricedAt: '',
 };
 
@@ -34,6 +35,8 @@ export const CASE_ODDS = [
 ];
 // Souvenir packages, collection packages and armory collection drops: each rarity is 5x rarer than the one below.
 export const COLLECTION_ODDS = { 0: 0.8, 1: 0.16, 2: 0.032, 3: 0.0064, 4: 0.00128, 5: 0.000256 };
+// Charm collections (High Grade, Remarkable, Exotic, Extraordinary): a capsule's odds.
+export const CHARM_ODDS = { 2: 0.7992, 3: 0.1598, 4: 0.032, 5: 0.009 };
 export const DOPPLER_PHASE_WEIGHT = {
   'Phase 1': 0.22, 'Phase 2': 0.22, 'Phase 3': 0.22, 'Phase 4': 0.22,
   Ruby: 0.045, Sapphire: 0.045, 'Black Pearl': 0.03, Emerald: 0.06,
@@ -46,6 +49,7 @@ export function initData(json) {
   D.cases.push(makeAgentLocker(), CHICKEN_COOP);
   D.caseById = Object.fromEntries(D.cases.map((c) => [c.id, c]));
   D.colById = Object.fromEntries(D.collections.map((c) => [c.id, c]));
+  D.charmColById = Object.fromEntries((D.charmCollections || []).map((c) => [c.id, c]));
   // Pro player cards grouped into the real rosters they played in (AI opponents in the team manager).
   D.rosters = {};
   for (const p of Object.values(D.pros)) (D.rosters[p.ev + '|' + p.tm] ||= []).push(p.id);
@@ -83,6 +87,7 @@ export function caseTiers(c) {
     return CASE_ODDS.filter(([k]) => (k === 'rare' ? c.rare?.length : c.pools[k]?.length));
   }
   if (c.kind === 'souvenir' || c.kind === 'package' || c.kind === 'collection') return collectionTiers(c.pools);
+  if (c.kind === 'charms') return Object.keys(c.pools).filter((k) => c.pools[k]?.length && CHARM_ODDS[k]).map((k) => [k, CHARM_ODDS[k]]);
   const odds = { 2: 0.7992, 3: 0.1598, 4: 0.032, 5: 0.0064, 7: 0.0026 };
   return Object.keys(c.pools).map((k) => [k, odds[k] ?? 0.01]);
 }
@@ -92,6 +97,10 @@ export const collectionTiers = (pools) =>
 // A collection as a case-like container (armory collection drops).
 export function collectionBox(col) {
   return { id: col.id, n: col.n, img: col.img, kind: 'collection', key: false, custom: true, pools: col.tiers, col: col.id, price: 0 };
+}
+// A charm collection as a case-like container (the Armory's charm offers).
+export function charmBox(col) {
+  return { id: col.id, n: col.n, img: col.img, kind: 'charms', key: false, custom: true, pools: col.pools, price: 0 };
 }
 
 export const eventName = (ev) => D.events[ev]?.n || '';

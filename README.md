@@ -38,6 +38,8 @@ With CS2 installed the inspect also offers:
 - **Sticker effects**: Holo, Foil, Gold, Glitter, Lenticular and Embroidered stickers use CS2's own sticker materials.
 - **StatTrak™ counters**: StatTrak™ guns carry CS2's orange counter module where the game puts it, and StatTrak™ knives
   have the count etched into the blade, showing the item's kills (in the inspect, first person and Play).
+- **Charms**: CS2's charm models hang from each gun's own keychain point and swing as the gun moves (in the inspect,
+  first person and Play), turned by the charm's pattern. A Sticker Slab shows its sticker on the card inside the case.
 
 Opening a case also plays CS2's own crate: the case's 3D model drops in, lands and unlocks with the game's "fall" and
 "open" animations and sounds before the roulette (weapon cases and recent souvenir packages; containers without a 3D
@@ -219,13 +221,17 @@ What's in a match:
 - Trade Up Contracts with CS2's rules: 10 skins of one rarity, ticket-based odds per collection, normalised output
   floats, StatTrak contracts, and 5-Covert contracts into a knife or gloves
 - The Armory: Armory Stars (Armory Pass, or earned by opening cases) spent on drops from featured collections that
-  rotate every 10-15 minutes
+  rotate every 10-15 minutes, and on the four charm collections (always available)
+- Charms: all 78 of CS2's charms (Missing Link, Missing Link Community, Small Arms and Dr Boom), from the Armory or the
+  Market, one per gun (Souvenirs too). Each has a pattern from 1 to 100,000; low and special ones (#1, the top 10, the
+  top 100, #77777...) are worth more. A gun is worth its charm too; taking one off uses a Charm Detachment (a pack of 3
+  for $0.99). Sticker Slabs turn any sticker into a charm (the sticker plus $0.44, the cheapest slabs' going rate)
 - Gambling (virtual money, no house edge, provably fair with a verify button): case battles (1v1 to 2v2, normal or
   crazy), coinflip and jackpot, against bots or, online, other players
 - Team manager: 2,570 pro player cards (one per player per Major, rated from real Major results), packs, a
   five-role lineup with chemistry, round-by-round match simulation, cups, LANs and Majors against real rosters
 - Online play (optional): accounts on your own server, trading between players, live lobbies; see DEPLOY.md
-- Item Database (like CSFloat's): search every skin, knife, glove, sticker, agent and pro card in the game; open one to
+- Item Database (like CSFloat's): search every skin, knife, glove, sticker, charm, agent and pro card in the game; open one to
   see every copy that exists with its owner, float, seed, pattern and stickers (online: everyone on the server;
   offline: your inventory), its float rank (#1-#3 lowest and highest, StatTrak™ and Souvenir copies ranked apart), the
   guns a sticker is applied to, and a skin's current Market listings. Your own top floats carry the same #1-#3 badge

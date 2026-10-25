@@ -176,6 +176,42 @@ class CS2Service {
     });
   }
 
+  // Charms: a charm's model (CS2's keychain models: a short chain of three joints with the charm on the end), as
+  // { model: url }, and where a gun's charm hangs (its "keychain" attachment, "keychain_legacy" on legacy models).
+  charm(mdl) {
+    mdl = String(mdl).replace(/\\/g, '/');
+    if (!/^weapons\/keychains\/[a-z0-9_/]+\.vmdl$/i.test(mdl)) return Promise.reject(new Error('Bad charm model'));
+    return this.playJob('charm:' + mdl, async () => {
+      const name = path.basename(mdl, '.vmdl');
+      const file = await this.ensureCS2().exportGltf(mdl, `charms/${name}/${name}.gltf`, { materials: true });
+      const dir = path.dirname(file), stamp = path.join(dir, SHRUNK);
+      if (this.shrinkImages && !fs.existsSync(stamp)) {
+        // Charm textures are 2K; a charm is a few centimetres across, even in its own inspect.
+        await this.shrinkImages(fs.readdirSync(dir).filter((f) => /\.(png|jpe?g)$/i.test(f)).map((f) => path.join(dir, f)), 1024);
+        fs.writeFileSync(stamp, '');
+      }
+      return { model: this.url(file) };
+    });
+  }
+  charmAttach(weapon) {
+    weapon = String(weapon);
+    return this.playJob('charmAttach:' + weapon, async () => {
+      const cs2 = this.ensureCS2();
+      const w = (await this.ensureIndex()).weapons[weapon];
+      if (!w) throw new Error('Unknown weapon ' + weapon);
+      const file = path.join(this.cacheDir, 'charms', 'attach', weapon + '.json');
+      let at = null;
+      try { at = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+      if (at?.model !== w.model) {
+        const text = String(await cs2.run(['-i', cs2.vpk, '-f', w.model + '_c', '--block', 'MDAT']));
+        at = { model: w.model, attach: attachment(text, 'keychain'), legacy: attachment(text, 'keychain_legacy') };
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(at));
+      }
+      return { attach: at.attach, legacy: at.legacy };
+    });
+  }
+
   // CS2's glove inspect animation (both hands posed on the viewmodel skeleton): { clip } glTF URL.
   async gloveClip() {
     const cs2 = this.ensureCS2();

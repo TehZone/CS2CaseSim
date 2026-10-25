@@ -19,6 +19,7 @@ export function freshState() {
     coopSlots: 3,
     team: freshTeam(),
     loadout: {}, // slot (see items.loadoutSlot) -> uid
+    charmDetach: 0, // Charm Detachments left (taking a charm off a gun uses one)
     serials: {}, // offline serial counters: items.serialKey -> last number given
     serialsBackfilled: true, // (older saves get their unboxed items numbered once on load)
     rank: freshRank(), // CS:GO competitive rank from Play (see ranks.js)

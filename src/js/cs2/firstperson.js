@@ -7,6 +7,7 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2FirstPerson } from './api.js';
 import { loadGltf as load, rebind, bonesByName, forearmTwist, retargetWeapon } from './rig.js';
 import { buildGloveScene } from './skin.js';
+import { swingCharm } from './charm.js';
 import { itemDef } from '../items.js';
 
 // CS2's special inspects and draws (the Deagle's spin, the Falchion's and Skeleton's tricks...) come up now and then:
@@ -56,6 +57,11 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
   // The weapon: a copy of the inspect model's glTF scene (same skin materials), without its inspect framing.
   const root = cloneSkinned(model.userData.root);
   root.position.set(0, 0, 0); root.rotation.set(0, 0, 0); root.scale.set(1, 1, 1);
+  // A charm keeps its own little skeleton: it comes off before the weapon is put on the clip's bones, and goes back on
+  // the animated bone after (below), swinging again.
+  const charms = [];
+  root.traverse((o) => { if (o.userData.charm && o.parent?.isBone) charms.push([o, o.parent]); });
+  for (const [o] of charms) o.removeFromParent();
   matchDuplicateBones(root, bones);
   const fixes = retargetWeapon(root, bones); // e.g. the USP-S on the P2000's clips
   rebind(root, bones, weaponRoot || skel);
@@ -69,6 +75,14 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
     const f = fixes.get(o.parent.name);
     if (f) o.applyMatrix4(f);
     b.add(o);
+  }
+  for (const [o, on] of charms) {
+    const b = bones[on.name];
+    if (!b) continue;
+    const f = fixes.get(on.name);
+    if (f) o.applyMatrix4(f);
+    b.add(o);
+    swingCharm(o);
   }
 
   // Stickers ride on the bone that moves the surface they're on (the magazine's for one on the mag, so it comes out

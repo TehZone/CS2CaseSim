@@ -13,7 +13,7 @@ import { marketWindow, skinListings, localSold, lowestPrice } from '../engine/ma
 import { floatRanks, countCopies, copyCategory, CATEGORY_NAME, itemKey } from '../engine/database.js';
 
 const PAGE = 60;
-const TYPES = [['all', 'All items'], ['skin', 'Weapon skins'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['pro', 'Pro cards']];
+const TYPES = [['all', 'All items'], ['skin', 'Weapon skins'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['pro', 'Pro cards']];
 const WEAPON_CATS = [['all', 'All weapons'], ['rifle', 'Rifles'], ['pistol', 'Pistols'], ['smg', 'SMGs'], ['heavy', 'Heavy']];
 const SORTS = [['owned', 'Most copies'], ['pricey', 'Price: high → low'], ['cheap', 'Price: low → high'], ['rarity', 'Rarity'], ['name', 'Name']];
 const COPY_SORTS = [['low', 'Float: low → high'], ['high', 'Float: high → low'], ['value', 'Value'], ['new', 'Newest']];
@@ -38,6 +38,7 @@ function catalog() {
     add('skin', s, s.cat === 'knife' ? 'knife' : s.cat === 'gloves' ? 'gloves' : 'skin', np.top, np.bottom, lowestPrice(s));
   }
   for (const s of Object.values(D.stickers)) { const [, a, ...b] = s.n.split(' | '); add('sticker', s, 'sticker', b.length ? `Sticker · ${b.join(' | ')}` : 'Sticker', a || s.n, s.p); }
+  for (const c of Object.values(D.charms)) add('charm', c, 'charm', `Charm · ${(D.charmColById[c.col]?.n || '').replace(' Charm Collection', '')}`, c.n.replace('Charm | ', ''), c.p);
   for (const a of Object.values(D.agents)) { const [n, f] = a.n.split(' | '); add('agent', a, 'agent', f || 'Agent', n, a.p); }
   for (const p of Object.values(D.pros)) add('pro', p, 'pro', `Pro card · ${D.proTeams[p.tm]?.n || ''}`.trim(), I.itemName({ t: 'pro', id: p.id }), I.basePrice({ t: 'pro', id: p.id }));
   return (CATALOG = out);
@@ -225,7 +226,7 @@ function drawItem() {
   </div>`;
   root.querySelector('[data-back]').addEventListener('click', back);
   root.querySelector('[data-inspect]')?.addEventListener('click', () => {
-    const it = e.t === 'skin' ? I.makeSkinItem(d, { stt: false, fl: d.v ? null : Math.min(d.mx, Math.max(d.mn, 0.02)), sd: 0 }) : e.t === 'sticker' ? I.makeStickerItem(d) : I.makeAgentItem(d);
+    const it = e.t === 'skin' ? I.makeSkinItem(d, { stt: false, fl: d.v ? null : Math.min(d.mx, Math.max(d.mn, 0.02)), sd: 0 }) : e.t === 'sticker' ? I.makeStickerItem(d) : e.t === 'charm' ? I.makeCharmItem(d) : I.makeAgentItem(d);
     openInspect(it);
   });
   root.querySelectorAll('[data-cats] button').forEach((b) => b.addEventListener('click', () => { view.copyCat = b.dataset.v; draw(); }));

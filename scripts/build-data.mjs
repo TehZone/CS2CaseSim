@@ -40,6 +40,7 @@ const skinsGrouped = await cached('skins.json', DB + 'skins.json');
 const stickersRaw = await cached('stickers.json', DB + 'stickers.json');
 const agentsRaw = await cached('agents.json', DB + 'agents.json');
 const collectionsRaw = await cached('collections.json', DB + 'collections.json');
+const keychainsRaw = await cached('keychains.json', DB + 'keychains.json');
 const itemsGame = parseKV1(await cachedText('items_game.txt', ITEMS_GAME)).items_game;
 
 const priceRaw = {};
@@ -232,6 +233,25 @@ for (const c of collectionsRaw) {
   });
 }
 
+// ---- charms ----------------------------------------------------------------------------------
+// Charms with a 3D model (CS2's keychain_definitions): the Missing Link, Small Arms and Dr Boom collections. The
+// souvenir highlight charms (Major clips) aren't included; the Sticker Slab (any sticker in a clear case) is its own entry.
+const KC = itemsGame.keychain_definitions || {};
+const charms = {};
+const charmCollections = new Map();
+for (const k of keychainsRaw) {
+  const def = KC[k.def_index];
+  if (!def?.pedestal_display_model || !k.market_hash_name?.startsWith('Charm |')) continue;
+  const r = ITEM_RARITY[k.rarity?.id] ?? 2;
+  const col = k.collections?.[0];
+  charms[k.id] = { id: k.id, n: k.market_hash_name, r, rc: k.rarity?.color || '#4b69ff', img: img(k.image), mdl: def.pedestal_display_model, col: col?.id || null, p: null };
+  if (!col) continue;
+  if (!charmCollections.has(col.id)) charmCollections.set(col.id, { id: col.id, n: col.name, img: img(col.image), pools: {} });
+  (charmCollections.get(col.id).pools[r] ||= []).push(k.id);
+}
+const slabDef = Object.values(KC).find((k) => k.name === 'kc_sticker_display_case');
+const slab = slabDef && { mdl: slabDef.pedestal_display_model, p: 0.44 };
+
 // ---- Majors: events, teams, souvenir stickers ------------------------------------------------
 const PE = itemsGame.pro_event_results || {}, PP = itemsGame.pro_players || {}, PT = itemsGame.pro_teams || {};
 const stickerKey = new Map(); // "type|team|player|event|effect" -> sticker
@@ -334,8 +354,10 @@ for (const c of Object.values(pros)) {
 
 const data = {
   version: 2, keyPrice: pricing.KEY_PRICE, cases, skins, stickers, agents, collections, events, proTeams, pros,
+  charms, charmCollections: [...charmCollections.values()], slab,
 };
 const counts = pricing.applyPrices(data, idx);
+for (const c of Object.values(charms)) if (c.p == null) c.p = [0.03, 0.05, 0.1, 0.4, 2, 10][c.r] || 0.1;
 
 // Drop stickers nobody sells (no price) unless they are in a capsule; drop capsules without a price.
 for (const [id, s] of Object.entries(stickers)) {
@@ -365,5 +387,6 @@ const nKind = (...k) => data.cases.filter((c) => k.includes(c.kind)).length;
 console.log(`cases: ${nKind('case')}, souvenir packages: ${nKind('souvenir')}, packages: ${nKind('package')}, capsules: ${nKind('capsule', 'autograph')}`);
 console.log(`collections: ${collections.length}, events: ${Object.keys(events).length}, pro cards: ${Object.keys(pros).length}`);
 console.log(`skins: ${Object.keys(skins).length}, stickers: ${Object.keys(stickers).length}, agents: ${Object.keys(agents).length}`);
+console.log(`charms: ${Object.keys(charms).length} in ${charmCollections.size} collections, Sticker Slab ${slab ? '$' + slab.p : 'missing'}`);
 console.log('priced:', counts);
 console.log(`wrote ${OUT} (${kb} KB)`);

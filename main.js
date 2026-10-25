@@ -181,6 +181,8 @@ function registerIpc() {
   ipcMain.handle('cs2:gloveClip', () => cs2.gloveClip());
   ipcMain.handle('cs2:firstPerson', (_e, weapon) => cs2.firstPerson(weapon));
   ipcMain.handle('cs2:statTrak', (_e, weapon) => cs2.statTrak(weapon));
+  ipcMain.handle('cs2:charm', (_e, mdl) => cs2.charm(mdl));
+  ipcMain.handle('cs2:charmAttach', (_e, weapon) => cs2.charmAttach(weapon));
   ipcMain.handle('cs2:crate', (_e, id) => cs2.crate(id));
   ipcMain.handle('cs2:play', (_e, fn, arg) => playCall(fn, arg));
   ipcMain.handle('cs2:prepareAll', (_e, content) => cs2.prepareAll(content));
@@ -1265,6 +1267,52 @@ async function runCrateSmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=charms` redeems a charm from the Armory and hangs it on an AK-47 from the market, seals a sticker in a
+// Sticker Slab, and screenshots the gun's 3D inspect (close up), its first person and the slab into userData/charm-*.png.
+async function runCharmSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `charm-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  await wait(4000);
+  console.log('SMOKE charms', await js(`(async () => { try {
+    const { S } = await import('./js/state.js'); const { act } = await import('./js/backend.js'); const { D } = await import('./js/data.js');
+    const MK = await import('./js/engine/market.js'); const A = await import('./js/engine/armory.js');
+    S.money += 5000; S.stars += 10;
+    const w = MK.marketWindow();
+    const ak = Object.values(D.skins).find((s) => s.wid === 'weapon_ak47' && !s.v && MK.skinListings(s, w).length);
+    const gun = (await act('market.buy', { kind: 'skin', id: ak.id, n: MK.skinListings(ak, w)[0].n, window: w })).item;
+    const offer = A.armoryOffers(A.armoryWindow().i).offers.find((o) => o.type === 'charm');
+    const charm = (await act('armory.redeem', { offer: offer.id, n: 1 })).item;
+    await act('charms.attach', { uid: gun.uid, charm: charm.uid });
+    const stk = Object.values(D.stickers).find((s) => !s.so && s.p > 1 && MK.unitStock('sticker', s, w) > 0);
+    const slab = (await act('charms.slab', { uid: (await act('market.buy', { kind: 'sticker', id: stk.id, window: w })).item.uid })).item;
+    window.__smoke = { gun: gun.uid, slab: slab.uid };
+    return JSON.stringify({ gun: ak.n, charm: D.charms[charm.id].n, pattern: charm.pat, slab: D.stickers[slab.sk].n, value: S.inv.find((i) => i.uid === gun.uid).kc ? 'attached' : 'missing' });
+  } catch (e) { return 'ERR ' + e.stack; } })()`));
+  const inspect = (which) => js(`(async () => { const { S } = await import('./js/state.js'); const ui = await import('./js/ui.js'); const { inspectView } = await import('./js/inspect.js');
+    document.querySelector('.inspect [data-a=close]')?.click();
+    ui.openInspect(S.inv.find((i) => i.uid === window.__smoke.${which}));
+    for (let i = 0; i < 240 && !(inspectView.model && !document.querySelector('.inspect .loading.model')); i++) await new Promise((r) => setTimeout(r, 500));
+    let charm = null; inspectView.model?.traverse((o) => { if (o.name === 'charm') charm = o; });
+    return JSON.stringify({ model: !!inspectView.model, source: inspectView.source, charm: !!charm, on: charm?.parent?.name || null, error: document.querySelector('.inspect .loading')?.textContent || null }); })()`);
+  console.log('SMOKE gun inspect', await inspect('gun'));
+  await wait(2500);
+  await shot('gun');
+  await js(`(async () => { const { inspectView } = await import('./js/inspect.js'); inspectView.state.zoom = 3; })()`);
+  await wait(1500);
+  await shot('gun-close');
+  console.log('SMOKE first person', await js(`(async () => { try { const { inspectView } = await import('./js/inspect.js'); await inspectView.enterFirstPerson();
+    let charm = null; inspectView.fp.rig.traverse((o) => { if (o.name === 'charm') charm = o; }); return JSON.stringify({ charm: !!charm, on: charm?.parent?.name || null });
+  } catch (e) { return 'ERR ' + e.message; } })()`));
+  await wait(1800);
+  await shot('fp');
+  console.log('SMOKE slab inspect', await inspect('slab'));
+  await wait(2500);
+  await shot('slab');
+  console.log('SMOKE screenshots saved to', app.getPath('userData'));
+  app.quit();
+}
+
 // `CS2SIM_SMOKE=play` starts a Play match on Dust II (exporting the map on first use), looks at a bot, shoots it and
 // screenshots the view into userData/play-*.png.
 async function runPlaySmoke(win) {
@@ -1675,6 +1723,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'hitch') { win.webContents.once('did-finish-load', () => runHitchSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'prepare') { win.webContents.once('did-finish-load', () => runPrepareSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'crate') { win.webContents.once('did-finish-load', () => runCrateSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'charms') { win.webContents.once('did-finish-load', () => runCharmSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   win.webContents.once('did-finish-load', async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     await wait(4000);

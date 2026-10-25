@@ -162,9 +162,23 @@ function priceSkin(idx, skin) {
   return p;
 }
 
+// The Sticker Slab charm isn't sold on its own: its price is what slabs of near-worthless stickers sell for above the
+// sticker (a low percentile, near the cheapest).
+function slabPrice(idx, stickers) {
+  const d = [];
+  for (const s of Object.values(stickers)) {
+    if (s.p == null || s.p > 0.1) continue;
+    const p = priceOf(idx, s.n.replace(/^Sticker \|/, 'Sticker Slab |'), null);
+    if (p != null) d.push(p - s.p);
+  }
+  if (d.length < 20) return null;
+  d.sort((a, b) => a - b);
+  return Math.round(d[Math.floor(d.length * 0.1)] * 100) / 100;
+}
+
 // Mutates game data in place with fresh prices. Returns counts for reporting.
 function applyPrices(data, idx) {
-  let skins = 0, stickers = 0, agents = 0, cases = 0;
+  let skins = 0, stickers = 0, agents = 0, cases = 0, charms = 0;
   for (const s of Object.values(data.skins)) { s.p = priceSkin(idx, s); skins++; }
   for (const s of Object.values(data.stickers)) {
     const p = priceOf(idx, s.n, null);
@@ -179,8 +193,13 @@ function applyPrices(data, idx) {
     const p = priceOf(idx, c.n, null);
     if (p != null) { c.price = p; cases++; }
   }
+  for (const c of Object.values(data.charms || {})) {
+    const p = priceOf(idx, c.n, null);
+    if (p != null) { c.p = p; charms++; }
+  }
+  if (data.slab) data.slab.p = slabPrice(idx, data.stickers) ?? data.slab.p;
   data.pricedAt = new Date().toISOString();
-  return { skins, stickers, agents, cases };
+  return { skins, stickers, agents, cases, charms };
 }
 
 module.exports = { SOURCES, WEARS, KEY_PRICE, fetchSources, buildIndex, priceOf, priceSkin, applyPrices, wearsFor, mhn };

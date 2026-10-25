@@ -37,6 +37,50 @@ export const makeStickerItem = (s, src = '') => ({ uid: uid(), t: 'sticker', id:
 export const makeAgentItem = (a, src = '') => ({ uid: uid(), t: 'agent', id: a.id, at: Date.now(), src });
 export const makeProItem = (p, src = '') => ({ uid: uid(), t: 'pro', id: p.id, at: Date.now(), src });
 
+// ---- charms ----------------------------------------------------------------------------------
+// A charm hangs off a gun's keychain point. Each copy has a pattern (1-100,000, like CS2's): which way it hangs and turns.
+// A Sticker Slab is a charm too: any sticker sealed in a clear case (id 'slab', the sticker in `sk`).
+export const CHARM_PATTERNS = 100000;
+export const rollCharmPattern = (r = rand) => 1 + Math.floor(r() * CHARM_PATTERNS);
+export function makeCharmItem(c, { src = '', pat, r = rand } = {}) {
+  return { uid: uid(), t: 'charm', id: c.id, pat: pat ?? rollCharmPattern(r), at: Date.now(), src };
+}
+export const makeSlabItem = (stickerId, { src = 'Sticker Slab', pat, r = rand } = {}) =>
+  ({ uid: uid(), t: 'charm', id: 'slab', sk: stickerId, pat: pat ?? rollCharmPattern(r), at: Date.now(), src });
+// A slab's definition, made from its sticker: worth the sticker plus the slab.
+const slabDefs = new Map();
+function slabDef(sk) {
+  const s = D.stickers[sk];
+  if (!s || !D.slab) return null;
+  let d = slabDefs.get(sk);
+  if (!d || d.p !== round2(s.p + D.slab.p)) {
+    d = { id: 'slab', sk, n: 'Sticker Slab | ' + s.n.replace(/^Sticker \| /, ''), r: s.r, rc: s.rc, img: s.img, fx: s.fx, mdl: D.slab.mdl, p: round2(s.p + D.slab.p), slab: true };
+    slabDefs.set(sk, d);
+  }
+  return d;
+}
+// Taking a charm off uses up a Charm Detachment; they come in packs of three.
+export const DETACH_PACK = { n: 3, price: 0.99 };
+// Charms go on guns (Souvenirs too), one per gun; not on knives, gloves or gear.
+export const canHaveCharm = (item) => item.t === 'skin' && STICKER_CATS.has(itemDef(item)?.cat);
+// The charm on a gun, as a charm item (item.kc keeps the charm item without its uid while it's attached).
+export const attachedCharm = (item) => (item.kc ? { ...item.kc, t: 'charm' } : null);
+// Low and fun patterns are collected: #1, #2-10, #11-100, #101-1000, and numbers like 77777, 12345 or 100000.
+const FUN_PATTERNS = new Set([69, 420, 777, 1337, 6969, 12345, 42069, 69420, 100000]);
+export function charmPattern(pat) {
+  const out = { mult: 1, label: '', tier: '', info: [] };
+  if (!pat) return out;
+  const s = String(pat);
+  const fun = FUN_PATTERNS.has(pat) || (s.length >= 3 && /^(\d)\1+$/.test(s));
+  if (pat === 1) Object.assign(out, { mult: 3, label: 'Pattern #1', tier: 't0' });
+  else if (pat <= 10) Object.assign(out, { mult: 1.8, label: 'Top 10 pattern', tier: 't1' });
+  else if (pat <= 100) Object.assign(out, { mult: 1.3, label: 'Low pattern' });
+  else if (fun) Object.assign(out, { mult: 1.15, label: 'Special pattern' });
+  else if (pat <= 1000) Object.assign(out, { mult: 1.08, label: 'Low pattern' });
+  out.info.push(['Pattern', '#' + pat.toLocaleString('en-US')]);
+  return out;
+}
+
 // Souvenir stickers for a Major: the event logo, the two teams that "played the match" and (from Cologne 2015)
 // a gold autograph of the match MVP. Placed in model space (m: 1) so they line up on icons and 3D models.
 export function souvenirStickers(ev, r = rand) {
@@ -73,6 +117,7 @@ export function rollFromCase(c, r = rand) {
     return makeSkinItem(skin, { src: c.n, r, ...(c.kind === 'case' || tier === 'rare' ? {} : { stt: false }) });
   }
   const id = pick(c.pools[tier], r);
+  if (c.kind === 'charms') return makeCharmItem(D.charms[id], { src: c.n, r });
   return c.kind === 'agents' ? makeAgentItem(D.agents[id], c.n) : makeStickerItem(D.stickers[id], c.n);
 }
 
@@ -86,7 +131,7 @@ export function fakeRoll(c, r = rand) {
   }
   const tier = pickWeighted(caseTiers(c).filter(([k]) => k !== 'rare'), r);
   if (SKIN_KINDS.has(c.kind)) return { t: 'skin', id: pick(c.pools[tier], r), fl: 0.2, sv: c.kind === 'souvenir' };
-  return { t: c.kind === 'agents' ? 'agent' : 'sticker', id: pick(c.pools[tier], r) };
+  return { t: c.kind === 'agents' ? 'agent' : c.kind === 'charms' ? 'charm' : 'sticker', id: pick(c.pools[tier], r) };
 }
 
 // ---- pro player cards ------------------------------------------------------------------------
@@ -113,6 +158,7 @@ export function itemDef(item) {
     case 'agent': return D.agents[item.id];
     case 'chicken': return BREED[item.id];
     case 'pro': return D.pros[item.id];
+    case 'charm': return item.id === 'slab' ? slabDef(item.sk) : D.charms[item.id];
   }
   return null;
 }
@@ -145,6 +191,7 @@ export function nameParts(item) {
     return { top: b || 'Agent', bottom: a };
   }
   if (item.t === 'chicken') return { top: 'Chicken', bottom: chickenName(item) };
+  if (item.t === 'charm') return d.slab ? { top: 'Sticker Slab', bottom: d.n.replace(/^Sticker Slab \| /, '') } : { top: 'Charm', bottom: d.n.replace(/^Charm \| /, '') };
   if (item.t === 'pro') return { top: `${d.ovr} ${d.role} · ${proTeamTag(d)} ${eventShort(d.ev)}`, bottom: d.n };
   return { top: '', bottom: '' };
 }
@@ -164,7 +211,7 @@ export function rarityRank(item) {
 export function rarityInfo(item) {
   const rank = rarityRank(item);
   if (item.t === 'pro') { const t = PRO_RARITY[rank - 2]; return { rank, n: t.n, c: t.c }; }
-  const fam = item.t === 'sticker' ? 'sticker' : item.t === 'agent' ? 'agent' : item.t === 'chicken' ? 'chicken' : 'skin';
+  const fam = item.t === 'sticker' || item.t === 'charm' ? 'sticker' : item.t === 'agent' ? 'agent' : item.t === 'chicken' ? 'chicken' : 'skin';
   let n = RARITY[fam][rank] || '';
   if (item.t === 'skin' && rank === 6) n = itemDef(item).cat === 'gloves' ? 'Extraordinary' : 'Covert ★';
   return { rank, n, c: rarityColor(rank) };
@@ -177,7 +224,7 @@ export const canHaveStickers = (item) => item.t === 'skin' && !item.sv && STICKE
 export function basePrice(item) {
   const d = itemDef(item);
   if (!d) return 0;
-  if (item.t === 'sticker' || item.t === 'agent') return d.p || 0;
+  if (item.t === 'sticker' || item.t === 'agent' || item.t === 'charm') return d.p || 0;
   if (item.t === 'chicken') return chickenValue(item);
   if (item.t === 'pro') return proValue(d);
   if (d.v) return (item.stt ? d.p.V[1] : null) ?? d.p.V[0];
@@ -213,6 +260,7 @@ export function floatMultiplier(item) {
 }
 
 export function patternInfo(item) {
+  if (item.t === 'charm') return charmPattern(item.pat);
   if (item.t !== 'skin') return { mult: 1, label: '', tier: '', info: [] };
   return analyzePattern(itemDef(item), item.sd);
 }
@@ -278,14 +326,16 @@ export function valueBreakdown(item) {
   const sm = serialMultiplier(item.sn);
   const stickers = item.t === 'skin' ? stickerContribution(item) : [];
   const stickerTotal = stickers.reduce((s, x) => s + x.value, 0);
-  const total = round2(base * fm * pat.mult * sm + stickerTotal);
-  return { base, fm, pat, sm, stickers, stickerTotal: round2(stickerTotal), total };
+  // An attached charm keeps its whole value (it comes off again with a Charm Detachment).
+  const charm = item.kc ? valueBreakdown(attachedCharm(item)).total : 0;
+  const total = round2(base * fm * pat.mult * sm + stickerTotal + charm);
+  return { base, fm, pat, sm, stickers, stickerTotal: round2(stickerTotal), charm, total };
 }
 
 const valueCache = new WeakMap();
 export function itemValue(item) {
-  // Cached per object; invalidated by replacing item.stk (see stickers editor) or calling invalidate().
-  const key = (item.stk || []).map((s) => s.id + (s.wr || 0)).join();
+  // Cached per object; invalidated by replacing item.stk (see stickers editor) or item.kc, or calling invalidate().
+  const key = (item.stk || []).map((s) => s.id + (s.wr || 0)).join() + (item.kc ? '|' + item.kc.id + (item.kc.sk || '') + item.kc.pat : '');
   const c = valueCache.get(item);
   if (c && c.key === key && c.pricedAt === D.pricedAt) return c.v;
   const v = valueBreakdown(item).total;

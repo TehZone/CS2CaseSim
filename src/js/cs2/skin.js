@@ -11,6 +11,7 @@ import { gloveMaterials } from './glove.js';
 import { loadGltf as loadRig, rebind, bonesByName, forearmTwist, hidePoints } from './rig.js';
 import { loadSource, texture, whiteTex } from './textures.js';
 import { stickerSurface, contentBox } from './sticker.js';
+import { addCharm } from './charm.js';
 import { stickerBase } from '../composite.js';
 import { D } from '../data.js';
 
@@ -515,6 +516,10 @@ export async function buildCS2Model(item, def, renderer, { statTrak = true, quic
   wrap.userData.root = root;
   if (item.stt && statTrak) {
     try { wrap.userData.statTrak = await addStatTrak(root, wid, prep, item.kills || 0); } catch (e) { console.warn('StatTrak counter failed', e); }
+  }
+  // A charm hangs off the gun's keychain attachment (it isn't part of the framing above).
+  if (item.kc) {
+    try { await addCharm(root, wid, prep.mesh, { ...item.kc, t: 'charm' }); } catch (e) { console.warn('Charm failed', e); }
   }
   if (item.stk?.length) {
     try { await addStickerDecals(wrap, item, def); } catch (e) { console.warn('sticker decals failed', e); }

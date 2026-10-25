@@ -182,6 +182,14 @@ function floatRankTag(item) {
   return `<span class="tag frk ${side} r${n}" title="${esc(floatRankText(r))}">#${n} ${side === 'low' ? 'Low' : 'High'}</span>`;
 }
 
+// Charms: a Sticker Slab's picture is its sticker, drawn in a clear case (.slab); a gun's charm hangs in its card's corner.
+const isSlab = (item) => item?.t === 'charm' && item.id === 'slab';
+const slabAttr = (item) => (isSlab(item) ? `data-sk="${esc(item.sk)}"` : ''); // its cropped picture is swapped in when ready (items.js)
+function charmBadge(c) {
+  if (!c || !I.itemDef(c)) return '';
+  return `<span class="kc-badge ${isSlab(c) ? 'slab' : ''}" title="${esc(I.itemName(c))} · Pattern #${c.pat}"><img src="${I.itemImage(c, 's')}" ${slabAttr(c)} alt=""></span>`;
+}
+
 export function itemCard(item, { selectable = false, selected = false, extra = '' } = {}) {
   const r = I.rarityInfo(item);
   const np = I.nameParts(item);
@@ -191,10 +199,11 @@ export function itemCard(item, { selectable = false, selected = false, extra = '
   const wear = wk ? `<b class="wk" style="--wc:${WEAR_BY_KEY[wk].c}" title="${WEAR_BY_KEY[wk].n}">${wk}</b>${item.fl.toFixed(4)}`
     : esc(item.t === 'chicken' ? HAT[item.hat].n : r.n);
   const stk = item.stk?.length ? `<div class="stickers">${item.stk.map((s) => `<img src="${imgUrl(D.stickers[s.id]?.img, 's')}">`).join('')}</div>` : '';
+  const kc = item.kc ? charmBadge(I.attachedCharm(item)) : '';
   return `<div class="card ${selected ? 'selected' : ''} ${extra}" data-uid="${item.uid}" style="--rc:${r.c}">
     ${selectable ? '<div class="sel"></div>' : ''}
     <div class="tags">${item.nw ? '<span class="tag new">New</span>' : ''}${item.stt ? '<span class="tag st">ST™</span>' : ''}${item.sv ? '<span class="tag sv">Souvenir</span>' : ''}${patternTag(pat)}${item.lk ? '<span class="tag lock">🔒</span>' : ''}${isEquipped(item) ? '<span class="tag eq">Equipped</span>' : ''}${floatRankTag(item)}${item.sn ? `<span class="tag sn ${item.sn <= 100 || I.isSpecialSerial(item.sn) ? 'low' : ''}" title="Serial number: unboxed #${item.sn}">#${item.sn}</span>` : ''}</div>
-    <div class="img"><img loading="lazy" src="${I.itemImage(item, 'm')}" alt="">${stk}</div>
+    <div class="img ${isSlab(item) ? 'slab' : ''}"><img loading="lazy" src="${I.itemImage(item, 'm')}" ${slabAttr(item)} alt="">${stk}${kc}</div>
     <div class="rbar"></div>
     ${item.t === 'skin' && item.fl != null ? `<div class="floatline"><i style="left:${item.fl * 100}%"></i></div>` : ''}
     <div class="meta">
@@ -249,9 +258,75 @@ export function itemContextMenu(e, item, { onChange } = {}) {
   if (I.canHaveStickers(item)) {
     items.push({ label: 'Stickers', icon: 'sticker', hint: `${item.stk?.length || 0}/${I.MAX_STICKERS}`, action: () => openStickerEditor(item, { onDone: () => { emit('inv'); onChange?.(); } }) });
   }
+  if (I.canHaveCharm(item)) {
+    items.push(item.kc
+      ? { label: 'Remove charm', icon: 'keychain_removal', hint: I.nameParts(I.attachedCharm(item)).bottom, action: async () => done(await detachCharm(item)) }
+      : { label: 'Attach charm', icon: 'move_keychain', action: async () => done(await attachCharmTo(item)) });
+  }
+  if (item.t === 'charm') items.push({ label: 'Attach to a gun', icon: 'move_keychain', action: async () => done(await hangCharm(item)) });
+  if (item.t === 'sticker' && D.slab) items.push({ label: 'Sticker Slab', icon: 'sticker', hint: money(D.slab.p), action: async () => done(await slabSticker(item)) });
   items.push({ label: item.lk ? 'Unlock' : 'Lock', icon: item.lk ? 'unlocked' : 'locked', action: async () => done(await tryAct('item.lock', { uid: item.uid, lk: !item.lk })) });
   items.push('-', { label: 'Sell', icon: 'dollar_sign', hint: money(I.itemValue(item)), disabled: !!item.lk, action: async () => done(await sellItems([item])) });
   contextMenu(e.clientX, e.clientY, items);
+}
+
+// ---- charms --------------------------------------------------------------------------------
+// One item picked from a grid (null if the window is closed).
+function chooseItem(title, items, { empty = 'Nothing to choose from.', note = '' } = {}) {
+  return new Promise((resolve) => {
+    let picked = null;
+    const m = openModal({
+      title, cls: 'wide',
+      body: `${note ? `<p class="muted" style="margin:0 0 12px">${note}</p>` : ''}${items.length ? `<div class="grid">${items.map((it) => itemCard(it)).join('')}</div>` : `<div class="empty">${empty}</div>`}`,
+      foot: '<button class="btn ghost" data-close>Cancel</button>',
+      onClose: () => resolve(picked),
+    });
+    m.el.querySelectorAll('.card[data-uid]').forEach((c) => c.addEventListener('click', () => { picked = items.find((it) => it.uid === c.dataset.uid); m.close(); }));
+  });
+}
+const byValue = (a, b) => I.itemValue(b) - I.itemValue(a);
+async function attach(gun, charm) {
+  if (!(await tryAct('charms.attach', { uid: gun.uid, charm: charm.uid }))) return false;
+  sfx.charm();
+  toast(`Attached ${esc(I.itemName(charm))} to ${esc(I.itemName(gun))}`, 'good');
+  return true;
+}
+// Picks one of your charms for a gun.
+async function attachCharmTo(gun) {
+  const charms = S.inv.filter((i) => i.t === 'charm' && !i.lk).sort(byValue);
+  const c = await chooseItem(`Attach a charm to ${esc(I.itemName(gun))}`, charms, {
+    empty: 'You have no charms. Get them from the Armory’s charm collections or the market, or seal a sticker in a Sticker Slab.',
+    note: 'A charm hangs off the gun’s keychain point (one per gun). Taking it off again uses a Charm Detachment.',
+  });
+  return c ? attach(gun, c) : false;
+}
+// Picks a gun for one of your charms.
+async function hangCharm(charm) {
+  const guns = S.inv.filter((i) => I.canHaveCharm(i) && !i.kc).sort(byValue);
+  const g = await chooseItem(`Attach ${esc(I.itemName(charm))} to…`, guns, { empty: 'You have no guns without a charm. Charms go on guns (not knives or gloves), one per gun.' });
+  return g ? attach(g, charm) : false;
+}
+async function detachCharm(gun) {
+  const name = esc(I.itemName(I.attachedCharm(gun)));
+  let buy = false;
+  if (!(S.charmDetach > 0)) {
+    if (!(await confirmDialog(`Taking ${name} off uses a Charm Detachment, and you have none. Buy a pack of ${I.DETACH_PACK.n} for <b class="green">${money(I.DETACH_PACK.price)}</b>?`, { ok: 'Buy and remove' }))) return false;
+    buy = true;
+  }
+  const r = await tryAct('charms.detach', { uid: gun.uid, buy });
+  if (!r) return false;
+  sfx.charm();
+  toast(`Removed ${name}. ${r.left} Charm Detachment${r.left === 1 ? '' : 's'} left.`, 'good');
+  return true;
+}
+async function slabSticker(sticker) {
+  const name = esc(I.itemName(sticker));
+  if (!(await confirmDialog(`Seal ${name} in a Sticker Slab for <b class="green">${money(D.slab.p)}</b>? It becomes a charm you can hang on a gun. The sticker can’t be taken out again.`, { ok: 'Slab it' }))) return false;
+  const r = await tryAct('charms.slab', { uid: sticker.uid });
+  if (!r) return false;
+  sfx.charm();
+  toast(`Made <b>${esc(I.itemName(r.item))}</b>`, 'good');
+  return true;
 }
 
 // ---- item detail ---------------------------------------------------------------------------
@@ -272,6 +347,12 @@ function detailBody(item) {
     kv.push(['Finish style', d.st || '—']);
     for (const [k, v] of vb.pat.info) kv.push([k, v]);
     if (item.stt) kv.push(['StatTrak™ kills', item.kills || 0]);
+    if (item.kc) { const c = I.attachedCharm(item); kv.push(['Charm', `${charmBadge(c)} ${esc(I.itemName(c))} <span class="muted">· Pattern #${c.pat.toLocaleString()}</span>`]); }
+  } else if (item.t === 'charm') {
+    for (const [k, v] of vb.pat.info) kv.push([k, v]);
+    if (d.slab) kv.push(['Sticker', esc(D.stickers[item.sk]?.n || '?')]);
+    else if (D.charmColById[d.col]) kv.push(['Collection', esc(D.charmColById[d.col].n)]);
+    kv.push(['Attaches to', 'Any gun (one charm per gun)']);
   } else if (item.t === 'sticker') {
     if (d.t) kv.push(['Tournament', d.t]);
     if (d.fx) kv.push(['Finish', d.fx]);
@@ -289,7 +370,7 @@ function detailBody(item) {
     kv.push(['Egg income', `${money(chickenIncome(item))}/s (when in coop)`]);
   }
   if (item.sn) kv.push(['Serial number', `#${item.sn.toLocaleString()}${I.serialLabel(item.sn) ? ` <span class="muted">· ${I.serialLabel(item.sn)}</span>` : ''}`]);
-  else if (['skin', 'sticker', 'agent', 'chicken'].includes(item.t)) kv.push(['Serial number', '<span class="muted">None (only unboxed items are numbered)</span>']);
+  else if (['skin', 'sticker', 'agent', 'chicken', 'charm'].includes(item.t)) kv.push(['Serial number', '<span class="muted">None (only unboxed items are numbered)</span>']);
   if (item.src) kv.push(['Obtained from', esc(item.src)]);
 
   const lines = [];
@@ -298,6 +379,11 @@ function detailBody(item) {
     if (vb.fm !== 1) lines.push(['Float premium', '×' + vb.fm.toFixed(2)]);
     if (vb.pat.mult !== 1) lines.push([`Pattern (${esc(vb.pat.label || 'seed ' + item.sd)})`, '×' + vb.pat.mult]);
     for (const s of vb.stickers) lines.push([`Sticker: ${esc(s.def?.n.replace('Sticker | ', '') || '?')}${s.craft > 1 ? ' (craft ×' + s.craft + ')' : ''}`, '+' + money(s.value)]);
+    if (vb.charm) lines.push([`Charm: ${esc(I.nameParts(I.attachedCharm(item)).bottom)}`, '+' + money(vb.charm)]);
+  } else if (item.t === 'charm') {
+    if (d.slab) lines.push(['Sticker', money(D.stickers[item.sk]?.p || 0)], ['Sticker Slab', '+' + money(D.slab.p)]);
+    else lines.push(['Market price', money(vb.base)]);
+    if (vb.pat.mult !== 1) lines.push([`Pattern (${esc(vb.pat.label)})`, '×' + vb.pat.mult]);
   } else if (item.t === 'chicken') {
     lines.push(['Breed value', money(BREED[item.id].v)]);
     lines.push(['Hat multiplier', '×' + HAT[item.hat].m]);
@@ -309,7 +395,7 @@ function detailBody(item) {
 
   return `<div class="detail" style="--rc:${r.c}">
     <div>
-      <div class="big"><img src="${I.itemImage(item, 'l')}" alt=""></div>
+      <div class="big ${isSlab(item) ? 'slab' : ''}"><img src="${I.itemImage(item, 'l')}" ${slabAttr(item)} alt=""></div>
       ${item.t === 'skin' ? floatBar(item) : ''}
     </div>
     <div>
@@ -325,6 +411,9 @@ function detailBody(item) {
       <div class="actions">
         <button class="btn gold" data-a="inspect">Inspect in 3D</button>
         ${I.canHaveStickers(item) ? `<button class="btn" data-a="stickers">Stickers (${item.stk?.length || 0}/${I.MAX_STICKERS})</button>` : ''}
+        ${I.canHaveCharm(item) ? (item.kc ? '<button class="btn" data-a="charm-off">Remove charm</button>' : '<button class="btn" data-a="charm-on">Attach charm</button>') : ''}
+        ${item.t === 'charm' ? '<button class="btn" data-a="charm-hang">Attach to a gun</button>' : ''}
+        ${item.t === 'sticker' && D.slab ? `<button class="btn" data-a="slab" title="Seal it in a clear case: a charm you can hang on a gun">Sticker Slab (${money(D.slab.p)})</button>` : ''}
         ${I.loadoutSlot(item) ? (isEquipped(item)
           ? `<button class="btn" data-a="unequip" title="Equipped as your ${esc(slotName(I.loadoutSlot(item)))}">Unequip</button>`
           : `<button class="btn" data-a="equip">Equip (${esc(slotName(I.loadoutSlot(item)))})</button>`) : ''}
@@ -378,6 +467,11 @@ export function showItemDetail(item, { onChange } = {}) {
       if (a === 'unequip' && await tryAct('loadout.unequip', { uid: item.uid })) refresh();
       if (a === 'sell') { if (await sellItems([item])) m.close(); }
       if (a === 'stickers') openStickerEditor(item, { onDone: () => { emit('inv'); refresh(); } });
+      if (a === 'charm-on' && await attachCharmTo(item)) refresh();
+      if (a === 'charm-off' && await detachCharm(item)) refresh();
+      // The charm or sticker itself is used up: the details close.
+      if (a === 'charm-hang' && await hangCharm(item)) m.close();
+      if (a === 'slab' && await slabSticker(item)) m.close();
     }));
   };
   wire();
@@ -392,8 +486,8 @@ export function openInspect(item) {
   const wrap = document.createElement('div');
   wrap.className = 'inspect';
   wrap.style.setProperty('--rc', r.c);
-  const sub = [I.itemDef(item)?.ph, I.wearName(item), item.fl != null ? 'Float ' + I.floatString(item.fl) : '', item.sd != null ? 'Pattern ' + item.sd : '']
-    .filter(Boolean).join('  ·  ');
+  const sub = [I.itemDef(item)?.ph, I.wearName(item), item.fl != null ? 'Float ' + I.floatString(item.fl) : '', item.sd != null ? 'Pattern ' + item.sd : '',
+    item.t === 'charm' && item.pat ? 'Pattern #' + item.pat.toLocaleString() : ''].filter(Boolean).join('  ·  ');
   wrap.innerHTML = `
     <div class="stage"></div>
     <div class="loading">Loading model…</div>
@@ -414,6 +508,7 @@ export function openInspect(item) {
       ${pat.label ? `<div class="pattern">${patternTag(pat)}</div>` : ''}
       ${item.t === 'skin' ? floatBar(item) : ''}
       ${item.stk?.length ? `<div class="sub" style="margin-top:10px">${item.stk.length} sticker${item.stk.length > 1 ? 's' : ''} applied</div>` : ''}
+      ${item.kc ? `<div class="sub" style="margin-top:6px">Charm: ${esc(I.nameParts(I.attachedCharm(item)).bottom)} · Pattern #${item.kc.pat.toLocaleString()}</div>` : ''}
     </div>
     <div class="help">Drag to rotate · Scroll to zoom · Double-click to reset</div>`;
   document.body.appendChild(wrap);

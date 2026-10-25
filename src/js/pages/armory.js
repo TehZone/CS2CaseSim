@@ -1,9 +1,10 @@
 // The Armory: spend Armory Stars on drops from a rotating set of collections (new rotation every 10-15 minutes).
 import { esc, money, imgUrl } from '../util.js';
-import { D, casePrice } from '../data.js';
+import { D, casePrice, caseTiers, rarityColor } from '../data.js';
+import { makeCharmItem } from '../items.js';
 import { S, on } from '../state.js';
 import { sfx } from '../audio.js';
-import { tryAct, toast } from '../ui.js';
+import { tryAct, toast, openModal, openInspect, rarityOddsHTML } from '../ui.js';
 import { autoSellRules } from '../autosell.js';
 import { armoryWindow, armoryOffers, offerBox, PASS_PRICE, PASS_STARS, SPEND_PER_STAR } from '../engine/armory.js';
 import { playRoulette, showResults, openCollectionView, caseImage } from './cases.js';
@@ -52,13 +53,47 @@ function colCard(id, offers, live) {
     </div>
   </div>`;
 }
+// The best charms of a charm collection: rarest first, then priciest.
+function topCharms(col, n = 3) {
+  return Object.values(col.pools).flat().map((id) => D.charms[id]).sort((a, b) => b.r - a.r || b.p - a.p).slice(0, n);
+}
+function charmCard(o) {
+  const col = D.charmColById[o.col];
+  return `<div class="arm-col">
+    <div class="top">${topCharms(col).map((c) => `<img src="${imgUrl(c.img, 's')}" title="${esc(c.n)}">`).join('')}</div>
+    <div class="body">
+      <h4 data-charms="${col.id}">${esc(col.n)}</h4>
+      <div class="muted" style="font-size:12px">${Object.values(col.pools).flat().length} charms · best: ${esc(topCharms(col, 1)[0].n.replace('Charm | ', ''))}</div>
+      ${offerRow(o, true)}
+    </div>
+  </div>`;
+}
+// What a charm collection holds, by rarity, with its odds.
+function charmCollectionView(id) {
+  const box = offerBox({ type: 'charm', col: id });
+  const tiers = caseTiers(box);
+  const total = tiers.reduce((s, [, w]) => s + w, 0);
+  const m = openModal({
+    title: esc(box.n), cls: 'wide',
+    body: `<div class="odds" style="margin-bottom:12px">${rarityOddsHTML(box, tiers)}</div>
+      <div class="grid">${tiers.slice().reverse().flatMap(([k, w]) => box.pools[k].map((cid) => {
+        const c = D.charms[cid];
+        return `<div class="card def" data-charm="${cid}" style="--rc:${rarityColor(c.r)}"><div class="img"><img loading="lazy" src="${imgUrl(c.img, 'm')}"></div><div class="rbar"></div>
+          <div class="meta"><div class="n1">Charm</div><div class="n2">${esc(c.n.replace('Charm | ', ''))}</div>
+          <div class="row"><span class="val">${money(c.p)}</span><span class="dim" style="font-size:11px">${((w / total / box.pools[k].length) * 100).toFixed(2)}%</span></div></div></div>`;
+      })).join('')}</div>`,
+    foot: '<span class="muted" style="margin-right:auto;font-size:12px">Each charm comes with its own pattern (1 to 100,000): how it hangs on the gun. Low and special numbers are worth more.</span><button class="btn ghost" data-close>Close</button>',
+  });
+  m.el.querySelectorAll('[data-charm]').forEach((el) => el.addEventListener('click', () => openInspect(makeCharmItem(D.charms[el.dataset.charm]))));
+}
 function offerRow(o, live) {
   const box = offerBox(o);
-  const label = o.type === 'drop' ? 'Collection drop' : box.kind === 'souvenir' ? 'Souvenir package' : 'Weapon case';
-  const img = o.type === 'drop' ? imgUrl(topSkins(D.colById[o.col], 1)[0].img, 's') : caseImage(box);
+  const label = o.type === 'drop' ? 'Collection drop' : o.type === 'charm' ? 'Charm' : box.kind === 'souvenir' ? 'Souvenir package' : 'Weapon case';
+  const img = o.type === 'drop' ? imgUrl(topSkins(D.colById[o.col], 1)[0].img, 's') : o.type === 'charm' ? imgUrl(topCharms(D.charmColById[o.col], 1)[0].img, 's') : caseImage(box);
+  const what = o.type === 'drop' ? 'Any skin from the collection' : o.type === 'charm' ? 'Any charm from the collection' : box.n;
   return `<div class="arm-offer">
     <img src="${img}">
-    <div class="grow"><div>${label}</div><div class="muted">${esc(o.type === 'drop' ? 'Any skin from the collection' : box.n)}${o.type !== 'drop' ? ` · worth ${money(casePrice(box))}` : ''}</div></div>
+    <div class="grow"><div>${label}</div><div class="muted">${esc(what)}${o.type === 'case' ? ` · worth ${money(casePrice(box))}` : ''}</div></div>
     ${live ? `<button class="btn gold sm" data-offer="${o.id}" data-stars="${o.stars * qty}">${qty > 1 ? `×${qty} · ` : ''}★ ${o.stars * qty}</button>` : `<span class="chip">★ ${o.stars}</span>`}
   </div>`;
 }
@@ -84,6 +119,8 @@ function draw() {
     <div class="section-title">Featured now<span class="seg arm-qty" data-qty>${QTYS.map((n) => `<button data-v="${n}" class="${qty === n ? 'active' : ''}">×${n}</button>`).join('')}</span></div>
     <div class="armory-grid">${cur.collections.map((id) => colCard(id, cur.offers, true)).join('')}
     </div>
+    ${cur.offers.some((o) => o.type === 'charm') ? `<div class="section-title">Charms<span class="muted" style="font-size:12px;font-weight:400;margin-left:10px;text-transform:none;letter-spacing:0">Always available · hang one on any gun</span></div>
+    <div class="armory-grid">${cur.offers.filter((o) => o.type === 'charm').map(charmCard).join('')}</div>` : ''}
     <div class="section-title">Up next</div>
     <div class="armory-grid">${next.collections.map((id) => colCard(id, next.offers, false)).join('')}</div>
   </div>`;
@@ -93,6 +130,7 @@ function draw() {
     document.querySelector('#nav [data-page=cases]').click();
     openCollectionView(h.dataset.col);
   }));
+  root.querySelectorAll('[data-charms]').forEach((h) => h.addEventListener('click', () => charmCollectionView(h.dataset.charms)));
   root.querySelectorAll('[data-offer]').forEach((b) => b.addEventListener('click', () => redeem(b.dataset.offer)));
   updateAfford();
 }

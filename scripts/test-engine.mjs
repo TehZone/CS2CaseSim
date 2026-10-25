@@ -449,5 +449,75 @@ function tierFreq(box, n) {
   check('item database counts copies by item', n['skin:s'] === 10 && n['sticker:k'] === 1 && !('chicken:h' in n));
 }
 
+// ---- charms --------------------------------------------------------------------------------------------------
+{
+  const { charmBox, CHARM_ODDS } = await E('data');
+  const MK = await import(new URL('../src/js/engine/market.js', import.meta.url));
+  const box = charmBox(D.charmCollections[0]);
+  const N = 200000, counts = {};
+  let patsOk = true;
+  for (let i = 0; i < N; i++) {
+    const it = I.rollFromCase(box, rng);
+    counts[I.itemDef(it).r] = (counts[I.itemDef(it).r] || 0) + 1;
+    if (!(it.t === 'charm' && it.pat >= 1 && it.pat <= 100000)) patsOk = false;
+  }
+  check('charm collections drop at a capsule’s odds', Object.entries(CHARM_ODDS).every(([r, p]) => near((counts[r] || 0) / N, p, Math.max(0.003, p * 0.08))), JSON.stringify(counts));
+  check('every charm has a pattern from 1 to 100,000', patsOk);
+  const pm = (pat) => I.charmPattern(pat).mult;
+  check('low and fun charm patterns are worth more', pm(1) > pm(7) && pm(7) > pm(55) && pm(55) > pm(77777) && pm(77777) > pm(500) && pm(500) > pm(54321) && pm(54321) === 1);
+
+  const st = freshState();
+  st.money = 100;
+  const now = (MK.marketWindow() + 0.5) * MK.MARKET_WINDOW_MS;
+  const run = (name, args, opts = {}) => { const ctx = ACT.makeCtx(st, { rng, now, ...opts }); const r = ACT.runAction(ctx, name, args); return { r, d: ACT.delta(ctx) }; };
+  const tryRun = (...a) => { try { return run(...a); } catch (e) { return e; } };
+  const gunSkin = Object.values(D.skins).find((s) => s.cat === 'rifle' && !s.v && !s.star);
+  const knifeSkin = Object.values(D.skins).find((s) => s.cat === 'knife' && !s.v);
+  const charmDef = Object.values(D.charms).find((c) => c.p > 1);
+  const gun = { uid: 'g', t: 'skin', id: gunSkin.id, fl: 0.2, sd: 3, stk: [], at: 0 };
+  const knife = { uid: 'k', t: 'skin', id: knifeSkin.id, fl: 0.2, sd: 3, stk: [], at: 0 };
+  const c1 = { uid: 'c1', t: 'charm', id: charmDef.id, pat: 4242, at: 0, src: 'Test' }, c2 = { uid: 'c2', t: 'charm', id: charmDef.id, pat: 9, at: 0 };
+  st.inv.push(gun, knife, c1, c2);
+  const gunValue = I.itemValue(gun), charmValue = I.itemValue(c1);
+  const a = run('charms.attach', { uid: 'g', charm: 'c1' });
+  check('attaching puts the charm on the gun and out of the inventory', gun.kc?.id === charmDef.id && gun.kc.pat === 4242 && !st.inv.some((i) => i.uid === 'c1')
+    && a.d.del.includes('c1') && a.d.upd.some((i) => i.uid === 'g'));
+  check('a gun with a charm is worth both', near(I.itemValue(gun), gunValue + charmValue, 0.011), `${I.itemValue(gun)} vs ${gunValue} + ${charmValue}`);
+  check('one charm per gun, and none on knives', tryRun('charms.attach', { uid: 'g', charm: 'c2' }) instanceof Error && tryRun('charms.attach', { uid: 'k', charm: 'c2' }) instanceof Error
+    && st.inv.some((i) => i.uid === 'c2'));
+  const locked = tryRun('charms.detach', { uid: 'g' }, { reserved: new Set(['g']) });
+  const none = tryRun('charms.detach', { uid: 'g' });
+  check('taking a charm off needs a Charm Detachment (and not while the gun is in a trade offer)', locked instanceof Error && none?.code === 'detach' && gun.kc && st.money === 100);
+  const full = tryRun('charms.detach', { uid: 'g', buy: true }, { invCap: st.inv.length });
+  check('a detach that fails (inventory full) changes nothing', full instanceof Error && gun.kc && st.money === 100 && !st.charmDetach);
+  const d = run('charms.detach', { uid: 'g', buy: true });
+  const back = st.inv.find((i) => i.t === 'charm' && i.pat === 4242);
+  check('detaching (buying a pack of three first) gives the same charm back', !gun.kc && back && back.src === 'Test' && back.uid !== 'c1' && d.r.bought === 3 && st.charmDetach === 2
+    && near(st.money, 100 - I.DETACH_PACK.price, 1e-9) && d.d.set.charmDetach === 2);
+  run('charms.attach', { uid: 'g', charm: back.uid });
+  check('a charmed gun can’t go in a trade-up', tryRun('tradeup.sign', { uids: ['g'] })?.message?.includes('charm'));
+
+  const stk = Object.values(D.stickers).find((s) => !s.so && s.p > 0.5);
+  st.inv.push({ uid: 's1', t: 'sticker', id: stk.id, at: 0 });
+  const money0 = st.money;
+  const sl = run('charms.slab', { uid: 's1' }).r.item;
+  check('a Sticker Slab seals a sticker into a charm worth the sticker plus the slab', sl.t === 'charm' && sl.id === 'slab' && sl.sk === stk.id && !st.inv.some((i) => i.uid === 's1')
+    && near(I.basePrice(sl), stk.p + D.slab.p, 0.011) && near(st.money, money0 - D.slab.p, 1e-9) && I.itemName(sl).startsWith('Sticker Slab |'));
+  st.inv.push({ uid: 'g2', t: 'skin', id: gunSkin.id, fl: 0.3, sd: 4, stk: [], sv: true, at: 0 });
+  run('charms.attach', { uid: 'g2', charm: sl.uid });
+  check('slabs hang on guns like any charm (Souvenirs too)', st.inv.find((i) => i.uid === 'g2').kc?.sk === stk.id);
+
+  const w = MK.marketWindow(now);
+  const forSale = Object.values(D.charms).find((c) => MK.unitStock('charm', c, w) > 0);
+  st.money = 1000;
+  const bought = run('market.buy', { kind: 'charm', id: forSale.id, window: w }).r.item;
+  check('charms are sold on the market, each with its own pattern', bought.t === 'charm' && bought.id === forSale.id && bought.pat >= 1 && bought.src === 'Market');
+  st.stars = 10;
+  const offer = A.armoryOffers(A.armoryWindow(now).i).offers.find((o) => o.type === 'charm');
+  const red = run('armory.redeem', { offer: offer.id, n: 5 }, { now: Date.now() }).r;
+  check('the Armory always offers the charm collections', red.items.length === 5 && red.items.every((it) => it.t === 'charm' && D.charms[it.id].col === offer.col && it.sn >= 1)
+    && st.stars === 10 - offer.stars * 5);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

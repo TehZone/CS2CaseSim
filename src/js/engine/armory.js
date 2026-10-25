@@ -1,6 +1,6 @@
 // The Armory: spend Armory Stars on items from a rotating set of collections. The rotation changes every 10-15
 // minutes. It is computed from the clock alone, so every player (and the server) sees the same armory.
-import { D, casePrice, collectionBox, caseTiers } from './data.js';
+import { D, casePrice, collectionBox, charmBox, caseTiers } from './data.js';
 import { hashStr, seededRng, round2, clamp, shuffle } from './util.js';
 
 export const ARMORY_EPOCH = Date.UTC(2026, 0, 1);
@@ -29,7 +29,7 @@ function boxEV(box) {
   let ev = 0;
   for (const [k, w] of tiers) {
     const ids = k === 'rare' ? box.rare.flat() : box.pools[k];
-    const avg = ids.reduce((s, id) => s + typicalPrice(D.skins[id]), 0) / ids.length;
+    const avg = ids.reduce((s, id) => s + (box.kind === 'charms' ? D.charms[id]?.p || 0 : typicalPrice(D.skins[id])), 0) / ids.length;
     ev += (w / tw) * avg;
   }
   return ev;
@@ -70,6 +70,10 @@ export function armoryOffers(i) {
       offers.push({ id: `${i}:pkg:${pkg.id}`, type: 'case', box: pkg.id, col: col.id, stars: starsFor(casePrice(pkg), 1, 40) });
     }
   }
+  // The charm collections are always on offer (like CS2's Armory), at the same star rule.
+  for (const col of D.charmCollections || []) {
+    offers.push({ id: `${i}:charm:${col.id}`, type: 'charm', col: col.id, stars: starsFor(boxEV(charmBox(col)), 1, 12) });
+  }
   const out = { i, collections: chosen.map((c) => c.id), offers };
   offersCache.set(i, out);
   if (offersCache.size > 8) offersCache.delete(offersCache.keys().next().value);
@@ -87,7 +91,7 @@ export function findLiveOffer(offerId, now = Date.now()) {
 
 // The box an offer rolls from.
 export function offerBox(o) {
-  return o.type === 'drop' ? collectionBox(D.colById[o.col]) : D.caseById[o.box];
+  return o.type === 'drop' ? collectionBox(D.colById[o.col]) : o.type === 'charm' ? charmBox(D.charmColById[o.col]) : D.caseById[o.box];
 }
 
 export const starsFromSpend = (prevSpend, spent) => Math.floor((prevSpend + spent) / SPEND_PER_STAR) - Math.floor(prevSpend / SPEND_PER_STAR);

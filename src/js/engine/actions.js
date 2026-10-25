@@ -13,7 +13,7 @@ import * as G from './gamble.js';
 import * as MK from './market.js';
 import * as R from './ranks.js';
 import * as P from './premier.js';
-import { rand, round2 } from './util.js';
+import { rand, round2, uid as newUid } from './util.js';
 
 export class GameError extends Error {
   constructor(message, code = 'bad') { super(message); this.code = code; }
@@ -215,8 +215,8 @@ export const ACTIONS = {
     if (w !== cur && !(w === cur - 1 && ctx.now - cur * MK.MARKET_WINDOW_MS < MK.MARKET_GRACE_MS)) fail('The market has restocked. Have a look at the new listings.', 'expired');
     const sold = ctx.market ? ctx.market(w) : MK.localSold(ctx.st, w);
     let item, price, lid;
-    if (kind === 'sticker' || kind === 'agent') {
-      const d = kind === 'sticker' ? D.stickers[id] : D.agents[id];
+    if (kind === 'sticker' || kind === 'agent' || kind === 'charm') {
+      const d = kind === 'sticker' ? D.stickers[id] : kind === 'agent' ? D.agents[id] : D.charms[id];
       if (!d) fail('Unknown item');
       const count = MK.unitStock(kind, d, w);
       let k = 0;
@@ -224,7 +224,7 @@ export const ACTIONS = {
       if (k >= count) fail(count ? 'Sold out until the next restock' : 'Not for sale right now. Check back after a restock.', 'sold');
       lid = MK.unitLid(kind, d.id, w, k);
       price = d.p;
-      item = kind === 'sticker' ? I.makeStickerItem(d, 'Market') : I.makeAgentItem(d, 'Market');
+      item = kind === 'sticker' ? I.makeStickerItem(d, 'Market') : kind === 'agent' ? I.makeAgentItem(d, 'Market') : I.makeCharmItem(d, { src: 'Market', r: ctx.rng });
     } else {
       const skin = D.skins[id];
       if (!skin) fail('Unknown item');
@@ -337,9 +337,64 @@ export const ACTIONS = {
     return { item, removed: next >= 1 };
   },
 
+  // Charms: one per gun. Attaching takes the charm out of the inventory onto the gun (item.kc); taking it off again uses
+  // a Charm Detachment (buy: buy a pack first when you have none) and gives the same charm back. Items are only changed
+  // after every check, since a failed action puts back the inventory list but not the items in it.
+  'charms.attach'(ctx, { uid, charm }) {
+    const gun = findOwned(ctx, String(uid));
+    if (!I.canHaveCharm(gun)) fail('Charms only go on guns');
+    if (gun.kc) fail(`${I.itemName(gun)} already has a charm. Take it off first.`);
+    if (ctx.reserved?.has(gun.uid)) fail(`${I.itemName(gun)} is in a pending trade offer`, 'reserved');
+    const [c] = take(ctx, [String(charm)]);
+    if (c.t !== 'charm') fail('That isn’t a charm');
+    const { uid: _, t, nw, lk, ...kc } = c;
+    gun.kc = kc;
+    touch(ctx, gun);
+    return { item: gun };
+  },
+  'charms.detach'(ctx, { uid, buy = false }) {
+    const gun = findOwned(ctx, String(uid));
+    if (!gun.kc) fail(`${I.itemName(gun)} has no charm`);
+    if (ctx.reserved?.has(gun.uid)) fail(`${I.itemName(gun)} is in a pending trade offer`, 'reserved');
+    let bought = 0;
+    if (!(ctx.st.charmDetach > 0)) {
+      if (!buy) fail('You have no Charm Detachments left', 'detach');
+      spend(ctx, I.DETACH_PACK.price);
+      ctx.st.charmDetach = (ctx.st.charmDetach || 0) + I.DETACH_PACK.n;
+      bought = I.DETACH_PACK.n;
+    }
+    ctx.st.charmDetach--;
+    ctx.dirty.add('charmDetach');
+    const charm = { ...gun.kc, uid: newUid(), t: 'charm', nw: true };
+    give(ctx, [charm]);
+    delete gun.kc;
+    touch(ctx, gun);
+    return { item: gun, charm, bought, left: ctx.st.charmDetach };
+  },
+  'charms.buyDetach'(ctx) {
+    spend(ctx, I.DETACH_PACK.price);
+    ctx.st.charmDetach = (ctx.st.charmDetach || 0) + I.DETACH_PACK.n;
+    ctx.dirty.add('charmDetach');
+    return { left: ctx.st.charmDetach };
+  },
+  // Seals a sticker in a Sticker Slab, making it a charm (the sticker is used up).
+  'charms.slab'(ctx, { uid }) {
+    if (!D.slab) fail('Sticker Slabs aren’t available');
+    const s = findOwned(ctx, String(uid));
+    if (s.t !== 'sticker') fail('Only stickers can be slabbed');
+    take(ctx, [s.uid]);
+    spend(ctx, D.slab.p);
+    const item = I.makeSlabItem(s.id, { r: ctx.rng });
+    item.nw = true;
+    give(ctx, [item]);
+    return { item, price: D.slab.p };
+  },
+
   'tradeup.sign'(ctx, { uids }) {
     if (!Array.isArray(uids)) fail('Invalid contract');
     const items = uids.map((u) => findOwned(ctx, String(u)));
+    const charmed = items.find((it) => it.kc);
+    if (charmed) fail(`Take the charm off ${I.itemName(charmed)} first`);
     const contract = tradeupContract(items);
     if (!contract.ok) fail(contract.error);
     take(ctx, uids.map(String));

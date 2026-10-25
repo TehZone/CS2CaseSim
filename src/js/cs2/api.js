@@ -92,6 +92,28 @@ export function cs2StatTrak(weapon) {
   return statTraks.get(weapon);
 }
 
+// Charms: a charm's model ({ model }), and where a gun's charm hangs ({ attach, legacy }: its keychain attachments).
+const charms = new Map();
+export function cs2Charm(mdl) {
+  if (!charms.has(mdl)) {
+    const p = window.native?.cs2Charm ? window.native.cs2Charm(mdl)
+      : fetch(`api/cs2/charm?mdl=${encodeURIComponent(mdl)}`).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); });
+    charms.set(mdl, p);
+    p.catch(() => charms.delete(mdl));
+  }
+  return charms.get(mdl);
+}
+const charmAttaches = new Map();
+export function cs2CharmAttach(weapon) {
+  if (!charmAttaches.has(weapon)) {
+    const p = window.native?.cs2CharmAttach ? window.native.cs2CharmAttach(weapon)
+      : fetch(`api/cs2/charm-attach?weapon=${encodeURIComponent(weapon)}`).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); });
+    charmAttaches.set(weapon, p);
+    p.catch(() => charmAttaches.delete(weapon));
+  }
+  return charmAttaches.get(weapon);
+}
+
 // A container's 3D crate model (CS2's "fall" and "open" animations included), or null: { model, name }.
 const crates = new Map();
 export function cs2Crate(id) {

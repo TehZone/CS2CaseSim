@@ -6,6 +6,7 @@ import { itemDef } from './items.js';
 import { buildChicken } from './chicken3d.js';
 import { cs2Status } from './cs2/api.js';
 import { buildCS2Model } from './cs2/skin.js';
+import { buildCharmModel } from './cs2/charm.js';
 import { buildBackdrop, BlurredBackdrop, backdropEnvironment } from './cs2/backdrop.js';
 import { buildFirstPerson, RARE_CHANCE } from './cs2/firstperson.js';
 import { equipped } from './loadout.js';
@@ -574,6 +575,18 @@ class InspectView {
         }
       } catch (e) {
         console.warn('CS2 sticker material unavailable, using the icon model instead:', e);
+      }
+    }
+    // Charms (and Sticker Slabs): CS2's charm model, hanging from its clasp and swinging as you turn it.
+    if (item.t === 'charm') {
+      try {
+        if ((await cs2Status()).available) {
+          const real = await buildCharmModel(item);
+          this.source = 'cs2';
+          return real;
+        }
+      } catch (e) {
+        console.warn('CS2 charm model unavailable, using the icon model instead:', e);
       }
     }
     this.source = 'icon';

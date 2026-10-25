@@ -71,6 +71,12 @@ http.createServer(async (req, res) => {
     if (url.pathname === '/api/cs2/stattrak') {
       try { return json(res, 200, await cs2.statTrak(url.searchParams.get('weapon'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
     }
+    if (url.pathname === '/api/cs2/charm') {
+      try { return json(res, 200, await cs2.charm(url.searchParams.get('mdl'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
+    }
+    if (url.pathname === '/api/cs2/charm-attach') {
+      try { return json(res, 200, await cs2.charmAttach(url.searchParams.get('weapon'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
+    }
     if (url.pathname === '/api/cs2/crate') {
       try { return json(res, 200, await cs2.crate(url.searchParams.get('id'))); } catch (e) { return res.writeHead(500).end(String(e.message || e)); }
     }

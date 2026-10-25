@@ -182,7 +182,7 @@ const cache = new Map();
 // Returns a canvas with the composed item. Cached by everything that affects the look.
 export async function composeItem(item, { size = 'l', stickers = true } = {}) {
   const def = itemDef(item);
-  const key = [item.t, item.id, item.fl, item.sd, size, stickers ? JSON.stringify(item.stk || []) : ''].join('|');
+  const key = [item.t, item.id, item.sk, item.fl, item.sd, size, stickers ? JSON.stringify(item.stk || []) : ''].join('|');
   if (cache.has(key)) return cache.get(key);
   const job = (async () => {
     const base = await loadImage(imgUrl(def.img, size));

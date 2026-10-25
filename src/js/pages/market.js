@@ -51,6 +51,11 @@ function rows(w, sold) {
     if (q) list = list.filter((s) => s.n.toLowerCase().includes(q));
     return list.map((s) => ({ id: s.id, n: s.n.replace('Sticker | ', ''), top: s.t || 'Sticker', img: s.img, p: s.p, rc: rarityColor(s.r), left: unitsLeft('sticker', s, w, sold) }));
   }
+  if (view.tab === 'charms') {
+    let list = Object.values(D.charms);
+    if (q) list = list.filter((c) => c.n.toLowerCase().includes(q));
+    return list.map((c) => ({ id: c.id, n: c.n.replace('Charm | ', ''), top: D.charmColById[c.col]?.n.replace(' Charm Collection', '') || 'Charm', img: c.img, p: c.p, rc: rarityColor(c.r), left: unitsLeft('charm', c, w, sold) }));
+  }
   if (view.tab === 'agents') {
     let list = Object.values(D.agents);
     if (q) list = list.filter((a) => a.n.toLowerCase().includes(q));
@@ -85,7 +90,7 @@ function draw() {
     <div class="page-head"><h1>Market</h1><span class="sub">Limited stock${online() ? ', shared with everyone on the server' : ''}. Rare items are listed rarely and one at a time. Each listing can only be bought once.</span>
       <span class="spacer"></span><span class="chip gold">Restocks in <b data-restock style="margin-left:4px">${fmt(windowEnd(w) - now())}</b></span></div>
     <div class="toolbar">
-      <div class="seg" data-tabs>${[['skins', 'Skins'], ['stickers', 'Stickers'], ['agents', 'Agents']].map(([k, n]) => `<button data-v="${k}" class="${view.tab === k ? 'active' : ''}">${n}</button>`).join('')}</div>
+      <div class="seg" data-tabs>${[['skins', 'Skins'], ['stickers', 'Stickers'], ['charms', 'Charms'], ['agents', 'Agents']].map(([k, n]) => `<button data-v="${k}" class="${view.tab === k ? 'active' : ''}">${n}</button>`).join('')}</div>
       <input class="input" type="search" placeholder="Search ${view.tab}…" value="${esc(view.q)}">
       ${view.tab === 'stickers' ? `<select class="input" data-fx>${FX.map((f) => `<option value="${f}" ${view.fx === f ? 'selected' : ''}>${f === 'all' ? 'All finishes' : f}</option>`).join('')}</select>` : ''}
       ${view.tab === 'skins' ? `<select class="input" data-cat>${CATS.map(([k, n]) => `<option value="${k}" ${view.cat === k ? 'selected' : ''}>${n}</option>`).join('')}</select>` : ''}
@@ -121,6 +126,7 @@ function updateAfford() {
 
 function preview(id) {
   if (view.tab === 'stickers') openInspect(I.makeStickerItem(D.stickers[id]));
+  else if (view.tab === 'charms') openInspect(I.makeCharmItem(D.charms[id]));
   else if (view.tab === 'agents') openInspect(I.makeAgentItem(D.agents[id]));
   else chooser(D.skins[id]);
 }
@@ -136,6 +142,7 @@ async function purchase(args, label) {
 
 function buy(id) {
   if (view.tab === 'stickers') return purchase({ kind: 'sticker', id }, D.stickers[id].n);
+  if (view.tab === 'charms') return purchase({ kind: 'charm', id }, D.charms[id].n);
   if (view.tab === 'agents') return purchase({ kind: 'agent', id }, D.agents[id].n);
   chooser(D.skins[id]);
 }
