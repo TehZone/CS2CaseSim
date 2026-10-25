@@ -695,7 +695,16 @@ function fakeGame() {
 
 // ---- sounds as CS2 plays them: each event's own settings, the soundscapes, and their reverb ---------------------------
 {
-  const { curveAt, distanceGain } = await import('../src/js/play/sound.js');
+  const { curveAt, distanceGain, layerVolumes } = await import('../src/js/play/sound.js');
+  // Your sounds' layers: the loudest at the volume asked, the rest as CS2 has them next to it, none louder (a helmet
+  // headshot kill's event is silent itself: its dink played hundreds of times too loud).
+  const infos = { HS: { v: 0, d: [[104, 1], [1100, 1]], c: ['Dink', 'Flesh'] }, Dink: { v: 0.6, d: [[104, 1]] }, Flesh: { v: 0.3, d: [[15, 1]] },
+    Glock: { v: 1, d: [[25, 0.8], [30, 1]], c: ['Far', 'Click'] }, Far: { v: 0.7, d: [[800, 0], [2354, 0.34]] }, Click: { v: 0.3, d: [[35, 1]] } };
+  const hs = layerVolumes(infos.HS, infos, 0.8), gl = layerVolumes(infos.Glock, infos, 0.9);
+  ok(hs.self === 0 && JSON.stringify(hs.layers) === '[["Dink",0.8],["Flesh",0.4]]', "sound: a silent event's layers play at the volume asked, not hundreds of times it: " + JSON.stringify(hs));
+  ok(gl.self === 0.9 && gl.layers.length === 1 && gl.layers[0][0] === 'Click' && near(gl.layers[0][1], 0.3375, 1e-9) && layerVolumes(null, infos, 0.5).self === 0.5,
+    "sound: your gunshot at the volume asked, its click as CS2 has it next to it, no distant layer: " + JSON.stringify(gl));
+  ok(Object.keys(infos).every((e) => layerVolumes(infos[e], infos, 1).layers.every(([, v]) => v <= 1) && layerVolumes(infos[e], infos, 1).self <= 1), 'sound: no layer louder than asked');
   const { renderReverb } = await import('../src/js/play/reverb.js');
   const { Soundscapes } = await import('../src/js/play/soundscape.js');
   const play = (await import('node:module')).createRequire(import.meta.url)('../cs2/play.cjs');

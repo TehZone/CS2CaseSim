@@ -376,6 +376,12 @@ async function runSoundSmoke(win) {
       voices: [...s.voices].map(([e, v]) => e.replace(/^[^.]+\\./, '') + (v.info.rt ? '(now and then)' : v.src ? '(playing)' : '(waiting)')).join(', ') }); })()`);
   await wait(2000);
   console.log('SMOKE sound at the spawn', await state());
+  // Your hit sounds at the volume the game plays them (0.8): each layer's volume as it started (none over 0.8).
+  console.log('SMOKE sound your hit sounds', await js(`(async () => { const b = window.__playGame.sounds, play = b.play.bind(b), got = [];
+    b.play = async (e, o = {}) => { const s = await play(e, o); if (s) got.push(e.replace('Player.', '') + ' ' + s.gainNode.gain.value.toFixed(2)); return s; };
+    for (const e of ['Player.DeathHeadShotArmor.AttackerFeedback', 'Player.DeathHeadShot.AttackerFeedback', 'Player.DamageHeadShotArmor.AttackerFeedback', 'Player.DeathBodyArmor.AttackerFeedback', 'Land_Weapon.StepLeft']) {
+      await b.load([e]); b.play(e, { volume: 0.8 }); await new Promise((r) => setTimeout(r, 300)); }
+    b.play = play; return got.join(', '); })()`));
   console.log('SMOKE sound info', await js(`JSON.stringify(Object.fromEntries(['Weapon_AK47.Single', 'Weapon_AK47.SingleDistant', 'CT_Concrete.StepLeft'].map((e) => [e, window.__playGame.sounds.info[e] || null])))`));
   const places = process.env.CS2SIM_SMOKE_PLACES ? process.env.CS2SIM_SMOKE_PLACES.split(',')
     : JSON.parse(await js(`JSON.stringify([...new Set(window.__playGame.soundscapes.list.map((s) => s.e.replace(/^[^.]+\\./, '')))].slice(0, 6))`));

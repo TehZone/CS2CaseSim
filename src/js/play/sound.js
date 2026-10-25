@@ -50,6 +50,18 @@ export function distanceGain(event, info, d) {
   return d > near ? Math.pow(1 - (d - near) / (r - near), 2) : 1;
 }
 
+// How loud one of your sounds (no position) and the events it plays along with it are, played at vol: its loudest
+// layer at vol, the others as CS2 has them next to it right where they are (a gunshot's distant layer: not at all).
+// infos: event -> info. { self, layers: [[event, volume]] }. (Against the event's own volume, one that's silent itself
+// made its layers hundreds of times too loud: a headshot kill through a helmet, a dink and a thud under a silent event.)
+export function layerVolumes(info, infos, vol) {
+  const here = (i) => (i?.v ?? 1) * (i?.d ? curveAt(i.d, 0) : 1);
+  const kids = (info?.c || []).filter((k) => infos[k]);
+  const loudest = Math.max(here(info), ...kids.map((k) => here(infos[k])));
+  if (!(loudest > 0)) return { self: 0, layers: [] };
+  return { self: (vol * here(info)) / loudest, layers: kids.map((k) => [k, (vol * here(infos[k])) / loudest]).filter(([, v]) => v > vol * 0.01) };
+}
+
 export class SoundBank {
   constructor() {
     this.ctx = new AudioContext();
@@ -108,23 +120,22 @@ export class SoundBank {
     const info = this.info[event], urls = this.events[event];
     const ear = pos && listener ? listener.earPos() : null;
     const d = ear ? Math.hypot(pos[0] - ear[0], pos[1] - ear[1], pos[2] - ear[2]) : 0;
-    // A gunshot's distant layer, an explosion's debris...: each by its own settings. Yours (no position) as loud next
-    // to this one as CS2 has them right where they are (a gunshot's distant layer: not at all).
+    // A gunshot's distant layer, an explosion's debris...: each by its own settings (yours: see layerVolumes).
+    let self = vol;
     if (info?.c && !opts.alone && (opts.depth || 0) < 2) {
-      const here = (i) => (i?.v ?? 1) * (i?.d ? curveAt(i.d, 0) : 1);
-      for (const k of info.c) {
-        const sub = { ...opts, depth: (opts.depth || 0) + 1, startIf: null }, ki = this.info[k];
-        if (pos) this.play(k, sub);
-        else if (ki) { const r = here(ki) / Math.max(1e-3, here(info)); if (r > 0.01) this.play(k, { ...sub, volume: vol * r }); }
+      const sub = { ...opts, depth: (opts.depth || 0) + 1, startIf: null };
+      if (pos) for (const k of info.c) this.play(k, sub);
+      else {
+        const mix = layerVolumes(info, this.info, vol);
+        self = mix.self;
+        for (const [k, v] of mix.layers) this.play(k, { ...sub, volume: v });
       }
     }
     if (!urls?.length) return;
     // In the world, its own volume by distance (yours keep the volume they're played at).
-    let volume = vol * (1 + (pos ? 0 : rnd(info?.vr)));
-    if (ear) {
-      volume *= Math.max(0, (info?.v ?? 1) + rnd(info?.vr)) * distanceGain(event, info, d);
-      if (volume < 0.003) return;
-    }
+    let volume = self * (1 + (pos ? 0 : rnd(info?.vr)));
+    if (ear) volume *= Math.max(0, (info?.v ?? 1) + rnd(info?.vr)) * distanceGain(event, info, d);
+    if (volume < 0.003) return;
     const key = event + '|' + (source ?? (pos ? 'world' : 'you')), now = this.ctx.currentTime;
     if (info?.bl && now - (this.lastStart.get(key) ?? -1e9) < info.bl) return;
     let muffled = 0;
