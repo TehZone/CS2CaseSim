@@ -100,7 +100,9 @@ uniform bool vmOn;
 uniform float flashImage;
 uniform float cameraNear;
 uniform float cameraFar;
-uniform float exposure;
+uniform float exposure; // the map's exposure bias (and with auto exposure, times tExposure's)
+uniform sampler2D tExposure;
+uniform bool autoOn;
 uniform vec4 tmCurve; // shoulder, linear strength, linear angle, toe strength
 uniform vec4 tmToe; // toe numerator, toe denominator, white point, 1 / curve(white point)
 uniform sampler3D tLut;
@@ -141,13 +143,14 @@ void main() {
   if (flashImage > 0.0) col.rgb = mix(col.rgb, texture(tFlash, vUv).rgb * 1.4, flashImage);
   if (smokeOn) { vec4 s = smokeHere(); col.rgb = col.rgb * s.a + s.rgb; }
   if (vmOn) { vec4 v = texture(tVm, vUv); col.rgb = col.rgb * (1.0 - v.a) + v.rgb; }
-  vec3 c = cs2Curve(min(max(col.rgb, 0.0) * exposure * 2.8, vec3(tmToe.z))) * tmToe.w;
+  float ex = exposure * (autoOn ? texelFetch(tExposure, ivec2(0), 0).r : 1.0);
+  vec3 c = cs2Curve(min(max(col.rgb, 0.0) * ex * 2.8, vec3(tmToe.z))) * tmToe.w;
   c = sRGBTransferOETF(vec4(clamp(c, 0.0, 1.0), 1.0)).rgb;
   if (lutOn) c = texture(tLut, c * lutRange.x + lutRange.y).rgb;
   gl_FragColor = vec4(c, 1.0);
 }`;
 
-// Average log luminance of the HDR image, 32x18 cells of 4x4 samples (read back for the auto exposure).
+// Average log luminance of the HDR image, 32x18 cells of 4x4 samples (for the auto exposure: see adaptShader).
 const lumShader = /* glsl */ `
 uniform sampler2D tColor;
 varying vec2 vUv;
@@ -158,6 +161,24 @@ void main() {
     sum += log(max(dot(c, vec3(0.2125, 0.7154, 0.0721)), 1e-4));
   }
   gl_FragColor = vec4(sum / 16.0, 0.0, 0.0, 1.0);
+}`;
+
+// The auto exposure, all on the GPU: the image's average (log) luminance from lumShader's cells, where the exposure
+// heads for it (middle grey, within the map's range), and this frame's exposure from last frame's, eased toward that
+// (faster brightening or darkening by the map's speeds). One pixel, kept in a pair of 1x1 targets in turn and read by
+// the composite. (Read back to the CPU it cost ~10 ms each time it arrived, a hitch five times a second.)
+const adaptShader = /* glsl */ `
+uniform sampler2D tLum, tPrev;
+uniform float dt, up, down, lo, hi, middle;
+uniform bool init;
+varying vec2 vUv;
+void main() {
+  float sum = 0.0;
+  for (int y = 0; y < 18; y++) for (int x = 0; x < 32; x++) sum += texelFetch(tLum, ivec2(x, y), 0).r;
+  float target = clamp(middle / max(exp(sum / 576.0), 1e-4), lo, hi);
+  float prev = init ? clamp(1.0, lo, hi) : texelFetch(tPrev, ivec2(0), 0).r;
+  float e = prev + (target - prev) * (1.0 - exp(-dt * 1.5 * (target > prev ? up : down)));
+  gl_FragColor = vec4(e, 0.0, 0.0, 1.0);
 }`;
 
 // CS2's default curve where a map gives none (nearly linear).
@@ -173,8 +194,9 @@ export class Post {
     this.smokeRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
     this.vmRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples });
     this.lumRT = new THREE.WebGLRenderTarget(32, 18, { type: THREE.FloatType, depthBuffer: false });
-    this.lumPixels = new Float32Array(32 * 18 * 4);
-    this.exposure = 1; this.lumAt = 0;
+    const one = () => new THREE.WebGLRenderTarget(1, 1, { type: THREE.FloatType, depthBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+    this.expRT = [one(), one()]; this.expCur = 0; // (the auto exposure's pixel: last frame's and this frame's, in turn)
+    this.exposure = 1; // (the starting exposure; with auto exposure the GPU keeps the current one)
     this.lut = null;
     this.smoke = smoke;
     const geo = new THREE.BufferGeometry();
@@ -191,7 +213,7 @@ export class Post {
         ...shared, tColor: { value: this.rt.texture }, tFlash: { value: this.flashRT.texture }, tSmokeRT: { value: this.smokeRT.texture },
         tVm: { value: this.vmRT.texture }, vmOn: { value: false },
         smokeOn: { value: false }, flashImage: { value: 0 }, cameraNear: { value: 0.05 }, cameraFar: { value: 400 },
-        exposure: { value: 1 }, tmCurve: { value: new THREE.Vector4() }, tmToe: { value: new THREE.Vector4() },
+        exposure: { value: 1 }, tExposure: { value: null }, autoOn: { value: false }, tmCurve: { value: new THREE.Vector4() }, tmToe: { value: new THREE.Vector4() },
         tLut: { value: null }, lutOn: { value: false }, lutRange: { value: new THREE.Vector2(1, 0) },
       },
     });
@@ -207,6 +229,11 @@ export class Post {
     this.copyScene = pass(this.copyMat);
     this.lumMat = new THREE.ShaderMaterial({ vertexShader, fragmentShader: lumShader, depthTest: false, depthWrite: false, toneMapped: false, uniforms: { tColor: { value: this.rt.texture } } });
     this.lumScene = pass(this.lumMat);
+    this.adaptMat = new THREE.ShaderMaterial({
+      vertexShader, fragmentShader: adaptShader, depthTest: false, depthWrite: false, toneMapped: false,
+      uniforms: { tLum: { value: this.lumRT.texture }, tPrev: { value: null }, dt: { value: 0 }, up: { value: 1 }, down: { value: 1 }, lo: { value: 1 }, hi: { value: 1 }, middle: { value: 0.18 }, init: { value: true } },
+    });
+    this.adaptScene = pass(this.adaptMat);
     this.setGrading({});
   }
 
@@ -225,6 +252,9 @@ export class Post {
     let lo = 0, hi = white / 2.8;
     for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (curve(t, Math.min(m * 2.8, white)) / curve(t, white) < 0.18) lo = m; else hi = m; }
     this.middle = (lo + hi) / 2;
+    const au = this.adaptMat.uniforms;
+    if (exposure) { au.up.value = exposure.up; au.down.value = exposure.down; au.lo.value = exposure.min; au.hi.value = exposure.max; au.middle.value = this.middle; }
+    au.init.value = true; // (a new map: from the start again)
     this.lut?.dispose();
     this.lut = null;
     if (lut?.data) {
@@ -246,25 +276,18 @@ export class Post {
   // Auto exposure: a few times a second, the image's average (log) luminance sets where the exposure heads, within the
   // map's range, at its speeds. Read back when the GPU has it (waiting for it stalled the frame).
   updateExposure(dt) {
-    const a = this.auto;
-    if (!a) { this.exposure = 1; return; }
-    const r = this.renderer;
-    if ((this.lumAt -= dt) <= 0 && !this.lumReading) {
-      this.lumAt = 0.2;
-      r.setRenderTarget(this.lumRT);
-      r.render(this.lumScene, this.cam);
-      this.lumReading = true;
-      r.readRenderTargetPixelsAsync(this.lumRT, 0, 0, 32, 18, this.lumPixels).then(() => {
-        if (this.disposed || this.auto !== a) return;
-        let sum = 0;
-        for (let i = 0; i < 32 * 18; i++) sum += this.lumPixels[i * 4];
-        const avg = Math.exp(sum / (32 * 18));
-        this.target = Math.min(a.max, Math.max(a.min, this.middle / Math.max(avg, 1e-4)));
-      }).catch(() => {}).finally(() => { this.lumReading = false; });
-    }
-    if (this.target == null) return;
-    const speed = this.target > this.exposure ? a.up : a.down;
-    this.exposure += (this.target - this.exposure) * (1 - Math.exp(-dt * 1.5 * speed));
+    const u = this.material.uniforms;
+    u.autoOn.value = !!this.auto;
+    if (!this.auto) return;
+    const r = this.renderer, au = this.adaptMat.uniforms, prev = this.expRT[this.expCur], next = this.expRT[1 - this.expCur];
+    r.setRenderTarget(this.lumRT);
+    r.render(this.lumScene, this.cam);
+    au.tPrev.value = prev.texture; au.dt.value = Math.min(dt, 0.25);
+    r.setRenderTarget(next);
+    r.render(this.adaptScene, this.cam);
+    au.init.value = false;
+    this.expCur = 1 - this.expCur;
+    u.tExposure.value = next.texture;
   }
 
   setSize(w, h) {
@@ -291,6 +314,10 @@ export class Post {
     if (overlay) { r.setRenderTarget(this.vmRT); r.compile(overlay.scene, overlay.camera); }
     r.setRenderTarget(this.smokeRT);
     r.compile(this.smokeScene, this.cam);
+    r.setRenderTarget(this.lumRT);
+    r.compile(this.lumScene, this.cam);
+    r.setRenderTarget(this.expRT[0]);
+    r.compile(this.adaptScene, this.cam);
     r.setRenderTarget(null);
     r.compile(this.scene, this.cam);
   }
@@ -320,7 +347,7 @@ export class Post {
     }
     u.vmOn.value = !!overlay;
     this.updateExposure(dt);
-    u.exposure.value = this.exposure * this.bias;
+    u.exposure.value = (this.auto ? 1 : this.exposure) * this.bias;
     if (captureFlash) { r.setRenderTarget(this.flashRT); r.render(this.copyScene, this.cam); }
     const smokes = this.smoke.active;
     if (smokes) {
@@ -341,8 +368,8 @@ export class Post {
   dispose() {
     this.disposed = true;
     this.rt.depthTexture?.dispose();
-    for (const t of [this.rt, this.flashRT, this.smokeRT, this.vmRT, this.lumRT]) t.dispose();
-    for (const m of [this.material, this.smokeMat, this.copyMat, this.lumMat]) m.dispose();
+    for (const t of [this.rt, this.flashRT, this.smokeRT, this.vmRT, this.lumRT, ...this.expRT]) t.dispose();
+    for (const m of [this.material, this.smokeMat, this.copyMat, this.lumMat, this.adaptMat]) m.dispose();
     this.lut?.dispose();
     this.geo.dispose();
   }

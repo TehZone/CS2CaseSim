@@ -909,7 +909,11 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   gltf.scene.traverse((o) => o.geometry?.dispose());
   for (const m of originals) m.dispose();
 
+  // The scene and the map never move: neither works out its matrix each frame (three did, which made every object in
+  // the scene work out its own again too, ~1100 a frame). What moves (doors, bots, effects) still updates itself.
   const scene = new THREE.Scene();
+  scene.matrixAutoUpdate = false;
+  world.matrixAutoUpdate = false;
   scene.add(world);
   const bounds = new THREE.Box3().setFromObject(world);
   // The sun: light_environment angles give the direction the light travels.

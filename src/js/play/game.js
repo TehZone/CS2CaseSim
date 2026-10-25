@@ -1983,10 +1983,12 @@ export class Game {
     this.camera.updateMatrixWorld();
     _frustum.setFromProjectionMatrix(_m4.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
     for (const b of [...this.bots, this.myBody]) {
+      b.root.matrixWorldAutoUpdate = b.root.visible; // (a hidden body skips the matrix pass too)
       if (!b.root.visible) continue;
       b.sync(a);
       const seen = _frustum.intersectsSphere(_sphere.set(toGl([b.pos[0], b.pos[1], b.pos[2] + 36], _v3), 60 * IN));
       b.view.visible = seen;
+      b.view.matrixWorldAutoUpdate = seen; // (out of view its ~100 bones skip the frame's matrix pass: a shot, its muzzle or a head bone works them out when needed)
       b.animDt = (b.animDt || 0) + (this.paused ? 0 : dt);
       if (seen || (this.frameNo + b.index) % 3 === 0) { b.animate(b.animDt); b.animDt = 0; }
       // Lit by the probes where it stands (a few times a second is plenty).
