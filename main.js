@@ -580,6 +580,9 @@ async function runRoundsSmoke(win) {
   if (!(await smokeStartMap(win, map, 'rounds'))) { app.quit(); return; }
   await js(`(() => { const g = window.__playGame, now = () => performance.now();
     g.console.run('sv_cheats 1'); g.console.run('mp_freezetime 6'); g.console.run('mp_roundtime 1.25'); g.console.run('host_timescale ' + ${+process.env.CS2SIM_SMOKE_TIMESCALE || 2});
+    // CS2SIM_SMOKE_MAXROUNDS: a match this many rounds long (played to its end screen).
+    const maxRounds = ${+process.env.CS2SIM_SMOKE_MAXROUNDS || 0};
+    if (maxRounds) Object.assign(g.match.rules, { maxRounds, winsNeeded: maxRounds / 2 + 1, halftime: maxRounds / 2, overtime: false });
     const R = window.__rd = { cur: null, rows: [] };
     const fresh = () => ({ frames: 0, cpu: 0, int: 0, parts: {}, fz: { frames: 0, cpu: 0, int: 0, parts: {} } });
     R.cur = fresh();
@@ -657,12 +660,14 @@ async function runRoundsSmoke(win) {
     if (st.phase === 'live' && st.alive && (!play || actedFor === st.round)) await js(`(() => { const g = window.__playGame; if (g.me.alive) g.kill(g.me, null, { name: 'World' }, false); return 1; })()`);
     if (st.round !== last) { last = st.round; console.log('SMOKE rounds round', st.round); }
   }
+  if (process.env.CS2SIM_SMOKE_MAXROUNDS) { await wait(3000); console.log('SMOKE rounds end screen: ' + await js(`document.querySelector('[data-end]')?.innerText`)); }
   const rows = JSON.parse(await js(`JSON.stringify(window.__rd.rows)`));
   const keys = [...new Set(rows.flatMap((r) => Object.keys(r)))];
   console.log('SMOKE rounds per round:\n' + keys.map((k) => k.padEnd(13) + rows.map((r) => String(r[k] ?? '').padStart(7)).join('')).join('\n'));
   // net_graph 2's own log of the run (src/js/play/framelog.js), saved as the game saves it.
   const log = await js(`window.__playGame.log?.save()`);
   if (log) console.log(`SMOKE rounds net_graph log ${log}:\n` + fs.readFileSync(log, 'utf8').split('\n').slice(0, 90).join('\n'));
+  console.log('SMOKE rounds net_graph kept for the next match: ' + await js(`JSON.parse(localStorage.getItem('cs2sim.play') || '{}').netGraph`));
   app.quit();
 }
 

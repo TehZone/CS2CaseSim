@@ -242,8 +242,9 @@ What's in a match:
   precise), and what's drawn and held. Each slow frame (over 30 ms and 1.8× the usual) gets its own line: its time split
   into the frame before's work and the wait after it, plus what came with it (shaders compiled, textures added, a
   collection, the browser's long frames and the scripts in them, the game's events just before). The log ends with a
-  table per round and a summary. It's saved to `userData/netgraph-logs` when the match ends or you leave (the end screen
-  says where); `net_graph_log` saves it on the spot and opens its folder. `CS2SIM_SMOKE=rounds`
+  table per round and a summary. It's saved to `userData/netgraph-logs` as soon as it starts, after every round, when
+  the match ends and when you leave (the console and the end screen say where); `net_graph_log` saves it on the spot
+  and opens its folder. `net_graph 2` stays on for your next matches. `CS2SIM_SMOKE=rounds`
   plays round after round (`CS2SIM_SMOKE_PLAY=1`: you buy, fire and throw too) and logs each round's frame cost, freeze
   time measured from the same spot every round, next to everything that could pile up, then net_graph 2's log of it.
   `CS2SIM_SMOKE=hitch` plays rounds on Dust II, Inferno and Nuke and logs every frame over 33 ms with what ran in it

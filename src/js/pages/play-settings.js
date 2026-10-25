@@ -130,5 +130,5 @@ export const privateRanks = (p) => { const t = 'tier:' + tierOf(p.difficulty); r
 // What a match gets from the saved preferences.
 export function matchSettings(p) {
   return { crosshair: p.crosshair, viewmodel: p.viewmodel, keybinds: bindTable(p), musicVolume: p.musicVolume ?? 1, voiceVolume: p.voiceVolume ?? 1, showFps: p.showFps === 2 ? 2 : p.showFps !== false,
-    renderScale: Math.min(1, Math.max(0.5, p.renderScale ?? 1)), fpsMax: p.fpsMax || 0, netGraph: !!p.netGraph };
+    renderScale: Math.min(1, Math.max(0.5, p.renderScale ?? 1)), fpsMax: p.fpsMax || 0, netGraph: p.netGraph === 2 ? 2 : !!p.netGraph };
 }

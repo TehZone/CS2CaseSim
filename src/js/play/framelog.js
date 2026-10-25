@@ -2,7 +2,8 @@
 // down as it's played. That's a line a second (frame times, where the frame went, the GPU's time, what the match holds),
 // every slow frame with what came with it (the main thread busy between frames, shaders compiled, textures uploaded,
 // a garbage collection, what happened in the game just before), a table a round and a summary. It's saved as a text
-// file (userData/netgraph-logs) when the match ends, when you leave it, or with net_graph_log (which shows the file).
+// file (userData/netgraph-logs) as soon as it starts, after every round, when the match ends and when you leave it, or
+// with net_graph_log (which shows the file).
 import { esc } from '../util.js';
 
 const SLOW_MS = 30, SLOW_X = 1.8; // a frame this long, and this many times the usual, is written down on its own
@@ -58,7 +59,8 @@ export class FrameLog {
     this.gl = g.renderer.getContext();
     this.tq = this.gl.getExtension('EXT_disjoint_timer_query_webgl2');
     this.queries = []; this.pending = []; this.gpuFor = new Map();
-    this.off = g.on((type, data) => { if (type === 'round') this.nextRound(data); else if (type === 'over') this.matchOver(); });
+    this.off = g.on((type, data) => { if (type === 'round') this.nextRound(data); else if (type === 'roundEnd') this.saveSoon(); else if (type === 'over') this.matchOver(); });
+    this.saveSoon();
   }
 
   // Each event the game has (HOOKS) is timed and kept (the last RING of them); sounds are counted.
@@ -188,6 +190,14 @@ export class FrameLog {
   matchOver() {
     this.save().then((file) => this.g.hud.q('[data-end]')?.insertAdjacentHTML('beforeend', `<div class="sub">net_graph 2 log saved: ${esc(file)} · type net_graph_log in the console (~) to open its folder</div>`))
       .catch((e) => console.warn('net_graph log', e));
+  }
+  // Saved outside the frame (and the time it took kept: a slow frame after it says so).
+  saveSoon() {
+    setTimeout(() => {
+      const t = performance.now();
+      this.save().catch((e) => console.warn('net_graph log', e));
+      this.mark('log saved', t, performance.now() - t);
+    }, 0);
   }
   // The log as a text file: userData/netgraph-logs/<name>.txt (a download in a browser). show: shows it in its folder.
   async save(show = false) {

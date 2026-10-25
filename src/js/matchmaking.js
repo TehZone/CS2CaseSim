@@ -74,7 +74,7 @@ function makeOverlay({ loading = false, behind = false } = {}) {
 function gameOptions(p, extra) {
   return {
     sensitivity: p.sensitivity, quality: p.quality,
-    settings: { ...matchSettings(p), onBinds: (t) => { const q = playPrefs(); q.keybinds = t; savePlayPrefs(q); } },
+    settings: { ...matchSettings(p), onBinds: (t) => { const q = playPrefs(); q.keybinds = t; savePlayPrefs(q); }, onNetGraph: (n) => { const q = playPrefs(); q.netGraph = n; savePlayPrefs(q); } },
     ...extra,
   };
 }

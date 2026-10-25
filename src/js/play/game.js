@@ -2013,7 +2013,7 @@ export class Game {
     if (!this.scene) return;
     dt *= this.cv.host_timescale || 1;
     const t0 = performance.now();
-    const log = this.settings.netGraph === 2 ? (this.log ||= new FrameLog(this)) : null; // (net_graph 2 logs the match: framelog.js)
+    const log = this.settings.netGraph === 2 ? this.startLog() : null;
     log?.begin(t0);
     this.parts = { ai: 0, draw: 0, bots: 0, hud: this.parts?.hud || 0 }; // (where the frame goes: net_graph 2)
     let steps = 0;
@@ -2151,6 +2151,9 @@ export class Game {
     log?.frame(t0, t1, steps);
     this.emit('frame', dt);
   }
+
+  // net_graph 2's log of the match (framelog.js), from the first frame it's on.
+  startLog() { return (this.log ||= new FrameLog(this)); }
 
   // Only the viewmodels that show are in the scene: three updates every bone of everything in it each frame, hidden or
   // not, and the twenty or so loaded weapons' arms and guns cost a third of a frame.

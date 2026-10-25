@@ -127,7 +127,9 @@ function commands(g, con) {
     fps_max: cv('fps_max', 'Frame rate cap (0 = none)', 0, { lo: 0, hi: 1000 }),
     cl_showfps: { help: 'Shows the frame rate (1), with a graph of each frame\'s time (2: a stutter shows as a red spike), or not (0)', get: () => (g.settings.showFps === false ? 0 : g.settings.showFps === 2 ? 2 : 1), set: (v) => { const n = num(v, 0, 2); if (n == null) return false; g.settings.showFps = n === 2 ? 2 : !!n; return true; } },
     net_graph: { help: 'Shows the frame time graph, the simulation and drawing times and the draws (1), also where the frame goes and what the match holds (2), or not (0)', get: () => (g.settings.netGraph === 2 ? 2 : g.settings.netGraph ? 1 : 0), set: (v) => { const n = num(v, 0, 2); if (n == null) return false; g.settings.netGraph = n === 2 ? 2 : !!n; if (!n) { g.hud.netGraph(null); g.renderer.info.autoReset = true; }
-      if (n === 2) con.print('net_graph 2 logs the match as it goes: saved when it ends or you leave (net_graph_log saves it now and opens its folder)', 'dim');
+      g.settings.onNetGraph?.(g.settings.netGraph); // (kept for your next matches too)
+      if (n === 2) g.startLog().save().then((file) => con.print(`net_graph 2 logs this match to ${file} (saved after every round, at the end and when you leave; net_graph_log opens its folder)`, 'dim'))
+        .catch((e) => con.print("Couldn't save the log: " + e.message, 'err'));
       return true; } },
     net_graph_log: { help: "Saves net_graph 2's log of this match now and opens its folder (net_graph 2 logs the match: every second, every slow frame, every round)", run: () => {
       if (!g.log) { con.print('Nothing logged yet: net_graph 2 logs the match', 'err'); return; }
