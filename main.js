@@ -517,7 +517,7 @@ async function runCorpseSmoke(win) {
         b.pos = [x, y, z]; b.vel = [0, 0, 0]; b.brain.body?.teleport(b.pos); n++; break;
       }
     }
-    g.input.pitch = 12;
+    g.input.pitch = 12; g.console.run('net_graph 2');
     const F = window.__cs = { frames: [], phase: null, parts: {} };
     const frame = g.frame; let prev = 0;
     g.frame = function (dt) { const t = now(); frame.call(this, dt); const e = now(); if (F.phase) F.frames.push({ phase: F.phase, cpu: e - t, int: prev ? t - prev : 0 }); prev = t; };
@@ -551,6 +551,88 @@ async function runCorpseSmoke(win) {
         + '  game cpu ' + (fr.reduce((a, f) => a + f.cpu, 0) / n).toFixed(2) + '  draw ' + ((parts.draw || 0) / n).toFixed(2) + '  animate ' + ((parts.animate || 0) / n).toFixed(2) + ' (ms a frame)');
     }
     return '\\n' + out.join('\\n'); })()`));
+  app.quit();
+}
+
+// `CS2SIM_SMOKE=rounds` plays a 5v5 on Dust II (CS2SIM_SMOKE_MAP) round after round (CS2SIM_SMOKE_ROUNDS, default 12:
+// short rounds, you dead at the start of each so the bots play it out) and logs each round's frame cost (the game's
+// time a frame, its simulation, drawing, animating, HUD) next to everything that could pile up: what's in the scene,
+// geometries, textures, shaders, effects, guns on the floor, grenades, the sound bank's lists, the page's elements and
+// the JS heap. Something growing round on round is what gets slower.
+async function runRoundsSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const map = process.env.CS2SIM_SMOKE_MAP || 'de_dust2', rounds = +process.env.CS2SIM_SMOKE_ROUNDS || 12;
+  await wait(3000);
+  if (!(await smokeStartMap(win, map, 'rounds'))) { app.quit(); return; }
+  await js(`(() => { const g = window.__playGame, now = () => performance.now();
+    g.console.run('sv_cheats 1'); g.console.run('mp_freezetime 6'); g.console.run('mp_roundtime 1.25'); g.console.run('host_timescale ' + ${+process.env.CS2SIM_SMOKE_TIMESCALE || 2});
+    const R = window.__rd = { cur: null, rows: [] };
+    const fresh = () => ({ frames: 0, cpu: 0, int: 0, parts: {}, fz: { frames: 0, cpu: 0, int: 0, parts: {} } });
+    R.cur = fresh();
+    // Freeze time is measured on its own, from the same spot every round (you, where you stood in the first one,
+    // looking the same way): nothing going on, so a round costing more there than the last is something left over.
+    let spot = null, wasFreeze = false;
+    const frame = g.frame; let prev = 0;
+    g.frame = function (dt) {
+      const fz = g.match.phase === 'freeze' && g.me.alive;
+      if (fz && !wasFreeze) { spot ||= { o: g.player.origin.slice(), yaw: g.input.yaw, pitch: g.input.pitch }; g.player.teleport(spot.o); g.input.yaw = spot.yaw; g.input.pitch = spot.pitch; R.fzSkip = 30; }
+      wasFreeze = fz;
+      const t = now(); frame.call(this, dt); const e = now();
+      const c = fz && !(R.fzSkip-- > 0) ? R.cur.fz : R.cur; c.frames++; c.cpu += e - t; if (prev) c.int += t - prev; prev = t; R.in = c;
+    };
+    const wrap = (obj, name, label) => { const f = obj?.[name]; if (typeof f !== 'function') return; obj[name] = function (...a) { const t = now(); try { return f.apply(this, a); } finally { const c = R.in || R.cur; c.parts[label] = (c.parts[label] || 0) + now() - t; } }; };
+    wrap(g, 'tick', 'sim'); wrap(g.post, 'render', 'draw'); wrap(Object.getPrototypeOf(g.bots[0]), 'animate', 'animate'); wrap(g, 'updateHud', 'hud');
+    wrap(Object.getPrototypeOf(g.bots[0].brain), 'tick', 'ai'); wrap(g.nades, 'tick', 'nades'); wrap(g.effects, 'update', 'effects'); wrap(g.sounds, 'play', 'sound');
+    wrap(g, 'pickups', 'pickups'); wrap(g.drops, 'tick', 'drops'); wrap(g.soundscapes, 'update', 'soundscapes');
+    // At each round's end: its frames, and what's there now.
+    const count = (o) => { let n = 0; o.traverse(() => n++); return n; };
+    const size = (m) => (m instanceof Map || m instanceof Set ? m.size : Array.isArray(m) ? m.length : m && typeof m === 'object' ? Object.keys(m).length : 0);
+    R.snap = () => { const c = R.cur, n = Math.max(1, c.frames), info = g.renderer.info, b = g.sounds, z = c.fz, nz = Math.max(1, z.frames);
+      R.rows.push({ round: g.match.round, 'FREEZE frames': z.frames, 'freeze ms': +(z.int / nz).toFixed(2), 'freeze cpu': +(z.cpu / nz).toFixed(2),
+        ...Object.fromEntries(Object.entries(z.parts).map(([k, v]) => ['freeze ' + k, +(v / nz).toFixed(2)])),
+        'ROUND frames': c.frames, ms: +(c.int / n).toFixed(1), cpu: +(c.cpu / n).toFixed(2), ...Object.fromEntries(Object.entries(c.parts).map(([k, v]) => [k, +(v / n).toFixed(2)])),
+        scene: count(g.scene), vm: count(g.vmScene), geo: info.memory.geometries, tex: info.memory.textures, progs: info.programs?.length || 0,
+        particles: g.effects.particles.length, tracers: g.effects.tracers.length, gibs: g.effects.gibList.length, holes: g.effects.holes.count, effectsGroup: g.effects.group.children.length,
+        floorGuns: g.drops.list.length, flying: g.nades.flying.length, fires: g.nades.fires?.length || 0, smokes: size(g.nades.smokes),
+        playing: [...b.playing.values()].reduce((s, l) => s + l.length, 0), playingKeys: b.playing.size, lastStart: b.lastStart.size, buffers: b.buffers.size, events: size(b.events),
+        dom: document.getElementsByTagName('*').length, heapMB: +((performance.memory?.usedJSHeapSize || 0) / 1e6).toFixed(0), pings: g.pings.length });
+      R.cur = fresh(); R.in = null; };
+    const end = g.match.endRound.bind(g.match);
+    g.match.endRound = (...a) => { const r = end(...a); R.snap(); return r; };
+    return 1; })()`);
+  // You: dead once each round's freeze time is over, so the bots play it out. CS2SIM_SMOKE_PLAY=1: first you buy a rifle
+  // and every grenade in the freeze time, then fire and throw them all (as CS2SIM_SMOKE=hitch does).
+  const play = !!process.env.CS2SIM_SMOKE_PLAY;
+  let last = -1, boughtFor = -1, actedFor = -1;
+  for (let i = 0; i < 3000; i++) {
+    await wait(1000);
+    const st = JSON.parse(await js(`JSON.stringify({ round: window.__playGame?.match.round, phase: window.__playGame?.match.phase, alive: window.__playGame?.me.alive, over: !!window.__playGame?.matchOver, rows: window.__rd.rows.length })`));
+    if (st.over || st.rows >= rounds || !st.phase) break;
+    if (play && st.phase === 'freeze' && st.alive && boughtFor !== st.round) {
+      boughtFor = st.round;
+      await js(`(async () => { const g = window.__playGame; g.console.run('impulse 101');
+        for (const w of [g.me.team === 'T' ? 'weapon_ak47' : 'weapon_m4a1', 'weapon_smokegrenade', 'weapon_flashbang', 'weapon_hegrenade', g.me.team === 'T' ? 'weapon_molotov' : 'weapon_incgrenade', 'vesthelm']) { try { await g.buy(w); } catch {} }
+        return 1; })()`);
+    }
+    if (play && st.phase === 'live' && st.alive && actedFor !== st.round) {
+      actedFor = st.round;
+      await js(`(async () => { const g = window.__playGame, inp = g.input, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const s = g.map.info.bombsites[0], o = g.player.origin, to = [(s.min[0] + s.max[0]) / 2, (s.min[1] + s.max[1]) / 2];
+        inp.yaw = Math.atan2(to[1] - o[1], to[0] - o[0]) * 180 / Math.PI; inp.pitch = -8;
+        g.arsenal.select('primary', g.now); await sleep(700); inp.down('mouse1'); await sleep(600); inp.up('mouse1'); await sleep(300);
+        for (const n of ['weapon_smokegrenade', 'weapon_flashbang', 'weapon_hegrenade', 'weapon_molotov', 'weapon_incgrenade']) {
+          if (!g.arsenal.guns['g_' + n] || !g.me.alive) continue;
+          g.arsenal.select('g_' + n, g.now); await sleep(700); inp.down('mouse1'); await sleep(300); inp.up('mouse1'); await sleep(500);
+        }
+        return 1; })()`);
+    }
+    if (st.phase === 'live' && st.alive && (!play || actedFor === st.round)) await js(`(() => { const g = window.__playGame; if (g.me.alive) g.kill(g.me, null, { name: 'World' }, false); return 1; })()`);
+    if (st.round !== last) { last = st.round; console.log('SMOKE rounds round', st.round); }
+  }
+  const rows = JSON.parse(await js(`JSON.stringify(window.__rd.rows)`));
+  const keys = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+  console.log('SMOKE rounds per round:\n' + keys.map((k) => k.padEnd(13) + rows.map((r) => String(r[k] ?? '').padStart(7)).join('')).join('\n'));
   app.quit();
 }
 
@@ -2032,6 +2114,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'breakables') { win.webContents.once('did-finish-load', () => runBreakSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'look') { win.webContents.once('did-finish-load', () => runLookSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'rounds') { win.webContents.once('did-finish-load', () => runRoundsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'corpses') { win.webContents.once('did-finish-load', () => runCorpseSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'botfire') { win.webContents.once('did-finish-load', () => runBotFireSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'sound') { win.webContents.once('did-finish-load', () => runSoundSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }

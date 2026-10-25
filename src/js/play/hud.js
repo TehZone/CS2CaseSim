@@ -123,7 +123,11 @@ export class Hud {
   mode(text) { this.set('[data-mode]', text || ''); }
   place(name) { this.set('.place', name ? name.replace(/([a-z])([A-Z])/g, '$1 $2') : ''); }
   fps(v) { this.set('.fps', v == null ? '' : `${Math.round(v)} fps`); }
-  netGraph(text) { this.set('.netgraph', text || ''); }
+  netGraph(text) {
+    this.set('.netgraph', text || '');
+    const lines = text ? text.split('\n').length : 1; // (the frame graph sits above however many lines it has: net_graph 2)
+    if (lines !== this.netLines) { this.netLines = lines; this.el.style.setProperty('--net-lines', lines); }
+  }
   // The frame-time graph (net_graph, cl_showfps 2): a bar per frame, scrolling left, as tall as the frame took (the top
   // is 50 ms; lines at 60 fps and 30 fps), red over 33 ms: a stutter shows as a spike. ms null hides it.
   frameGraph(ms) {

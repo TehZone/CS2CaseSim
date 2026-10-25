@@ -1315,7 +1315,7 @@ export class Game {
     for (const b of this.bots) {
       if (!b.c.alive) continue;
       if (this.cv.bot_stop) { b.vel = [0, 0, 0]; continue; }
-      b.brain.tick(TICK, this.now);
+      if (this.settings.netGraph === 2) { const ta = performance.now(); b.brain.tick(TICK, this.now); this.parts.ai += performance.now() - ta; } else b.brain.tick(TICK, this.now);
       this.balls.touch(b.pos, b.vel, BOT_HULL.mins, BOT_HULL.maxs);
       this.botThrowing(b);
       const bomb = m.bomb;
@@ -2012,6 +2012,7 @@ export class Game {
     if (!this.scene) return;
     dt *= this.cv.host_timescale || 1;
     const t0 = performance.now();
+    this.parts = { ai: 0, draw: 0, bots: 0, hud: this.parts?.hud || 0 }; // (where the frame goes: net_graph 2)
     if (!this.paused) {
       this.acc += dt;
       let steps = 0;
@@ -2080,6 +2081,7 @@ export class Game {
     // A bot out of view isn't drawn and animates a third as often (its hitboxes stay current enough: a bullet syncs it).
     this.camera.updateMatrixWorld();
     _frustum.setFromProjectionMatrix(_m4.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
+    const tb = performance.now();
     for (const b of [...this.bots, this.myBody]) {
       // A body lies there a while, then sinks into the floor and is gone (nine in view cost a quarter of a frame).
       const gone = b.deadAt != null ? (this.now - b.deadAt - BODY_STAY) / BODY_SINK : -1;
@@ -2096,6 +2098,7 @@ export class Game {
       // Lit by the probes where it stands (a few times a second is plenty).
       if (probes && (this.frameNo + b.index) % 6 === 0) b.amb.set(probes, [b.pos[0], b.pos[1], b.pos[2] + 36]);
     }
+    this.parts.bots = performance.now() - tb;
     if (probes && this.frameNo % 3 === 0) {
       const c = probes.cube(camEye, this.vmCube), PI = Math.PI;
       this.vmHemi.color.setRGB(c[6] * PI, c[7] * PI, c[8] * PI);
@@ -2125,17 +2128,21 @@ export class Game {
       c.updateProjectionMatrix();
       c.updateMatrixWorld();
     }
+    const td = performance.now();
     this.post.render(this.scene, this.camera, {
       camPos: camEye, captureFlash: this.flashCapture, dt: this.paused ? 0 : dt, sky3d: s3,
       flashImage: me.alive && flashLeft > 0 ? Math.min(1, flashLeft / Math.max(0.6, this.flashSecs * 0.85)) * 0.9 : 0,
       overlay: (me.alive || this.specVm) && this.cv.r_drawviewmodel ? { scene: this.vmScene, camera: this.vmCamera } : null,
     });
     this.flashCapture = false;
+    this.parts.draw += performance.now() - td;
 
     this.fps = this.fps ? this.fps * 0.95 + (1 / Math.max(dt, 1e-3)) * 0.05 : 60;
     if (this.settings.netGraph) this.graphFrame(dt, t0, t1);
     this.hud.frameGraph(this.settings.netGraph || this.settings.showFps === 2 ? this.frameMs ?? dt * 1000 : null);
+    const th = performance.now();
     this.updateHud(dt);
+    this.parts.hud = performance.now() - th; // (net_graph 2 shows it next frame)
     this.emit('frame', dt);
   }
 
@@ -2150,15 +2157,24 @@ export class Game {
   }
 
   // net_graph: the frame rate and frame time, how much of a frame the simulation and the drawing took (averaged), and
-  // what was drawn. (Draws are counted over the whole frame: three counts each render call on its own.)
+  // what was drawn. (Draws are counted over the whole frame: three counts each render call on its own.) net_graph 2
+  // also splits the frame (the bots' AI, the bodies' animation and drawing, the scene's drawing, the HUD) and shows what
+  // the match holds (bodies shown, guns on the floor, textures, geometries, the JS heap): what grows when it slows.
   graphFrame(dt, t0, t1) {
-    const t2 = performance.now(), info = this.renderer.info, k = 0.05, gr = this.graph || (this.graph = { ms: 16, sim: 0, cpu: 0, calls: 0, tris: 0 });
+    const t2 = performance.now(), info = this.renderer.info, k = 0.05, gr = this.graph || (this.graph = { ms: 16, sim: 0, cpu: 0, calls: 0, tris: 0, ai: 0, bots: 0, draw: 0, hud: 0 });
     gr.ms += (dt * 1000 - gr.ms) * k; gr.sim += (t1 - t0 - gr.sim) * k; gr.cpu += (t2 - t0 - gr.cpu) * k;
+    for (const p of ['ai', 'bots', 'draw', 'hud']) gr[p] += (this.parts[p] - gr[p]) * k;
     gr.calls = info.render.calls; gr.tris = info.render.triangles;
     info.autoReset = false; info.reset();
     if ((this.graphAt = (this.graphAt || 0) - dt) > 0) return;
     this.graphAt = 0.25;
-    this.hud.netGraph(`${Math.round(1000 / gr.ms)} fps · ${gr.ms.toFixed(1)} ms · cpu ${gr.cpu.toFixed(1)} ms (sim ${gr.sim.toFixed(1)}) · ${gr.calls} draws · ${(gr.tris / 1e6).toFixed(1)}M tris`);
+    let text = `${Math.round(1000 / gr.ms)} fps · ${gr.ms.toFixed(1)} ms · cpu ${gr.cpu.toFixed(1)} ms (sim ${gr.sim.toFixed(1)}) · ${gr.calls} draws · ${(gr.tris / 1e6).toFixed(1)}M tris`;
+    if (this.settings.netGraph === 2) {
+      const bodies = this.bots.filter((b) => b.root.visible).length, heap = performance.memory ? ` · heap ${Math.round(performance.memory.usedJSHeapSize / 1e6)} MB` : '';
+      text += `\nai ${gr.ai.toFixed(1)} · bodies ${gr.bots.toFixed(1)} · draw ${gr.draw.toFixed(1)} · hud ${gr.hud.toFixed(1)} ms · round ${this.match.round}`
+        + `\n${bodies} bodies shown · ${this.drops.list.length} guns down · ${info.memory.textures} tex · ${info.memory.geometries} geo${heap}`;
+    }
+    this.hud.netGraph(text);
   }
 
   lookAt(from, to, rate) {

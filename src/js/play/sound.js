@@ -136,7 +136,8 @@ export class SoundBank {
     let volume = self * (1 + (pos ? 0 : rnd(info?.vr)));
     if (ear) volume *= Math.max(0, (info?.v ?? 1) + rnd(info?.vr)) * distanceGain(event, info, d);
     if (volume < 0.003) return;
-    const key = event + '|' + (source ?? (pos ? 'world' : 'you')), now = this.ctx.currentTime;
+    const who = source && typeof source === 'object' ? 'bot' + source.index : source; // (a bot: by its number, not "[object Object]" for all of them)
+    const key = event + '|' + (who ?? (pos ? 'world' : 'you')), now = this.ctx.currentTime;
     if (info?.bl && now - (this.lastStart.get(key) ?? -1e9) < info.bl) return;
     let muffled = 0;
     if (ear && occlude && d > 120 && (info?.o ?? 0.6) > 0 && listener.soundBlocked(ear, pos)) {

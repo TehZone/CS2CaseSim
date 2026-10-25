@@ -235,6 +235,10 @@ What's in a match:
   bounds; dropped and thrown guns are the bots' baked copies; a molotov lays out its flames over a few ticks; the smoke's
   lighting runs allocation-free; bots and grenades are drawn between ticks (the tick is 64 Hz, the screen faster).
   `cl_showfps 2` (or `net_graph 1`, or Show fps in the settings) graphs each frame's time: a stutter is a red spike.
+  `net_graph 2` also splits the frame (the bots' AI, their bodies, drawing, the HUD) and shows what the match holds
+  (bodies shown, guns down, textures, geometries, the heap): what grows when it gets slower. `CS2SIM_SMOKE=rounds`
+  plays round after round (`CS2SIM_SMOKE_PLAY=1`: you buy, fire and throw too) and logs each round's frame cost, freeze
+  time measured from the same spot every round, next to everything that could pile up.
   `CS2SIM_SMOKE=hitch` plays rounds on Dust II, Inferno and Nuke and logs every frame over 33 ms with what ran in it
   and how often each kind of event (a bot's shot, damage, a kill...) comes before a slow frame against before any
   (`CS2SIM_SMOKE_PROFILE` and `CS2SIM_SMOKE_ALLOC` add a CPU and an allocation profile). `CS2SIM_SMOKE=botfire` stops
