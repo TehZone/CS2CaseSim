@@ -13,7 +13,7 @@ import { loadWorld, toGl, fromGl } from './world.js';
 import { Input, bindTable } from './input.js';
 import { SoundBank } from './sound.js';
 import { buildViewmodel } from './viewmodel.js';
-import { Arsenal, Gun, basis } from './weapons.js';
+import { Arsenal, Gun, basis, refillAmmo } from './weapons.js';
 import { BotAssets, Bot, BOT_NAMES, rayCapsule, bindBounds } from './bots.js';
 import { Brain, botGun, inaccuracyOf } from './ai.js';
 import { teamPlan, teamEconomy } from './strats.js';
@@ -876,6 +876,8 @@ export class Game {
       jobs.push(this.giveMe('secondary', DEFAULT_PISTOL[me.team], false));
       me.armor = 0; me.helmet = false; me.defuser = false; me.nades = {};
     }
+    for (const g of Object.values(this.arsenal.guns)) refillAmmo(g);
+    this.arsenal.scheduled = []; // a cut-short reload's sounds
     jobs.push(this.syncMyNades());
     const knife = this.knifeId(me.team);
     if (this.arsenal.guns.knife?.id !== knife) jobs.push(this.giveMe('knife', knife, false));
@@ -897,6 +899,7 @@ export class Game {
       b.weapons = {};
       c.armor = 0; c.helmet = false; c.defuser = false; c.nades = {};
     }
+    for (const g of Object.values(b.weapons)) refillAmmo(g);
     b.weapons.secondary ||= botGun(DEFAULT_PISTOL[c.team], this.stats[DEFAULT_PISTOL[c.team]]);
     const knife = c.team === 'T' ? 'weapon_knife_t' : 'weapon_knife';
     b.weapons.knife = botGun(knife, this.stats[knife] || this.stats.weapon_knife);

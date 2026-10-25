@@ -71,6 +71,16 @@ export class Gun {
   get scoped() { return this.zoom > 0; }
 }
 
+// A new round: like CS2, every gun you still carry is topped up to a full magazine and full reserve, a reload in
+// progress is cut short, and a used Zeus is charged again.
+export function refillAmmo(g) {
+  if (!g || g.melee || g.nade || g.id === 'weapon_c4' || g.stats.clip == null) return;
+  g.clip = g.stats.clip;
+  g.reserve = g.stats.reserve ?? g.reserve;
+  g.reloading = false; g.shellReload = false; g.reloadEnd = 0;
+  g.cockAt = null; g.burstLeft = 0; g.rechargeAt = 0; g.recoilIndex = 0;
+}
+
 export class Arsenal {
   constructor(game, guns) {
     this.game = game;

@@ -438,6 +438,23 @@ function fakeGame() {
   ok(always && never && !Arsenal.prototype.rare.call({ game: { cv: { cl_inspect_rare: 1 } } }, { vm: { has: () => false } }, 'inspectRare'), 'special inspects: cl_inspect_rare 1 always, -1 never (and none for a weapon without one)');
 }
 
+// ---- a new round tops up the guns you kept: full magazine and reserve, a reload cut short, the Zeus charged ------------
+{
+  const { Gun, refillAmmo } = await import('../src/js/play/weapons.js');
+  const recoil = { recoilSeed: 1, recoilAngle: [0, 0], recoilAngleVariance: [0, 0], recoilMagnitude: [0, 0], recoilMagnitudeVariance: [0, 0] };
+  const make = (id, stats) => new Gun({ slot: 'x', id, name: id, stats: { ...recoil, ...stats }, vm: null });
+  const ak = make('weapon_ak47', { clip: 30, reserve: 90 });
+  ak.clip = 4; ak.reserve = 11; ak.reloading = true; ak.reloadEnd = 99;
+  const nova = make('weapon_nova', { clip: 8, reserve: 32, bulletsPerReload: 1 });
+  nova.clip = 2; nova.reserve = 0; nova.reloading = true; nova.shellReload = true;
+  const zeus = make('weapon_taser', { clip: 1, reserve: 0, type: 'WEAPONTYPE_TASER' });
+  zeus.clip = 0; zeus.rechargeAt = 50;
+  const knife = make('weapon_knife', { melee: true });
+  for (const g of [ak, nova, zeus, knife]) refillAmmo(g);
+  ok(ak.clip === 30 && ak.reserve === 90 && !ak.reloading && nova.clip === 8 && nova.reserve === 32 && !nova.shellReload
+    && zeus.clip === 1 && zeus.rechargeAt === 0 && knife.clip === undefined, 'round start: kept guns get a full magazine and reserve, reloads stop, the Zeus is charged');
+}
+
 // ---- CS2's binds: key names, older saves' keys, scroll jump, mouse buttons, console commands -------------------------
 {
   const { Input, keyName, bindTable, DEFAULT_BINDS } = await import('../src/js/play/input.js');
