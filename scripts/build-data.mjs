@@ -245,6 +245,7 @@ for (const k of keychainsRaw) {
   const r = ITEM_RARITY[k.rarity?.id] ?? 2;
   const col = k.collections?.[0];
   charms[k.id] = { id: k.id, n: k.market_hash_name, r, rc: k.rarity?.color || '#4b69ff', img: img(k.image), mdl: def.pedestal_display_model, col: col?.id || null, p: null };
+  if (def.keychain_material) charms[k.id].mat = def.keychain_material; // a community charm: a shared blank model, its own material
   if (!col) continue;
   if (!charmCollections.has(col.id)) charmCollections.set(col.id, { id: col.id, n: col.name, img: img(col.image), pools: {} });
   (charmCollections.get(col.id).pools[r] ||= []).push(k.id);

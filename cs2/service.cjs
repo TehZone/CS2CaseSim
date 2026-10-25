@@ -176,21 +176,69 @@ class CS2Service {
     });
   }
 
-  // Charms: a charm's model (CS2's keychain models: a short chain of three joints with the charm on the end), as
-  // { model: url }, and where a gun's charm hangs (its "keychain" attachment, "keychain_legacy" on legacy models).
-  charm(mdl) {
+  // Charms: a charm's model (CS2's keychain models: a short chain of three joints with the charm on the end) and its
+  // materials as CS2 draws them, and where a gun's charm hangs (its "keychain" attachment, "keychain_legacy" on legacy
+  // models). `mat` is the charm's own material where the model is a shared blank (the community charms: one model, a
+  // material each), put in place of the model's own (all but its chain).
+  // { model: url, materials: { glTF material name: { shader, flags, params, dynamic, textures } } }: csgo_weapon's
+  // parameters (colour adjustments, tint, roughness), its dynamic expressions (most charms' colours follow the charm's
+  // pattern, $KeychainSeed) and its textures (colour, normal, AO, roughness/metal, tint mask).
+  charm(mdl, mat = null) {
     mdl = String(mdl).replace(/\\/g, '/');
+    mat = mat ? String(mat).replace(/\\/g, '/') : null;
     if (!/^weapons\/keychains\/[a-z0-9_/]+\.vmdl$/i.test(mdl)) return Promise.reject(new Error('Bad charm model'));
-    return this.playJob('charm:' + mdl, async () => {
+    if (mat && !/^weapons\/keychains\/[a-z0-9_/]+\.vmat$/i.test(mat)) return Promise.reject(new Error('Bad charm material'));
+    return this.playJob(`charm:${mdl}|${mat || ''}`, async () => {
+      const cs2 = this.ensureCS2();
       const name = path.basename(mdl, '.vmdl');
-      const file = await this.ensureCS2().exportGltf(mdl, `charms/${name}/${name}.gltf`, { materials: true });
+      const file = await cs2.exportGltf(mdl, `charms/${name}/${name}.gltf`, { materials: true });
       const dir = path.dirname(file), stamp = path.join(dir, SHRUNK);
       if (this.shrinkImages && !fs.existsSync(stamp)) {
         // Charm textures are 2K; a charm is a few centimetres across, even in its own inspect.
         await this.shrinkImages(fs.readdirSync(dir).filter((f) => /\.(png|jpe?g)$/i.test(f)).map((f) => path.join(dir, f)), 1024);
         fs.writeFileSync(stamp, '');
       }
-      return { model: this.url(file) };
+      const vmats = {};
+      for (const m of JSON.parse(fs.readFileSync(file, 'utf8')).materials || []) {
+        const own = m.extras?.vmat?.Name;
+        if (own) vmats[m.name] = mat && !/_chain\.vmat$/.test(own) ? mat : own;
+      }
+      const materials = {};
+      for (const [gltfName, vmat] of Object.entries(vmats)) {
+        try { materials[gltfName] = await this.charmMaterial(vmat); } catch (e) { this.log(`charm material ${vmat}: ${e.message}`); }
+      }
+      return { model: this.url(file), materials };
+    });
+  }
+  // One csgo_weapon material of a charm, decompiled: its flags, parameters, dynamic expressions and textures (copied
+  // beside it under charms/materials and made smaller like the models'). Cached per material.
+  charmMaterial(vmat) {
+    return this.playJob('charmMaterial:' + vmat, async () => {
+      const cs2 = this.ensureCS2();
+      const src = (await cs2.extract([vmat]))[vmat + '_c'];
+      if (!src) throw new Error('not found');
+      const layer = Object.values(parseKV1(fs.readFileSync(src, 'utf8')))[0] || {};
+      const flags = {}, params = {};
+      for (const [k, v] of Object.entries(layer)) {
+        if (typeof v !== 'string') continue;
+        if (/^F_/.test(k)) flags[k] = +v;
+        else if (/^g_[fv]/.test(k)) params[k] = v.startsWith('[') ? v.slice(1, -1).trim().split(/\s+/).map(Number) : +v;
+      }
+      const compiled = layer['Compiled Textures'] || {};
+      const want = { color: 'g_tColor', normal: 'g_tNormal', ao: 'g_tAmbientOcclusion', rm: 'g_tMetalness', tint: 'g_tTintMask' };
+      const files = await cs2.extract(Object.values(want).map((k) => compiled[k]).filter(Boolean));
+      const out = path.join(this.cacheDir, 'charms', 'materials', path.basename(vmat, '.vmat'));
+      fs.mkdirSync(out, { recursive: true });
+      const textures = {}, copies = [];
+      for (const [key, param] of Object.entries(want)) {
+        const local = compiled[param] && files[compiled[param] + '_c'];
+        if (!local) continue;
+        const dest = path.join(out, key + path.extname(local));
+        if (!fs.existsSync(dest)) { fs.copyFileSync(local, dest); copies.push(dest); }
+        textures[key] = this.url(dest);
+      }
+      if (this.shrinkImages && copies.length) await this.shrinkImages(copies.filter((f) => /\.png$/i.test(f)), 1024);
+      return { shader: String(layer.shader || '').replace(/\.vfx$/, ''), flags, params, dynamic: layer.DynamicParams || {}, textures };
     });
   }
   charmAttach(weapon) {

@@ -92,16 +92,18 @@ export function cs2StatTrak(weapon) {
   return statTraks.get(weapon);
 }
 
-// Charms: a charm's model ({ model }), and where a gun's charm hangs ({ attach, legacy }: its keychain attachments).
+// Charms: a charm's model and materials ({ model, materials }; mat: its own material on a shared blank model), and
+// where a gun's charm hangs ({ attach, legacy }: its keychain attachments).
 const charms = new Map();
-export function cs2Charm(mdl) {
-  if (!charms.has(mdl)) {
-    const p = window.native?.cs2Charm ? window.native.cs2Charm(mdl)
-      : fetch(`api/cs2/charm?mdl=${encodeURIComponent(mdl)}`).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); });
-    charms.set(mdl, p);
-    p.catch(() => charms.delete(mdl));
+export function cs2Charm(mdl, mat = null) {
+  const key = mdl + '|' + (mat || '');
+  if (!charms.has(key)) {
+    const p = window.native?.cs2Charm ? window.native.cs2Charm(mdl, mat)
+      : fetch(`api/cs2/charm?mdl=${encodeURIComponent(mdl)}${mat ? '&mat=' + encodeURIComponent(mat) : ''}`).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); });
+    charms.set(key, p);
+    p.catch(() => charms.delete(key));
   }
-  return charms.get(mdl);
+  return charms.get(key);
 }
 const charmAttaches = new Map();
 export function cs2CharmAttach(weapon) {
