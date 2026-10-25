@@ -13,6 +13,7 @@ import { loadWorld, toGl, fromGl } from './world.js';
 import { Input, bindTable } from './input.js';
 import { SoundBank } from './sound.js';
 import { Soundscapes } from './soundscape.js';
+import { FrameLog } from './framelog.js';
 import { buildViewmodel } from './viewmodel.js';
 import { Arsenal, Gun, basis, refillAmmo } from './weapons.js';
 import { BotAssets, Bot, BOT_NAMES, rayCapsule, bindBounds } from './bots.js';
@@ -2012,10 +2013,12 @@ export class Game {
     if (!this.scene) return;
     dt *= this.cv.host_timescale || 1;
     const t0 = performance.now();
+    const log = this.settings.netGraph === 2 ? (this.log ||= new FrameLog(this)) : null; // (net_graph 2 logs the match: framelog.js)
+    log?.begin(t0);
     this.parts = { ai: 0, draw: 0, bots: 0, hud: this.parts?.hud || 0 }; // (where the frame goes: net_graph 2)
+    let steps = 0;
     if (!this.paused) {
       this.acc += dt;
-      let steps = 0;
       while (this.acc >= TICK && steps < 8) { this.tick(); this.acc -= TICK; steps++; }
       if (steps === 8) this.acc = 0;
     }
@@ -2129,11 +2132,13 @@ export class Game {
       c.updateMatrixWorld();
     }
     const td = performance.now();
+    log?.gpuBegin();
     this.post.render(this.scene, this.camera, {
       camPos: camEye, captureFlash: this.flashCapture, dt: this.paused ? 0 : dt, sky3d: s3,
       flashImage: me.alive && flashLeft > 0 ? Math.min(1, flashLeft / Math.max(0.6, this.flashSecs * 0.85)) * 0.9 : 0,
       overlay: (me.alive || this.specVm) && this.cv.r_drawviewmodel ? { scene: this.vmScene, camera: this.vmCamera } : null,
     });
+    log?.gpuEnd();
     this.flashCapture = false;
     this.parts.draw += performance.now() - td;
 
@@ -2143,6 +2148,7 @@ export class Game {
     const th = performance.now();
     this.updateHud(dt);
     this.parts.hud = performance.now() - th; // (net_graph 2 shows it next frame)
+    log?.frame(t0, t1, steps);
     this.emit('frame', dt);
   }
 
@@ -2298,6 +2304,7 @@ export class Game {
 
   dispose() {
     this.disposed = true;
+    if (this.log) { this.log.save().catch(() => {}); this.log.stop(); } // (leaving: net_graph 2's log so far)
     this.console?.dispose();
     cancelAnimationFrame(this.raf);
     this.resizer.disconnect();

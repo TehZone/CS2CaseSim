@@ -204,6 +204,18 @@ function registerIpc() {
     if (/^https:\/\//.test(u)) shell.openExternal(u);
   });
   ipcMain.handle('app:info', () => ({ version: app.getVersion(), userData: userDir, electron: process.versions.electron }));
+  // net_graph 2's log of a match (src/js/play/framelog.js): userData/netgraph-logs/<name>.txt, and shown in its folder.
+  const logDir = () => path.join(userDir, 'netgraph-logs');
+  ipcMain.handle('app:saveLog', (_e, name, text) => {
+    const file = path.join(logDir(), String(name).replace(/[^\w.-]/g, '_').slice(0, 100) + '.txt');
+    fs.mkdirSync(logDir(), { recursive: true });
+    fs.writeFileSync(file, String(text).slice(0, 64e6));
+    return file;
+  });
+  ipcMain.handle('app:showLog', (_e, file) => {
+    const f = path.resolve(String(file));
+    if (path.dirname(f) === logDir() && fs.existsSync(f)) shell.showItemInFolder(f);
+  });
   // Display settings that need a restart (the uncapped frame rate): { uncapped, active } (active: what this run has).
   const displayNow = readDisplay();
   ipcMain.handle('app:display', () => ({ ...readDisplay(), active: !!displayNow.uncapped }));
@@ -254,7 +266,8 @@ if (SMOKE) app.setPath('userData', path.join(app.getPath('temp'), 'cs2sim-smoke'
 const displayFile = path.join(app.getPath('userData'), 'display.json');
 const readDisplay = () => { try { return JSON.parse(fs.readFileSync(displayFile, 'utf8')); } catch { return {}; } };
 if (process.env.CS2SIM_SMOKE_ANGLE) app.commandLine.appendSwitch('use-angle', process.env.CS2SIM_SMOKE_ANGLE); // (trying ANGLE's other backends: gl, vulkan, d3d11)
-if (process.env.CS2SIM_SMOKE === 'hitch') app.commandLine.appendSwitch('enable-precise-memory-info'); // the heap falling in a frame: a garbage collection
+// The JS heap as it is (net_graph 2 and its log: the heap falling is a garbage collection), not rounded and kept for 20 minutes.
+app.commandLine.appendSwitch('enable-precise-memory-info');
 // Play collects the garbage loading a match leaves (models, textures, parsing) behind the loading screen (window.gc), not
 // in a full collection a minute into the match (50 ms or more).
 app.commandLine.appendSwitch('js-flags', '--expose-gc');
@@ -647,6 +660,9 @@ async function runRoundsSmoke(win) {
   const rows = JSON.parse(await js(`JSON.stringify(window.__rd.rows)`));
   const keys = [...new Set(rows.flatMap((r) => Object.keys(r)))];
   console.log('SMOKE rounds per round:\n' + keys.map((k) => k.padEnd(13) + rows.map((r) => String(r[k] ?? '').padStart(7)).join('')).join('\n'));
+  // net_graph 2's own log of the run (src/js/play/framelog.js), saved as the game saves it.
+  const log = await js(`window.__playGame.log?.save()`);
+  if (log) console.log(`SMOKE rounds net_graph log ${log}:\n` + fs.readFileSync(log, 'utf8').split('\n').slice(0, 90).join('\n'));
   app.quit();
 }
 

@@ -236,9 +236,16 @@ What's in a match:
   lighting runs allocation-free; bots and grenades are drawn between ticks (the tick is 64 Hz, the screen faster).
   `cl_showfps 2` (or `net_graph 1`, or Show fps in the settings) graphs each frame's time: a stutter is a red spike.
   `net_graph 2` also splits the frame (the bots' AI, their bodies, drawing, the HUD) and shows what the match holds
-  (bodies shown, guns down, textures, geometries, the heap): what grows when it gets slower. `CS2SIM_SMOKE=rounds`
+  (bodies shown, guns down, textures, geometries, the heap): what grows when it gets slower. With `net_graph 2` on,
+  the match is logged as it's played (`src/js/play/framelog.js`). Each second gets a line: frame times, the game's work
+  and its parts, the GPU's drawing time (timer queries), the wait between frames, garbage collections (the heap is
+  precise), and what's drawn and held. Each slow frame (over 30 ms and 1.8× the usual) gets its own line: its time split
+  into the frame before's work and the wait after it, plus what came with it (shaders compiled, textures added, a
+  collection, the browser's long frames and the scripts in them, the game's events just before). The log ends with a
+  table per round and a summary. It's saved to `userData/netgraph-logs` when the match ends or you leave (the end screen
+  says where); `net_graph_log` saves it on the spot and opens its folder. `CS2SIM_SMOKE=rounds`
   plays round after round (`CS2SIM_SMOKE_PLAY=1`: you buy, fire and throw too) and logs each round's frame cost, freeze
-  time measured from the same spot every round, next to everything that could pile up.
+  time measured from the same spot every round, next to everything that could pile up, then net_graph 2's log of it.
   `CS2SIM_SMOKE=hitch` plays rounds on Dust II, Inferno and Nuke and logs every frame over 33 ms with what ran in it
   and how often each kind of event (a bot's shot, damage, a kill...) comes before a slow frame against before any
   (`CS2SIM_SMOKE_PROFILE` and `CS2SIM_SMOKE_ALLOC` add a CPU and an allocation profile). `CS2SIM_SMOKE=botfire` stops

@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('native', {
   display: () => ipcRenderer.invoke('app:display'),
   setDisplay: (d) => ipcRenderer.invoke('app:setDisplay', d),
   relaunch: () => ipcRenderer.invoke('app:relaunch'),
+  saveLog: (name, text) => ipcRenderer.invoke('app:saveLog', name, text),
+  showLog: (file) => ipcRenderer.invoke('app:showLog', file),
   cs2Status: () => ipcRenderer.invoke('cs2:status'),
   cs2Prepare: (req) => ipcRenderer.invoke('cs2:prepare', req),
   cs2Clear: () => ipcRenderer.invoke('cs2:clear'),
