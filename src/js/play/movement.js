@@ -39,6 +39,17 @@ export class PlayerMovement {
   speed2d() { return Math.hypot(this.velocity[0], this.velocity[1]); }
 
   trace(start, end, hull = this.hull) { return this.world.traceBox(start, end, hull.mins, hull.maxs, FLAG_PLAYER); }
+  // Whether a hull fits at a point (nothing solid inside it). A trace that doesn't move can't tell: it lets a box that
+  // starts inside something move out of it, so it never reports being inside. Standing up in the air (the legs dropped
+  // back down) went by one, and the legs dropped into the top of whatever you were landing on: stuck. This asks the
+  // world straight out, the box shrunk a hair so resting on a floor or against a wall doesn't count.
+  fits(origin, hull) {
+    const e = 0.125, min = [origin[0] + hull.mins[0] + e, origin[1] + hull.mins[1] + e, origin[2] + hull.mins[2] + e];
+    const max = [origin[0] + hull.maxs[0] - e, origin[1] + hull.maxs[1] - e, origin[2] + hull.maxs[2] - e];
+    if (this.world.boxOverlap) return !this.world.boxOverlap(min, max, FLAG_PLAYER, true);
+    const tr = this.trace(origin, origin, hull);
+    return !tr.startsolid && !tr.normal;
+  }
 
   teleport(origin) {
     this.origin = origin.slice();
@@ -265,15 +276,10 @@ export class PlayerMovement {
       if (this.ducked) {
         // Stand up only if there's room (in the air, by dropping the legs back down).
         const start = this.onGround ? this.origin : [this.origin[0], this.origin[1], this.origin[2] - DUCK_DIFF];
-        const tr = this.trace(start, start, HULL_STAND);
-        if (!tr.startsolid && tr.fraction === 1 && !tr.normal) {
+        if (this.fits(start, HULL_STAND)) {
           if (!this.onGround) { this.origin = start.slice(); this.duckAmount = 0; }
           this.ducked = false;
-        } else if (!this.onGround) {
-          // no room to drop the legs: try standing in place
-          const tr2 = this.trace(this.origin, this.origin, HULL_STAND);
-          if (!tr2.normal) this.ducked = false;
-        }
+        } else if (!this.onGround && this.fits(this.origin, HULL_STAND)) this.ducked = false; // no room to drop the legs: standing in place
       }
       if (!this.ducked) this.duckAmount = Math.max(0, this.duckAmount - dt * this.duckSpeed);
     }

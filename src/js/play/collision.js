@@ -187,8 +187,9 @@ export class CollisionWorld {
   }
 }
 
-// Does any solid triangle touch the box min..max? (Smoke fills only free space.)
-CollisionWorld.prototype.boxOverlap = function boxOverlap(min, max, mask = FLAG_BULLET) {
+// Does any solid triangle touch the box min..max? (Smoke fills only free space; a player stands up only where it fits.)
+// dynamic: the moving solids (doors, unbroken breakables) count too.
+CollisionWorld.prototype.boxOverlap = function boxOverlap(min, max, mask = FLAG_BULLET, dynamic = false) {
   const B = this.box, L = this.link, S = this.stack, P = this.pos;
   const c = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2], e = [(max[0] - min[0]) / 2, (max[1] - min[1]) / 2, (max[2] - min[2]) / 2];
   let sp = 0;
@@ -202,6 +203,10 @@ CollisionWorld.prototype.boxOverlap = function boxOverlap(min, max, mask = FLAG_
       const tri = this.order[k];
       if ((this.flags[tri] & mask) && triBoxOverlap(P, tri * 9, c, e)) return true;
     }
+  }
+  if (dynamic) for (const sh of this.dynamic) {
+    if (sh.off || !(sh.flags & mask)) continue;
+    for (let i = 0; i < sh.tris.length; i += 9) if (triBoxOverlap(sh.tris, i, c, e)) return true;
   }
   return false;
 };

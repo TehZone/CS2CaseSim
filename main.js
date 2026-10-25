@@ -305,12 +305,12 @@ async function runFeatureSmoke(win) {
     console.log('SMOKE', online);
   }
   for (const page of ['cases', 'inventory', 'tradeup', 'armory', 'gamble', 'team', 'stats']) {
-    await js(`document.querySelector('#nav [data-page=${page}]').click()`);
+    await js(`document.querySelector('#topbar [data-page=${page}]').click()`);
     await wait(page === 'team' ? 600 : 1500);
     if (page === 'team') { await js(`document.querySelector('[data-auto]')?.click()`); await wait(1500); }
     await shot(page);
   }
-  await js(`document.querySelector('#nav [data-page=cases]').click(); (async () => { const c = await import('./js/pages/cases.js'); c.openCollectionView('collection-set-cobblestone'); })()`);
+  await js(`document.querySelector('#topbar [data-page=cases]').click(); (async () => { const c = await import('./js/pages/cases.js'); c.openCollectionView('collection-set-cobblestone'); })()`);
   await wait(1500);
   await shot('collection');
   console.log('SMOKE screenshots saved to', app.getPath('userData'));
@@ -331,7 +331,7 @@ async function smokeMapIds(win) {
   if (process.env.CS2SIM_SMOKE_GLOBALS) await js(`Object.assign(window, ${process.env.CS2SIM_SMOKE_GLOBALS}); 1`);
   // CS2SIM_SMOKE_PREFS: Play settings for the run (JSON, e.g. {"quality":"performance","renderScale":0.75}).
   if (process.env.CS2SIM_SMOKE_PREFS) await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, ...${process.env.CS2SIM_SMOKE_PREFS} })); })(); 1`);
-  await js(`document.querySelector('#nav [data-page=play]').click(); 1`);
+  await js(`document.querySelector('#topbar [data-page=play]').click(); 1`);
   let ids = (process.env.CS2SIM_SMOKE_MAPS || '').split(',').filter(Boolean);
   for (let i = 0; i < 40 && !ids.length; i++) {
     await wait(500);
@@ -449,7 +449,7 @@ async function runPrepareSmoke(win) {
     await js(`document.querySelector('.play-root [data-leave]')?.click(); 1`);
     await wait(2000);
   }
-  await js(`document.querySelector('#nav [data-page=stats]').click(); 1`);
+  await js(`document.querySelector('#topbar [data-page=stats]').click(); 1`);
   for (let i = 0; i < 20 && !(await js(`!!document.querySelector('[data-prep]:not([hidden])')`)); i++) await wait(500);
   await js(`document.querySelector('[data-prep]').scrollIntoView({ block: 'center' }); 1`);
   await wait(6000);
@@ -688,7 +688,7 @@ async function runBotsSmoke(win) {
   for (const map of maps) {
     for (const tier of tiers) {
       await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'competitive', map: '${map}', difficulty: '${tier}', teamSize: 5, length: 'long', quality: 'balanced' })); })(); 1`);
-      await js(`document.querySelector('#nav [data-page=stats]').click(); setTimeout(() => document.querySelector('#nav [data-page=play]').click(), 200); 1`);
+      await js(`document.querySelector('#topbar [data-page=stats]').click(); setTimeout(() => document.querySelector('#topbar [data-page=play]').click(), 200); 1`);
       await wait(1500);
       if (!(await smokeStartMap(win, map, 'bots'))) continue;
       await js(`(() => { const g = window.__playGame, B = window.__bots = { log: [], throws: [], landed: [], kills: 0, plants: 0, wins: { T: 0, CT: 0 } };
@@ -758,7 +758,7 @@ async function runLookSmoke(win) {
   await wait(4000);
   const map = (process.env.CS2SIM_SMOKE_MAPS || 'de_dust2').split(',')[0];
   await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'competitive', map: '${map}', teamSize: 5, team: '${process.env.CS2SIM_SMOKE_PLANT ? 'T' : 'CT'}' })); })(); 1`);
-  await js(`document.querySelector('#nav [data-page=stats]').click(); setTimeout(() => document.querySelector('#nav [data-page=play]').click(), 200); 1`);
+  await js(`document.querySelector('#topbar [data-page=stats]').click(); setTimeout(() => document.querySelector('#topbar [data-page=play]').click(), 200); 1`);
   await wait(1500);
   if (!(await smokeStartMap(win, map, 'look'))) return app.quit();
   await js(`(() => { const g = window.__playGame;
@@ -974,7 +974,7 @@ async function runBreakSmoke(win) {
   await wait(4000);
   const map = (process.env.CS2SIM_SMOKE_MAPS || 'de_mirage').split(',')[0];
   await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'competitive', map: '${map}', teamSize: 5 })); })(); 1`);
-  await js(`document.querySelector('#nav [data-page=stats]').click(); setTimeout(() => document.querySelector('#nav [data-page=play]').click(), 200); 1`);
+  await js(`document.querySelector('#topbar [data-page=stats]').click(); setTimeout(() => document.querySelector('#topbar [data-page=play]').click(), 200); 1`);
   await wait(1500);
   if (!(await smokeStartMap(win, map, 'break'))) return app.quit();
   await js(`(() => { const g = window.__playGame;
@@ -1061,7 +1061,7 @@ async function runPremierSmoke(win) {
   const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `premier-${name}.png`), (await win.webContents.capturePage()).toPNG());
   await wait(3000);
   await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'premier', difficulty: '${process.env.CS2SIM_SMOKE_TIERS || 'mg'}', quality: 'balanced' })); })(); 1`);
-  await js(`document.querySelector('#nav [data-page=play]').click(); 1`);
+  await js(`document.querySelector('#topbar [data-page=play]').click(); 1`);
   await wait(2500);
   await shot('lobby');
   await js(`window.__cs2Debug = true; document.querySelector('[data-start]').click(); 1`);
@@ -1252,7 +1252,7 @@ async function runCrateSmoke(win) {
   const t = Date.now();
   console.log('SMOKE crate', JSON.stringify(await js(`window.native.cs2Crate(${JSON.stringify(id.replace(/^crate-/, ''))})`)), ((Date.now() - t) / 1000).toFixed(1) + 's');
   await js(`(async () => { const { S } = await import('./js/state.js'); S.money += 1000; const c = await import('./js/pages/cases.js');
-    document.querySelector('#nav [data-page=cases]').click(); c.openCaseView(${JSON.stringify(id)}); })()`);
+    document.querySelector('#topbar [data-page=cases]').click(); c.openCaseView(${JSON.stringify(id)}); })()`);
   await wait(800);
   await shot('page');
   const t0 = Date.now();
@@ -1399,7 +1399,7 @@ async function runPlaySmoke(win) {
   await js(`document.querySelector('.inspect [data-a=close]')?.click(); 1`);
   await wait(500);
   const t0 = Date.now();
-  await js(`window.__cs2Debug = true; document.querySelector('#nav [data-page=play]').click(); setTimeout(() => document.querySelector('[data-start]').click(), 300); 1`);
+  await js(`window.__cs2Debug = true; document.querySelector('#topbar [data-page=play]').click(); setTimeout(() => document.querySelector('[data-start]').click(), 300); 1`);
   let last = '';
   for (let i = 0; i < 900; i++) {
     await wait(1000);
@@ -1711,7 +1711,12 @@ async function runPlaySmoke(win) {
 }
 
 function runSmokeTest(win) {
-  win.webContents.on('console-message', (e, level, message) => console.log('[renderer]', e.message ?? message));
+  win.webContents.on('console-message', (e, level, message, line, source) => {
+    // (errors say where: the file under js/ and the line)
+    const isError = e.level === 'error' || level === 3, src = String(e.sourceId ?? source ?? '');
+    const where = isError && src ? ` (${src.replace(/^.*\/js\//, '')}:${e.lineNumber ?? line})` : '';
+    console.log('[renderer]', (e.message ?? message) + where);
+  });
   if (process.env.CS2SIM_SMOKE === 'features') { win.webContents.once('did-finish-load', () => runFeatureSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'play') { win.webContents.once('did-finish-load', () => runPlaySmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'perf') { win.webContents.once('did-finish-load', () => runPerfSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }

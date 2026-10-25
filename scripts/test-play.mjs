@@ -105,6 +105,20 @@ run(p, 10, { forward: 0 });
 p.tick(1 / 64, { forward: 0, side: 0, yaw: 0, maxSpeed: 250 });
 run(p, 30, {});
 ok(!p.ducked, 'stands up again');
+// letting go of crouch in the air just above a box: the legs can't drop into it, so you stand in place, land on it
+// and walk on (they dropped into it before and you were stuck)
+{
+  const B = world([[[-2000, -2000, -64], [2000, 2000, 0]], [[1500, 1500, 0], [1600, 1600, 48]]]);
+  const q = new PlayerMovement(B, [1550, 1550, 60]);
+  q.ducked = true; q.duckAmount = 1; q.onGround = false; q.velocity = [0, 0, -50];
+  q.origin = [1550, 1550, 52]; // feet 4 units over the box
+  q.tick(1 / 64, { forward: 0, side: 0, yaw: 0, maxSpeed: 250 }); // (crouch let go)
+  const legsIn = q.origin[2] < 48 - 0.5;
+  run(q, 32, {});
+  const landed = q.onGround && near(q.origin[2], 48, 0.5);
+  run(q, 64, { forward: 1, yaw: 0 });
+  ok(!legsIn && landed && q.origin[0] > 1620, `letting go of crouch just over a box doesn't sink the legs into it: lands on it and walks off (z ${q.origin[2].toFixed(1)}, x ${q.origin[0].toFixed(0)})`);
+}
 // crouch spam: each new crouch goes down slower (CS2's duck speed), and it comes back after a rest
 {
   const q = new PlayerMovement(W, [0, 900, 0]);

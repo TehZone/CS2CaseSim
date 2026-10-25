@@ -717,7 +717,7 @@ export class Brain {
     const go0 = Math.hypot(want[0], want[1]);
     if (go0 > 0 && t >= (this.lowAt || 0)) {
       this.lowAt = t + 0.1;
-      const wp = this.path?.[this.pi], prev = this.pi > 0 ? this.path[this.pi - 1] : null;
+      const wp = this.path?.[this.pi], prev = this.path && this.pi > 0 ? this.path[this.pi - 1] : null; // (no path once it has arrived)
       this.low = !!(wp?.crouch && Math.hypot(wp[0] - b.pos[0], wp[1] - b.pos[1]) < 120) || !!(prev?.crouch && Math.hypot(prev[0] - b.pos[0], prev[1] - b.pos[1]) < 64) || this.lowAhead(want[0] / go0, want[1] / go0);
       // And a breakable in the way (a vent cover over the hole it goes through, a shutter): it shoots it open, or slashes
       // it with the knife, like CS2's bots.
@@ -813,7 +813,7 @@ export class Brain {
     const b = this.bot, c = this.game.collision;
     if (this.body?.world.of !== c) {
       const w = this.game.bodyWorld(() => this.c);
-      this.body = new PlayerMovement({ of: c, traceBox: w.traceBox, ladders: NO_LADDERS }, b.pos);
+      this.body = new PlayerMovement({ of: c, traceBox: w.traceBox, boxOverlap: (...a) => c.boxOverlap(...a), ladders: NO_LADDERS }, b.pos);
     }
     const m = this.body;
     if (m.origin[0] !== b.pos[0] || m.origin[1] !== b.pos[1] || m.origin[2] !== b.pos[2]) m.teleport(b.pos);
