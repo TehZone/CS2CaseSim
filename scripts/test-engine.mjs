@@ -562,7 +562,7 @@ function tierFreq(box, n) {
   check('charms are sold on the market, each with its own pattern', bought.t === 'charm' && bought.id === forSale.id && bought.pat >= 1 && bought.src === 'Market');
   st.stars = 10;
   const offer = A.armoryOffers(A.armoryWindow(now).i).offers.find((o) => o.type === 'charm');
-  const red = run('armory.redeem', { offer: offer.id, n: 5 }, { now: Date.now() }).r;
+  const red = run('armory.redeem', { offer: offer.id, n: 5 }).r;
   check('the Armory always offers the charm collections', red.items.length === 5 && red.items.every((it) => it.t === 'charm' && D.charms[it.id].col === offer.col && it.sn >= 1)
     && st.stars === 10 - offer.stars * 5);
 }
