@@ -585,19 +585,33 @@ async function runRoundsSmoke(win) {
     wrap(g, 'tick', 'sim'); wrap(g.post, 'render', 'draw'); wrap(Object.getPrototypeOf(g.bots[0]), 'animate', 'animate'); wrap(g, 'updateHud', 'hud');
     wrap(Object.getPrototypeOf(g.bots[0].brain), 'tick', 'ai'); wrap(g.nades, 'tick', 'nades'); wrap(g.effects, 'update', 'effects'); wrap(g.sounds, 'play', 'sound');
     wrap(g, 'pickups', 'pickups'); wrap(g.drops, 'tick', 'drops'); wrap(g.soundscapes, 'update', 'soundscapes');
+    // Draw calls a frame (net_graph 2 counts the whole frame's), audio nodes made, and event listeners added but not taken
+    // off again (a pile of either is something not let go of).
+    g.console.run('net_graph 2');
+    R.audioNodes = 0; R.listeners = 0;
+    for (const m of ['createGain', 'createBufferSource', 'createPanner', 'createBiquadFilter', 'createConvolver']) {
+      const f = BaseAudioContext.prototype[m]; BaseAudioContext.prototype[m] = function (...a) { R.audioNodes++; return f.apply(this, a); };
+    }
+    const add = EventTarget.prototype.addEventListener, rem = EventTarget.prototype.removeEventListener;
+    EventTarget.prototype.addEventListener = function (...a) { if (!(this instanceof AudioNode)) R.listeners++; return add.apply(this, a); };
+    EventTarget.prototype.removeEventListener = function (...a) { if (!(this instanceof AudioNode)) R.listeners--; return rem.apply(this, a); };
+    const callsWas = g.graphFrame; R.calls = 0;
+    g.graphFrame = function (...a) { R.calls += this.renderer.info.render.calls; return callsWas.apply(this, a); };
     // At each round's end: its frames, and what's there now.
     const count = (o) => { let n = 0; o.traverse(() => n++); return n; };
+    const materials = () => { const s = new Set(); g.scene.traverse((o) => { if (o.material) [].concat(o.material).forEach((m) => s.add(m)); }); return s.size; };
     const size = (m) => (m instanceof Map || m instanceof Set ? m.size : Array.isArray(m) ? m.length : m && typeof m === 'object' ? Object.keys(m).length : 0);
     R.snap = () => { const c = R.cur, n = Math.max(1, c.frames), info = g.renderer.info, b = g.sounds, z = c.fz, nz = Math.max(1, z.frames);
       R.rows.push({ round: g.match.round, 'FREEZE frames': z.frames, 'freeze ms': +(z.int / nz).toFixed(2), 'freeze cpu': +(z.cpu / nz).toFixed(2),
         ...Object.fromEntries(Object.entries(z.parts).map(([k, v]) => ['freeze ' + k, +(v / nz).toFixed(2)])),
         'ROUND frames': c.frames, ms: +(c.int / n).toFixed(1), cpu: +(c.cpu / n).toFixed(2), ...Object.fromEntries(Object.entries(c.parts).map(([k, v]) => [k, +(v / n).toFixed(2)])),
+        draws: Math.round(R.calls / n), materials: materials(), botObjects: g.bots.reduce((s, x) => s + count(x.root), 0), audioNodes: R.audioNodes, listeners: R.listeners,
         scene: count(g.scene), vm: count(g.vmScene), geo: info.memory.geometries, tex: info.memory.textures, progs: info.programs?.length || 0,
         particles: g.effects.particles.length, tracers: g.effects.tracers.length, gibs: g.effects.gibList.length, holes: g.effects.holes.count, effectsGroup: g.effects.group.children.length,
         floorGuns: g.drops.list.length, flying: g.nades.flying.length, fires: g.nades.fires?.length || 0, smokes: size(g.nades.smokes),
         playing: [...b.playing.values()].reduce((s, l) => s + l.length, 0), playingKeys: b.playing.size, lastStart: b.lastStart.size, buffers: b.buffers.size, events: size(b.events),
         dom: document.getElementsByTagName('*').length, heapMB: +((performance.memory?.usedJSHeapSize || 0) / 1e6).toFixed(0), pings: g.pings.length });
-      R.cur = fresh(); R.in = null; };
+      R.cur = fresh(); R.in = null; R.calls = 0; R.audioNodes = 0; };
     const end = g.match.endRound.bind(g.match);
     g.match.endRound = (...a) => { const r = end(...a); R.snap(); return r; };
     return 1; })()`);
