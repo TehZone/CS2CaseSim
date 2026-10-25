@@ -125,7 +125,9 @@ What's in a match:
   with CS2's third-person clips: running, walking and crouching in every direction, each gun's hold pose, drawing and
   reloading it, pulling a grenade's pin and throwing it, flinching when hit, covering their eyes when flashed, climbing
   ladders, falling, planting, defusing, deaths. Standing still they aim around with the upper body and only step round
-  when the aim swings far off, like CS2's turn in place.
+  when the aim swings far off, like CS2's turn in place. A body falls without its gun (that's on the floor), lies there
+  10 seconds, then sinks into the floor and is gone (`CS2SIM_SMOKE=corpses` times what bodies cost: nine in view, about
+  a quarter of a frame).
 - Everyone's picture by the round clock (the bots' real players), dimmed when they die. Grenades stay primed for as
   long as you hold the button and keep the crosshair; tracers come out of the gun's barrel (yours and the bots').
 - Radar (CS2's overview of the map), kill feed (with CS2's marks for headshots, wallbangs, kills through smoke, jumping,

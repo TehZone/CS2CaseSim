@@ -371,7 +371,7 @@ export class Bot {
     if (this.holding !== id) return;
     this.weaponModel?.removeFromParent();
     this.weaponModel = null;
-    if (tpl && this.bones.wpn) {
+    if (tpl && this.bones.wpn && this.mode !== 'dead') {
       const { model, grip, muzzle } = this.assets.staticWeapon(tpl);
       const w = model.clone(); // (its geometry shared with every bot holding one)
       this.lightOwn(w);
@@ -436,6 +436,7 @@ export class Bot {
     this.pos = origin.slice(); this.vel = [0, 0, 0];
     this.yaw = yaw; this.bodyYaw = yaw; this.turning = false; this.pitch = 0; this.ducked = false;
     this.mode = 'move';
+    this.deadAt = null;
     this.mixer.stopAllAction();
     this.loco = null;
     this.gestureAction = null;
@@ -459,6 +460,10 @@ export class Bot {
       this.armsAction?.fadeOut(0.1);
       this.gestureAction?.fadeOut(0.1);
       this.gestureAction = null;
+      // The gun falls (it's on the floor: see Game.dropOnDeath), not with the body through its head.
+      this.weaponModel?.removeFromParent();
+      this.weaponModel = null;
+      this.deathEnd = this.time + (clip?.duration ?? 0) + 0.3; // (lying still after: see animate)
     } else if (mode === 'plant' || mode === 'defuse') {
       // The whole body plants (or defuses): blended with the walk and the gun's hold pose it only got half way there.
       this.armsAction?.fadeOut(0.12);
@@ -481,6 +486,7 @@ export class Bot {
   animate(dt) {
     const l = this.loco;
     this.time += dt;
+    if (this.mode === 'dead' && this.time > this.deathEnd) return; // (its death clip over: it holds the last pose)
     this.turnBody(dt);
     if (this.gestureAction && this.time >= this.gestureEnd) this.endGesture();
     // On a ladder the clip moves the arms too (hands on the rungs): the hold pose steps aside.

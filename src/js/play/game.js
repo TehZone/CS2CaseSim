@@ -51,6 +51,7 @@ const vfov = (fov43) => (2 * Math.atan(Math.tan((fov43 * Math.PI) / 360) * 0.75)
 const FOV = 90;
 const VIEWMODEL = { fov: 68, x: 1, y: 1, z: -1 }; // CS2's viewmodel_fov and viewmodel_offset_x/y/z (inches)
 const IN = 0.0254;
+const BODY_STAY = 10, BODY_SINK = 1.5; // seconds a body lies there, and sinks into the floor for before it's gone
 
 const SURFACE_STEP = { concrete: 'Concrete', rock: 'Concrete', tile: 'Tile', sand: 'Sand', dirt: 'Dirt', wood: 'Wood', wood_solid: 'Wood_Solid',
   wood_panel: 'Wood', wood_plank: 'Wood', wood_dense: 'Wood', wood_crate: 'Wood', wood_basket: 'Wood_Basket', wood_tree: 'Wood', metal: 'SolidMetal',
@@ -1915,11 +1916,12 @@ export class Game {
       this.planting = null; this.defusing = false;
       this.closeBuyMenu();
       this.sounds.play(headshot ? 'Player.DeathHeadShot.Victim' : 'Player.DeathBody.Victim', { volume: 0.8 });
-      // Your body falls where you stood; the death cam pulls up and back from it to watch your killer.
-      const body = this.myBody, gunId = this.arsenal.gun?.id;
+      // Your body falls where you stood (your gun on the floor by it); the death cam pulls up and back from it to watch
+      // your killer.
+      const body = this.myBody;
       body.spawn(this.player.origin, this.input.yaw);
-      if (gunId && !this.arsenal.gun.nade) body.equip(gunId, { draw: false });
       body.setMode('dead', { headshot });
+      body.deadAt = this.now;
       const eye = this.player.eye(), { fwd } = basis(0, this.input.yaw), back = [-fwd[0] * 0.8, -fwd[1] * 0.8, 0.6], bl = Math.hypot(...back);
       const hit = this.collision.raycast(eye, back.map((v) => v / bl), 48, FLAG_BULLET);
       const from = [0, 1, 2].map((k) => eye[k] + (back[k] / bl) * (hit ? Math.max(0, hit.t - 6) : 48));
@@ -1927,6 +1929,7 @@ export class Game {
     } else {
       const b = this.botOf(c);
       b.setMode('dead', { headshot });
+      b.deadAt = this.now;
       b.vel = [0, 0, 0];
     }
   }
@@ -2078,9 +2081,13 @@ export class Game {
     this.camera.updateMatrixWorld();
     _frustum.setFromProjectionMatrix(_m4.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
     for (const b of [...this.bots, this.myBody]) {
+      // A body lies there a while, then sinks into the floor and is gone (nine in view cost a quarter of a frame).
+      const gone = b.deadAt != null ? (this.now - b.deadAt - BODY_STAY) / BODY_SINK : -1;
+      if (gone >= 1) b.root.visible = false;
       b.root.matrixWorldAutoUpdate = b.root.visible; // (a hidden body skips the matrix pass too)
       if (!b.root.visible) continue;
       b.sync(a);
+      if (gone > 0) b.root.position.y -= gone * 40 * IN;
       const seen = _frustum.intersectsSphere(_sphere.set(toGl([b.pos[0], b.pos[1], b.pos[2] + 36], _v3), 60 * IN));
       b.view.visible = seen;
       b.view.matrixWorldAutoUpdate = seen; // (out of view its ~100 bones skip the frame's matrix pass: a shot, its muzzle or a head bone works them out when needed)

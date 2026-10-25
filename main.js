@@ -11,7 +11,8 @@ protocol.registerSchemesAsPrivileged([
 
 const SRC = path.join(__dirname, 'src');
 const BUNDLED_DATA = path.join(SRC, 'data', 'game-data.json');
-const IMAGE_HOSTS = /^https:\/\/(community\.(akamai|cloudflare|fastly)\.steamstatic\.com|steamcommunity-a\.akamaihd\.net|raw\.githubusercontent\.com)\//;
+// cdn.steamstatic.com serves the econ icons Steam has no economy image for, e.g. most Gold and souvenir stickers.
+const IMAGE_HOSTS = /^https:\/\/(community\.(akamai|cloudflare|fastly)\.steamstatic\.com\/|steamcommunity-a\.akamaihd\.net\/|cdn\.steamstatic\.com\/apps\/730\/|raw\.githubusercontent\.com\/)/;
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.jpg': 'image/jpeg', '.woff2': 'font/woff2',
@@ -487,6 +488,68 @@ async function runBotFireSmoke(win) {
         longTasks: F.long.filter((l) => l.phase === p).map((l) => Math.round(l.d)), calls };
     }
     return JSON.stringify(out, null, 1); })()`));
+  app.quit();
+}
+
+// `CS2SIM_SMOKE=corpses` times what dead bodies cost on Dust II (CS2SIM_SMOKE_MAP): the bots stopped and lined up in
+// front of you, alive, then dead (the round doesn't end: their guns on the floor, not in their hands), and once their
+// bodies have gone; each phase's frame times (between frames, as net_graph's ms), the game's own time in the frame,
+// drawing and animating.
+async function runCorpseSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const map = process.env.CS2SIM_SMOKE_MAP || 'de_dust2';
+  await wait(3000);
+  if (!(await smokeStartMap(win, map, 'corpses'))) { app.quit(); return; }
+  await wait(4000);
+  const lined = await js(`(() => { const g = window.__playGame, now = () => performance.now();
+    g.console.run('sv_cheats 1'); g.cv.bot_stop = 1; g.god = true;
+    g.match.endRound = () => {}; // (the bodies stay: no round end)
+    // The bots in rows in front of you, on the floor.
+    const o = g.player.origin, yaw = g.input.yaw * Math.PI / 180, f = [Math.cos(yaw), Math.sin(yaw)], r = [Math.sin(yaw), -Math.cos(yaw)];
+    let n = 0;
+    for (const b of g.bots) {
+      for (let k = 0; k < 40; k++) {
+        const along = 180 + (k % 4) * 90 + Math.floor(n / 3) * 70, side = ((n % 3) - 1) * 70 + (Math.floor(k / 4) % 2 ? 35 : 0);
+        const x = o[0] + f[0] * along + r[0] * side, y = o[1] + f[1] * along + r[1] * side, z = g.floorAt([x, y, o[2] + 60], 200);
+        if (z == null || Math.abs(z - o[2]) > 40) continue;
+        b.pos = [x, y, z]; b.vel = [0, 0, 0]; b.brain.body?.teleport(b.pos); n++; break;
+      }
+    }
+    g.input.pitch = 12;
+    const F = window.__cs = { frames: [], phase: null, parts: {} };
+    const frame = g.frame; let prev = 0;
+    g.frame = function (dt) { const t = now(); frame.call(this, dt); const e = now(); if (F.phase) F.frames.push({ phase: F.phase, cpu: e - t, int: prev ? t - prev : 0 }); prev = t; };
+    const wrap = (obj, name, label) => { const f2 = obj[name]; obj[name] = function (...a) { const t = now(); try { return f2.apply(this, a); } finally { if (F.phase) { const p = (F.parts[F.phase] ||= {}); p[label] = (p[label] || 0) + now() - t; } } }; };
+    wrap(g.post, 'render', 'draw'); wrap(Object.getPrototypeOf(g.bots[0]), 'animate', 'animate');
+    return n; })()`);
+  console.log('SMOKE corpses lined up', lined, 'bots in front of you');
+  const phase = (p) => js(`window.__cs.phase = ${JSON.stringify(p)}; 1`);
+  const ms = +(process.env.CS2SIM_SMOKE_PHASE_MS || 6000);
+  await phase('alive'); await wait(ms);
+  await js(`(() => { const g = window.__playGame; window.__cs.phase = null; window.__cs.killedAt = performance.now(); for (const b of g.bots) if (b.c.alive) g.kill(b.c, null, { name: 'World' }, false); return 1; })()`);
+  await wait(800);
+  const bodies = () => js(`(() => { const g = window.__playGame; let guns = 0; for (const b of g.bots) { let n = 0; b.root.traverse((o) => { if (o.isMesh && o.parent && o.parent.parent === b.bones.hand_R) n++; }); if (b.weaponModel || n) guns++; }
+    return JSON.stringify({ seconds: +((performance.now() - window.__cs.killedAt) / 1000).toFixed(1), shown: g.bots.filter((b) => b.root.visible).length, holdingGuns: guns, gunsOnTheFloor: g.drops.list.length }); })()`);
+  console.log('SMOKE corpses just dead', await bodies());
+  await wait(1700); // (their death animations done)
+  await phase('dead'); await wait(Math.min(ms, 6000));
+  await phase(null);
+  fs.writeFileSync(path.join(app.getPath('userData'), 'corpses-dead.png'), (await win.webContents.capturePage()).toPNG());
+  console.log('SMOKE corpses lying there', await bodies());
+  const left = 12500 - (await js(`performance.now() - window.__cs.killedAt`));
+  if (left > 0) await wait(left);
+  console.log('SMOKE corpses after a while', await bodies());
+  await phase('gone'); await wait(ms);
+  await phase(null);
+  console.log('SMOKE corpses', await js(`(() => { const F = window.__cs, out = [];
+    const q = (a, k) => { const s = a.slice().sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(s.length * k))].toFixed(1) : '0'; };
+    for (const p of ['alive', 'dead', 'gone']) {
+      const fr = F.frames.filter((f) => f.phase === p), ints = fr.map((f) => f.int).filter(Boolean), n = Math.max(1, fr.length), parts = F.parts[p] || {};
+      out.push(p.padEnd(12) + ' ' + fr.length + ' frames  ms mean ' + (ints.reduce((a, b) => a + b, 0) / Math.max(1, ints.length)).toFixed(2) + ' p95 ' + q(ints, 0.95) + ' max ' + Math.max(0, ...ints).toFixed(1)
+        + '  game cpu ' + (fr.reduce((a, f) => a + f.cpu, 0) / n).toFixed(2) + '  draw ' + ((parts.draw || 0) / n).toFixed(2) + '  animate ' + ((parts.animate || 0) / n).toFixed(2) + ' (ms a frame)');
+    }
+    return '\\n' + out.join('\\n'); })()`));
   app.quit();
 }
 
@@ -1968,6 +2031,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'breakables') { win.webContents.once('did-finish-load', () => runBreakSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'look') { win.webContents.once('did-finish-load', () => runLookSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'corpses') { win.webContents.once('did-finish-load', () => runCorpseSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'botfire') { win.webContents.once('did-finish-load', () => runBotFireSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'sound') { win.webContents.once('did-finish-load', () => runSoundSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'mm') { win.webContents.once('did-finish-load', () => runMatchmakingSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
