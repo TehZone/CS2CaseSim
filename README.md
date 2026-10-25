@@ -39,7 +39,9 @@ With CS2 installed the inspect also offers:
 - **StatTrak™ counters**: StatTrak™ guns carry CS2's orange counter module where the game puts it, and StatTrak™ knives
   have the count etched into the blade, showing the item's kills (in the inspect, first person and Play).
 - **Charms**: CS2's charm models hang from each gun's own keychain point and swing as the gun moves (in the inspect,
-  first person and Play), turned by the charm's pattern. A Sticker Slab shows its sticker on the card inside the case.
+  first person and Play), resting against the gun's side where it is wider than the keychain sits out, never through it.
+  They are drawn with CS2's charm materials, and most charms' colours follow their pattern like in game (the icons show
+  the middle pattern). A Sticker Slab shows its sticker on the card inside the case, its label in the sticker's rarity colour.
 
 Opening a case also plays CS2's own crate: the case's 3D model drops in, lands and unlocks with the game's "fall" and
 "open" animations and sounds before the roulette (weapon cases and recent souvenir packages; containers without a 3D
@@ -223,7 +225,7 @@ What's in a match:
 - The Armory: Armory Stars (Armory Pass, or earned by opening cases) spent on drops from featured collections that
   rotate every 10-15 minutes, and on the four charm collections (always available)
 - Charms: all 78 of CS2's charms (Missing Link, Missing Link Community, Small Arms and Dr Boom), from the Armory or the
-  Market, one per gun (Souvenirs too). Each has a pattern from 1 to 100,000; low and special ones (#1, the top 10, the
+  Market, one per gun (Souvenirs too). Each has a pattern from 1 to 100,000 that sets its colours and how it hangs; low and special ones (#1, the top 10, the
   top 100, #77777...) are worth more. A gun is worth its charm too; taking one off uses a Charm Detachment (a pack of 3
   for $0.99). Sticker Slabs turn any sticker into a charm (the sticker plus $0.44, the cheapest slabs' going rate)
 - Gambling (virtual money, no house edge, provably fair with a verify button): case battles (1v1 to 2v2, normal or
