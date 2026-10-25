@@ -2215,7 +2215,7 @@ export class Game {
       hud.fps(this.settings.showFps === false ? null : this.fps);
       hud.place(me.alive ? this.place() : null);
       if (this.buyMenu.isOpen) { if (!m.buyOpen || !this.inBuyZone()) this.closeBuyMenu(); else this.buyMenu.render(); }
-      if (!this.matchOver) hud.scoreboard(this.input.held('scores'), this.scoreData());
+      if (!this.matchOver) { const tab = this.input.held('scores'); hud.scoreboard(tab, tab ? this.scoreData() : null); }
       this.radar?.draw(this.radarData());
     }
   }

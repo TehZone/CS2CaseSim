@@ -232,7 +232,11 @@ What's in a match:
   lighting runs allocation-free; bots and grenades are drawn between ticks (the tick is 64 Hz, the screen faster).
   `cl_showfps 2` (or `net_graph 1`, or Show fps in the settings) graphs each frame's time: a stutter is a red spike.
   `CS2SIM_SMOKE=hitch` plays rounds on Dust II, Inferno and Nuke and logs every frame over 33 ms with what ran in it
-  (`CS2SIM_SMOKE_PROFILE` and `CS2SIM_SMOKE_ALLOC` add a CPU and an allocation profile).
+  and how often each kind of event (a bot's shot, damage, a kill...) comes before a slow frame against before any
+  (`CS2SIM_SMOKE_PROFILE` and `CS2SIM_SMOKE_ALLOC` add a CPU and an allocation profile). `CS2SIM_SMOKE=botfire` stops
+  the bots and times one thing at a time: bots firing at nothing or at the floor, bots or you taking damage, Tab held
+  (`+mute`, `+noradio`, `+noflinch`, `+nohud` on a phase turn one part off). The scoreboard is made again only when
+  something on it changes (holding Tab took frames from 7 ms to 54 ms on average; now it doesn't).
 - Movement ported from Source's: CS2's acceleration, friction, air strafing, 18-unit steps, jumping (no auto bunny
   hop), crouching, crouch-jumps (66 units: short of a standing player's head, onto a crouching one's), walking and
   ladders, with the weapon's own speed; footsteps by surface. Players are solid to each other: you stop at them (you

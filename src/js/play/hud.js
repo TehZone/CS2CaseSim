@@ -207,29 +207,16 @@ export class Hud {
   }
 
   // Tab: both teams with kills, deaths, assists, damage per round, money (your team) and MVPs; in free-for-all one list
-  // by points (or Arms Race level).
-  scoreboard(show, { players = [], myTeam, round = 1, scores = {}, ffa = false, respawn = false } = {}) {
+  // by points (or Arms Race level). Made again only when something on it changed: every tenth of a second it put new
+  // rows (and pictures) in, the whole HUD's style worked out again each time, and holding Tab stuttered.
+  scoreboard(show, data) {
     const el = this.q('[data-scores]');
     el.classList.toggle('hidden', !show);
     if (!show) return;
-    if (respawn) {
-      const list = (side) => players.filter((p) => ffa || p.team === side).sort((a, b) => b.level - a.level || b.points - a.points).map((p) => `
-        <tr class="${p.alive ? '' : 'dead'} ${p.me ? 'me' : ''}"><td>${who(p)}</td><td>${p.kills}</td><td>${p.deaths}</td><td>${ffa && p.level ? p.level + 1 : p.points}</td></tr>`).join('');
-      const table = (side, name) => `<div class="sb-team ${side ? side.toLowerCase() : 'ffa'}"><div class="sb-head">${side ? `<b>${scores[side] ?? 0}</b> ` : ''}${name}</div>
-        <table><thead><tr><th>Player</th><th>K</th><th>D</th><th>${players.some((p) => p.level) ? 'Level' : 'Points'}</th></tr></thead><tbody>${list(side)}</tbody></table></div>`;
-      el.innerHTML = ffa ? table(null, 'Free for all') : table('CT', 'Counter-Terrorists') + table('T', 'Terrorists');
-      return;
-    }
-    const ranked = players.some((p) => p.rank !== undefined || p.rating !== undefined);
-    const rows = (side) => players.filter((p) => p.team === side).sort((a, b) => b.score - a.score).map((p) => `
-      <tr class="${p.alive ? '' : 'dead'} ${p.me ? 'me' : ''}">${ranked ? `<td class="rank">${p.rating !== undefined ? ratingHtml(p.rating, { size: 12 }) : emblemHtml(p.rank, { size: 18, wingman: p.wingman })}</td>` : ''}<td>${who(p)}</td><td>${p.team === myTeam ? '$' + p.money : ''}</td>
-      <td>${p.kills}</td><td>${p.deaths}</td><td>${p.assists}</td><td>${Math.round(p.damage / Math.max(1, round - 1 || 1))}</td><td>${p.mvps ? '★' + p.mvps : ''}</td><td>${p.score}</td></tr>`).join('');
-    const table = (side, name) => `<div class="sb-team ${side.toLowerCase()}"><div class="sb-head"><b>${scores[side] ?? 0}</b> ${name}</div>
-      <table><thead><tr>${ranked ? '<th class="rank">Rank</th>' : ''}<th>Player</th><th>Money</th><th>K</th><th>D</th><th>A</th><th>ADR</th><th>MVP</th><th>Score</th></tr></thead><tbody>${rows(side)}</tbody></table></div>`;
-    el.innerHTML = table('CT', 'Counter-Terrorists') + table('T', 'Terrorists');
+    const html = scoreboardHtml(data);
+    if (html !== this.scoresHtml) { el.innerHTML = html; this.scoresHtml = html; }
   }
 
-  // A radio call in the chat: name @ place: text (fades after a while).
   // A radio call in the chat (name @ place: text).
   chat(name, place, text, team) { this.chatLine({ name, team, text, place, radio: true }); }
   // A chat line like CS2's: *DEAD* and (Terrorist) / (Counter-Terrorist) for team messages, the name in its side's
@@ -315,6 +302,24 @@ const ICONS = {
 };
 
 // A bar per player, the ones alive next to their team's score (the CT bars sit left of it, the T bars right).
+// The scoreboard's tables (see Hud.scoreboard).
+function scoreboardHtml({ players = [], myTeam, round = 1, scores = {}, ffa = false, respawn = false } = {}) {
+  if (respawn) {
+    const list = (side) => players.filter((p) => ffa || p.team === side).sort((a, b) => b.level - a.level || b.points - a.points).map((p) => `
+      <tr class="${p.alive ? '' : 'dead'} ${p.me ? 'me' : ''}"><td>${who(p)}</td><td>${p.kills}</td><td>${p.deaths}</td><td>${ffa && p.level ? p.level + 1 : p.points}</td></tr>`).join('');
+    const table = (side, name) => `<div class="sb-team ${side ? side.toLowerCase() : 'ffa'}"><div class="sb-head">${side ? `<b>${scores[side] ?? 0}</b> ` : ''}${name}</div>
+      <table><thead><tr><th>Player</th><th>K</th><th>D</th><th>${players.some((p) => p.level) ? 'Level' : 'Points'}</th></tr></thead><tbody>${list(side)}</tbody></table></div>`;
+    return ffa ? table(null, 'Free for all') : table('CT', 'Counter-Terrorists') + table('T', 'Terrorists');
+  }
+  const ranked = players.some((p) => p.rank !== undefined || p.rating !== undefined);
+  const rows = (side) => players.filter((p) => p.team === side).sort((a, b) => b.score - a.score).map((p) => `
+    <tr class="${p.alive ? '' : 'dead'} ${p.me ? 'me' : ''}">${ranked ? `<td class="rank">${p.rating !== undefined ? ratingHtml(p.rating, { size: 12 }) : emblemHtml(p.rank, { size: 18, wingman: p.wingman })}</td>` : ''}<td>${who(p)}</td><td>${p.team === myTeam ? '$' + p.money : ''}</td>
+    <td>${p.kills}</td><td>${p.deaths}</td><td>${p.assists}</td><td>${Math.round(p.damage / Math.max(1, round - 1 || 1))}</td><td>${p.mvps ? '★' + p.mvps : ''}</td><td>${p.score}</td></tr>`).join('');
+  const table = (side, name) => `<div class="sb-team ${side.toLowerCase()}"><div class="sb-head"><b>${scores[side] ?? 0}</b> ${name}</div>
+    <table><thead><tr>${ranked ? '<th class="rank">Rank</th>' : ''}<th>Player</th><th>Money</th><th>K</th><th>D</th><th>A</th><th>ADR</th><th>MVP</th><th>Score</th></tr></thead><tbody>${rows(side)}</tbody></table></div>`;
+  return table('CT', 'Counter-Terrorists') + table('T', 'Terrorists');
+}
+
 // A player on the scoreboard: their picture (a bot's real player), name and team.
 const who = (p) => `<span class="sb-who">${p.avatar ? `<img class="sb-avatar" src="${esc(p.avatar)}" alt="" loading="lazy">` : ''}<span>${esc(p.name)}${p.org ? `<small>${esc(p.org)}</small>` : ''}</span></span>`;
 const pips = (alive, total, side) => Array.from({ length: total }, (_, i) => `<i class="${(side === 'ct' ? total - 1 - i : i) < alive ? 'on' : ''}"></i>`).join('');

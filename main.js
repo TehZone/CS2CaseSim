@@ -408,6 +408,82 @@ async function runSoundSmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=botfire` times frames on Dust II (CS2SIM_SMOKE_MAP) with the bots stopped and one thing at a time
+// going on, ten times a second a bot (CS2SIM_SMOKE_PHASES: idle, shoot-sky: bots firing at nothing, shoot-ground: at the
+// floor (impacts), damage-bots: bots taking damage with no one shooting, damage-me: you taking it, scores: Tab held):
+// each phase's frame times (between frames, as net_graph's ms), shaders compiled, long tasks and the time in each call.
+async function runBotFireSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const map = process.env.CS2SIM_SMOKE_MAP || 'de_dust2';
+  await wait(3000);
+  if (!(await smokeStartMap(win, map, 'botfire'))) { app.quit(); return; }
+  await wait(4000);
+  await js(`(() => { const g = window.__playGame, now = () => performance.now();
+    g.console.run('sv_cheats 1'); g.cv.bot_stop = 1;
+    const F = window.__bf = { frames: [], calls: {}, long: [], phase: null };
+    const frame = g.frame; let prev = 0;
+    g.frame = function (dt) { const t = now(); frame.call(this, dt); const e = now(); if (F.phase) F.frames.push({ phase: F.phase, cpu: e - t, int: prev ? t - prev : 0, progs: g.renderer.info.programs?.length || 0 }); prev = t; };
+    const wrap = (obj, name, label = name) => { const f = obj[name]; obj[name] = function (...a) { const t = now(); try { return f.apply(this, a); } finally { if (F.phase) ((F.calls[F.phase] ||= {})[label] ||= []).push(now() - t); } }; };
+    wrap(g, 'botShoot'); wrap(g, 'damage'); wrap(g, 'fireBullet'); wrap(g.sounds, 'play', 'sound'); wrap(g.effects, 'impact'); wrap(g.effects, 'blood'); wrap(g.hud, 'scoreboard'); wrap(g, 'kill');
+    new PerformanceObserver((l) => { for (const e of l.getEntries()) if (F.phase) F.long.push({ phase: F.phase, d: e.duration }); }).observe({ type: 'longtask' });
+    const held = g.input.held.bind(g.input);
+    g.input.held = (k) => (k === 'scores' && F.phase?.startsWith('scores')) || held(k);
+    // A phase's +switches turn one thing off for it: +mute (sounds), +noradio (the bots' radio calls), +noflinch (bots
+    // flinching when hit), +nohud (your hurt flash).
+    const off = { mute: [g.sounds, 'play', async () => undefined], noradio: [g.radio, 'chatter', () => {}], noflinch: [Object.getPrototypeOf(g.bots[0]), 'flinch', () => {}], nohud: [g.hud, 'hurt', () => {}] };
+    window.__bfSwitch = (phase) => {
+      for (const [k, [obj, name, stub]] of Object.entries(off)) {
+        const want = (phase || '').split('+').includes(k);
+        if (want && !obj['__real_' + name]) { obj['__real_' + name] = obj[name]; obj[name] = stub; }
+        else if (!want && obj['__real_' + name]) { obj[name] = obj['__real_' + name]; delete obj['__real_' + name]; }
+      }
+    };
+    // Each phase's work, a bot every few ticks (as ten shots a second each).
+    const tick = g.tick; let n = 0;
+    g.tick = function () {
+      tick.call(this);
+      const p = F.phase?.split('+')[0]; if (!p || p === 'idle' || p === 'scores') return;
+      n++;
+      const them = g.bots.filter((b) => b.c.alive && b.c.team !== g.me.team).slice(0, 3), mates = g.bots.filter((b) => b.c.alive && b.c.team === g.me.team).slice(0, 3);
+      (p === 'damage-me' ? them.slice(0, 1) : [...them, ...mates]).forEach((b, i) => {
+        if ((n + i * 2) % 6) return;
+        if (p === 'shoot-sky' || p === 'shoot-ground') {
+          const gun = b.weapons[b.slot] || Object.values(b.weapons).find((w) => w && !w.melee);
+          if (!gun || gun.melee) return;
+          gun.clip = Math.max(gun.clip, 5); b.pitch = p === 'shoot-sky' ? -89 : 70;
+          g.botShoot(b, gun, g.now, 1);
+        } else if (p === 'damage-bots') {
+          const c = b.c, body = g.bodyOf(c); c.health = 100;
+          g.damage(c, 1, { attacker: g.me.team !== c.team ? g.me : them[0]?.c, group: ['chest', 'head', 'stomach', 'leg'][n % 4], point: body.chest, dir: [1, 0, 0] });
+          c.health = 100;
+        } else if (p === 'damage-me') {
+          g.god = false; g.me.health = 100;
+          g.damage(g.me, 1, { attacker: b.c, group: ['chest', 'head', 'stomach', 'leg'][n % 4], point: g.player.eye(), dir: [1, 0, 0] });
+          g.me.health = 100;
+        }
+      });
+    };
+    return 1; })()`);
+  const phases = (process.env.CS2SIM_SMOKE_PHASES || 'idle,shoot-sky,shoot-ground,damage-bots,damage-me,scores,idle2').split(',');
+  for (const p of phases) {
+    await js(`window.__bfSwitch(${JSON.stringify(p)}); window.__bf.phase = ${JSON.stringify(p)}; 1`);
+    await wait(+(process.env.CS2SIM_SMOKE_PHASE_MS || 8000));
+  }
+  await js(`window.__bfSwitch(null); window.__bf.phase = null; 1`);
+  console.log('SMOKE botfire', await js(`(() => { const F = window.__bf, out = {};
+    const q = (a, k) => { const s = a.slice().sort((x, y) => x - y); return s.length ? +s[Math.min(s.length - 1, Math.floor(s.length * k))].toFixed(1) : 0; };
+    for (const p of [...new Set(F.frames.map((f) => f.phase))]) {
+      const fr = F.frames.filter((f) => f.phase === p), ints = fr.map((f) => f.int).filter(Boolean), cpu = fr.map((f) => f.cpu);
+      const calls = Object.fromEntries(Object.entries(F.calls[p] || {}).map(([k, v]) => [k, v.length + ' calls, mean ' + (v.reduce((a, b) => a + b, 0) / v.length).toFixed(2) + ' max ' + Math.max(...v).toFixed(1) + ' ms']));
+      out[p] = { frames: fr.length, ms: { mean: +(ints.reduce((a, b) => a + b, 0) / Math.max(1, ints.length)).toFixed(1), p95: q(ints, 0.95), p99: q(ints, 0.99), max: +Math.max(0, ...ints).toFixed(1), over25: ints.filter((x) => x > 25).length },
+        cpu: { mean: +(cpu.reduce((a, b) => a + b, 0) / Math.max(1, cpu.length)).toFixed(1), max: +Math.max(0, ...cpu).toFixed(1) }, shaders: fr.length ? fr[fr.length - 1].progs - fr[0].progs : 0,
+        longTasks: F.long.filter((l) => l.phase === p).map((l) => Math.round(l.d)), calls };
+    }
+    return JSON.stringify(out, null, 1); })()`));
+  app.quit();
+}
+
 async function runMapsSmoke(win) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const js = (code) => win.webContents.executeJavaScript(code);
@@ -560,6 +636,7 @@ async function runHitchSmoke(win) {
         obj[name] = function (...a) { const t = now(); const r = f.apply(this, a); const d = now() - t; let x = ''; try { x = fmt ? ' ' + fmt(...a) : ''; } catch {}
           H.events.push({ t, d, what: label + x }); if (H.cur) add(H.cur.p, label, d); return r; }; };
       ev(g, 'kill', 'kill', (c) => c.name); ev(g.nades, 'throw', 'throw', (c, w) => w); ev(g.nades, 'detonate', 'detonate', (n) => n.id || n.kind || '');
+      ev(g, 'botShoot', 'botShoot', (b) => b.c.name); ev(g, 'damage', 'damage', (c) => (c === g.me ? 'you' : 'bot')); ev(g.hud, 'hurt', 'hurt'); ev(g.radio, 'say', 'radio');
       ev(g.match, 'startRound', 'startRound'); ev(g.match, 'endRound', 'endRound'); ev(g, 'buy', 'buy', (w) => w); ev(g.drops, 'drop', 'drop', (gun) => gun?.id || '');
       ev(g.effects, 'explosion', 'explosion'); ev(g.effects, 'flashPop', 'flashPop'); ev(g.match, 'planted', 'planted'); ev(g.match, 'defused', 'defused');
       ev(g.match, 'exploded', 'bombExploded'); ev(g, 'restartMatch', 'restartMatch'); ev(g.nades, 'fire', 'fire'); ev(g.nades, 'smoke', 'smoke'); ev(g.nades, 'explodeHE', 'he');
@@ -590,7 +667,7 @@ async function runHitchSmoke(win) {
         if (progs.length > c.prog) c.progNames = progs.slice(c.prog).map((pr) => pr.name + (pr.cacheKey ? ' ' + String(pr.cacheKey).slice(0, 60) : '')).join(' | ');
         c.cpu = e - t; c.heapIn = h1 - h0; c.prog = progs.length - c.prog; c.tex = info.memory.textures - c.tex;
         H.prev = t; H.lastEnd = e; H.lastHeap = h1; H.lastCpu = c.cpu; H.cur = null;
-        if (c.int) H.ints.push(c.int);
+        if (c.int) { H.ints.push(c.int); (H.all ||= []).push([t, c.int]); }
         if (c.int > 33 || c.cpu > 25) H.slow.push(c);
       };
       return 1; })()`);
@@ -707,7 +784,14 @@ async function runHitchSmoke(win) {
           + (c.heapIn < -1e6 || c.heapGap < -1e6 ? '  GC ' + (Math.min(c.heapIn, c.heapGap) / 1e6).toFixed(0) + 'MB' : '')
           + (lt ? '  long ' + lt : '') + '\\n          parts: ' + top(c.p, 7) + (glTop(c.gl) ? '\\n          gl: ' + glTop(c.gl) : '') + (glTop(c.pre) ? '\\n          gl before: ' + glTop(c.pre) : '')
           + (evs.length ? '\\n          events: ' + [...new Set(evs)].slice(0, 8).join(', ') : '') + (c.progNames ? '\\n          new programs: ' + c.progNames : ''); });
-      return JSON.stringify({ frames: H.ints.length, p50: q(0.5), p99: q(0.99), p999: q(0.999), worst: q(1), over33: ints.filter((x) => x > 33).length, over50: ints.filter((x) => x > 50).length, over100: ints.filter((x) => x > 100).length,
+      // What the slow frames (over 33 ms) follow: how often a kind of event came in the frame before one, against how
+      // often it came before any frame (the same share: nothing to do with it).
+      const kinds = ['botShoot', 'damage you', 'damage bot', 'hurt', 'kill', 'radio', 'throw', 'detonate'], ev2 = H.events.slice().sort((a, b) => a.t - b.t);
+      const near = (t, int, kind) => { let lo = 0, hi = ev2.length; const from = t - int - 30; while (lo < hi) { const m = (lo + hi) >> 1; if (ev2[m].t < from) lo = m + 1; else hi = m; }
+        for (let i = lo; i < ev2.length && ev2[i].t <= t; i++) if (ev2[i].what.startsWith(kind)) return true; return false; };
+      const all = H.all || [], slowAll = all.filter(([, i]) => i > 33);
+      const follows = kinds.map((k) => k + ': ' + Math.round(100 * slowAll.filter(([t, i]) => near(t, i, k)).length / Math.max(1, slowAll.length)) + '% of slow frames, ' + Math.round(100 * all.filter(([t, i]) => near(t, i, k)).length / Math.max(1, all.length)) + '% of all').join('; ');
+      return JSON.stringify({ frames: H.ints.length, p50: q(0.5), p99: q(0.99), p999: q(0.999), worst: q(1), over33: ints.filter((x) => x > 33).length, over50: ints.filter((x) => x > 50).length, over100: ints.filter((x) => x > 100).length, follows,
         rounds: window.__playGame.match.round, reentered: H.reentered || 0,
         uploads: Object.entries(H.stacks || {}).sort((a, b) => b[1][1] - a[1][1]).slice(0, 12).map(([k, v]) => v[0] + 'x ' + v[1].toFixed(0) + ' ms  ' + k)
           .concat(Object.entries(H.made || {}).sort((a, b) => b[1][0] - a[1][0]).slice(0, 8).map(([k, v]) => v[0] + ' textures made in frames  ' + k)), slow }); })()`));
@@ -1878,6 +1962,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'breakables') { win.webContents.once('did-finish-load', () => runBreakSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'look') { win.webContents.once('did-finish-load', () => runLookSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'botfire') { win.webContents.once('did-finish-load', () => runBotFireSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'sound') { win.webContents.once('did-finish-load', () => runSoundSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'mm') { win.webContents.once('did-finish-load', () => runMatchmakingSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'premier') { win.webContents.once('did-finish-load', () => runPremierSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
