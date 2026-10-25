@@ -1,29 +1,23 @@
 /* Styles for trade-ups, the armory, gambling, the team manager, trading and online play. */
 
-/* ---------- top bar: sections that don't fit scroll sideways; the profile corner ---------- */
-#nav { overflow-x: auto; scrollbar-width: none; }
-#nav::-webkit-scrollbar { display: none; }
+/* ---------- top bar: Armory stars, online-only sections, the profile corner ---------- */
 .pill.star { background: rgba(228, 174, 57, .2); color: var(--gold2); }
 .pill.star::before { content: '★'; margin-right: 1px; }
 body:not(.is-online) .online-only { display: none !important; }
-/* the profile corner, like CS2's: avatar, name and whether you're playing on this PC or online */
+/* the profile corner, like CS2's: avatar with a status dot (grey on this PC, green online), your name over your balance */
 .account {
-  display: flex; align-items: center; gap: 10px; padding: 0 16px 0 12px; background: none; border: 0; border-left: 1px solid rgba(255, 255, 255, .08);
+  display: flex; align-items: center; gap: 12px; padding: 0 18px 0 14px; background: none; border: 0; border-left: 1px solid rgba(255, 255, 255, .08);
   color: var(--text); white-space: nowrap; flex: none; transition: background .12s;
 }
 .account:hover { background: linear-gradient(180deg, transparent, rgba(255, 255, 255, .08)); }
-.account .avatar { width: 36px; height: 36px; display: grid; place-items: center; color: #c3cad2; background: linear-gradient(180deg, #4b5563, #2a3039); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22), 0 2px 6px rgba(0, 0, 0, .5); }
-.account .avatar .ico { width: 26px; height: 26px; }
-.account.online .avatar { box-shadow: inset 0 0 0 1px rgba(138, 208, 100, .7), 0 0 10px rgba(138, 208, 100, .25); }
-.account .who { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; line-height: 1; }
-#account-name { font-size: 14px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #fff; }
-.account .dot { display: flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-.account .dot::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
-.account .dot::after { content: 'Local save'; }
-.account.online .dot::before { background: var(--green); box-shadow: 0 0 8px var(--green); }
-.account.online .dot::after { content: 'Online'; color: var(--green); }
-.account.connecting .dot::before { background: var(--gold); animation: blink 1s infinite; }
-.account.connecting .dot::after { content: 'Connecting'; }
+.account .avatar { position: relative; width: 38px; height: 38px; display: grid; place-items: center; color: #c3cad2; background: linear-gradient(180deg, #4b5563, #2a3039); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22), 0 2px 6px rgba(0, 0, 0, .5); }
+.account .avatar .ico { width: 27px; height: 27px; }
+.account .dot { position: absolute; right: -4px; bottom: -4px; width: 12px; height: 12px; border-radius: 50%; background: #6f7a86; border: 2px solid #0c0f12; }
+.account.online .dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.account.connecting .dot { background: var(--gold); animation: blink 1s infinite; }
+.account .who { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; line-height: 1; }
+#account-name { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: #aab3bd; }
+.account.online #account-name { color: #fff; }
 @keyframes blink { 50% { opacity: .3; } }
 
 .panel { background: var(--panel-grad); border: 1px solid var(--line); border-top-color: rgba(255, 255, 255, .11); border-radius: var(--radius); padding: 16px; box-shadow: 0 4px 16px rgba(0, 0, 0, .25); backdrop-filter: var(--glass); }

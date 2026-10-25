@@ -59,6 +59,23 @@ export async function setMenuBackground(choice = S.settings.menuBg || 'random') 
   bg.classList.add('shown');
 }
 
+// The top strip's More menu: the sections CS2 would keep out of its main strip, in a dropdown. Opens on its button,
+// closes after picking one, on a click outside or on Esc.
+export function initMoreMenu() {
+  const wrap = document.querySelector('.nav-more');
+  if (!wrap) return;
+  const btn = wrap.querySelector('.more-btn');
+  const set = (open) => { wrap.classList.toggle('open', open); btn.setAttribute('aria-expanded', String(open)); };
+  btn.addEventListener('click', () => set(!wrap.classList.contains('open')));
+  wrap.querySelector('.more-panel').addEventListener('click', (e) => { if (e.target.closest('[data-page]')) set(false); });
+  window.addEventListener('mousedown', (e) => { if (!wrap.contains(e.target)) set(false); }, true);
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !wrap.classList.contains('open')) return;
+    e.stopPropagation();
+    set(false);
+  }, true);
+}
+
 export async function initMenu() {
   if (!(await cs2Status()).available) return;
   cs2Play('menuIcons').then((r) => {

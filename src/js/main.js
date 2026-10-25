@@ -3,7 +3,7 @@ import { loadData } from './data.js';
 import { S, loadState, on, saveSync, save, idleRate, addMoney, isOnlineState } from './state.js';
 import { itemValue } from './items.js';
 import { toast, topModal, openModal, installTooltips } from './ui.js';
-import { initMenu } from './menu.js';
+import { initMenu, initMoreMenu } from './menu.js';
 import { loadGameSounds } from './audio.js';
 import { keepPrepared } from './cs2/content.js';
 import { net, normalizeUrl } from './net/online.js';
@@ -33,6 +33,8 @@ function go(name) {
   root.dataset.page = name;
   root.scrollTop = 0;
   $$('#topbar [data-page]').forEach((b) => b.classList.toggle('active', b.dataset.page === name));
+  // A section from the More menu: its name shows on the More button.
+  $('.more-cur').textContent = $(`.more-panel [data-page="${name}"] .mlbl`)?.textContent || '';
   current = PAGES[name];
   current.render(root);
 }
@@ -46,7 +48,7 @@ function updateBalance() {
 }
 const updateInv = debounce(() => {
   $('#inv-count').textContent = S.inv.length;
-  $('#net-worth').textContent = 'Inventory ' + money(S.inv.reduce((s, i) => s + itemValue(i), 0));
+  $('#net-worth').textContent = money(S.inv.reduce((s, i) => s + itemValue(i), 0));
   $('#idle-rate').textContent = '+' + money(idleRate()) + '/s';
 }, 150);
 const updateStars = () => { $('#star-count').textContent = S.stars || 0; };
@@ -159,6 +161,7 @@ async function boot() {
   $('#account').addEventListener('click', accountModal);
   $$('#topbar [data-page]').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
   installTooltips();
+  initMoreMenu();
   initMenu();
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && topModal() && !document.querySelector('.inspect')) topModal().close();

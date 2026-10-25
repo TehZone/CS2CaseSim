@@ -69,50 +69,76 @@ b { font-weight: 600; }
 /* a match covers it: nothing to draw underneath */
 body:has(.play-root) #menu-bg { display: none; }
 
-/* ---------- top bar: CS2's main menu strip (PLAY, the sections as icons, then wallet, profile and settings) ---------- */
+/* ---------- top bar: CS2's main menu strip. PLAY, the main sections as icons (Cases, Inventory, Market) and More for
+   the rest, then your profile (avatar, name, balance) and settings. ---------- */
 #topbar {
-  display: flex; align-items: stretch; height: 64px; padding: 0 0 0 14px; flex: none; position: relative; z-index: 5;
+  display: flex; align-items: stretch; height: 64px; padding: 0 0 0 16px; flex: none; position: relative; z-index: 5;
   background: linear-gradient(180deg, rgba(3, 4, 6, .9) 0%, rgba(9, 11, 14, .72) 100%);
   border-bottom: 1px solid rgba(255, 255, 255, .09); box-shadow: 0 10px 30px rgba(0, 0, 0, .3); backdrop-filter: blur(18px) saturate(1.2);
 }
-.brand { display: flex; align-items: center; padding-right: 12px; color: var(--gold); flex: none; }
+.brand { display: flex; align-items: center; padding-right: 14px; color: var(--gold); flex: none; }
 .brand svg { filter: drop-shadow(0 0 8px rgba(228, 174, 57, .35)); }
 /* icons: drawn ones (inline SVG), swapped for CS2's own (a mask, so they take the text colour) when they load */
 .ico { display: inline-block; width: 26px; height: 26px; flex: none; vertical-align: middle; }
 .ico svg { width: 100%; height: 100%; display: block; fill: currentColor; }
 .ico.cs2 { background: currentColor; -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
 .ico.cs2 > svg { display: none; }
-#nav { display: flex; align-items: stretch; flex: 1; min-width: 0; }
-#nav button, .nav-icon {
-  position: relative; display: grid; place-items: center; width: 58px; flex: none; padding: 0; background: none; border: 0;
+#nav { display: flex; align-items: stretch; flex: 1; min-width: 0; gap: 4px; }
+#nav > button, .more-btn, .nav-icon {
+  position: relative; display: grid; place-items: center; width: 66px; flex: none; padding: 0; background: none; border: 0;
   color: #98a2ad; transition: color .12s, background .12s;
 }
-#nav button:hover, .nav-icon:hover { color: #fff; background: linear-gradient(180deg, transparent 0%, rgba(255, 255, 255, .08) 100%); }
-#nav button.active, .nav-icon.active { color: #fff; background: linear-gradient(180deg, transparent 0%, rgba(255, 255, 255, .12) 100%); }
-#nav button.active::after, .nav-icon.active::after { content: ''; position: absolute; left: 9px; right: 9px; bottom: 0; height: 3px; background: #fff; box-shadow: 0 0 12px rgba(255, 255, 255, .75); }
-#nav button.active .ico, .nav-icon.active .ico { filter: drop-shadow(0 0 7px rgba(255, 255, 255, .55)); }
+#nav > button:hover, .more-btn:hover, .nav-icon:hover, .nav-more.open .more-btn { color: #fff; background: linear-gradient(180deg, transparent 0%, rgba(255, 255, 255, .08) 100%); }
+#nav > button.active, .nav-icon.active, .nav-more:has(.more-panel .active) .more-btn { color: #fff; background: linear-gradient(180deg, transparent 0%, rgba(255, 255, 255, .12) 100%); }
+#nav > button.active::after, .nav-icon.active::after, .nav-more:has(.more-panel .active) .more-btn::after {
+  content: ''; position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; background: #fff; box-shadow: 0 0 12px rgba(255, 255, 255, .75);
+}
+#nav > button.active .ico, .nav-icon.active .ico { filter: drop-shadow(0 0 7px rgba(255, 255, 255, .55)); }
 #nav .lbl, .nav-icon .lbl { display: none; }
 /* CS2's big PLAY entry, set apart from the sections by a rule */
 #nav .nav-play {
-  display: flex; align-items: center; gap: 11px; width: auto; padding: 0 26px 0 12px; color: #fff;
+  display: flex; align-items: center; gap: 11px; width: auto; padding: 0 28px 0 12px; color: #fff;
   font-family: var(--font-cond); font-size: 25px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase;
 }
 #nav .nav-play .ico { width: 19px; height: 19px; }
 #nav .nav-play:hover { text-shadow: 0 0 18px rgba(255, 255, 255, .5); }
-#nav .nav-play.active::after { left: 12px; right: 26px; }
-.nav-sep { width: 1px; margin: 15px 8px 15px 0; background: rgba(255, 255, 255, .16); flex: none; }
-/* counts on the icons (inventory items, Armory stars) */
-#nav .pill { position: absolute; top: 9px; left: 34px; min-width: 18px; padding: 0 4px; font-size: 10px; line-height: 15px; text-align: center; background: #e6e9ec; color: #111; box-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
-#nav .pill.star { background: linear-gradient(180deg, #f5cf6b, #e4ae39); color: #1b1305; }
+#nav .nav-play.active::after { left: 12px; right: 28px; }
+.nav-sep { width: 1px; margin: 16px 10px 16px 0; background: rgba(255, 255, 255, .16); flex: none; }
+/* the inventory's item count on its icon */
+#nav > button .pill { position: absolute; top: 10px; left: 38px; min-width: 18px; padding: 0 4px; font-size: 10px; line-height: 15px; text-align: center; background: #e6e9ec; color: #111; box-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
 .pill { background: rgba(255, 255, 255, .1); color: var(--text); border-radius: 1px; padding: 0 6px; font-size: 11px; letter-spacing: 0; font-weight: 700; line-height: 17px; }
+/* More: a button (with the open section's name when it's one of these) and its dropdown */
+.nav-more { position: relative; display: flex; }
+.more-btn { display: flex; gap: 9px; width: auto; min-width: 66px; padding: 0 20px; justify-content: center; }
+.more-cur { font-size: 13px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
+.more-cur:empty { display: none; }
+.more-panel {
+  position: absolute; top: 100%; left: 0; margin-top: 1px; z-index: 10; min-width: 260px; padding: 0 0 6px; display: none; border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(36, 42, 50, .97), rgba(18, 21, 26, .98)); border: 1px solid rgba(255, 255, 255, .14); border-top: 2px solid #fff;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, .65); backdrop-filter: blur(14px);
+}
+.nav-more.open .more-panel { display: block; animation: ctx-in .12s ease-out; }
+.more-panel button {
+  position: relative; display: flex; align-items: center; gap: 13px; width: 100%; padding: 9px 18px; background: none; border: 0; text-align: left;
+  color: #c3cad2; font-size: 13.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; transition: color .1s, background .1s;
+}
+.more-panel button .ico { width: 21px; height: 21px; color: #9aa4af; }
+.more-panel button:hover { color: #fff; background: linear-gradient(90deg, rgba(255, 255, 255, .13), rgba(255, 255, 255, .04)); }
+.more-panel button:hover .ico, .more-panel button.active .ico { color: #fff; }
+.more-panel button.active { color: #fff; background: rgba(255, 255, 255, .08); box-shadow: inset 3px 0 0 #fff; }
+.more-panel .pill { margin-left: auto; }
+.more-panel .pill.star { background: linear-gradient(180deg, #f5cf6b, #e4ae39); color: #1b1305; }
+/* your inventory's value and passive income, at the top of the dropdown */
+.more-wallet { display: grid; grid-template-columns: 1fr 1fr; margin-bottom: 6px; background: rgba(0, 0, 0, .3); border-bottom: 1px solid rgba(255, 255, 255, .08); }
+.more-wallet div { padding: 10px 18px 9px; font-size: 10px; font-weight: 600; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
+.more-wallet div + div { border-left: 1px solid rgba(255, 255, 255, .06); }
+.more-wallet b { display: block; margin-top: 2px; font-size: 17px; color: var(--hi); letter-spacing: .01em; font-family: var(--font-cond); font-variant-numeric: tabular-nums; }
+#idle-rate { color: #a7dd8a; }
 .top-right { display: flex; align-items: stretch; flex: none; margin-left: auto; }
-.wallet { display: flex; flex-direction: column; justify-content: center; align-items: flex-end; padding: 0 16px; line-height: 1.15; border-left: 1px solid rgba(255, 255, 255, .08); }
-.balance { font-size: 22px; color: var(--green); font-weight: 700; letter-spacing: .02em; font-variant-numeric: tabular-nums; font-family: var(--font-cond); }
+.balance { font-size: 21px; color: var(--green); font-weight: 700; letter-spacing: .02em; font-variant-numeric: tabular-nums; font-family: var(--font-cond); line-height: 1; }
 .balance.bump { animation: bump .35s ease; }
 @keyframes bump { 40% { transform: scale(1.08); color: #c8f5ae; } }
-.wallet-sub { display: flex; gap: 10px; justify-content: flex-end; font-size: 10.5px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
-#idle-rate { color: #a7dd8a; }
-.top-right .nav-icon { width: 60px; border-left: 1px solid rgba(255, 255, 255, .08); }
+.top-right .nav-icon { width: 64px; border-left: 1px solid rgba(255, 255, 255, .08); }
 
 /* ---------- tooltips and context menus (Panorama's, see ui.js) ---------- */
 .tooltip {
@@ -571,20 +597,20 @@ input[type=range]:focus { outline: none; }
 
 /* ---------- phone width ---------- */
 @media (max-width: 760px) {
-  #topbar { height: auto; flex-wrap: wrap; padding: 0 0 0 10px; }
+  /* two rows: the logo with your profile and settings, then PLAY, the sections and More (labelled under the icons) */
+  #topbar { height: auto; flex-wrap: wrap; padding: 0 0 0 12px; }
   .top-right { height: 50px; }
-  .wallet { padding: 0 10px; }
   .balance { font-size: 19px; }
-  #nav { order: 3; flex: 1 0 100%; height: 54px; margin-left: -10px; border-top: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
-  #nav::-webkit-scrollbar { display: none; }
-  #nav button { width: 54px; }
-  #nav button .ico { width: 22px; height: 22px; margin-bottom: 12px; }
-  #nav .lbl { display: block; position: absolute; left: 0; right: 0; bottom: 6px; font-size: 9px; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
-  #nav .nav-play { font-size: 18px; padding: 0 14px 0 12px; }
+  #nav { order: 3; flex: 1 0 100%; height: 56px; margin-left: -12px; gap: 0; border-top: 1px solid var(--line); }
+  #nav > button, .more-btn { width: 58px; min-width: 0; padding: 0; }
+  #nav > button .ico, .more-btn .ico { width: 22px; height: 22px; margin-bottom: 13px; }
+  #nav .lbl { display: block; position: absolute; left: 0; right: 0; bottom: 7px; font-size: 9px; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+  #nav .nav-play { font-size: 18px; padding: 0 16px 0 12px; margin-right: auto; }
   #nav .nav-play .ico { width: 15px; height: 15px; margin-bottom: 0; }
-  #nav .pill { top: 5px; left: 30px; }
-  .top-right .nav-icon { width: 50px; }
-  #account-name, .wallet-sub #net-worth { display: none; }
+  #nav > button .pill { top: 6px; left: 32px; }
+  .more-cur { display: none; }
+  .more-panel { left: auto; right: 0; }
+  .top-right .nav-icon { width: 54px; }
   .seg { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; scrollbar-width: none; }
   .seg button { flex: none; }
   .page { padding: 16px 16px 32px; }
