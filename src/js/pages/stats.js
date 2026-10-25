@@ -7,6 +7,7 @@ import { online } from '../backend.js';
 import { autoSellLabel, autoSellModal } from '../autosell.js';
 import { sfx } from '../audio.js';
 import { cs2Status } from '../cs2/api.js';
+import { backgroundMaps, setMenuBackground } from '../menu.js';
 import { prepareAll, prepareStatus, prepareCancel, cacheSize } from '../cs2/content.js';
 import { rankInfo } from '../engine/ranks.js';
 import { loadRankArt, emblemHtml, rankKey } from '../rank.js';
@@ -56,6 +57,8 @@ function draw() {
       <div class="setting"><div>Sound volume<p>Roulette ticks, reveals and clicks.</p></div><input type="range" min="0" max="1" step="0.05" value="${S.settings.volume}" data-s="volume"></div>
       <div class="setting"><div>Fast open by default<p>Shorter roulette animation.</p></div><input type="checkbox" ${S.settings.fast ? 'checked' : ''} data-s="fast"></div>
       <div class="setting"><div>Case drop animation<p>The case drops in and unlocks before the roulette, like CS2 (its real 3D model when Counter-Strike 2 is installed).</p></div><input type="checkbox" ${S.settings.caseIntro !== false ? 'checked' : ''} data-s="caseIntro"></div>
+      <div class="setting"><div>Main menu background<p>CS2's own picture of a map behind every page, like its main menu (from your Counter-Strike 2 install).</p></div>
+        <select class="input" data-menubg><option value="random">Random map</option><option value="off">Off</option></select></div>
       <div class="setting"><div>Auto-sell<p>Sell new drops automatically when they are worth less than an amount or have chosen rarities. <span data-aslabel>${esc(autoSellLabel())}</span></p></div><button class="btn" data-a="autosell">Set up…</button></div>
       <div class="setting"><div>Confirm sales above<p>Ask before selling items worth at least this much.</p></div><input class="input" type="number" min="0" step="1" value="${S.settings.confirmSellAbove}" style="width:110px" data-s="confirmSellAbove"></div>
       <div class="setting"><div>Market prices<p>Prices from ${D.pricedAt ? new Date(D.pricedAt).toLocaleString() : 'the bundled snapshot'}. Refreshing downloads the latest Skinport, CSFloat, Buff163, YouPin and Steam prices.</p>
@@ -93,6 +96,14 @@ function draw() {
     if (k === 'volume') sfx.click();
   }));
   root.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', () => action(b.dataset.a, b)));
+  const bgSel = root.querySelector('[data-menubg]');
+  bgSel.value = S.settings.menuBg === 'off' ? 'off' : 'random';
+  backgroundMaps().then((maps) => {
+    if (!maps.length || !bgSel.isConnected) { bgSel.disabled = !maps.length; return; }
+    bgSel.insertAdjacentHTML('beforeend', maps.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join(''));
+    bgSel.value = S.settings.menuBg && [...bgSel.options].some((o) => o.value === S.settings.menuBg) ? S.settings.menuBg : 'random';
+  });
+  bgSel.addEventListener('change', () => { S.settings.menuBg = bgSel.value; save(); setMenuBackground(bgSel.value); });
   cs2Status().then((st) => {
     const el = root?.querySelector('[data-cs2]');
     if (!el) return;

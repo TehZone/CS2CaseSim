@@ -81,6 +81,7 @@ const CASE_SOUNDS = {
 
 // CS2's weapon and gear icons (vsvg_c, which the CLI decompiles to SVG).
 const ICON_DIR = 'panorama/images/icons/equipment';
+const MENU_ICON_DIR = 'panorama/images/icons/ui';
 const RANK_DIR = 'panorama/images/icons/skillgroups';
 const RANKUP_TEXTURES = { flag: 'panorama/images/ui_textures/rankup_flag_png.vtex_c', halo: 'panorama/images/ui_textures/rankup_flare_halo_png.vtex_c' };
 
@@ -982,32 +983,55 @@ class CS2Service {
   // kill feed show), decompiled to SVG into play/icons/ (again when a CS2 update changes them): { name: url } (ak47,
   // knife_karambit, hegrenade, planted_c4...). Icons that draw nothing (world, trigger_hurt) are left out.
   playIcons() {
-    return this.playJob('icons', async () => {
+    return this.playJob('icons', () => this.svgFolder(ICON_DIR, path.join(this.cacheDir, 'play', 'icons')));
+  }
+
+  // CS2's menu icons (panorama/images/icons/ui: inventory, loadout, shoppingcart, settings, trade_up...), decompiled to
+  // SVG into menu/icons/ like the equipment icons: { name: url }. The app's top bar and buttons use them.
+  menuIcons() {
+    return this.playJob('menuIcons', () => this.svgFolder(MENU_ICON_DIR, path.join(this.cacheDir, 'menu', 'icons')));
+  }
+
+  // The 720p screenshot CS2's play menu shows for a map (for the main menu's background): a URL, or null.
+  menuBackdrop(id) {
+    id = String(id);
+    if (!/^[a-z0-9_]+$/i.test(id)) return Promise.reject(new Error('Bad map id'));
+    return this.playJob('menuBackdrop:' + id, async () => {
       const cs2 = this.ensureCS2();
-      const dir = path.join(this.cacheDir, 'play', 'icons');
-      const file = path.join(dir, 'icons.json');
-      const inputs = [ICON_DIR + '/'];
-      const result = (names) => Object.fromEntries(names.map((n) => [n, this.url(path.join(dir, n + '.svg'))]));
-      const c = await cs2.cached(file, inputs);
-      if (c?.names) return result(c.names);
-      fs.rmSync(dir, { recursive: true, force: true });
-      const tmp = path.join(dir, 'tmp');
-      await cs2.run(['-i', cs2.vpk, '-f', ICON_DIR + '/', '-d', '-o', tmp]);
-      const src = path.join(tmp, ...ICON_DIR.split('/'));
-      const names = [];
-      for (const f of fs.existsSync(src) ? fs.readdirSync(src) : []) {
-        const name = /^([a-z0-9_]+)\.svg$/i.exec(f)?.[1].toLowerCase();
-        if (!name) continue;
-        const svg = fs.readFileSync(path.join(src, f), 'utf8');
-        if (!/<svg\b/.test(svg) || !/<(path|polygon|polyline|rect|circle|ellipse|line)\b/.test(svg)) continue;
-        fs.writeFileSync(path.join(dir, name + '.svg'), svg);
-        names.push(name);
-      }
-      fs.rmSync(tmp, { recursive: true, force: true });
-      if (!names.length) throw new Error('No equipment icons in this CS2 install');
-      await cs2.save(file, { names }, inputs);
-      return result(names);
+      const all = new Set(await cs2.list());
+      const p = ['720p/' + id, '1080p/' + id, '720p/' + id + '_1'].map((n) => `panorama/images/map_icons/screenshots/${n}_png.vtex_c`).find((f) => all.has(f));
+      if (!p) return null;
+      const files = await cs2.extract([p]);
+      return files[p] ? this.url(files[p]) : null;
     });
+  }
+
+  // Every icon in a pak01 folder of vsvg_c files, decompiled to SVG into `dir` (again when a CS2 update changes them):
+  // { name: url }. Icons that draw nothing are left out.
+  async svgFolder(folder, dir) {
+    const cs2 = this.ensureCS2();
+    const file = path.join(dir, 'icons.json');
+    const inputs = [folder + '/'];
+    const result = (names) => Object.fromEntries(names.map((n) => [n, this.url(path.join(dir, n + '.svg'))]));
+    const c = await cs2.cached(file, inputs);
+    if (c?.names) return result(c.names);
+    fs.rmSync(dir, { recursive: true, force: true });
+    const tmp = path.join(dir, 'tmp');
+    await cs2.run(['-i', cs2.vpk, '-f', folder + '/', '-d', '-o', tmp]);
+    const src = path.join(tmp, ...folder.split('/'));
+    const names = [];
+    for (const f of fs.existsSync(src) ? fs.readdirSync(src) : []) {
+      const name = /^([a-z0-9_-]+)\.svg$/i.exec(f)?.[1].toLowerCase();
+      if (!name) continue;
+      const svg = fs.readFileSync(path.join(src, f), 'utf8');
+      if (!/<svg\b/.test(svg) || !/<(path|polygon|polyline|rect|circle|ellipse|line)\b/.test(svg)) continue;
+      fs.writeFileSync(path.join(dir, name + '.svg'), svg);
+      names.push(name);
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (!names.length) throw new Error('No icons in ' + folder);
+    await cs2.save(file, { names }, inputs);
+    return result(names);
   }
 
   // CS:GO's competitive rank art in this install: the skill group emblems (skillgroup0..18, none, need_wins, expired) as

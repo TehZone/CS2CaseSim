@@ -1,4 +1,4 @@
-// Shared UI: cards, modals, toasts, item detail, 3D inspect overlay, selling.
+// Shared UI: cards, modals, toasts, tooltips, context menus, item detail, 3D inspect overlay, selling.
 import { esc, money, imgUrl } from './util.js';
 import { D, WEARS, wearOf, WEAR_BY_KEY, rarityColor, eventName } from './data.js';
 import * as I from './items.js';
@@ -14,6 +14,7 @@ import { TIER_LABEL } from './patterns.js';
 import { isEquipped, slotName } from './loadout.js';
 import { floatRankOf } from './floatranks.js';
 import { CATEGORY_NAME } from './engine/database.js';
+import { iconHtml } from './menu.js';
 
 // ---- toasts --------------------------------------------------------------------------------
 export function toast(msg, type = '') {
@@ -34,6 +35,88 @@ export async function tryAct(name, args) {
     else { console.error(e); toast('Something went wrong: ' + esc(e.message), 'bad'); }
     return null;
   }
+}
+
+// ---- tooltips (Panorama's) -------------------------------------------------------------------
+// Anything with a title or data-tip shows its text in a styled box under it (above near the bottom of the window). A
+// title moves to data-tip on hover so the browser's own tooltip stays away; code that sets the title again just updates it.
+let tipEl = null, tipFor = null, tipTimer = 0;
+export function installTooltips() {
+  tipEl = document.createElement('div');
+  tipEl.className = 'tooltip';
+  tipEl.setAttribute('role', 'tooltip');
+  document.body.appendChild(tipEl);
+  document.addEventListener('mouseover', (e) => {
+    const t = e.target.closest?.('[title], [data-tip]');
+    if (t === tipFor) return;
+    hideTip();
+    if (!t) return;
+    if (t.hasAttribute('title')) {
+      const v = t.getAttribute('title');
+      t.removeAttribute('title');
+      if (v) t.dataset.tip = v;
+    }
+    if (!t.dataset.tip) return;
+    tipFor = t;
+    tipTimer = setTimeout(() => showTip(t), t.closest('#topbar') ? 120 : 450);
+  });
+  document.addEventListener('mouseout', (e) => { if (tipFor && !tipFor.contains(e.relatedTarget)) hideTip(); });
+  for (const ev of ['mousedown', 'wheel', 'keydown']) window.addEventListener(ev, hideTip, true);
+}
+function showTip(t) {
+  if (!t.isConnected) return hideTip();
+  tipEl.textContent = t.dataset.tip;
+  tipEl.classList.add('show');
+  const r = t.getBoundingClientRect(), w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+  let y = r.bottom + 8;
+  const above = y + h > innerHeight - 6;
+  if (above) y = r.top - h - 8;
+  const x = Math.max(6, Math.min(innerWidth - w - 6, r.left + r.width / 2 - w / 2));
+  tipEl.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+  tipEl.classList.toggle('above', above);
+}
+function hideTip() {
+  clearTimeout(tipTimer);
+  tipFor = null;
+  tipEl?.classList.remove('show');
+}
+
+// ---- context menus (Panorama's) ---------------------------------------------------------------
+// items: { label, icon (a CS2 menu icon name), action, danger, disabled, hint }, with '-' between groups. Closes on a
+// click outside, Esc, scrolling or resizing.
+let ctxClose = null;
+export function contextMenu(x, y, items) {
+  ctxClose?.();
+  const el = document.createElement('div');
+  el.className = 'ctx-menu';
+  el.innerHTML = items.map((it, i) => (it === '-' ? '<div class="sep"></div>'
+    : `<button data-i="${i}" class="${it.danger ? 'danger' : ''}" ${it.disabled ? 'disabled' : ''}>${iconHtml(it.icon) || '<i class="ico"></i>'}<span>${esc(it.label)}</span>${it.hint ? `<small>${esc(it.hint)}</small>` : ''}</button>`)).join('');
+  document.body.appendChild(el);
+  const w = el.offsetWidth, h = el.offsetHeight;
+  el.style.left = `${Math.max(4, Math.min(innerWidth - w - 4, x))}px`;
+  el.style.top = `${Math.max(4, y + h > innerHeight - 4 ? y - h : y)}px`;
+  const outside = (e) => { if (!el.contains(e.target)) close(); };
+  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); close(); } };
+  const close = () => {
+    el.remove();
+    window.removeEventListener('mousedown', outside, true);
+    window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('wheel', close, true);
+    window.removeEventListener('resize', close);
+    ctxClose = null;
+  };
+  window.addEventListener('mousedown', outside, true);
+  window.addEventListener('keydown', onKey, true);
+  window.addEventListener('wheel', close, true);
+  window.addEventListener('resize', close);
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-i]');
+    if (!b || b.disabled) return;
+    close();
+    items[+b.dataset.i].action?.();
+  });
+  ctxClose = close;
 }
 
 // ---- modals --------------------------------------------------------------------------------
@@ -138,6 +221,37 @@ export async function sellItems(items, { ask = true } = {}) {
   sfx.coin();
   toast(`Sold ${name} for <b class="green">${money(r.total)}</b>`, 'good');
   return true;
+}
+
+// ---- item actions --------------------------------------------------------------------------
+async function equipItem(item) {
+  if (!(await tryAct('loadout.equip', { uid: item.uid }))) return false;
+  toast(`Equipped ${esc(I.itemName(item))}${I.loadoutSlot(item) === 'gloves' ? ' — you’ll see them in the first-person inspect' : ''}`, 'good');
+  return true;
+}
+
+// The right-click menu on an item you own, like CS2's inventory: the same actions as its details. `onChange` runs after
+// one that changes the item.
+export function itemContextMenu(e, item, { onChange } = {}) {
+  e.preventDefault();
+  const done = (ok) => { if (ok) onChange?.(); };
+  const slot = I.loadoutSlot(item);
+  const items = [
+    { label: 'Inspect', icon: 'zoom_in', hint: '3D', action: () => openInspect(item) },
+    { label: 'Details', icon: 'info', action: () => showItemDetail(item, { onChange }) },
+    '-',
+  ];
+  if (slot) {
+    items.push(isEquipped(item)
+      ? { label: 'Unequip', icon: 'loadout', hint: slotName(slot), action: async () => done(await tryAct('loadout.unequip', { uid: item.uid })) }
+      : { label: 'Equip', icon: 'loadout', hint: slotName(slot), action: async () => done(await equipItem(item)) });
+  }
+  if (I.canHaveStickers(item)) {
+    items.push({ label: 'Stickers', icon: 'sticker', hint: `${item.stk?.length || 0}/${I.MAX_STICKERS}`, action: () => openStickerEditor(item, { onDone: () => { emit('inv'); onChange?.(); } }) });
+  }
+  items.push({ label: item.lk ? 'Unlock' : 'Lock', icon: item.lk ? 'unlocked' : 'locked', action: async () => done(await tryAct('item.lock', { uid: item.uid, lk: !item.lk })) });
+  items.push('-', { label: 'Sell', icon: 'dollar_sign', hint: money(I.itemValue(item)), disabled: !!item.lk, action: async () => done(await sellItems([item])) });
+  contextMenu(e.clientX, e.clientY, items);
 }
 
 // ---- item detail ---------------------------------------------------------------------------
@@ -260,10 +374,7 @@ export function showItemDetail(item, { onChange } = {}) {
       const a = b.dataset.a;
       if (a === 'inspect') openInspect(item);
       if (a === 'lock') { if (await tryAct('item.lock', { uid: item.uid, lk: !item.lk })) refresh(); }
-      if (a === 'equip' && await tryAct('loadout.equip', { uid: item.uid })) {
-        toast(`Equipped ${esc(I.itemName(item))}${I.loadoutSlot(item) === 'gloves' ? ' — you’ll see them in the first-person inspect' : ''}`, 'good');
-        refresh();
-      }
+      if (a === 'equip' && await equipItem(item)) refresh();
       if (a === 'unequip' && await tryAct('loadout.unequip', { uid: item.uid })) refresh();
       if (a === 'sell') { if (await sellItems([item])) m.close(); }
       if (a === 'stickers') openStickerEditor(item, { onDone: () => { emit('inv'); refresh(); } });
@@ -286,19 +397,20 @@ export function openInspect(item) {
   wrap.innerHTML = `
     <div class="stage"></div>
     <div class="loading">Loading model…</div>
-    <div class="val">${money(I.itemValue(item))}</div>
-    <div class="top">
-      <select class="input bg-pick" data-bg title="Background" style="display:none"></select>
-      <button class="btn" data-a="fp" style="display:none">First person (V)</button>
-      <button class="btn" data-a="inspect">Inspect (F)</button>
-      <button class="btn" data-a="flip">Flip (B)</button>
-      <button class="btn" data-a="reset">Reset (R)</button>
-      <button class="btn" data-a="close">Close (Esc)</button>
+    <div class="insp-bar">
+      <button class="insp-back" data-a="close" data-tip="Back (Esc)">${iconHtml('back', '<svg viewBox="0 0 32 32"><path d="M13 7l2.1 2.1-5.4 5.4H27v3H9.7l5.4 5.4L13 25 4 16z"/></svg>')}<span>Back</span></button>
+      <span class="spacer"></span>
+      <select class="input bg-pick" data-bg data-tip="Background (CS2's own maps)" style="display:none"></select>
+      <button class="insp-btn" data-a="fp" data-tip="First person (V)" style="display:none">${iconHtml('first_person')}<span>First person</span></button>
+      <button class="insp-btn" data-a="inspect" data-tip="Inspect (F)">${iconHtml('rotate_weapon')}<span>Inspect</span></button>
+      <button class="insp-btn" data-a="flip" data-tip="Flip (B)">${iconHtml('refresh')}<span>Flip</span></button>
+      <button class="insp-btn" data-a="reset" data-tip="Reset the view (R)">${iconHtml('undo')}<span>Reset</span></button>
     </div>
     <div class="hud">
       <div class="rn">${esc(r.n)}</div>
       <h2>${esc(I.itemName(item))}</h2>
       <div class="sub">${esc(sub)}</div>
+      <div class="val">${money(I.itemValue(item))}</div>
       ${pat.label ? `<div class="pattern">${patternTag(pat)}</div>` : ''}
       ${item.t === 'skin' ? floatBar(item) : ''}
       ${item.stk?.length ? `<div class="sub" style="margin-top:10px">${item.stk.length} sticker${item.stk.length > 1 ? 's' : ''} applied</div>` : ''}
@@ -346,21 +458,22 @@ export function openInspect(item) {
     })
     .catch((e) => { wrap.querySelector('.loading.model').textContent = 'Could not load model: ' + e.message; });
   const fpBtn = wrap.querySelector('[data-a=fp]');
+  const fpLabel = (text) => { fpBtn.querySelector('span').textContent = text; };
   let fpBusy = false;
   const toggleFP = async () => {
     if (fpBusy || fpBtn.style.display === 'none') return;
     fpBusy = true;
     try {
-      if (inspectView.fp) { inspectView.exitFirstPerson(); fpBtn.textContent = 'First person (V)'; wrap.classList.remove('fp'); }
+      if (inspectView.fp) { inspectView.exitFirstPerson(); fpLabel('First person'); wrap.classList.remove('fp'); }
       else {
-        fpBtn.textContent = 'Loading…';
+        fpLabel('Loading…');
         await inspectView.enterFirstPerson();
-        fpBtn.textContent = 'Third person (V)';
+        fpLabel('Third person');
         wrap.classList.add('fp');
       }
     } catch (e) {
       toast('First person isn’t available for this item: ' + esc(e.message), 'bad');
-      fpBtn.textContent = 'First person (V)';
+      fpLabel('First person');
     }
     fpBusy = false;
   };

@@ -104,7 +104,7 @@ export function cs2Crate(id) {
   return crates.get(id);
 }
 
-// Play mode: fn is one of maps, map, progress, weapon, agent, anims, sounds, agentModel, stats, voices, icons (see CS2Service).
+// CS2 asset calls: fn is one of maps, mapImages, map, progress, weapon, agent, anims, sounds, agentModel, stats, impacts, voices, icons, ranks, menuIcons, menuBackdrop (see CS2Service).
 // Results of everything but progress are cached per argument.
 const playCache = new Map();
 export function cs2Play(fn, arg = null) {

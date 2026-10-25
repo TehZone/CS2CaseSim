@@ -2,7 +2,7 @@ import { esc, money, debounce } from '../util.js';
 import * as I from '../items.js';
 import { S, on } from '../state.js';
 import { act } from '../backend.js';
-import { itemCard, showItemDetail, sellItems, openModal, toast } from '../ui.js';
+import { itemCard, showItemDetail, itemContextMenu, sellItems, openModal, toast } from '../ui.js';
 import { D, rarityColor } from '../data.js';
 import { SELL_RANKS } from '../autosell.js';
 import { MAIN_SLOTS, GUN_GROUPS, ZEUS_SLOT, equipped, equippedUids, slotName } from '../loadout.js';
@@ -102,6 +102,11 @@ function draw() {
       if (view.selected.has(it.uid)) view.selected.delete(it.uid); else if (!it.lk) view.selected.add(it.uid);
       draw();
     } else showItemDetail(it, { onChange: () => draw() });
+  }));
+  // Right-click: CS2's item menu (inspect, equip, stickers, lock, sell).
+  root.querySelectorAll('.card[data-uid]').forEach((c) => c.addEventListener('contextmenu', (e) => {
+    const it = S.inv.find((i) => i.uid === c.dataset.uid);
+    if (it && !view.select) itemContextMenu(e, it, { onChange: () => draw() });
   }));
 }
 

@@ -1,23 +1,26 @@
-/* Loadout: equipped tag on item cards and the inventory's loadout panel. */
+/* Loadout: equipped tag on item cards and the inventory's loadout panel, drawn like CS2's loadout grid (a tile per slot
+   with the weapon's silhouette until a skin is equipped). */
 .tag.eq { color: #0d1a10; background: var(--green); border-color: var(--green); }
 
-.lo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
-.lo-slot { cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
-.lo-name { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.lo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.lo-slot { cursor: pointer; display: flex; flex-direction: column; gap: 5px; }
+.lo-name { font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #aab3bd; }
 .lo-empty {
   flex: 1; min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
-  border: 1px dashed var(--line2); border-radius: var(--radius); color: var(--dim); background: var(--panel2); font-size: 12px;
-  transition: border-color .15s, color .15s;
+  border: 1px solid rgba(255, 255, 255, .08); border-radius: var(--radius); color: var(--dim); font-size: 12px; letter-spacing: .04em;
+  background: radial-gradient(ellipse 70% 55% at 50% 45%, rgba(255, 255, 255, .06), transparent 70%), linear-gradient(180deg, rgba(46, 53, 62, .8), rgba(26, 30, 36, .86));
+  box-shadow: inset 0 -3px 0 rgba(255, 255, 255, .06); transition: border-color .15s, color .15s, background .15s;
 }
 .lo-empty img { width: 72%; height: 56px; object-fit: contain; opacity: .45; transition: opacity .15s; }
-.lo-slot:hover .lo-empty { border-color: var(--gold); color: var(--text); }
-.lo-slot:hover .lo-empty img { opacity: .8; }
+.lo-slot:hover .lo-empty { border-color: rgba(255, 255, 255, .5); color: var(--text); background: radial-gradient(ellipse 70% 55% at 50% 45%, rgba(255, 255, 255, .1), transparent 70%), linear-gradient(180deg, rgba(60, 68, 79, .86), rgba(32, 37, 44, .9)); }
+.lo-slot:hover .lo-empty img { opacity: .85; }
 .lo-slot.none { cursor: default; }
-.lo-slot.none:hover .lo-empty { border-color: var(--line2); color: var(--dim); }
+.lo-slot.none:hover .lo-empty { border-color: rgba(255, 255, 255, .08); color: var(--dim); background: radial-gradient(ellipse 70% 55% at 50% 45%, rgba(255, 255, 255, .06), transparent 70%), linear-gradient(180deg, rgba(46, 53, 62, .8), rgba(26, 30, 36, .86)); }
 .lo-slot.none .lo-empty img { opacity: .2; }
 .lo-grid.guns { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
 .lo-grid.guns .lo-empty { min-height: 150px; }
-.lo-side { margin-left: 6px; padding: 0 4px; border-radius: 3px; font-size: 10px; border: 1px solid currentColor; vertical-align: 1px; }
-.lo-side.t { color: #e0a94f; }
-.lo-side.ct { color: #7aa7ec; }
-.lo-head { margin: 18px 0 10px; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.lo-side { margin-left: 6px; padding: 0 4px; border-radius: 1px; font-size: 10px; border: 1px solid currentColor; vertical-align: 1px; }
+.lo-side.t { color: var(--tt); }
+.lo-side.ct { color: var(--ct); }
+.lo-head { margin: 18px 0 10px; font-size: 13px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--hi); display: flex; align-items: center; gap: 12px; }
+.lo-head::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line2), transparent); }
