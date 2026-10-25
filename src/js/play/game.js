@@ -38,7 +38,7 @@ import { MODES, WINGMAN_RULES, Deathmatch, ARMS_RACE, PROTECT } from './modes.js
 import { act, online } from '../backend.js';
 import { S } from '../state.js';
 import { rankInfo, SKILL_GROUPS } from '../engine/ranks.js';
-import { loadRankArt, rankArt, emblemHtml, rankKey, ratingHtml } from '../rank.js';
+import { rankPictures, rankArt, emblemHtml, rankKey, ratingHtml } from '../rank.js';
 import { botIdentities, pickIdentities } from './identity.js';
 import { tierOf, TO_DIFFICULTY, botSkill, groupOfSkill, ratingOfSkill, skillParams, tierOfGroup, mmrOfSkill } from './skill.js';
 import { premierInfo, formatRating } from '../engine/premier.js';
@@ -226,7 +226,7 @@ export class Game {
     this.soundscapes = new Soundscapes(this, map.info.soundscapes);
     this.stats = await cs2Play('stats');
     this.impacts = await cs2Play('impacts').catch(() => ({}));
-    await loadRankArt();
+    await rankPictures(); // (the emblems as pictures: see rank.js)
     this.midSpot = this.findMid();
 
     status('Loading players…');
@@ -709,9 +709,8 @@ export class Game {
   onRoundStart(round, { halftime, pistol, overtime, respawn }) {
     if (!respawn) { this.balls?.reset(); this.doors?.reset(); }
     if (respawn) { this.startRespawnMode(); return; }
-    // The garbage play makes builds up to a full collection every few minutes (100 ms and more): collected here instead,
-    // as everyone respawns, where a pause doesn't show (see main.js).
-    window.gc?.();
+    // (No full collection here: one stops everything while it goes through the whole heap, 100 ms to 360 ms a round start
+    // and the frames after it slow too, where V8's own, marking alongside the game, never held a frame up for long.)
     this.effects.clear();
     this.nades.clear();
     this.drops.clear();

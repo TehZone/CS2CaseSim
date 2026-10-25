@@ -249,7 +249,15 @@ What's in a match:
   time measured from the same spot every round, next to everything that could pile up, then net_graph 2's log of it.
   `CS2SIM_SMOKE=hitch` plays rounds on Dust II, Inferno and Nuke and logs every frame over 33 ms with what ran in it
   and how often each kind of event (a bot's shot, damage, a kill...) comes before a slow frame against before any
-  (`CS2SIM_SMOKE_PROFILE` and `CS2SIM_SMOKE_ALLOC` add a CPU and an allocation profile). `CS2SIM_SMOKE=botfire` stops
+  (`CS2SIM_SMOKE_PROFILE` and `CS2SIM_SMOKE_ALLOC` add a CPU and an allocation profile, with the long waits between
+  frames on their own; `CS2SIM_SMOKE_LIVE` what the JS heap holds once the map is loaded, against the array buffers
+  held outside it, and how long a full collection takes; `CS2SIM_SMOKE_TRACE=<round>` a Chromium trace of that round's
+  freeze time, every process; `CS2SIM_SMOKE_TAB=1` holds Tab through freeze time, `=tap` presses it four times a
+  second; `CS2SIM_SMOKE_NOGC` drops the game's own collections). There's no full collection at a round start (it held
+  the game up 100 ms to 360 ms every round; V8's own, marking alongside the game, don't), the rank emblems on the
+  scoreboard are pictures (CS2's are SVGs of a thousand paths and gradients each: bringing the scoreboard up redrew
+  them on the GPU for 85 ms), and every reverb the map uses is made as it loads (a convolver works its impulse
+  response over as it gets it, 7 ms a second of it: walking into another room was a 25 ms hitch). `CS2SIM_SMOKE=botfire` stops
   the bots and times one thing at a time: bots firing at nothing or at the floor, bots or you taking damage, Tab held
   (`+mute`, `+noradio`, `+noflinch`, `+nohud` on a phase turn one part off). The scoreboard is made again only when
   something on it changes (holding Tab took frames from 7 ms to 54 ms on average; now it doesn't).

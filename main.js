@@ -802,10 +802,51 @@ async function runHitchSmoke(win) {
   if (!process.env.CS2SIM_SMOKE_MAPS) process.env.CS2SIM_SMOKE_MAPS = 'de_dust2,de_inferno,de_nuke';
   const totals = [];
   for (const id of await smokeMapIds(win)) {
+    // CS2SIM_SMOKE_LIVE: what the JS heap holds once the first map is loaded and collected (a sampling heap profile of
+    // what's still alive then, by where it was made: a big heap makes every full collection long).
+    const live = process.env.CS2SIM_SMOKE_LIVE && !totals.length ? win.webContents.debugger : null;
+    const heapMB = async () => Math.round(await js('window.gc?.(), (performance.memory?.usedJSHeapSize || 0) / 1e6'));
+    if (live) {
+      if (!live.isAttached()) live.attach('1.3');
+      console.log('SMOKE hitch heap before the match', await heapMB(), 'MB');
+      await live.sendCommand('HeapProfiler.enable');
+      await live.sendCommand('HeapProfiler.startSampling', { samplingInterval: 32768 });
+    }
     if (!(await smokeStartMap(win, id, 'hitch'))) continue;
+    if (live) {
+      await wait(3000);
+      console.log('SMOKE hitch heap with the match loaded', await heapMB(), 'MB');
+      // The JS heap itself against what's held outside it (array buffers: performance.memory counts both), and how long
+      // a full collection takes.
+      const u = await live.sendCommand('Runtime.getHeapUsage');
+      console.log('SMOKE hitch heap usage', JSON.stringify(Object.fromEntries(Object.entries(u).map(([k, v]) => [k, Math.round(v / 1e6) + ' MB']))));
+      console.log('SMOKE hitch full collections (ms)', await js(`(() => { const r = []; for (let i = 0; i < 3; i++) { const t = performance.now(); window.gc(); r.push(+(performance.now() - t).toFixed(1)); } return r.join(', '); })()`));
+      const { profile } = await live.sendCommand('HeapProfiler.stopSampling');
+      const self = new Map(), total = new Map();
+      const key = (n) => `${n.callFrame.functionName || '(anon)'} ${n.callFrame.url.replace(/.*\//, '')}:${n.callFrame.lineNumber + 1}`;
+      let all = 0;
+      const walk = (n, path) => {
+        const k = key(n), size = n.selfSize || 0;
+        all += size;
+        self.set(k, (self.get(k) || 0) + size);
+        const p = path.includes(k) ? path : [...path, k];
+        for (const kk of new Set(p)) total.set(kk, (total.get(kk) || 0) + size);
+        for (const c of n.children || []) walk(c, p);
+      };
+      walk(profile.head, []);
+      const mb = (b) => (b / 1e6).toFixed(1).padStart(7);
+      console.log(`SMOKE hitch the match holds ${(all / 1e6).toFixed(0)} MB it made; by own allocations:\n` + [...self].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, b]) => `  ${mb(b)} MB  ${k}`).join('\n'));
+      console.log('SMOKE hitch what it holds by total (with what they call):\n' + [...total].filter(([k]) => /\.m?js:/.test(k)).sort((a, b) => b[1] - a[1]).slice(0, 50).map(([k, b]) => `  ${mb(b)} MB  ${k}`).join('\n'));
+    }
     await js(`(() => { const g = window.__playGame, gl = g.renderer.getContext(), now = () => performance.now();
       document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
       g.console.run('sv_cheats 1');
+      // CS2SIM_SMOKE_TAB: Tab held through freeze time (the scoreboard up while you buy); =tap: pressed and let go four
+      // times a second.
+      if (${!!process.env.CS2SIM_SMOKE_TAB}) { const tap = ${JSON.stringify(process.env.CS2SIM_SMOKE_TAB)} === 'tap', held = g.input.held.bind(g.input);
+        g.input.held = (k, ...a) => (k === 'scores' && g.match.phase === 'freeze' && (!tap || Math.floor(performance.now() / 125) % 2 === 0)) || held(k, ...a); }
+      // CS2SIM_SMOKE_NOGC: no forced collections (the game's own at round start): V8's own, wherever they come.
+      if (${!!process.env.CS2SIM_SMOKE_NOGC}) window.gc = undefined;
       const H = window.__hitch = { t0: now(), ints: [], slow: [], events: [], long: [], cur: null, prev: 0, lastEnd: 0, outside: {} };
       const add = (o, k, v) => { o[k] = (o[k] || 0) + v; };
       const heap = () => performance.memory?.usedJSHeapSize || 0;
@@ -826,7 +867,7 @@ async function runHitchSmoke(win) {
       ev(g, 'botShoot', 'botShoot', (b) => b.c.name); ev(g, 'damage', 'damage', (c) => (c === g.me ? 'you' : 'bot')); ev(g.hud, 'hurt', 'hurt'); ev(g.radio, 'say', 'radio');
       ev(g.match, 'startRound', 'startRound'); ev(g.match, 'endRound', 'endRound'); ev(g, 'buy', 'buy', (w) => w); ev(g.drops, 'drop', 'drop', (gun) => gun?.id || '');
       ev(g.effects, 'explosion', 'explosion'); ev(g.effects, 'flashPop', 'flashPop'); ev(g.match, 'planted', 'planted'); ev(g.match, 'defused', 'defused');
-      ev(g.match, 'exploded', 'bombExploded'); ev(g, 'restartMatch', 'restartMatch'); ev(g.nades, 'fire', 'fire'); ev(g.nades, 'smoke', 'smoke'); ev(g.nades, 'explodeHE', 'he');
+      ev(g.match, 'exploded', 'bombExploded'); ev(g, 'restartMatch', 'restartMatch'); ev(window, 'gc', 'gc'); ev(g.sounds, 'setRoom', 'setRoom', (n) => n); ev(g.nades, 'fire', 'fire'); ev(g.nades, 'smoke', 'smoke'); ev(g.nades, 'explodeHE', 'he');
       ev(g.nades, 'flashbang', 'flash'); ev(g.arsenal, 'select', 'select', (s) => s); ev(g.arsenal, 'shoot', 'shoot', (gun) => gun.id); ev(g, 'vmData', 'vmData', (w) => w);
       // GL work, in the frame (by call) and between frames.
       for (const name of ['compileShader', 'linkProgram', 'getProgramParameter', 'getShaderParameter', 'getProgramInfoLog', 'getShaderInfoLog', 'getUniformLocation', 'getActiveUniform', 'texImage2D', 'texSubImage2D', 'texImage3D', 'texSubImage3D',
@@ -873,6 +914,11 @@ async function runHitchSmoke(win) {
       await prof.sendCommand('Profiler.enable'); await prof.sendCommand('Profiler.setSamplingInterval', { interval: 200 });
       const before = await js('performance.now()'); await prof.sendCommand('Profiler.start'); profAt = (before + await js('performance.now()')) / 2;
     }
+    // CS2SIM_SMOKE_TRACE=round: a Chromium trace of that round's freeze time (Tab held too with CS2SIM_SMOKE_TAB), every
+    // process, saved to userData/hitch-trace.json: what the browser does between frames, which a CPU profile only shows
+    // as "(program)".
+    const traceRound = !totals.length && +process.env.CS2SIM_SMOKE_TRACE;
+    const { contentTracing } = require('electron');
     // You: a rifle and every grenade each round, a few shots and the grenades thrown, then dead (the bots play it out).
     const t0 = Date.now();
     let round = -1;
@@ -881,11 +927,14 @@ async function runHitchSmoke(win) {
       if (!st.phase || st.over) break;
       if (st.round !== round && st.phase === 'freeze' && st.alive) {
         round = st.round;
+        const tracing = st.round === traceRound;
+        if (tracing) await contentTracing.startRecording({ included_categories: ['toplevel', 'devtools.timeline', 'disabled-by-default-devtools.timeline', 'blink', 'cc', 'gpu', 'viz', 'v8', 'disabled-by-default-v8.gc', 'loading', 'benchmark', 'renderer.scheduler', 'blink.user_timing'], excluded_categories: ['*'] });
         await js(`(async () => { const g = window.__playGame; g.console.run('impulse 101');
           const rifle = g.me.team === 'T' ? 'weapon_ak47' : 'weapon_m4a1';
           for (const w of [rifle, 'weapon_smokegrenade', 'weapon_flashbang', 'weapon_hegrenade', g.me.team === 'T' ? 'weapon_molotov' : 'weapon_incgrenade', 'vesthelm']) { try { await g.buy(w); } catch {} }
           return 1; })()`);
         for (let i = 0; i < 40 && JSON.parse(await js(`JSON.stringify(window.__playGame?.match.phase)`)) === 'freeze'; i++) await wait(500);
+        if (tracing) console.log('SMOKE hitch trace of round', st.round, 'saved to', await contentTracing.stopRecording(path.join(app.getPath('userData'), 'hitch-trace.json')));
         await js(`(async () => { const g = window.__playGame, inp = g.input, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
           const i = g.map.info, s = i.bombsites[0], o = g.player.origin, to = [(s.min[0] + s.max[0]) / 2, (s.min[1] + s.max[1]) / 2];
           inp.yaw = Math.atan2(to[1] - o[1], to[0] - o[0]) * 180 / Math.PI; inp.pitch = -8;
@@ -924,10 +973,12 @@ async function runHitchSmoke(win) {
       const byId = new Map(profile.nodes.map((nd) => [nd.id, nd])), parent = new Map();
       for (const nd of profile.nodes) for (const c of nd.children || []) parent.set(c, nd);
       const keyOf = (nd) => `${nd.callFrame.functionName || '(anon)'} ${nd.callFrame.url.replace(/.*\//, '')}:${nd.callFrame.lineNumber + 1}`;
-      const sets = { inside: new Map(), outside: new Map(), outsideSelf: new Map(), outsideRoots: new Map(), slowSelf: new Map(), slowTotal: new Map() };
-      let tin = 0, tout = 0, tslow = 0;
+      const sets = { inside: new Map(), outside: new Map(), outsideSelf: new Map(), outsideRoots: new Map(), slowSelf: new Map(), slowTotal: new Map(), gapSelf: new Map(), gapRoots: new Map() };
+      let tin = 0, tout = 0, tslow = 0, tgap = 0;
       // The frames that took over 18 ms of their own, in the profile's time (ms from its start).
       const slowFrames = JSON.parse(await js(`JSON.stringify(window.__hitch.slow.filter((c) => c.cpu > 18).map((c) => [c.t, c.t + c.cpu]))`)).map(([a, b]) => [a - profAt, b - profAt]);
+      // And the long waits between frames (over 25 ms from one frame's end to the next one's start).
+      const slowGaps = JSON.parse(await js(`JSON.stringify(window.__hitch.slow.filter((c) => c.gap > 25).map((c) => [c.t - c.gap, c.t]))`)).map(([a, b]) => [a - profAt, b - profAt]);
       let at = 0;
       profile.samples.forEach((sid, k) => {
         const dt = (profile.timeDeltas[k + 1] ?? profile.timeDeltas[k] ?? 0) / 1000;
@@ -947,6 +998,7 @@ async function runHitchSmoke(win) {
           sets.outsideSelf.set(leaf, (sets.outsideSelf.get(leaf) || 0) + dt);
           const js3 = chain.filter((nd) => /\.js$/.test(nd.callFrame.url)).slice(-3).reverse().map(keyOf).join(' > ') || leaf;
           sets.outsideRoots.set(js3, (sets.outsideRoots.get(js3) || 0) + dt);
+          if (slowGaps.some(([a, b]) => at >= a && at <= b)) { tgap += dt; sets.gapSelf.set(leaf, (sets.gapSelf.get(leaf) || 0) + dt); sets.gapRoots.set(js3, (sets.gapRoots.get(js3) || 0) + dt); }
         }
       });
       const list = (m, n = 25) => [...m].sort((a, b) => b[1] - a[1]).slice(0, n).map(([kk, t]) => `  ${t.toFixed(0).padStart(7)}  ${kk}`).join('\n');
@@ -957,6 +1009,8 @@ async function runHitchSmoke(win) {
       console.log('SMOKE hitch in frames, by total time:\n' + list(sets.inside, 30));
       console.log(`SMOKE hitch in the ${slowFrames.length} slow frames (${tslow.toFixed(0)} ms), by total time:\n` + list(sets.slowTotal, 45));
       console.log('SMOKE hitch in the slow frames, by own time:\n' + list(sets.slowSelf, 25));
+      console.log(`SMOKE hitch in the ${slowGaps.length} long waits between frames (${tgap.toFixed(0)} ms busy), by own time:\n` + list(sets.gapSelf, 25));
+      console.log('SMOKE hitch in the long waits, by task (outermost JS):\n' + list(sets.gapRoots, 20));
     }
     const r = JSON.parse(await js(`(() => { const H = window.__hitch, ints = H.ints.slice().sort((a, b) => a - b), n = ints.length || 1;
       const q = (p) => +(ints[Math.min(n - 1, Math.floor(n * p))] || 0).toFixed(1);

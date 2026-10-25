@@ -9,9 +9,10 @@ import { esc } from '../util.js';
 const SLOW_MS = 30, SLOW_X = 1.8; // a frame this long, and this many times the usual, is written down on its own
 const MAX_SLOW = 4000, MAX_LONG = 4000, RING = 1024;
 const BINS = 301; // frame times to the millisecond (the last: 300 ms or more)
-// What happened in the game, timed: [what of the game's ('' the game itself), its method, what the log calls it].
+// What happened in the game, timed: [what of the game's ('' the game itself), its method, what the log calls it (or
+// a function of its arguments that says)].
 const HOOKS = [['', 'kill', 'kill'], ['', 'botShoot', 'bot shot'], ['', 'damage', 'damage'], ['arsenal', 'shoot', 'you shot'],
-  ['nades', 'throw', 'grenade thrown'], ['nades', 'detonate', 'grenade went off'], ['effects', 'explosion', 'explosion'], ['', 'buy', 'buy'],
+  ['nades', 'throw', 'grenade thrown'], ['nades', 'detonate', 'grenade went off'], ['effects', 'explosion', 'explosion'], ['', 'buy', 'buy', (id) => 'buy ' + String(id).replace(/^weapon_/, '')],
   ['drops', 'drop', 'gun dropped'], ['radio', 'say', 'radio'], ['', 'say', 'chat'], ['', 'onRoundStart', 'round start'], ['', 'onRoundEnd', 'round end'],
   ['match', 'planted', 'bomb planted'], ['match', 'defused', 'bomb defused'], ['match', 'exploded', 'bomb exploded']];
 
@@ -66,13 +67,22 @@ export class FrameLog {
   // Each event the game has (HOOKS) is timed and kept (the last RING of them); sounds are counted.
   hook() {
     const g = this.g, log = this;
-    for (const [on, name, label] of HOOKS) {
+    for (const [on, name, said, say] of HOOKS) {
+      const label = say || said;
       const o = on ? g[on] : g, f = o?.[name];
       if (typeof f !== 'function') continue;
-      o[name] = function (...a) { const t = performance.now(); try { return f.apply(this, a); } finally { log.mark(label, t, performance.now() - t); } };
+      o[name] = function (...a) { const t = performance.now(); try { return f.apply(this, a); } finally { log.mark(typeof label === 'function' ? label(...a) : label, t, performance.now() - t); } };
     }
     const play = g.sounds?.play;
     if (play) g.sounds.play = function (...a) { log.sounds++; return play.apply(this, a); };
+    // A weapon made mid-match (one not loaded ahead, as you buy or pick it up): as it starts, and once it's ready (how
+    // long it took).
+    const vm = g.vmData;
+    if (vm) g.vmData = function (wid, ...a) {
+      const had = this.vmCache.size, t = performance.now(), job = vm.call(this, wid, ...a);
+      if (this.vmCache.size > had) { log.mark('weapon loading', t, performance.now() - t); job.then(() => log.mark(`${wid.replace(/^weapon_/, '')} loaded`, performance.now(), performance.now() - t), () => {}); }
+      return job;
+    };
   }
   mark(what, t, d) {
     const e = this.ev, i = e.n++ % RING;

@@ -22,7 +22,7 @@ export class Soundscapes {
   }
 
   // Loads every soundscape's sounds and CS2's reverb presets, and makes the reverbs the map uses ahead (one at a time:
-  // a big hall takes a moment).
+  // a big hall takes a moment), each ready to switch to.
   async load() {
     const events = [...new Set(this.list.map((s) => s.e))];
     if (!events.length) return;
@@ -30,7 +30,7 @@ export class Soundscapes {
     this.presets = await cs2Play('reverbs').catch(() => ({}));
     for (const name of new Set(events.map((e) => this.room(e)).filter(Boolean))) {
       if (this.game.disposed) return;
-      this.bank.reverb(name, this.presets);
+      this.bank.roomFor(name, this.presets);
       await new Promise((r) => setTimeout(r, 0));
     }
   }

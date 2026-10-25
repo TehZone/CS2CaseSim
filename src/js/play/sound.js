@@ -77,7 +77,8 @@ export class SoundBank {
     // The room: every sound sends some of itself here, and the reverb of the soundscape you're in plays it back.
     this.verbIn = this.ctx.createGain();
     this.verbs = new Map(); // preset -> AudioBuffer | null
-    this.room = null; // { name, conv, gain }
+    this.rooms = new Map(); // preset -> { name, conv, gain, wired, off } (see roomFor)
+    this.room = null; // the one you're in
     this.setVolume();
   }
 
@@ -228,21 +229,45 @@ export class SoundBank {
   }
 
   // The room you're in: one of CS2's reverb presets (by name), what every sound's reverb plays through. The last
-  // room's fades out as this one fades in. presets: { name: processors } (cs2Play('reverbs')).
+  // room's fades out as this one fades in, and is cut off from the sounds once it's quiet. presets: { name: processors }
+  // (cs2Play('reverbs')).
   setRoom(name, presets) {
     if (this.room?.name === name) return;
     const old = this.room, now = this.ctx.currentTime;
-    if (old?.gain) { old.gain.gain.setTargetAtTime(0, now, ROOM_FADE / 3); setTimeout(() => { try { this.verbIn.disconnect(old.conv); } catch {} old.gain.disconnect(); }, ROOM_FADE * 2000); }
-    this.room = { name };
-    const ir = this.reverb(name, presets);
-    if (!ir) return;
-    const conv = this.ctx.createConvolver(), gain = this.ctx.createGain();
-    conv.normalize = false;
-    conv.buffer = ir;
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.setTargetAtTime(REVERB_RETURN, now, ROOM_FADE / 3);
-    this.verbIn.connect(conv); conv.connect(gain); gain.connect(this.out);
-    Object.assign(this.room, { conv, gain });
+    if (old?.gain) {
+      old.gain.gain.setTargetAtTime(0, now, ROOM_FADE / 3);
+      clearTimeout(old.off);
+      old.off = setTimeout(() => { if (this.room !== old) this.wire(old, false); }, ROOM_FADE * 2000);
+    }
+    const room = this.roomFor(name, presets);
+    this.room = room;
+    if (!room.conv) return;
+    clearTimeout(room.off);
+    this.wire(room, true);
+    room.gain.gain.setTargetAtTime(REVERB_RETURN, now, ROOM_FADE / 3);
+  }
+  // A preset's reverb, made once: a convolver works its impulse response over on the main thread as it's given it (7 ms
+  // a second of it: a hitch of 20 ms and more every time you walked into another room). See Soundscapes.load.
+  roomFor(name, presets) {
+    let room = this.rooms.get(name);
+    if (!room) {
+      room = { name, conv: null, gain: null, wired: false, off: 0 };
+      const ir = this.reverb(name, presets);
+      if (ir) {
+        room.conv = this.ctx.createConvolver(); room.gain = this.ctx.createGain();
+        room.conv.normalize = false;
+        room.conv.buffer = ir;
+        room.gain.gain.value = 0;
+        room.conv.connect(room.gain);
+      }
+      this.rooms.set(name, room);
+    }
+    return room;
+  }
+  wire(room, on) {
+    if (!room.conv || room.wired === on) return;
+    room.wired = on;
+    if (on) { this.verbIn.connect(room.conv); room.gain.connect(this.out); } else { try { this.verbIn.disconnect(room.conv); room.gain.disconnect(this.out); } catch {} }
   }
   // A preset's impulse response (made once).
   reverb(name, presets) {
