@@ -225,7 +225,10 @@ What's in a match:
   shader drawn as one (their own values in a small table: a few dozen draws for a map, not hundreds) — cut-outs,
   decals, glowing and breakable surfaces and the 3D skybox too, a lone surface joining a batch of bigger textures;
   props tinted differently share a material (each one's colour per vertex); bots share their materials (each its own
-  light) and hold baked guns, and aren't drawn out of view; hidden viewmodels out of the scene; bullet holes in one
+  light) and hold baked guns, and aren't drawn out of view; a bot's body parts (and the viewmodel's arms) share one
+  skeleton (each had its own copy of the same bones, worked out and sent to the GPU five times a bot a frame); a bot
+  far off is posed every other frame, a body that's done falling once, and one out of view is left out of the frame's
+  matrix pass (its hitboxes worked out as a shot needs them); hidden viewmodels out of the scene; bullet holes in one
   draw; every texture uploaded and new guns' shaders compiled before they're seen; the radar moved by the page's
   compositor, not redrawn. Bots move with your movement code on a collision test that allocates
   nothing, and their sight lines stop at the first wall. `CS2SIM_SMOKE=perf` measures each map's frame rate with the

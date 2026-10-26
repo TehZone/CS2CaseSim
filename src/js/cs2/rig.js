@@ -41,6 +41,19 @@ export function rebind(scene, bones, fallback) {
   });
 }
 
+// A model's skinned meshes (an agent's body parts and gloves, the arms' sleeves...) each come with a skeleton of their
+// own, the same bones with the same rest pose: three works each one out and sends it to the GPU every frame it's drawn
+// (five times a bot). Those alike share the first one.
+export function shareSkeletons(root) {
+  const kept = [];
+  root.traverse((o) => {
+    if (!o.isSkinnedMesh) return;
+    const s = o.skeleton, same = kept.find((k) => k.bones.length === s.bones.length && k.bones.every((b, i) => b === s.bones[i]) && k.boneInverses.every((m, i) => m.equals(s.boneInverses[i])));
+    if (!same) kept.push(s);
+    else if (same !== s) { s.dispose(); o.skeleton = same; }
+  });
+}
+
 // CS2's forearm twist (the arms model's CTiltTwistConstraints): the clips don't animate the forearm twist bones;
 // the game turns them by a share of the hand's roll around the forearm (bone X axis), measured from the hand's rest
 // orientation (the constraint's target offset). Returns an update to run after each animation step.

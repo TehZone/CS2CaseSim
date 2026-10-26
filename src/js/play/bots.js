@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2Play } from '../cs2/api.js';
-import { loadGltf } from '../cs2/rig.js';
+import { loadGltf, shareSkeletons } from '../cs2/rig.js';
 import { buildCS2Model } from '../cs2/skin.js';
 import { toGl, fromGl, ambientLit, ambientCube, bakeSkin, barrelTip } from './world.js';
 
@@ -279,6 +279,7 @@ export class BotAssets {
 }
 
 export class Bot {
+  static drawing = false; // the game is drawing a frame (see the matrix pass in the constructor)
   constructor(assets, c, index) {
     this.c = c; // the Combatant (team, health, money...)
     this.assets = assets;
@@ -288,6 +289,12 @@ export class Bot {
     // pose's, so three's own culling is off for them).
     this.view = new THREE.Group();
     this.root.add(this.view);
+    // A bot that isn't posed this frame (Game.frame: frozen) is left out of the frame's matrix pass, its ~100 bones as
+    // they were (three's matrixWorldAutoUpdate leaves a node's own matrix as it was but goes on down its children, and
+    // they then worked theirs out from that stale one: a bot out of view had its hitboxes where it was last seen). A hit
+    // test or a bone's position works them out as it needs them, outside the pass.
+    const pass = this.root.updateMatrixWorld;
+    this.root.updateMatrixWorld = (force) => { if (!(this.frozen && Bot.drawing)) pass.call(this.root, force); };
     this.pos = [0, 0, 0]; this.vel = [0, 0, 0];
     this.yaw = 0; this.pitch = 0; this.ducked = false;
     this.bodyYaw = 0; // where the legs face (yaw is where it aims)
@@ -309,6 +316,11 @@ export class Bot {
     this.modelTeam = team;
     this.modelSrc = src;
     this.model = cloneSkinned(src.scene);
+    shareSkeletons(this.model);
+    // (Its skeleton is worked out and sent to the GPU only on the frames the bot is posed: see Game.frame.)
+    const skeletons = new Set();
+    this.model.traverse((o) => { if (o.isSkinnedMesh) skeletons.add(o.skeleton); });
+    for (const sk of skeletons) { const update = sk.update; sk.update = () => { if (!this.frozen) update.call(sk); }; }
     this.lightOwn(this.model);
     this.model.traverse((o) => {
       if (!o.isMesh) return;

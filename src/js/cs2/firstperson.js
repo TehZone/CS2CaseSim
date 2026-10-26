@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2FirstPerson } from './api.js';
-import { loadGltf as load, rebind, bonesByName, forearmTwist, retargetWeapon } from './rig.js';
+import { loadGltf as load, rebind, bonesByName, forearmTwist, retargetWeapon, shareSkeletons } from './rig.js';
 import { buildGloveScene } from './skin.js';
 import { swingCharm } from './charm.js';
 import { itemDef } from '../items.js';
@@ -100,6 +100,7 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
     bones[on.name].add(d);
   });
 
+  shareSkeletons(rig);
   // Keeps the forearms twisting with the hands and the weapon merged onto them.
   const pose = () => {
     twist();

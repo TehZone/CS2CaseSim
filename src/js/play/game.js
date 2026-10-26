@@ -53,6 +53,7 @@ const FOV = 90;
 const VIEWMODEL = { fov: 68, x: 1, y: 1, z: -1 }; // CS2's viewmodel_fov and viewmodel_offset_x/y/z (inches)
 const IN = 0.0254;
 const BODY_STAY = 10, BODY_SINK = 1.5; // seconds a body lies there, and sinks into the floor for before it's gone
+const FAR_BOT = 1200; // game units: a bot further off than this is posed every other frame (see frame)
 
 const SURFACE_STEP = { concrete: 'Concrete', rock: 'Concrete', tile: 'Tile', sand: 'Sand', dirt: 'Dirt', wood: 'Wood', wood_solid: 'Wood_Solid',
   wood_panel: 'Wood', wood_plank: 'Wood', wood_dense: 'Wood', wood_crate: 'Wood', wood_basket: 'Wood_Basket', wood_tree: 'Wood', metal: 'SolidMetal',
@@ -2143,15 +2144,24 @@ export class Game {
       // A body lies there a while, then sinks into the floor and is gone (nine in view cost a quarter of a frame).
       const gone = b.deadAt != null ? (this.now - b.deadAt - BODY_STAY) / BODY_SINK : -1;
       if (gone >= 1) b.root.visible = false;
-      b.root.matrixWorldAutoUpdate = b.root.visible; // (a hidden body skips the matrix pass too)
-      if (!b.root.visible) continue;
+      if (!b.root.visible) { b.frozen = true; continue; } // (a hidden body skips the matrix pass too)
       b.sync(a);
       if (gone > 0) b.root.position.y -= gone * 40 * IN;
       const seen = _frustum.intersectsSphere(_sphere.set(toGl([b.pos[0], b.pos[1], b.pos[2] + 36], _v3), 60 * IN));
+      // Posed this frame (animated, its bones worked out and sent to the GPU): in view, and a body that's done falling
+      // only once (it lies still until it sinks), a bot far off every other frame (a frame behind there is a fraction of
+      // a pixel). Out of view its ~100 bones skip the frame's matrix pass (see Bot): a shot, its muzzle or a head bone
+      // works them out when needed.
+      const resting = b.deadAt != null && b.time > b.deathEnd + 0.3 && gone <= 0;
+      if (!resting) b.posedAtRest = false;
+      const far = Math.hypot(b.pos[0] - camEye[0], b.pos[1] - camEye[1], b.pos[2] - camEye[2]) > FAR_BOT;
+      const pose = seen && !(resting && b.posedAtRest) && (!far || !b.wasSeen || (this.frameNo + b.index) % 2 === 0);
+      if (pose && resting) b.posedAtRest = true;
+      b.wasSeen = seen;
       b.view.visible = seen;
-      b.view.matrixWorldAutoUpdate = seen; // (out of view its ~100 bones skip the frame's matrix pass: a shot, its muzzle or a head bone works them out when needed)
+      b.frozen = !pose; // (left out of the matrix pass, its skeleton not worked out: see Bot)
       b.animDt = (b.animDt || 0) + (this.paused ? 0 : dt);
-      if (seen || (this.frameNo + b.index) % 3 === 0) { b.animate(b.animDt); b.animDt = 0; }
+      if (pose || (!seen && (this.frameNo + b.index) % 3 === 0)) { b.animate(b.animDt); b.animDt = 0; }
       // Lit by the probes where it stands (a few times a second is plenty).
       if (probes && (this.frameNo + b.index) % 6 === 0) b.amb.set(probes, [b.pos[0], b.pos[1], b.pos[2] + 36]);
     }
@@ -2187,11 +2197,14 @@ export class Game {
     }
     const td = performance.now();
     log?.gpuBegin();
-    this.post.render(this.scene, this.camera, {
-      camPos: camEye, captureFlash: this.flashCapture, dt: this.paused ? 0 : dt, sky3d: s3,
-      flashImage: me.alive && flashLeft > 0 ? Math.min(1, flashLeft / Math.max(0.6, this.flashSecs * 0.85)) * 0.9 : 0,
-      overlay: (me.alive || this.specVm) && this.cv.r_drawviewmodel ? { scene: this.vmScene, camera: this.vmCamera } : null,
-    });
+    Bot.drawing = true;
+    try {
+      this.post.render(this.scene, this.camera, {
+        camPos: camEye, captureFlash: this.flashCapture, dt: this.paused ? 0 : dt, sky3d: s3,
+        flashImage: me.alive && flashLeft > 0 ? Math.min(1, flashLeft / Math.max(0.6, this.flashSecs * 0.85)) * 0.9 : 0,
+        overlay: (me.alive || this.specVm) && this.cv.r_drawviewmodel ? { scene: this.vmScene, camera: this.vmCamera } : null,
+      });
+    } finally { Bot.drawing = false; }
     log?.gpuEnd();
     this.flashCapture = false;
     this.parts.draw += performance.now() - td;
