@@ -48,6 +48,20 @@ export function loadImage(src) {
   return imgCache.get(src);
 }
 
+// An image drawn once into a picture h pixels high: a PNG's blob URL (the URL itself if it can't be). For CS2's SVGs:
+// one is drawn all over again each time what's around it is (paths by the hundred), a picture isn't.
+export async function picture(url, h) {
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  const w = Math.max(1, Math.round((h * img.naturalWidth) / (img.naturalHeight || img.naturalWidth || 1)));
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d').drawImage(img, 0, 0, w, h);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+  return blob ? URL.createObjectURL(blob) : url;
+}
+
 export function timeAgo(ts) {
   const s = (Date.now() - ts) / 1000;
   if (s < 60) return 'just now';

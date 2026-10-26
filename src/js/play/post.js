@@ -318,6 +318,8 @@ export class Post {
     r.compile(this.lumScene, this.cam);
     r.setRenderTarget(this.expRT[0]);
     r.compile(this.adaptScene, this.cam);
+    r.setRenderTarget(this.flashRT);
+    r.compile(this.copyScene, this.cam); // (the flashbang's afterimage: compiled the first time one went off on you)
     r.setRenderTarget(null);
     r.compile(this.scene, this.cam);
   }

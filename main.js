@@ -270,7 +270,8 @@ if (process.env.CS2SIM_SMOKE_ANGLE) app.commandLine.appendSwitch('use-angle', pr
 app.commandLine.appendSwitch('enable-precise-memory-info');
 // Play collects the garbage loading a match leaves (models, textures, parsing) behind the loading screen (window.gc), not
 // in a full collection a minute into the match (50 ms or more).
-app.commandLine.appendSwitch('js-flags', '--expose-gc');
+// (CS2SIM_SMOKE_JSFLAGS: V8's own for a run, e.g. --trace-gc.)
+app.commandLine.appendSwitch('js-flags', ['--expose-gc', process.env.CS2SIM_SMOKE_JSFLAGS].filter(Boolean).join(' '));
 if (process.env.CS2SIM_SMOKE === 'perf' || readDisplay().uncapped) { app.commandLine.appendSwitch('disable-frame-rate-limit'); app.commandLine.appendSwitch('disable-gpu-vsync'); }
 
 // `CS2SIM_SMOKE=features`: opens a souvenir package and a player pack, plays a bot battle and a team match, signs
@@ -365,9 +366,10 @@ async function smokeStartMap(win, id, label) {
   await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, lobby: 'private' })); })();
     window.__cs2Debug = true; window.__playGame = null; document.querySelector('#topbar [data-page=play]').click();
     setTimeout(() => { document.querySelector('[data-map="${id}"]')?.click(); setTimeout(() => document.querySelector('[data-start]').click(), 400); }, 300); 1`);
+  const t0 = Date.now();
   for (let i = 0; i < 900; i++) {
     await wait(1000);
-    if (await js(`!!window.__playGame?.raf`)) return true;
+    if (await js(`!!window.__playGame?.raf`)) { console.log('SMOKE', label, id, 'loaded in', ((Date.now() - t0) / 1000).toFixed(0), 's'); return true; }
     if (i > 2 && !(await js(`!!document.querySelector('.play-root')`))) break; // it gave up (the error is in a toast)
     if (i % 30 === 29) console.log('SMOKE', label, id, 'loading', await js(`document.querySelector('.play-root [data-status]')?.textContent || ''`));
   }
@@ -892,6 +894,33 @@ async function runHitchSmoke(win) {
       gl.createTexture = function () { if (H.cur) { const k = (new Error().stack || '').split('\\n').slice(2, 8).map((l) => l.trim().replace(/^at /, '').replace(/\\(.*\\/(.*?):(\\d+):\\d+\\)/, '$1:$2')).join(' < '); const s = (H.made ||= {})[k] ||= [0]; s[0]++; } return ct.apply(gl, arguments); };
       new PerformanceObserver((l) => { for (const e of l.getEntries()) H.long.push([e.startTime, e.duration]); }).observe({ type: 'longtask' });
       const info = g.renderer.info, frame = g.frame;
+      // What each shader program compiled mid-match was for (the object drawn, its material, the shadow pass or not), and
+      // the materials whose disposal took one with them (the next one like it compiles it again).
+      const R = g.renderer, rbd = R.renderBufferDirect, upTo = (o) => { const n = []; for (let x = o; x && n.length < 5; x = x.parent) n.push(x.name || x.type); return n.join(' < '); };
+      R.renderBufferDirect = function (cam, scene, geo, mat, obj) {
+        const p0 = info.programs.length, r = rbd.apply(this, arguments);
+        if (info.programs.length > p0) {
+          // (With what made it new: the fields of its key unlike the program it had, or the nearest one with its name.)
+          const progs = [...(R.properties.get(mat).programs?.values() || [])], mine = progs.at(-1), key = String(mine?.cacheKey || '').split(',');
+          const other = progs.length > 1 ? progs[0] : info.programs.filter((pr) => pr !== mine && pr.name === mine?.name).sort((x, y) => diffOf(x).length - diffOf(y).length)[0];
+          function diffOf(pr) { const k = String(pr.cacheKey).split(','); return key.map((v, i) => (v !== k[i] ? i + ':' + k[i] + '>' + v : null)).filter(Boolean); }
+          const w = upTo(obj) + ' [' + (mat.name || mat.type) + (scene ? '' : ', shadow') + ']' + (other ? ' unlike ' + (progs.length > 1 ? 'its last' : 'one like it') + ': ' + diffOf(other).slice(0, 8).join(' ') : ' (none like it)');
+          (H.made2 ||= []).push(((now() - H.t0) / 1000).toFixed(1) + 's ' + w); if (H.cur) (H.cur.newFor ||= []).push(w); }
+        return r;
+      };
+      let MP = null;
+      g.scene.traverse((o) => { if (MP || !o.material || Array.isArray(o.material)) return; let p = Object.getPrototypeOf(o.material); while (p && !Object.prototype.hasOwnProperty.call(p, 'setValues')) p = Object.getPrototypeOf(p); MP = p; });
+      if (MP) { const d = MP.dispose; MP.dispose = function () { const p0 = info.programs.length, r = d.apply(this, arguments);
+        if (info.programs.length < p0) (H.released ||= []).push(((now() - H.t0) / 1000).toFixed(1) + 's ' + (this.name || this.type) + ' < ' + (new Error().stack || '').split('\\n').slice(2, 5).map((l) => l.trim().replace(/^at /, '').replace(/\\(.*\\/(.*?):(\\d+):\\d+\\)/, '$1:$2')).join(' < '));
+        return r; }; }
+      // CS2SIM_SMOKE_BREAK: every breakable broken 8 s in (what that compiles, all at once), and which of their meshes
+      // (whole, and what's left once broken) have no shader yet.
+      if (${!!process.env.CS2SIM_SMOKE_BREAK}) {
+        const none = [];
+        for (const p of g.doors?.panes || []) for (const [k, list] of [['whole', p.meshes], ['left', p.after]]) for (const m of list || []) for (const mt of [].concat(m.material)) if (!R.properties.get(mt).programs?.size) none.push(k + ' ' + (mt.name || mt.type) + (m.visible ? '' : ' (hidden)') + ' ' + Object.keys(m.geometry.attributes).join('/'));
+        console.log('SMOKE hitch breakables without a shader: ' + (none.join(' | ') || 'none'));
+        setTimeout(() => { for (const p of g.doors?.panes || []) if (!p.broken) g.doors.breakPane(p); }, 8000);
+      }
       g.frame = function (dt) {
         const t = now(), h0 = heap();
         if (H.cur) H.reentered = (H.reentered || 0) + 1;
@@ -904,6 +933,8 @@ async function runHitchSmoke(win) {
         c.cpu = e - t; c.heapIn = h1 - h0; c.prog = progs.length - c.prog; c.tex = info.memory.textures - c.tex;
         H.prev = t; H.lastEnd = e; H.lastHeap = h1; H.lastCpu = c.cpu; H.cur = null;
         if (c.int) { H.ints.push(c.int); (H.all ||= []).push([t, c.int]); }
+        // By the round's phase: frames, over 33 ms, and waits over 20 ms between one frame's end and the next's start.
+        if (c.int) { const ph = (H.phases ||= {})[g.match?.phase || '?'] ||= [0, 0, 0]; ph[0]++; if (c.int > 33) ph[1]++; if (c.gap > 20) ph[2]++; }
         if (c.int > 33 || c.cpu > 25) H.slow.push(c);
       };
       return 1; })()`);
@@ -926,23 +957,42 @@ async function runHitchSmoke(win) {
     // process, saved to userData/hitch-trace.json: what the browser does between frames, which a CPU profile only shows
     // as "(program)".
     const traceRound = !totals.length && +process.env.CS2SIM_SMOKE_TRACE;
+    // CS2SIM_SMOKE_TRACE_LIVE=round: the same through that whole round, its freeze time and the bots playing it out with
+    // you dead.
+    const traceLive = !totals.length && +process.env.CS2SIM_SMOKE_TRACE_LIVE;
+    let liveTrace = false;
     const { contentTracing } = require('electron');
+    const traceFile = path.join(app.getPath('userData'), 'hitch-trace.json');
+    // CS2SIM_SMOKE_GCTRACE: V8's collections through the whole run (a trace of only them): how many, and how long each
+    // held the main thread.
+    const gcTrace = !!process.env.CS2SIM_SMOKE_GCTRACE && !traceLive && !traceRound;
+    if (gcTrace) await contentTracing.startRecording({ included_categories: ['disabled-by-default-v8.gc'], excluded_categories: ['*'] });
     // You: a rifle and every grenade each round, a few shots and the grenades thrown, then dead (the bots play it out).
     const t0 = Date.now();
     let round = -1;
     while (Date.now() - t0 < secs * 1000) {
       const st = JSON.parse(await js(`JSON.stringify({ round: window.__playGame?.match.round, phase: window.__playGame?.match.phase, alive: window.__playGame?.me.alive, over: !!window.__playGame?.matchOver })`));
+      if (liveTrace && st.round !== traceLive) { liveTrace = false; console.log('SMOKE hitch trace of round', traceLive, 'saved to', await contentTracing.stopRecording(traceFile)); }
       if (!st.phase || st.over) break;
       if (st.round !== round && st.phase === 'freeze' && st.alive) {
         round = st.round;
         const tracing = st.round === traceRound;
-        if (tracing) await contentTracing.startRecording({ included_categories: ['toplevel', 'devtools.timeline', 'disabled-by-default-devtools.timeline', 'blink', 'cc', 'gpu', 'viz', 'v8', 'disabled-by-default-v8.gc', 'loading', 'benchmark', 'renderer.scheduler', 'blink.user_timing'], excluded_categories: ['*'] });
+        if (st.round === traceLive) liveTrace = true;
+        // (A whole round's is the tasks on every thread, V8's collections, what the page draws and the GPU's work: the
+        // freeze time's categories over a round came to a gigabyte.)
+        if (tracing || liveTrace) await contentTracing.startRecording({ included_categories: liveTrace ? ['toplevel', 'devtools.timeline', 'gpu', 'viz', 'v8', 'disabled-by-default-v8.gc']
+          : ['toplevel', 'devtools.timeline', 'disabled-by-default-devtools.timeline', 'blink', 'cc', 'gpu', 'viz', 'v8', 'disabled-by-default-v8.gc', 'loading', 'benchmark', 'renderer.scheduler', 'blink.user_timing'], excluded_categories: ['*'] });
+        // CS2SIM_SMOKE_BUYMENU: bought with the buy menu open (a buy a second, as you'd click them), left open through the
+        // freeze time.
+        const menu = !!process.env.CS2SIM_SMOKE_BUYMENU;
         await js(`(async () => { const g = window.__playGame; g.console.run('impulse 101');
           const rifle = g.me.team === 'T' ? 'weapon_ak47' : 'weapon_m4a1';
-          for (const w of [rifle, 'weapon_smokegrenade', 'weapon_flashbang', 'weapon_hegrenade', g.me.team === 'T' ? 'weapon_molotov' : 'weapon_incgrenade', 'vesthelm']) { try { await g.buy(w); } catch {} }
+          if (${menu}) g.openBuyMenu();
+          for (const w of [rifle, 'weapon_smokegrenade', 'weapon_flashbang', 'weapon_hegrenade', g.me.team === 'T' ? 'weapon_molotov' : 'weapon_incgrenade', 'vesthelm']) { try { await g.buy(w); } catch {} if (${menu}) await new Promise((r) => setTimeout(r, 1000)); }
           return 1; })()`);
         for (let i = 0; i < 40 && JSON.parse(await js(`JSON.stringify(window.__playGame?.match.phase)`)) === 'freeze'; i++) await wait(500);
-        if (tracing) console.log('SMOKE hitch trace of round', st.round, 'saved to', await contentTracing.stopRecording(path.join(app.getPath('userData'), 'hitch-trace.json')));
+        if (menu) await js(`window.__playGame.closeBuyMenu(), 1`);
+        if (tracing) console.log('SMOKE hitch trace of round', st.round, 'saved to', await contentTracing.stopRecording(traceFile));
         await js(`(async () => { const g = window.__playGame, inp = g.input, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
           const i = g.map.info, s = i.bombsites[0], o = g.player.origin, to = [(s.min[0] + s.max[0]) / 2, (s.min[1] + s.max[1]) / 2];
           inp.yaw = Math.atan2(to[1] - o[1], to[0] - o[0]) * 180 / Math.PI; inp.pitch = -8;
@@ -954,6 +1004,17 @@ async function runHitchSmoke(win) {
           await sleep(3000); if (g.me.alive) g.console.run('kill'); return 1; })()`);
       }
       await wait(1000);
+    }
+    if (liveTrace) console.log('SMOKE hitch trace of round', traceLive, 'saved to', await contentTracing.stopRecording(traceFile));
+    if (gcTrace) {
+      const file = await contentTracing.stopRecording(path.join(app.getPath('userData'), 'hitch-gc.json'));
+      const evs = JSON.parse(fs.readFileSync(file, 'utf8')).traceEvents, names = new Map();
+      for (const e of evs) if (e.ph === 'M' && e.name === 'thread_name') names.set(e.pid + ':' + e.tid, e.args.name);
+      const sum = {};
+      for (const e of evs) if (e.ph === 'X' && names.get(e.pid + ':' + e.tid) === 'CrRendererMain' && /^V8\.GC_(SCAVENGER|MARK_COMPACTOR|MC_INCREMENTAL)$/.test(e.name)) {
+        const k = sum[e.name] ||= { n: 0, ms: 0, max: 0 }; k.n++; k.ms += e.dur / 1000; k.max = Math.max(k.max, e.dur / 1000);
+      }
+      console.log('SMOKE hitch collections on the main thread over', secs, 's:', JSON.stringify(Object.fromEntries(Object.entries(sum).map(([k, v]) => [k, { n: v.n, ms: +v.ms.toFixed(0), max: +v.max.toFixed(1) }]))));
     }
     if (alloc) {
       const { profile } = await alloc.sendCommand('HeapProfiler.stopSampling');
@@ -1032,7 +1093,8 @@ async function runHitchSmoke(win) {
           + (c.prog ? '  +' + c.prog + ' programs' : '') + (c.tex ? '  +' + c.tex + ' tex' : '')
           + (c.heapIn < -1e6 || c.heapGap < -1e6 ? '  GC ' + (Math.min(c.heapIn, c.heapGap) / 1e6).toFixed(0) + 'MB' : '')
           + (lt ? '  long ' + lt : '') + '\\n          parts: ' + top(c.p, 7) + (glTop(c.gl) ? '\\n          gl: ' + glTop(c.gl) : '') + (glTop(c.pre) ? '\\n          gl before: ' + glTop(c.pre) : '')
-          + (evs.length ? '\\n          events: ' + [...new Set(evs)].slice(0, 8).join(', ') : '') + (c.progNames ? '\\n          new programs: ' + c.progNames : ''); });
+          + (evs.length ? '\\n          events: ' + [...new Set(evs)].slice(0, 8).join(', ') : '') + (c.progNames ? '\\n          new programs: ' + c.progNames : '')
+          + (c.newFor ? '\\n          compiled for: ' + [...new Set(c.newFor)].join(' | ') : ''); });
       // What the slow frames (over 33 ms) follow: how often a kind of event came in the frame before one, against how
       // often it came before any frame (the same share: nothing to do with it).
       const kinds = ['botShoot', 'damage you', 'damage bot', 'hurt', 'kill', 'radio', 'throw', 'detonate'], ev2 = H.events.slice().sort((a, b) => a.t - b.t);
@@ -1041,11 +1103,13 @@ async function runHitchSmoke(win) {
       const all = H.all || [], slowAll = all.filter(([, i]) => i > 33);
       const follows = kinds.map((k) => k + ': ' + Math.round(100 * slowAll.filter(([t, i]) => near(t, i, k)).length / Math.max(1, slowAll.length)) + '% of slow frames, ' + Math.round(100 * all.filter(([t, i]) => near(t, i, k)).length / Math.max(1, all.length)) + '% of all').join('; ');
       return JSON.stringify({ frames: H.ints.length, p50: q(0.5), p99: q(0.99), p999: q(0.999), worst: q(1), over33: ints.filter((x) => x > 33).length, over50: ints.filter((x) => x > 50).length, over100: ints.filter((x) => x > 100).length, follows,
-        rounds: window.__playGame.match.round, reentered: H.reentered || 0,
+        rounds: window.__playGame.match.round, reentered: H.reentered || 0, compiled: H.made2 || [], released: H.released || [], phases: H.phases,
         uploads: Object.entries(H.stacks || {}).sort((a, b) => b[1][1] - a[1][1]).slice(0, 12).map(([k, v]) => v[0] + 'x ' + v[1].toFixed(0) + ' ms  ' + k)
           .concat(Object.entries(H.made || {}).sort((a, b) => b[1][0] - a[1][0]).slice(0, 8).map(([k, v]) => v[0] + ' textures made in frames  ' + k)), slow }); })()`));
     console.log('SMOKE hitch', id, 'slow texture uploads (count, total, size, where):\n' + (r.uploads || []).map((l) => '  ' + l).join('\n'));
-    console.log('SMOKE hitch', id, JSON.stringify({ ...r, slow: undefined, uploads: undefined }));
+    console.log('SMOKE hitch', id, 'shaders compiled mid-match, for:\n' + r.compiled.map((l) => '  ' + l).join('\n'));
+    console.log('SMOKE hitch', id, 'shaders released (a material disposed):\n' + r.released.map((l) => '  ' + l).join('\n'));
+    console.log('SMOKE hitch', id, JSON.stringify({ ...r, slow: undefined, uploads: undefined, compiled: r.compiled.length, released: r.released.length }));
     console.log('SMOKE hitch', id, 'slowest frames (when, frame interval, own CPU, gap before it):\n' + r.slow.join('\n'));
     totals.push({ id, ...r, slow: undefined, uploads: undefined });
     await js(`document.querySelector('.play-root [data-leave]')?.click(); 1`);

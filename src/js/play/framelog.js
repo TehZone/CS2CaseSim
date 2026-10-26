@@ -47,7 +47,7 @@ export class FrameLog {
     this.hist = new Uint32Array(BINS); this.frames = 0; this.intSum = 0;
     this.ev = { t: new Float64Array(RING), d: new Float32Array(RING), what: new Array(RING), n: 0, from: 0 };
     this.before = {}; this.beforeSlow = {}; // how many frames each kind of event came before (all of them, the slow ones)
-    this.slowCount = 0; this.avg = 16; this.sounds = 0; this.done = -1;
+    this.slowCount = 0; this.avg = 16; this.sounds = 0; this.done = -1; this.compiled = [];
     // The last frame's own numbers (a slow frame's record is the time since the frame before: that frame's work and the wait after it).
     this.last = { start: 0, end: 0, cpu: 0, sim: 0, ticks: 0, ai: 0, bots: 0, draw: 0, hud: 0, heapIn: 0, frameNo: -1 };
     const info = g.renderer.info;
@@ -75,6 +75,13 @@ export class FrameLog {
     }
     const play = g.sounds?.play;
     if (play) g.sounds.play = function (...a) { log.sounds++; return play.apply(this, a); };
+    // A shader compiled as something was drawn: what for (its material, and the model's name or its parent's).
+    const r = g.renderer, draw = r?.renderBufferDirect;
+    if (draw) r.renderBufferDirect = function (cam, scene, geo, mat, obj) {
+      const n = r.info.programs?.length ?? 0, out = draw.apply(this, arguments);
+      if ((r.info.programs?.length ?? 0) > n && log.compiled.length < 6) log.compiled.push(`${mat.name || mat.type}${scene ? '' : ' (shadow)'} on ${obj.name || obj.parent?.name || obj.type}`);
+      return out;
+    };
     // A weapon made mid-match (one not loaded ahead, as you buy or pick it up): as it starts, and once it's ready (how
     // long it took).
     const vm = g.vmData;
@@ -138,8 +145,8 @@ export class FrameLog {
     const tex = info.memory.textures, geo = info.memory.geometries, prog = info.programs?.length ?? 0, heap = heapNow();
     const changed = [tex - at.tex, geo - at.geo, prog - at.prog], heapBetween = heap - (this.heapEnd ?? heap);
     at.tex = tex; at.geo = geo; at.prog = prog; at.heap = heap;
-    const sounds = this.sounds;
-    this.sounds = 0;
+    const sounds = this.sounds, compiled = this.compiled;
+    this.sounds = 0; this.compiled = [];
     // What happened since the last frame started.
     const e = this.ev, events = new Map();
     for (let k = Math.max(e.from, e.n - RING); k < e.n; k++) {
@@ -168,7 +175,7 @@ export class FrameLog {
     if (this.slow.length >= MAX_SLOW) return;
     const flags = [g.input?.held?.('scores') && 'scoreboard', g.buyMenu?.isOpen && 'buy menu', g.console?.isOpen && 'console', g.me && !g.me.alive && 'you dead'].filter(Boolean);
     const rec = { t: t0, start: last.start, round: g.match?.round ?? 0, phase: g.match?.phase || '', int, usual: this.avg, work: last.cpu, idle, sim: last.sim, ticks: last.ticks,
-      ai: last.ai, bots: last.bots, draw: last.draw, hud: last.hud, gpu: null, heapIn: last.heapIn, heapBetween, changed: { tex: changed[0], geo: changed[1], prog: changed[2] }, sounds, flags,
+      ai: last.ai, bots: last.bots, draw: last.draw, hud: last.hud, gpu: null, heapIn: last.heapIn, heapBetween, changed: { tex: changed[0], geo: changed[1], prog: changed[2] }, compiled, sounds, flags,
       events: [...events].sort((a, b) => b[1][1] - a[1][1]).map(([k, [c, d]]) => `${k}${c > 1 ? ' ×' + c : ''}${d >= 0.5 ? ` (${d.toFixed(1)} ms)` : ''}`) };
     this.slow.push(rec);
     this.gpuFor.set(last.frameNo, rec);
@@ -291,7 +298,7 @@ export class FrameLog {
     out.push('', '==== SLOW FRAMES ====', '(when · round · time since the frame before = that frame\'s work (its parts) + the wait after it · the GPU\'s time for it · what changed · what happened · the browser\'s long frames then)');
     for (const x of slow) {
       const ch = x.changed, heap = x.heapIn + x.heapBetween;
-      const what = [ch.prog > 0 && `+${ch.prog} shader${ch.prog > 1 ? 's' : ''}`, ch.tex > 0 && `+${ch.tex} tex`, ch.geo > 0 && `+${ch.geo} geo`,
+      const what = [ch.prog > 0 && `+${ch.prog} shader${ch.prog > 1 ? 's' : ''}${x.compiled?.length ? ` (${x.compiled.join(', ')})` : ''}`, ch.tex > 0 && `+${ch.tex} tex`, ch.geo > 0 && `+${ch.geo} geo`,
         heap < -2e6 && `gc ${mb(heap)} MB${x.heapBetween < -2e6 ? ' (between frames)' : ''}`, x.sounds && `${x.sounds} sound${x.sounds > 1 ? 's' : ''}`, ...x.flags].filter(Boolean);
       out.push(`${clock((x.t - this.t0) / 1000, true).padStart(8)} r${String(x.round).padEnd(3)} ${x.phase.padEnd(7)} ${n0(x.int, 4)} ms (usual ${n0(x.usual, 0)}) = work ${n1(x.work, 0)}`
         + ` (sim ${n1(x.sim, 0)} in ${x.ticks} tick${x.ticks === 1 ? '' : 's'} · ai ${n1(x.ai, 0)} · bodies ${n1(x.bots, 0)} · draw ${n1(x.draw, 0)} · hud ${n1(x.hud, 0)}) + wait ${n1(x.idle, 0)}`

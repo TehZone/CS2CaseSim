@@ -79,6 +79,7 @@ export class SoundBank {
     this.channels = new Map(); // name -> { src, gain, token }
     this.playing = new Map(); // event|source -> [{ src, gain, fo }] (instance limits)
     this.lastStart = new Map(); // event|source -> when it last started (blocks)
+    this.voices = new Map(); // where a sound in the world goes -> its free voices (see voice)
     // The room: every sound sends some of itself here, and the reverb of the soundscape you're in plays it back.
     this.verbIn = this.ctx.createGain();
     this.verbOut = this.ctx.createGain(); // the room's reverb, on its way out
@@ -190,32 +191,24 @@ export class SoundBank {
     const g = ctx.createGain();
     if (fadeIn > 0) { g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(volume, t + fadeIn); } else g.gain.value = volume;
     src.connect(g);
-    let last = g;
-    if (muffled) {
-      const lp = ctx.createBiquadFilter();
-      lp.type = 'lowpass'; lp.frequency.value = 700 + 4000 * (1 - muffled);
-      g.connect(lp); last = lp;
-    }
     // Some of it to the room.
     const wet = info ? info.r ?? 0 : pos ? 0.3 : 0;
-    if (wet > 0) { const s = ctx.createGain(); s.gain.value = wet; last.connect(s); s.connect(this.verbIn); }
     if (ear) {
-      // Up close a sound is plain stereo, further away positioned; the panner only gives the direction, distance is in
-      // the volume above.
-      const stereo = info?.s ? Math.max(0, Math.min(1, curveAt(info.s, d))) : 0;
-      if (stereo > 0) { const s = ctx.createGain(); s.gain.value = stereo; last.connect(s); s.connect(dest); }
-      if (stereo < 1) {
-        const p = ctx.createPanner();
-        p.panningModel = 'HRTF';
-        p.distanceModel = 'linear';
-        p.refDistance = 1; p.maxDistance = 100000; p.rolloffFactor = 0;
-        // game units straight in: x/y horizontal, z up -> Web Audio's y up
-        p.positionX.value = pos[0]; p.positionY.value = pos[2]; p.positionZ.value = -pos[1];
-        const s = ctx.createGain();
-        s.gain.value = 1 - stereo;
-        last.connect(s); s.connect(p); p.connect(dest);
-      }
-    } else last.connect(dest);
+      // In the world: through a voice, muffled by the walls in between, some to the room, and up close plain stereo,
+      // further away positioned (the panner only gives the direction, distance is in the volume above).
+      const v = this.voice(dest, pos), stereo = info?.s ? Math.max(0, Math.min(1, curveAt(info.s, d))) : 0;
+      v.lp.frequency.value = muffled ? 700 + 4000 * (1 - muffled) : ctx.sampleRate / 2; // (at half the rate it passes everything)
+      v.wet.gain.value = wet;
+      v.near.gain.value = stereo;
+      v.far.gain.value = 1 - stereo;
+      // game units straight in: x/y horizontal, z up -> Web Audio's y up
+      v.pan.positionX.value = pos[0]; v.pan.positionY.value = pos[2]; v.pan.positionZ.value = -pos[1];
+      g.connect(v.lp);
+      src.addEventListener('ended', () => { g.disconnect(); this.voices.get(dest).push(v); });
+    } else {
+      if (wet > 0) { const s = ctx.createGain(); s.gain.value = wet; g.connect(s); s.connect(this.verbIn); }
+      g.connect(dest);
+    }
     src.start(t, loop && opts.offset ? opts.offset * buf.duration : 0);
     src.gainNode = g;
     if (info?.n) {
@@ -224,6 +217,38 @@ export class SoundBank {
       src.addEventListener('ended', () => { v.ended = true; });
     }
     return src;
+  }
+
+  // A free voice for a sound in the world at pos going to dest (the room ducks under it, or not): its muffling (a
+  // lowpass), its share to the room, and its stereo and positioned (HRTF panner) halves, wired together once and used
+  // again by the next sound when its sound ends. (Each sound had its own: Chromium deletes the insides of the nodes a
+  // garbage collection frees on the main thread, all at once after a full one: 32 ms between two frames in one round.)
+  // The free one last used nearest pos: a panner moved far crossfades from where it was over its first 40 ms.
+  voice(dest, pos) {
+    if (!this.voices.has(dest)) this.voices.set(dest, []);
+    const free = this.voices.get(dest);
+    let k = -1, best = Infinity;
+    for (let i = 0; i < free.length; i++) {
+      const a = free[i].at, dd = (a[0] - pos[0]) ** 2 + (a[1] - pos[1]) ** 2 + (a[2] - pos[2]) ** 2;
+      if (dd < best) { best = dd; k = i; }
+    }
+    if (k >= 0) {
+      const v = free[k];
+      free[k] = free[free.length - 1];
+      free.pop();
+      v.at[0] = pos[0]; v.at[1] = pos[1]; v.at[2] = pos[2];
+      return v;
+    }
+    const ctx = this.ctx, v = { lp: ctx.createBiquadFilter(), wet: ctx.createGain(), near: ctx.createGain(), far: ctx.createGain(), pan: ctx.createPanner(), at: [pos[0], pos[1], pos[2]] };
+    v.lp.type = 'lowpass';
+    const p = v.pan;
+    p.panningModel = 'HRTF';
+    p.distanceModel = 'linear';
+    p.refDistance = 1; p.maxDistance = 100000; p.rolloffFactor = 0;
+    v.lp.connect(v.wet); v.wet.connect(this.verbIn);
+    v.lp.connect(v.near); v.near.connect(dest);
+    v.lp.connect(v.far); v.far.connect(p); p.connect(dest);
+    return v;
   }
 
   // Fades a playing sound out ({ src, gain }) and stops it.

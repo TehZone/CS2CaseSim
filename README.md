@@ -230,9 +230,11 @@ What's in a match:
   compositor, not redrawn. Bots move with your movement code on a collision test that allocates
   nothing, and their sight lines stop at the first wall. `CS2SIM_SMOKE=perf` measures each map's frame rate with the
   bots playing.
-- No stutters: everything a match shows is loaded behind the loading screen (every gun bots carry, your viewmodels and
-  the plain ones you see spectating, the bomb, the effects), with its shaders compiled and first used and its textures
-  and bone textures on the GPU, and one frame drawn, so nothing is loaded, compiled or uploaded mid-round. Textures are
+- No stutters: everything a match shows is loaded behind the loading screen (every gun bots carry, as it lies on the
+  floor and in a bot's hands, your viewmodels and the plain ones you see spectating, the bomb, the effects, the whole
+  3D skybox, the flashbang's afterimage), with its shaders compiled and first used, its textures (its shader's own too:
+  a skin's pattern and wear) and bone textures on the GPU, and each drawn once by itself (Direct3D, under WebGL,
+  finishes a shader the first time it draws with it), so nothing is loaded, compiled or uploaded mid-round. Textures are
   shared between the models that use the same image; your gloves are baked once; skinned meshes take their bind-pose
   bounds; dropped and thrown guns are the bots' baked copies; a molotov lays out its flames over a few ticks; the smoke's
   lighting runs allocation-free; bots and grenades are drawn between ticks (the tick is 64 Hz, the screen faster).
@@ -242,23 +244,29 @@ What's in a match:
   the match is logged as it's played (`src/js/play/framelog.js`). Each second gets a line: frame times, the game's work
   and its parts, the GPU's drawing time (timer queries), the wait between frames, garbage collections (the heap is
   precise), and what's drawn and held. Each slow frame (over 30 ms and 1.8× the usual) gets its own line: its time split
-  into the frame before's work and the wait after it, plus what came with it (shaders compiled, textures added, a
+  into the frame before's work and the wait after it, plus what came with it (shaders compiled and what for, textures added, a
   collection, the browser's long frames and the scripts in them, the game's events just before). The log ends with a
   table per round and a summary. It's saved to `userData/netgraph-logs` as soon as it starts, after every round, when
   the match ends and when you leave (the console and the end screen say where); `net_graph_log` saves it on the spot
   and opens its folder. `net_graph 2` stays on for your next matches. `CS2SIM_SMOKE=rounds`
   plays round after round (`CS2SIM_SMOKE_PLAY=1`: you buy, fire and throw too) and logs each round's frame cost, freeze
   time measured from the same spot every round, next to everything that could pile up, then net_graph 2's log of it.
-  `CS2SIM_SMOKE=hitch` plays rounds on Dust II, Inferno and Nuke and logs every frame over 33 ms with what ran in it
-  and how often each kind of event (a bot's shot, damage, a kill...) comes before a slow frame against before any
-  (`CS2SIM_SMOKE_PROFILE` and `CS2SIM_SMOKE_ALLOC` add a CPU and an allocation profile, with the long waits between
+  `CS2SIM_SMOKE=hitch` plays rounds on Dust II, Inferno and Nuke and logs every frame over 33 ms with what ran in it,
+  how often each kind of event (a bot's shot, damage, a kill...) comes before a slow frame against before any, slow
+  frames and long waits by the round's phase, and every shader compiled mid-match with what it was for and what in its
+  key made it new (`CS2SIM_SMOKE_BUYMENU` buys with the buy menu open, `CS2SIM_SMOKE_BREAK` breaks every breakable;
+  `CS2SIM_SMOKE_PROFILE` and `CS2SIM_SMOKE_ALLOC` add a CPU and an allocation profile, with the long waits between
   frames on their own; `CS2SIM_SMOKE_LIVE` what the JS heap holds once the map is loaded, against the array buffers
   held outside it, and how long a full collection takes; `CS2SIM_SMOKE_TRACE=<round>` a Chromium trace of that round's
-  freeze time, every process; `CS2SIM_SMOKE_TAB=1` holds Tab through freeze time, `=tap` presses it four times a
+  freeze time, every process, `CS2SIM_SMOKE_TRACE_LIVE=<round>` of all of it, `CS2SIM_SMOKE_GCTRACE` of only V8's
+  collections through the run, counted; `CS2SIM_SMOKE_JSFLAGS` passes V8 flags; `CS2SIM_SMOKE_TAB=1` holds Tab through freeze time, `=tap` presses it four times a
   second; `CS2SIM_SMOKE_NOGC` drops the game's own collections). There's no full collection at a round start (it held
   the game up 100 ms to 360 ms every round; V8's own, marking alongside the game, don't), the rank emblems on the
   scoreboard are pictures (CS2's are SVGs of a thousand paths and gradients each: bringing the scoreboard up redrew
-  them on the GPU for 85 ms), and every reverb the map uses is made as it loads (a convolver works its impulse
+  them on the GPU for 85 ms) and so are the weapon icons in the buy menu, the kill feed and the weapon list, a sound in
+  the world goes through a voice (its muffling, its share of the room, its HRTF panner) the next sound uses again
+  (with a node each per sound, Chromium deleted them all in one go after a full collection, 32 ms between two frames),
+  and every reverb the map uses is made as it loads (a convolver works its impulse
   response over as it gets it, 7 ms a second of it: walking into another room was a 25 ms hitch). `CS2SIM_SMOKE=botfire` stops
   the bots and times one thing at a time: bots firing at nothing or at the floor, bots or you taking damage, Tab held
   (`+mute`, `+noradio`, `+noflinch`, `+nohud` on a phase turn one part off). The scoreboard is made again only when

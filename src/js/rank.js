@@ -1,7 +1,7 @@
 // CS:GO competitive rank badges for the pages and the Play HUD: CS2's skill group emblems when the game is installed
 // (see CS2Service.playRanks), else the rank's short name.
 import { cs2Status, cs2Play } from './cs2/api.js';
-import { esc } from './util.js';
+import { esc, picture } from './util.js';
 import { SKILL_GROUPS, SHORT_NAMES } from './engine/ranks.js';
 import { tierOf, formatRating } from './engine/premier.js';
 
@@ -24,17 +24,6 @@ async function toPictures(emblems = {}) {
     try { emblems[k] = await picture(url, 128); } catch {}
     await new Promise((r) => setTimeout(r, 0));
   }
-}
-async function picture(url, h) {
-  const img = new Image();
-  img.src = url;
-  await img.decode();
-  const w = Math.max(1, Math.round((h * img.naturalWidth) / (img.naturalHeight || img.naturalWidth || 1)));
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  c.getContext('2d').drawImage(img, 0, 0, w, h);
-  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
-  return blob ? URL.createObjectURL(blob) : url;
 }
 
 // The emblem to show for a rank (see engine/ranks.js rankInfo): its group, the '?' plate (0) until placed, 'expired'.

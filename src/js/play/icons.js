@@ -2,6 +2,7 @@
 // player's install as { name: url } under CS2's own names (panorama/images/icons/equipment/<name>): a weapon id without
 // "weapon_" (weapon_m4a1_silencer -> m4a1_silencer, weapon_hegrenade, weapon_c4, weapon_taser), a skin knife's own
 // (knife_karambit, bayonet) or else the default knife. Without CS2 there are none and the name is shown instead.
+import { picture } from '../util.js';
 
 // The buy menu's gear, by CS2's item names.
 const GEAR = { vest: 'kevlar', vesthelm: 'assaultsuit', defuser: 'defuser' };
@@ -18,6 +19,20 @@ export function iconNames(id, { gun = null, kill = false } = {}) {
   names.push(name);
   if (/knife|bayonet/.test(name)) names.push('knife');
   return names;
+}
+
+// The icons as pictures 64 px high, twice the biggest the HUD shows (see util.js picture): as SVGs, buying redrew every
+// one in the buy menu (each button's price and what you can afford changed), a kill its kill feed line, a weapon
+// switch the weapon list. Each made once, one at a time, while Play loads.
+const pictures = new Map();
+export async function iconPictures(icons) {
+  if (globalThis.__cs2SvgIcons) return icons; // (as they were, to compare)
+  const out = {};
+  for (const [k, url] of Object.entries(icons || {})) {
+    if (!pictures.has(url)) { pictures.set(url, picture(url, 64).catch(() => url)); await pictures.get(url); await new Promise((r) => setTimeout(r, 0)); }
+    out[k] = await pictures.get(url);
+  }
+  return out;
 }
 
 // The URL of an item's icon in the extracted set, or null when there isn't one.

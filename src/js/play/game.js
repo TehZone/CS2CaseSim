@@ -25,7 +25,7 @@ import { NavMesh } from './nav.js';
 import { Match, Combatant, RULES, SHORT_RULES, DEFAULT_PISTOL, ITEM_NAMES, slotOf, isGrenade } from './match.js';
 import { BuyMenu } from './buymenu.js';
 import { DevConsole } from './console.js';
-import { iconFor } from './icons.js';
+import { iconFor, iconPictures } from './icons.js';
 import { Radar } from './radar.js';
 import { buildCS2Model, buildGloveScene } from '../cs2/skin.js';
 import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, aimThrow as aimThrowPitch } from './grenades.js';
@@ -180,8 +180,9 @@ export class Game {
   async load() {
     const status = (m) => { if (!this.disposed) this.onStatus(m); };
     status('Preparing the map from your CS2 install (the first time takes a couple of minutes)…');
-    // CS2's weapon icons for the buy menu and the kill feed (they show the names until these arrive, or without CS2).
-    cs2Play('icons').then((icons) => { this.icons = icons; }).catch(() => {});
+    // CS2's weapon icons for the buy menu and the kill feed, as pictures (they show the names until these arrive, or
+    // without CS2).
+    cs2Play('icons').then(iconPictures).then((icons) => { if (!this.disposed) this.icons = icons; }).catch(() => {});
     let done = false;
     (async () => {
       while (!done && !this.disposed) {
@@ -287,11 +288,18 @@ export class Game {
     this.match = this.respawnMode ? new Deathmatch(this, { minutes: this.minutes, ffa: this.ffa, armsRace: this.armsRace }) : new Match(this, this.rules);
     if (this.respawnMode) await Promise.all((this.armsRace ? ARMS_RACE : [this.dmWeapon('primary'), this.dmWeapon('secondary')]).slice(0, 2).map((id) => this.vmData(id).catch(() => {})));
     // Every gun the match will show, now rather than in it (each one loaded mid-round stalled the game a tenth of a second
-    // or more, and its textures again the first time it was drawn): the bots' guns as they hold them, your viewmodels
-    // and the plain ones you see spectating a bot, each with its shaders compiled and its textures on the GPU.
+    // or more, and its textures again the first time it was drawn): the bots' guns as they lie on the floor and as they
+    // hold them (in their own materials, see Bot.lightOwn: the first bot to hold each one compiled it mid-round), your
+    // viewmodels and the plain ones you see spectating a bot, each with its shaders compiled and its textures on the GPU.
     const guns = [...new Set([...BOT_GUNS, ...PRELOAD, ...(this.armsRace ? ARMS_RACE : [])])];
     const jobs = [
-      ...BOT_GUNS.map((id) => async () => { const tpl = await this.botAssets.weapon(id); if (tpl) await this.warm(this.botAssets.staticWeapon(tpl).model, this.scene); }),
+      ...BOT_GUNS.map((id) => async () => {
+        const tpl = await this.botAssets.weapon(id);
+        if (!tpl) return;
+        const { model } = this.botAssets.staticWeapon(tpl), held = model.clone();
+        await this.warm(model, this.scene);
+        if (this.bots[0]) { this.bots[0].lightOwn(held); await this.warm(held, this.scene); }
+      }),
       ...guns.flatMap((id) => [false, true].map((plain) => async () => { const d = await this.vmData(id, { plain }).catch(() => null); if (d) await this.warm(d.vm.rig, this.vmScene); })),
     ];
     // The planted bomb (lit as it will be: lighting it changes its shaders).
@@ -315,6 +323,15 @@ export class Game {
     // them). Set before they compile here.
     if (this.msaa) for (const sc of [this.scene, this.vmScene]) sc.traverse((o) => { for (const m of [].concat(o.material || [])) if (m.alphaTest > 0) m.alphaToCoverage = true; });
     this.post.compile(this.scene, this.camera, { scene: this.vmScene, camera: this.vmCamera });
+    // Then each drawn once: a model's buffers go up the first time it's drawn, and Direct3D (ANGLE, under WebGL) finishes
+    // a shader for the model's vertices and the target the first time it draws with it (frames of 30 ms and more with
+    // everything compiled: a gun falling, a body coming into view).
+    // The 3D skybox too, all of it (its own scene: only what was in view as you spawned was drawn, the rest compiled
+    // the first time you turned to it).
+    const sky = this.world.sky3d?.scene;
+    this.drawOnce([...this.warmed || [], ...bodies.map((b) => [b.root, this.scene]), ...hidden.map((o) => [o, this.scene]),
+      ...(this.effects.warm || []).map((o) => [o, this.scene]), [this.effects.flash, this.vmScene], ...(sky ? [[sky, sky]] : [])]);
+    this.warmed = null;
     for (const o of hidden) o.visible = false;
     for (const b of bodies) {
       b.root.visible = b.root.userData.wasVisible;
@@ -336,20 +353,58 @@ export class Game {
     this.emit('loaded');
   }
 
-  // A model ready to be drawn: its shaders compiled and its textures uploaded.
+  // A model ready to be drawn: its shaders compiled and its textures uploaded (and drawn once as Play loads: drawOnce).
   async warm(obj, scene) {
     if (!obj || this.disposed) return;
     await this.precompile(obj, scene);
+    (this.warmed ||= []).push([obj, scene]);
     obj.traverse((o) => {
       if (!o.isMesh || !o.visible) return;
       for (const m of [].concat(o.material || [])) {
         for (const v of Object.values(m)) if (v?.isTexture) this.renderer.initTexture(v);
+        // And the ones only its shader has (a skin's pattern, wear and grunge, a sticker's: they went up the first time it
+        // was drawn, two dozen in one frame).
+        const props = this.renderer.properties.get(m);
+        for (const u of Object.values(props.uniforms || {})) for (const v of [].concat(u?.value ?? [])) if (v?.isTexture) this.renderer.initTexture(v);
         // Its shaders' first use (their uniforms and attributes looked up), done now that they're linked.
-        for (const p of this.renderer.properties.get(m).programs?.values() || []) { p.getUniforms(); p.getAttributes(); }
+        for (const p of props.programs?.values() || []) { p.getUniforms(); p.getAttributes(); }
       }
       // (A skinned mesh's bone matrices go to the GPU as a texture, made the first time it's drawn.)
       if (o.isSkinnedMesh && !o.skeleton.boneTexture) { o.skeleton.computeBoneTexture(); this.renderer.initTexture(o.skeleton.boneTexture); }
     });
+  }
+
+  // Draws these ([object, its scene]) once, by themselves (on a layer of their own, the rest left out), into the target
+  // their scene is drawn to and lit as it is. One not in its scene is put in for the draw.
+  drawOnce(list) {
+    const r = this.renderer, L = 31, prev = r.getRenderTarget();
+    const sky = this.world.sky3d;
+    for (const [scene, camera, rt] of [[this.scene, this.camera, this.post.rt], [this.vmScene, this.vmCamera, this.post.vmRT], ...(sky ? [[sky.scene, sky.camera, this.post.rt]] : [])]) {
+      const was = new Map(), holder = new THREE.Group();
+      const tag = (o) => { if (!was.has(o)) was.set(o, [o.layers.mask, o.frustumCulled]); o.layers.enable(L); o.frustumCulled = false; };
+      for (const [o, sc] of list) {
+        if (!o || sc !== scene) continue;
+        let top = o;
+        while (top.parent) top = top.parent;
+        if (!top.isScene) holder.add(top);
+        if (top.isScene && top !== scene) continue;
+        o.traverse(tag);
+      }
+      if (!was.size) continue;
+      scene.traverse((o) => { if (o.isLight) tag(o); });
+      scene.add(holder);
+      const mask = camera.layers.mask, bg = scene.background;
+      camera.layers.set(L); scene.background = null;
+      r.setRenderTarget(rt);
+      r.shadowMap.needsUpdate = true; // (a shadow map to sample: without one every lit draw failed)
+      r.render(scene, camera);
+      camera.layers.mask = mask; scene.background = bg;
+      for (const [o, [m, f]] of was) { o.layers.mask = m; o.frustumCulled = f; }
+      for (const o of [...holder.children]) holder.remove(o);
+      holder.removeFromParent();
+    }
+    r.setRenderTarget(prev);
+    r.shadowMap.needsUpdate = true; // (drawn again in full, from everything: these only cast into it)
   }
 
   // A model's shaders compiled while the game goes on (the browser links them alongside) before it's first drawn: a gun
