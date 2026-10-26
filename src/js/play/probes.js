@@ -4,6 +4,7 @@
 // Like CS2, a point takes the volumes containing it in priority order (more indoor first, then smaller), each faded
 // in from its edges, up to four, and the sky fills in what they leave uncovered. Game units (inches, Z up).
 const MAX_BLEND = 4;
+const SIDES = [0, 1, 3, 4]; // +X, +Y, -X, -Y
 
 export class ProbeField {
   // data: probes.bin; info: { size: [w, h, depth of one block], max, volumes }; fallback: { up, down } linear RGB for
@@ -52,10 +53,11 @@ export class ProbeField {
     return cover;
   }
 
-  // Trilinear sample of block k (a direction, or 6 for the sun) of volume v at normalized box coords (nx, ny, nz):
-  // RGB into out[o..o+2] for the light, or the sun's visibility returned.
-  sample(v, k, nx, ny, nz, out, o) {
-    const W = this.W, H = this.H, D = this.D, d = this.data;
+  // Trilinear sample of block k (a direction, or 6 for the sun) of volume v at blend j's normalized box coords (see
+  // blend): RGB into out[o..o+2] for the light, or the sun's visibility returned. (By index: three fractions handed over
+  // as arguments were three new objects a call, six calls a cube.)
+  sample(v, k, j, out, o) {
+    const W = this.W, H = this.H, D = this.D, d = this.data, nx = this.blendN[j * 3], ny = this.blendN[j * 3 + 1], nz = this.blendN[j * 3 + 2];
     const fx = Math.min(W - 1, Math.max(0, nx * v.voxels[0] + v.atlas[0] - 0.5));
     const fy = Math.min(H - 1, Math.max(0, ny * v.voxels[1] + v.atlas[1] - 0.5));
     const fz = Math.min(D - 1, Math.max(0, nz * v.voxels[2] + v.atlas[2] - 0.5));
@@ -83,9 +85,9 @@ export class ProbeField {
     const cover = this.blend(p);
     const tmp = this.tmp ||= new Float32Array(3);
     for (let j = 0; j < this.blendCount; j++) {
-      const v = this.volumes[this.blendVol[j]], w = this.blendW[j], n = this.blendN;
+      const v = this.volumes[this.blendVol[j]], w = this.blendW[j];
       for (let k = 0; k < 6; k++) {
-        this.sample(v, k, n[j * 3], n[j * 3 + 1], n[j * 3 + 2], tmp, 0);
+        this.sample(v, k, j, tmp, 0);
         for (let c = 0; c < 3; c++) out[k * 3 + c] += tmp[c] * w;
       }
     }
@@ -93,7 +95,7 @@ export class ProbeField {
       const rest = 1 - cover, { up, down } = this.fallback;
       for (let c = 0; c < 3; c++) {
         out[6 + c] += up[c] * rest; out[15 + c] += down[c] * rest;
-        for (const k of [0, 1, 3, 4]) out[k * 3 + c] += (up[c] + down[c]) * 0.5 * rest;
+        for (let j = 0; j < SIDES.length; j++) out[SIDES[j] * 3 + c] += (up[c] + down[c]) * 0.5 * rest;
       }
     }
     return out;
@@ -112,10 +114,7 @@ export class ProbeField {
   sun(p) {
     const cover = this.blend(p);
     let s = 1 - Math.min(1, cover);
-    for (let j = 0; j < this.blendCount; j++) {
-      const n = this.blendN;
-      s += this.sample(this.volumes[this.blendVol[j]], 6, n[j * 3], n[j * 3 + 1], n[j * 3 + 2]) * this.blendW[j];
-    }
+    for (let j = 0; j < this.blendCount; j++) s += this.sample(this.volumes[this.blendVol[j]], 6, j) * this.blendW[j];
     return s;
   }
 }

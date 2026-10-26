@@ -67,10 +67,11 @@ export class Soundscapes {
       if (best && best.e !== this.active?.e) this.enter(best);
     }
     const now = g.sounds.ctx.currentTime;
-    for (const [event, v] of this.voices) {
-      if (v.info.rt) { if (now >= v.next) { this.oneShot(event, v.info, ear); v.next = now + rand(v.info.rt); } continue; }
+    // (forEach: every tick, and for...of a Map makes an array an entry.)
+    this.voices.forEach((v, event) => {
+      if (v.info.rt) { if (now >= v.next) { this.oneShot(event, v.info, ear); v.next = now + rand(v.info.rt); } return; }
       if (v.info.wp) this.follow(event, v, ear, now);
-    }
+    });
   }
 
   // Into another soundscape: its reverb, and its sounds (the last one's fading out, unless this one has them too).

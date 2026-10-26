@@ -270,8 +270,15 @@ if (process.env.CS2SIM_SMOKE_ANGLE) app.commandLine.appendSwitch('use-angle', pr
 app.commandLine.appendSwitch('enable-precise-memory-info');
 // Play collects the garbage loading a match leaves (models, textures, parsing) behind the loading screen (window.gc), not
 // in a full collection a minute into the match (50 ms or more).
-// (CS2SIM_SMOKE_JSFLAGS: V8's own for a run, e.g. --trace-gc.)
-app.commandLine.appendSwitch('js-flags', ['--expose-gc', process.env.CS2SIM_SMOKE_JSFLAGS].filter(Boolean).join(' '));
+// And no memory reducer: it's V8's way of giving memory back when a page goes quiet, which a game never is, but a match's
+// freeze time (bots stood still, little garbage) looked enough like it: a few seconds into every match it made two or
+// three full collections in a row to shrink the heap, 35 ms and 70 ms ones, that freed next to nothing, and it kept the
+// young generation small, so it was collected three times as often (Mirage, 8 minutes: with it 285 minor collections
+// and 12 full, the longest 70 ms; without it 89 and 10, the longest 10 ms, and 14% more frames).
+// (CS2SIM_SMOKE_JSFLAGS: V8's own for a run, e.g. --trace-gc; with CS2SIM_SMOKE_NOSANDBOX the page can write V8's log,
+// e.g. --log-deopt --logfile=C:/temp/v8.log --no-logfile-per-isolate: every function deoptimized, where and why.)
+app.commandLine.appendSwitch('js-flags', ['--expose-gc', '--no-memory-reducer', process.env.CS2SIM_SMOKE_JSFLAGS].filter(Boolean).join(' '));
+if (process.env.CS2SIM_SMOKE_NOSANDBOX) app.commandLine.appendSwitch('no-sandbox');
 if (process.env.CS2SIM_SMOKE === 'perf' || readDisplay().uncapped) { app.commandLine.appendSwitch('disable-frame-rate-limit'); app.commandLine.appendSwitch('disable-gpu-vsync'); }
 
 // `CS2SIM_SMOKE=features`: opens a souvenir package and a player pack, plays a bot battle and a team match, signs
@@ -862,7 +869,8 @@ async function runHitchSmoke(win) {
       const heap = () => performance.memory?.usedJSHeapSize || 0;
       // The game's parts, timed inside the frame.
       const wrap = (obj, name, label) => { const f = obj?.[name]; if (typeof f !== 'function') return;
-        obj[name] = function (...a) { const t = now(); try { return f.apply(this, a); } finally { if (H.cur) add(H.cur.p, label, now() - t); } }; };
+        // (Its arguments named, not gathered into an array: the wrapper's own garbage would count as the game's.)
+        obj[name] = function (a, b, c, d, e) { const t = now(); try { return f.call(this, a, b, c, d, e); } finally { if (H.cur) add(H.cur.p, label, now() - t); } }; };
       wrap(g, 'tick', 'sim'); wrap(g.match, 'tick', 'match'); wrap(g.nades, 'tick', 'nades'); wrap(g.nades, 'update', 'nadesFx'); wrap(g.effects, 'update', 'effects');
       wrap(g.drops, 'tick', 'drops'); wrap(g.doors, 'tick', 'doors'); wrap(g.arsenal, 'tick', 'arsenal'); wrap(g, 'updateHud', 'hud'); wrap(g.post, 'render', 'render');
       wrap(g, 'updateSpecView', 'spec'); wrap(g, 'botThrowing', 'botThrow'); wrap(g, 'spotFromMe', 'spot'); wrap(g, 'pickups', 'pickups'); wrap(g, 'footsteps', 'steps');
@@ -897,8 +905,8 @@ async function runHitchSmoke(win) {
       // What each shader program compiled mid-match was for (the object drawn, its material, the shadow pass or not), and
       // the materials whose disposal took one with them (the next one like it compiles it again).
       const R = g.renderer, rbd = R.renderBufferDirect, upTo = (o) => { const n = []; for (let x = o; x && n.length < 5; x = x.parent) n.push(x.name || x.type); return n.join(' < '); };
-      R.renderBufferDirect = function (cam, scene, geo, mat, obj) {
-        const p0 = info.programs.length, r = rbd.apply(this, arguments);
+      R.renderBufferDirect = function (cam, scene, geo, mat, obj, group) {
+        const p0 = info.programs.length, r = rbd.call(this, cam, scene, geo, mat, obj, group);
         if (info.programs.length > p0) {
           // (With what made it new: the fields of its key unlike the program it had, or the nearest one with its name.)
           const progs = [...(R.properties.get(mat).programs?.values() || [])], mine = progs.at(-1), key = String(mine?.cacheKey || '').split(',');
@@ -940,12 +948,16 @@ async function runHitchSmoke(win) {
       return 1; })()`);
     // CS2SIM_SMOKE_PROFILE: a CPU profile of the first map's run, split into the work inside frames and between them.
     const prof = process.env.CS2SIM_SMOKE_PROFILE && !totals.length ? win.webContents.debugger : null;
-    // CS2SIM_SMOKE_ALLOC: where the garbage comes from (a sampling heap profile of the first map's run, freed objects too).
+    // CS2SIM_SMOKE_ALLOC: where the garbage comes from (a sampling heap profile of the first map's run, freed objects too;
+    // =promoted, only those that outlived the young generation).
     const alloc = process.env.CS2SIM_SMOKE_ALLOC && !totals.length ? win.webContents.debugger : null;
     if (alloc) {
       if (!alloc.isAttached()) alloc.attach('1.3');
       await alloc.sendCommand('HeapProfiler.enable');
-      await alloc.sendCommand('HeapProfiler.startSampling', { samplingInterval: 16384, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
+      // (=promoted: only what lived long enough to leave the young generation, the garbage that full collections are
+      // for: what died young left out.)
+      const promoted = process.env.CS2SIM_SMOKE_ALLOC === 'promoted';
+      await alloc.sendCommand('HeapProfiler.startSampling', { samplingInterval: promoted ? 4096 : 16384, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: !promoted });
     }
     let profAt = 0; // performance.now() when it started (to line its samples up with the frames)
     if (prof) {
@@ -980,7 +992,8 @@ async function runHitchSmoke(win) {
         if (st.round === traceLive) liveTrace = true;
         // (A whole round's is the tasks on every thread, V8's collections, what the page draws and the GPU's work: the
         // freeze time's categories over a round came to a gigabyte.)
-        if (tracing || liveTrace) await contentTracing.startRecording({ included_categories: liveTrace ? ['toplevel', 'devtools.timeline', 'gpu', 'viz', 'v8', 'disabled-by-default-v8.gc']
+        // (CS2SIM_SMOKE_TRACE_CATS: the round's trace of these categories instead, comma-separated: e.g. V8's compiling.)
+        if (tracing || liveTrace) await contentTracing.startRecording({ included_categories: process.env.CS2SIM_SMOKE_TRACE_CATS ? process.env.CS2SIM_SMOKE_TRACE_CATS.split(',') : liveTrace ? ['toplevel', 'devtools.timeline', 'gpu', 'viz', 'v8', 'disabled-by-default-v8.gc']
           : ['toplevel', 'devtools.timeline', 'disabled-by-default-devtools.timeline', 'blink', 'cc', 'gpu', 'viz', 'v8', 'disabled-by-default-v8.gc', 'loading', 'benchmark', 'renderer.scheduler', 'blink.user_timing'], excluded_categories: ['*'] });
         // CS2SIM_SMOKE_BUYMENU: bought with the buy menu open (a buy a second, as you'd click them), left open through the
         // freeze time.
@@ -1021,20 +1034,21 @@ async function runHitchSmoke(win) {
       const self = new Map(), total = new Map();
       const key = (n) => `${n.callFrame.functionName || '(anon)'} ${n.callFrame.url.replace(/.*\//, '')}:${n.callFrame.lineNumber + 1}`;
       let all = 0;
-      const chains = new Map(); // the biggest allocators' callers
+      // The biggest allocators' callers (CS2SIM_SMOKE_ALLOC_CALLERS: a regex of which; by default the builtins').
+      const chains = new Map(), callersOf = new RegExp(process.env.CS2SIM_SMOKE_ALLOC_CALLERS || '^(next|sort|map|values|entries|join|slice|filter|forEach|reduce|concat|split|replace|toFixed|String) ');
       const walk = (n, path) => {
         const k = key(n), size = n.selfSize || 0;
         all += size;
         self.set(k, (self.get(k) || 0) + size);
-        if (size && /lightAt|applyBoneTransform|computeBoundingSphere|three\.core\.js:6044|setValueV3f/.test(k)) { const c = k + ' <- ' + path.slice(-4).reverse().join(' <- '); chains.set(c, (chains.get(c) || 0) + size); }
+        if (size && callersOf.test(k)) { const c = k + ' <- ' + path.slice(-4).reverse().join(' <- '); chains.set(c, (chains.get(c) || 0) + size); }
         const p = path.includes(k) ? path : [...path, k];
         for (const kk of new Set(p)) total.set(kk, (total.get(kk) || 0) + size);
         for (const c of n.children || []) walk(c, p);
       };
       walk(profile.head, []);
       const mb = (b) => (b / 1e6).toFixed(1).padStart(7);
-      console.log(`SMOKE hitch allocated ${(all / 1e6).toFixed(0)} MB; by own allocations:\n` + [...self].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, b]) => `  ${mb(b)} MB  ${k}`).join('\n'));
-      console.log('SMOKE hitch biggest allocators, by caller:\n' + [...chains].sort((a, b) => b[1] - a[1]).slice(0, 14).map(([k, b]) => `  ${mb(b)} MB  ${k}`).join('\n'));
+      console.log(`SMOKE hitch allocated ${(all / 1e6).toFixed(0)} MB; by own allocations:\n` + [...self].sort((a, b) => b[1] - a[1]).slice(0, 60).map(([k, b]) => `  ${mb(b)} MB  ${k}`).join('\n'));
+      console.log('SMOKE hitch biggest allocators, by caller:\n' + [...chains].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, b]) => `  ${mb(b)} MB  ${k}`).join('\n'));
       console.log('SMOKE hitch allocations by total (with what they call):\n' + [...total].filter(([k]) => /\.js:/.test(k)).sort((a, b) => b[1] - a[1]).slice(0, 40).map(([k, b]) => `  ${mb(b)} MB  ${k}`).join('\n'));
     }
     if (prof) {
@@ -1072,6 +1086,11 @@ async function runHitchSmoke(win) {
       });
       const list = (m, n = 25) => [...m].sort((a, b) => b[1] - a[1]).slice(0, n).map(([kk, t]) => `  ${t.toFixed(0).padStart(7)}  ${kk}`).join('\n');
       console.log(`SMOKE hitch profile: ${tin.toFixed(0)} ms in frames, ${tout.toFixed(0)} ms between frames`);
+      // The functions V8 deoptimized (it compiles a function again each time: a function deoptimized over and over is
+      // code made and thrown away all match), with why.
+      const deopts = new Map();
+      for (const nd of profile.nodes) if (nd.deoptReason) { const kk = keyOf(nd) + ': ' + nd.deoptReason; deopts.set(kk, (deopts.get(kk) || 0) + 1); }
+      console.log('SMOKE hitch deoptimized functions (profile nodes):\n' + [...deopts].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([kk, n]) => `  ${String(n).padStart(5)}  ${kk}`).join('\n'));
       console.log('SMOKE hitch between frames, by total time:\n' + list(sets.outside, 40));
       console.log('SMOKE hitch between frames, by own time:\n' + list(sets.outsideSelf, 25));
       console.log('SMOKE hitch between frames, by task (outermost JS):\n' + list(sets.outsideRoots, 25));
@@ -1764,6 +1783,22 @@ async function runPerfSmoke(win) {
           slowest: f.slice().sort((a, b) => b.dt - a.dt).slice(0, 3).map((x) => [Math.round(x.dt * 1000), Math.round(x.cpu), Math.round(x.sim), Math.round(x.draw)].join('/')) }); })()`));
       all.push({ map: id, view: v.name, ...r });
       console.log('SMOKE perf', id, v.name, JSON.stringify(r));
+      // CS2SIM_SMOKE_SHOTS: a screenshot of each view (userData/perf-<map>-<view>.png) with three bots stopped in front
+      // of you, facing you: to see that the world, the bots and the HUD look as they did.
+      if (process.env.CS2SIM_SMOKE_SHOTS) {
+        await js(`(() => { const g = window.__playGame, o = g.player.origin, yaw = g.input.yaw * Math.PI / 180;
+          g.cv.bot_stop = 1;
+          g.bots.filter((b) => b.c.alive).slice(0, 3).forEach((b, i) => {
+            const d = 150 + i * 70, side = (i - 1) * 60, p = [o[0] + Math.cos(yaw) * d + Math.sin(yaw) * side, o[1] + Math.sin(yaw) * d - Math.cos(yaw) * side, o[2] + 40];
+            b.pos = [p[0], p[1], g.floorAt(p, 300) ?? o[2]]; b.vel = [0, 0, 0]; b.yaw = b.bodyYaw = g.input.yaw + 180; b.pitch = 0; b.hasPrev = false;
+          });
+          return 1; })()`);
+        await wait(1500);
+        win.webContents.invalidate();
+        await js('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
+        fs.writeFileSync(path.join(app.getPath('userData'), `perf-${id}-${v.name}.png`), (await win.webContents.capturePage()).toPNG());
+        await js('window.__playGame.cv.bot_stop = 0, 1');
+      }
       // CS2SIM_SMOKE_VARIANTS ([[name, js], ...], at the first view): each applied on top of the last, measured again,
       // to see what each part costs.
       if (v !== views[0] || !process.env.CS2SIM_SMOKE_VARIANTS) continue;

@@ -44,6 +44,9 @@ export function basis(pitch, yaw) {
 // off, in burst mode.
 export const altMode = (g) => (g.zoom > 0 || (g.detachable && !g.silenced) || g.burstMode ? 1 : 0);
 const REVOLVER_COCK = 0.2, TASER_RECHARGE = 30, SHELL_TIME = 0.5;
+const SLOT_KEYS = ['slot1', 'primary', 'slot2', 'secondary', 'slot5', 'c4']; // (the key, the slot it picks)
+// Every slot in the weapon wheel's order: guns, knife, Zeus, grenades (CS2's order), bomb.
+export const WHEEL = ['primary', 'secondary', 'knife', 'taser', ...NADE_ORDER.map((id) => 'g_' + id), 'c4'];
 
 const KNIFE = { light: { range: 48, damage: 40, again: 25, backstab: 90, cycle: 0.5, againCycle: 0.4 }, heavy: { range: 32, damage: 65, backstab: 180, cycle: 1.0 } };
 
@@ -113,7 +116,7 @@ export class Arsenal {
     for (const s of ['primary', 'secondary', 'knife', 'taser', 'c4']) if (this.guns[s]) { this.select(s, t); return; }
   }
   // Slots in wheel order: guns, knife, Zeus, grenades (CS2's order), bomb.
-  order() { return ['primary', 'secondary', 'knife', 'taser', ...NADE_ORDER.map((id) => 'g_' + id), 'c4'].filter((s) => this.guns[s]); }
+  order() { return WHEEL.filter((s) => this.guns[s]); }
 
   // Whether to play one of CS2's special animations (role: inspectRare or drawRare): now and then (RARE_CHANCE, never
   // twice in a row), always with cl_inspect_rare 1, never with -1 (or when the weapon has none).
@@ -172,17 +175,18 @@ export class Arsenal {
   tick(dt, t, input) {
     const g = this.current;
     this.decayPunch(dt);
-    for (const z of Object.values(this.guns)) {
+    for (const slot in this.guns) {
+      const z = this.guns[slot];
       if (z.taser && z.clip <= 0 && z.rechargeAt && t >= z.rechargeAt) { z.clip = 1; z.rechargeAt = 0; if (z === g) this.sound('Weapon_Taser.ChargeReady', { volume: 0.5 }); }
     }
-    for (const s of this.scheduled.splice(0)) { if (t >= s.at) this.sound(s.event); else this.scheduled.push(s); }
+    if (this.scheduled.length) for (const s of this.scheduled.splice(0)) { if (t >= s.at) this.sound(s.event); else this.scheduled.push(s); }
     if (!g) return;
     const pressed = input.takePressed();
     const clicked = input.takeClicked();
     const wheel = input.takeWheel();
     this.pressed = pressed;
     if (!this.game.me.alive) return;
-    for (const [a, slot] of [['slot1', 'primary'], ['slot2', 'secondary'], ['slot5', 'c4']]) if (pressed.has(a) && this.guns[slot]) this.select(slot, t);
+    for (let i = 0; i < SLOT_KEYS.length; i += 2) if (pressed.has(SLOT_KEYS[i]) && this.guns[SLOT_KEYS[i + 1]]) this.select(SLOT_KEYS[i + 1], t);
     // 3: the knife, or the Zeus when you already hold the knife (CS2 keeps both in slot 3).
     if (pressed.has('slot3')) this.select(this.current?.slot === 'knife' && this.guns.taser ? 'taser' : this.guns.knife ? 'knife' : 'taser', t);
     if (pressed.has('lastWeapon') && this.last && this.guns[this.last.slot] === this.last) this.select(this.last.slot, t);

@@ -22,6 +22,10 @@ const DUCK_SPEED = 8, DUCK_SPEED_MIN = 1.5, DUCK_SPAM = 2, DUCK_RECOVER = 3; // 
 
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+// Scratch for a tick's working (you and every bot move each tick, with many traces each: arrays made for them were
+// garbage by the end of it). A trace's result is its own: origin takes its endpos. (Plain arrays, like the positions
+// the traces and helpers get from everywhere else: see collision.js.)
+const _wish = [0, 0, 0], _end = [0, 0, 0], _end2 = [0, 0, 0], _orig = [0, 0, 0], _primal = [0, 0, 0];
 
 export class PlayerMovement {
   constructor(world, origin = [0, 0, 0]) {
@@ -79,12 +83,12 @@ export class PlayerMovement {
     if (this.ducked && this.onGround) maxSpeed *= MOVE.duckScale;
     else if (cmd.walk) maxSpeed *= MOVE.walkScale;
 
-    const yaw = (cmd.yaw * Math.PI) / 180;
-    const fwd = [Math.cos(yaw), Math.sin(yaw), 0], right = [Math.sin(yaw), -Math.cos(yaw), 0];
-    let wish = [fwd[0] * cmd.forward + right[0] * cmd.side, fwd[1] * cmd.forward + right[1] * cmd.side, 0];
+    // Forward (cos, sin) and right (sin, -cos) by the keys.
+    const yaw = (cmd.yaw * Math.PI) / 180, cy = Math.cos(yaw), sy = Math.sin(yaw), wish = _wish;
+    wish[0] = cy * cmd.forward + sy * cmd.side; wish[1] = sy * cmd.forward - cy * cmd.side; wish[2] = 0;
     const wl = Math.hypot(wish[0], wish[1]);
     const wishSpeed = wl > 0 ? maxSpeed * Math.min(1, wl) : 0;
-    if (wl > 0) wish = [wish[0] / wl, wish[1] / wl, 0];
+    if (wl > 0) { wish[0] /= wl; wish[1] /= wl; }
 
     // Jump (needs a fresh press: CS2 has no auto bunny hop, but every mouse wheel notch is one)
     if ((cmd.jumpPress || (cmd.jump && !this.jumpHeld)) && this.onGround) {
@@ -120,6 +124,8 @@ export class PlayerMovement {
   // Source's LadderMove: moving into a ladder surface climbs it. Forward climbs towards where you look (look down and
   // press forward to go down), back goes the other way, strafing slides sideways, jump pushes you off.
   ladderMove(cmd) {
+    if (!this.world.ladders.size) { this.onLadder = false; return false; } // (a bot's world has none: see BotBrain.physics)
+    if (!this.onLadder && !cmd.forward && !cmd.side) return false;
     let wish;
     const yaw = (cmd.yaw * Math.PI) / 180, pitch = ((cmd.pitch || 0) * Math.PI) / 180;
     const fwd = [Math.cos(pitch) * Math.cos(yaw), Math.cos(pitch) * Math.sin(yaw), -Math.sin(pitch)];
@@ -161,12 +167,12 @@ export class PlayerMovement {
   }
 
   friction(dt) {
-    const speed = Math.hypot(...this.velocity);
+    const v = this.velocity, speed = Math.hypot(v[0], v[1], v[2]);
     if (speed < 0.1) return;
     const control = speed < MOVE.stopSpeed ? MOVE.stopSpeed : speed;
     const ns = Math.max(0, speed - control * MOVE.friction * dt);
     const k = ns / speed;
-    this.velocity = this.velocity.map((v) => v * k);
+    v[0] *= k; v[1] *= k; v[2] *= k;
   }
 
   accelerate(dir, wishSpeed, accel, dt) {
@@ -186,43 +192,46 @@ export class PlayerMovement {
 
   // Slides the box along everything it touches during this tick (up to 4 bumps).
   tryPlayerMove(dt) {
-    const planes = [];
-    const original = this.velocity.slice(), primal = this.velocity.slice();
+    const planes = (this.planes ||= []), vel = this.velocity, original = _orig, primal = _primal, end = _end;
+    planes.length = 0;
+    for (let k = 0; k < 3; k++) original[k] = primal[k] = vel[k];
     let timeLeft = dt;
     for (let bump = 0; bump < 4; bump++) {
-      if (!this.velocity[0] && !this.velocity[1] && !this.velocity[2]) break;
-      const end = this.origin.map((o, i) => o + this.velocity[i] * timeLeft);
+      if (!vel[0] && !vel[1] && !vel[2]) break;
+      for (let k = 0; k < 3; k++) end[k] = this.origin[k] + vel[k] * timeLeft;
       const tr = this.trace(this.origin, end);
-      if (tr.fraction > 0) { this.origin = tr.endpos; planes.length = 0; original.splice(0, 3, ...this.velocity); }
+      if (tr.fraction > 0) { this.origin = tr.endpos; planes.length = 0; for (let k = 0; k < 3; k++) original[k] = vel[k]; }
       if (tr.fraction === 1 || !tr.normal) break;
       timeLeft -= timeLeft * tr.fraction;
-      if (planes.length >= 5) { this.velocity = [0, 0, 0]; break; }
+      if (planes.length >= 5) { vel[0] = vel[1] = vel[2] = 0; break; }
       planes.push(tr.normal);
       // Find a velocity that doesn't go back into any plane we've hit this tick.
       let i;
       for (i = 0; i < planes.length; i++) {
-        this.velocity = clip(original, planes[i], 1);
+        clip(original, planes[i], 1, vel);
         let j;
-        for (j = 0; j < planes.length; j++) if (j !== i && dot(this.velocity, planes[j]) < 0) break;
+        for (j = 0; j < planes.length; j++) if (j !== i && dot(vel, planes[j]) < 0) break;
         if (j === planes.length) break;
       }
       if (i === planes.length) {
-        if (planes.length !== 2) { this.velocity = [0, 0, 0]; break; }
+        if (planes.length !== 2) { vel[0] = vel[1] = vel[2] = 0; break; }
         // Slide along the crease between the two planes.
         const a = planes[0], b = planes[1];
-        const dir = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-        const l = Math.hypot(...dir) || 1;
-        const d = dot(dir, this.velocity) / l;
-        this.velocity = dir.map((x) => (x / l) * d);
+        const dx = a[1] * b[2] - a[2] * b[1], dy = a[2] * b[0] - a[0] * b[2], dz = a[0] * b[1] - a[1] * b[0];
+        const l = Math.hypot(dx, dy, dz) || 1;
+        const d = (dx * vel[0] + dy * vel[1] + dz * vel[2]) / l;
+        vel[0] = (dx / l) * d; vel[1] = (dy / l) * d; vel[2] = (dz / l) * d;
       }
-      if (dot(this.velocity, primal) <= 0) { this.velocity = [0, 0, 0]; break; }
+      if (dot(vel, primal) <= 0) { vel[0] = vel[1] = vel[2] = 0; break; }
     }
+    planes.length = 0;
   }
 
   // Ground movement with stair/ledge stepping: try the plain move and the move from one step higher, keep whichever
   // gets further.
   walkMove(dt) {
-    const dest = [this.origin[0] + this.velocity[0] * dt, this.origin[1] + this.velocity[1] * dt, this.origin[2]];
+    const dest = _end2;
+    dest[0] = this.origin[0] + this.velocity[0] * dt; dest[1] = this.origin[1] + this.velocity[1] * dt; dest[2] = this.origin[2];
     const tr = this.trace(this.origin, dest);
     if (tr.fraction === 1) { this.origin = tr.endpos; this.stayOnGround(); return; }
     const pos = this.origin.slice(), vel = this.velocity.slice();
@@ -243,9 +252,10 @@ export class PlayerMovement {
 
   // Keeps the player glued to the ground walking down slopes and steps.
   stayOnGround() {
-    const start = [this.origin[0], this.origin[1], this.origin[2] + 2];
-    const up = this.trace(this.origin, start);
-    const tr = this.trace(up.endpos, [this.origin[0], this.origin[1], this.origin[2] - MOVE.stepSize]);
+    const start = _end, below = _end2, o = this.origin;
+    start[0] = below[0] = o[0]; start[1] = below[1] = o[1]; start[2] = o[2] + 2; below[2] = o[2] - MOVE.stepSize;
+    const up = this.trace(o, start);
+    const tr = this.trace(up.endpos, below);
     if (tr.fraction > 0 && tr.fraction < 1 && !tr.startsolid && tr.normal && tr.normal[2] >= 0.7) {
       if (Math.abs(this.origin[2] - tr.endpos[2]) > 0.5 * 0.03125) this.origin = tr.endpos;
     }
@@ -253,7 +263,9 @@ export class PlayerMovement {
 
   categorize() {
     if (this.velocity[2] > NON_JUMP_VELOCITY) { this.onGround = false; this.groundNormal = null; return; }
-    const tr = this.trace(this.origin, [this.origin[0], this.origin[1], this.origin[2] - 2]);
+    const below = _end, o = this.origin;
+    below[0] = o[0]; below[1] = o[1]; below[2] = o[2] - 2;
+    const tr = this.trace(o, below);
     if (tr.normal && tr.fraction < 1 && tr.normal[2] >= 0.7) {
       this.onGround = true;
       this.groundNormal = tr.normal;
@@ -289,9 +301,9 @@ export class PlayerMovement {
   }
 }
 
-function clip(v, n, overbounce) {
+function clip(v, n, overbounce, out = [0, 0, 0]) {
   const backoff = dot(v, n) * overbounce;
-  const out = v.map((x, i) => x - n[i] * backoff);
+  for (let i = 0; i < 3; i++) out[i] = v[i] - n[i] * backoff;
   const adjust = dot(out, n);
   if (adjust < 0) for (let i = 0; i < 3; i++) out[i] -= n[i] * adjust;
   return out;

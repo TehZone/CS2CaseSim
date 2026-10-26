@@ -5,6 +5,10 @@
 
 const LEAF = 6; // triangles per leaf
 export const FLAG_PLAYER = 1, FLAG_BULLET = 2, FLAG_GRENADE = 4;
+// Scratch. A typed array only where one function (and what only it calls) reads it: passed where other callers pass
+// plain arrays, reading from it made those reads generic, and every number read came out as a new object.
+const _dir = [0, 0, 0], _ext = new Float64Array(3), _c0 = new Float64Array(3), _v = new Float64Array(3), _lo = new Float64Array(3), _hi = new Float64Array(3);
+const _res = { t: 0, n: [0, 0, 0], solid: false };
 
 export class CollisionWorld {
   // buffer: collision.bin (Float32 positions x9 per triangle, then a flags byte and a surface byte per triangle).
@@ -92,14 +96,13 @@ export class CollisionWorld {
       for (let k = a; k < a - c; k++) {
         const tri = this.order[k];
         if (!(this.flags[tri] & mask) || tri === ignore) continue;
-        const t = rayTri(P, tri * 9, o, d);
-        if (t >= 0 && t < best) { best = t; hit = tri; }
+        if (rayTri(P, tri * 9, o, d) && RAY_T[0] < best) { best = RAY_T[0]; hit = tri; }
       }
     }
     let shape = null, at = 0;
     for (const sh of this.dynamic) {
       if (sh.off || !(sh.flags & mask)) continue;
-      for (let i = 0; i < sh.tris.length; i += 9) { const t = rayTri(sh.tris, i, o, d); if (t >= 0 && t < best) { best = t; shape = sh; at = i; } }
+      for (let i = 0; i < sh.tris.length; i += 9) if (rayTri(sh.tris, i, o, d) && RAY_T[0] < best) { best = RAY_T[0]; shape = sh; at = i; }
     }
     if (shape) return { t: best, normal: triNormal(shape.tris, at), tri: -1, surface: shape.surface || 'default', shape };
     if (hit < 0) return null;
@@ -111,7 +114,8 @@ export class CollisionWorld {
   occluded(a, b, mask = FLAG_BULLET, margin = 2) {
     const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2], l = Math.hypot(dx, dy, dz);
     if (l <= margin) return false;
-    const d = [dx / l, dy / l, dz / l], maxT = l - margin;
+    const d = _dir, maxT = l - margin;
+    d[0] = dx / l; d[1] = dy / l; d[2] = dz / l;
     const P = this.pos, B = this.box, L = this.link, S = this.stack;
     const ix = 1 / d[0], iy = 1 / d[1], iz = 1 / d[2];
     let sp = 0;
@@ -130,13 +134,12 @@ export class CollisionWorld {
       for (let k = c0; k < c0 - c1; k++) {
         const tri = this.order[k];
         if (!(this.flags[tri] & mask)) continue;
-        const t = rayTri(P, tri * 9, a, d);
-        if (t >= 0 && t < maxT) return true;
+        if (rayTri(P, tri * 9, a, d) && RAY_T[0] < maxT) return true;
       }
     }
     for (const sh of this.dynamic) {
       if (sh.off || !(sh.flags & mask)) continue;
-      for (let i = 0; i < sh.tris.length; i += 9) { const t = rayTri(sh.tris, i, a, d); if (t >= 0 && t < maxT) return true; }
+      for (let i = 0; i < sh.tris.length; i += 9) if (rayTri(sh.tris, i, a, d) && RAY_T[0] < maxT) return true;
     }
     return false;
   }
@@ -144,15 +147,18 @@ export class CollisionWorld {
   // Sweeps an axis-aligned box (mins/maxs relative to start) from start to end. Returns Source-style trace results:
   // { fraction, endpos, normal, startsolid, tri }. only: a Set of surface ids to consider (e.g. ladders).
   traceBox(start, end, mins, maxs, mask = FLAG_PLAYER, only = null) {
-    const ext = [(maxs[0] - mins[0]) / 2, (maxs[1] - mins[1]) / 2, (maxs[2] - mins[2]) / 2];
-    const c0 = [start[0] + (mins[0] + maxs[0]) / 2, start[1] + (mins[1] + maxs[1]) / 2, start[2] + (mins[2] + maxs[2]) / 2];
-    const v = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
-    const lo = [Math.min(c0[0], c0[0] + v[0]) - ext[0] - 1, Math.min(c0[1], c0[1] + v[1]) - ext[1] - 1, Math.min(c0[2], c0[2] + v[2]) - ext[2] - 1];
-    const hi = [Math.max(c0[0], c0[0] + v[0]) + ext[0] + 1, Math.max(c0[1], c0[1] + v[1]) + ext[1] + 1, Math.max(c0[2], c0[2] + v[2]) + ext[2] + 1];
+    // (Its working in scratch arrays: bots trace many times a tick, and only the result is theirs to keep.)
+    const ext = _ext, c0 = _c0, v = _v, lo = _lo, hi = _hi, res = _res;
+    for (let k = 0; k < 3; k++) {
+      ext[k] = (maxs[k] - mins[k]) / 2;
+      c0[k] = start[k] + (mins[k] + maxs[k]) / 2;
+      v[k] = end[k] - start[k];
+      lo[k] = Math.min(c0[k], c0[k] + v[k]) - ext[k] - 1;
+      hi[k] = Math.max(c0[k], c0[k] + v[k]) + ext[k] + 1;
+    }
     const P = this.pos, B = this.box, L = this.link, S = this.stack;
     let best = 1, normal = null, hitTri = -1, hitShape = null, startsolid = false, sp = 0;
     S[sp++] = 0;
-    const res = { t: 0, n: [0, 0, 0], solid: false };
     while (sp) {
       const node = S[--sp], b = node * 6;
       if (B[b] > hi[0] || B[b + 3] < lo[0] || B[b + 1] > hi[1] || B[b + 4] < lo[1] || B[b + 2] > hi[2] || B[b + 5] < lo[2]) continue;
@@ -191,7 +197,8 @@ export class CollisionWorld {
 // dynamic: the moving solids (doors, unbroken breakables) count too.
 CollisionWorld.prototype.boxOverlap = function boxOverlap(min, max, mask = FLAG_BULLET, dynamic = false) {
   const B = this.box, L = this.link, S = this.stack, P = this.pos;
-  const c = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2], e = [(max[0] - min[0]) / 2, (max[1] - min[1]) / 2, (max[2] - min[2]) / 2];
+  const c = _c0, e = _ext;
+  for (let k = 0; k < 3; k++) { c[k] = (min[k] + max[k]) / 2; e[k] = (max[k] - min[k]) / 2; }
   let sp = 0;
   S[sp++] = 0;
   while (sp) {
@@ -211,25 +218,29 @@ CollisionWorld.prototype.boxOverlap = function boxOverlap(min, max, mask = FLAG_
   return false;
 };
 
-// Static triangle / AABB overlap (separating axes: box faces, triangle normal, edge cross products).
+// Static triangle / AABB overlap (separating axes: box faces, triangle normal, edge cross products). (In scratch arrays:
+// standing up and smoke filling test thousands of triangles.)
+const _tv = new Float64Array(9), _tf = new Float64Array(9);
 function triBoxOverlap(P, i, c, e) {
-  const v = [P[i] - c[0], P[i + 1] - c[1], P[i + 2] - c[2], P[i + 3] - c[0], P[i + 4] - c[1], P[i + 5] - c[2], P[i + 6] - c[0], P[i + 7] - c[1], P[i + 8] - c[2]];
+  const v = _tv, f = _tf;
+  for (let k = 0; k < 9; k++) v[k] = P[i + k] - c[k % 3];
   for (let k = 0; k < 3; k++) {
     if (Math.min(v[k], v[3 + k], v[6 + k]) > e[k] || Math.max(v[k], v[3 + k], v[6 + k]) < -e[k]) return false;
   }
-  const f = [v[3] - v[0], v[4] - v[1], v[5] - v[2], v[6] - v[3], v[7] - v[4], v[8] - v[5], v[0] - v[6], v[1] - v[7], v[2] - v[8]];
-  const test = (ax, ay, az) => {
-    const p0 = v[0] * ax + v[1] * ay + v[2] * az, p1 = v[3] * ax + v[4] * ay + v[5] * az, p2 = v[6] * ax + v[7] * ay + v[8] * az;
-    const r = e[0] * Math.abs(ax) + e[1] * Math.abs(ay) + e[2] * Math.abs(az);
-    return !(Math.min(p0, p1, p2) > r || Math.max(p0, p1, p2) < -r);
-  };
+  for (let k = 0; k < 9; k++) f[k] = v[(k + 3) % 9] - v[k];
   const nx = f[1] * f[5] - f[2] * f[4], ny = f[2] * f[3] - f[0] * f[5], nz = f[0] * f[4] - f[1] * f[3];
-  if (!test(nx, ny, nz)) return false;
+  if (!axisOverlaps(v, e, nx, ny, nz)) return false;
   for (let j = 0; j < 3; j++) {
     const fx = f[j * 3], fy = f[j * 3 + 1], fz = f[j * 3 + 2];
-    if (!test(0, -fz, fy) || !test(fz, 0, -fx) || !test(-fy, fx, 0)) return false;
+    if (!axisOverlaps(v, e, 0, -fz, fy) || !axisOverlaps(v, e, fz, 0, -fx) || !axisOverlaps(v, e, -fy, fx, 0)) return false;
   }
   return true;
+}
+// Do the triangle (v: its corners from the box's centre) and the box (half extents e) overlap along this axis?
+function axisOverlaps(v, e, ax, ay, az) {
+  const p0 = v[0] * ax + v[1] * ay + v[2] * az, p1 = v[3] * ax + v[4] * ay + v[5] * az, p2 = v[6] * ax + v[7] * ay + v[8] * az;
+  const r = e[0] * Math.abs(ax) + e[1] * Math.abs(ay) + e[2] * Math.abs(az);
+  return !(Math.min(p0, p1, p2) > r || Math.max(p0, p1, p2) < -r);
 }
 
 // Partial sort so order[mid] is the median by key (quickselect).
@@ -247,20 +258,25 @@ function nthElement(a, lo, hi, n, key) {
   }
 }
 
+// Ray from o along d against triangle i: whether it hits it ahead of o, how far in RAY_T[0]. (Not the distance
+// returned: from a function V8 doesn't inline, every fraction returned is a new object, for every triangle tested.)
+const RAY_T = new Float64Array(1);
 function rayTri(P, i, o, d) {
   const e1x = P[i + 3] - P[i], e1y = P[i + 4] - P[i + 1], e1z = P[i + 5] - P[i + 2];
   const e2x = P[i + 6] - P[i], e2y = P[i + 7] - P[i + 1], e2z = P[i + 8] - P[i + 2];
   const px = d[1] * e2z - d[2] * e2y, py = d[2] * e2x - d[0] * e2z, pz = d[0] * e2y - d[1] * e2x;
   const det = e1x * px + e1y * py + e1z * pz;
-  if (Math.abs(det) < 1e-9) return -1;
+  if (Math.abs(det) < 1e-9) return false;
   const inv = 1 / det;
   const tx = o[0] - P[i], ty = o[1] - P[i + 1], tz = o[2] - P[i + 2];
   const u = (tx * px + ty * py + tz * pz) * inv;
-  if (u < 0 || u > 1) return -1;
+  if (u < 0 || u > 1) return false;
   const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
   const v = (d[0] * qx + d[1] * qy + d[2] * qz) * inv;
-  if (v < 0 || u + v > 1) return -1;
-  return (e2x * qx + e2y * qy + e2z * qz) * inv;
+  if (v < 0 || u + v > 1) return false;
+  const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+  RAY_T[0] = t;
+  return t >= 0;
 }
 
 function triNormal(P, i) {

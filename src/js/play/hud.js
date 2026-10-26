@@ -5,6 +5,7 @@
 import { esc } from '../util.js';
 import { emblemHtml, ratingHtml } from '../rank.js';
 
+const CLOCK_LOOK = ['clock', 'clock bomb', 'clock low', 'clock freeze'];
 const fmtTime = (s) => { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
 export class Hud {
@@ -54,7 +55,7 @@ export class Hud {
   }
 
   set(sel, text) { if (this.cache[sel] !== text) { this.cache[sel] = text; this.q(sel).textContent = text; } }
-  toggle(sel, on) { const k = sel + '?'; if (this.cache[k] !== on) { this.cache[k] = on; this.q(sel).classList.toggle('hidden', !on); } }
+  toggle(sel, on) { const shown = (this.shown ||= {}); if (shown[sel] !== on) { shown[sel] = on; this.q(sel).classList.toggle('hidden', !on); } }
 
   // CS2's crosshair from your settings: classic (opens up with inaccuracy) or static, its length, gap, thickness,
   // outline, centre dot and colour.
@@ -69,6 +70,10 @@ export class Hud {
   crosshair(on) { this.toggle('.xhair', on); }
 
   vitals(hp, armor, helmet) {
+    // (Every frame: nothing made unless one of them changed.)
+    const c = this.cache;
+    if (c.hpN === hp && c.arN === armor && c.helmetN === helmet) return;
+    c.hpN = hp; c.arN = armor; c.helmetN = helmet;
     this.set('[data-hp]', String(Math.max(0, Math.ceil(hp))));
     this.set('[data-ar]', String(Math.max(0, Math.ceil(armor))));
     this.toggle('[data-helmet]', !!helmet && armor > 0);
@@ -84,7 +89,7 @@ export class Hud {
   }
   money(m, { buyzone = false, c4 = false, kit = false } = {}) {
     this.toggle('[data-money]', m != null); // no money in Deathmatch
-    this.set('[data-money]', m == null ? '' : '$' + Math.max(0, Math.floor(m)));
+    if (this.cache.moneyN !== m) { this.cache.moneyN = m; this.set('[data-money]', m == null ? '' : '$' + Math.max(0, Math.floor(m))); }
     this.toggle('[data-buyzone]', buyzone);
     this.toggle('[data-c4]', c4);
     this.toggle('[data-kit]', kit);
@@ -152,18 +157,22 @@ export class Hud {
   // Top bar: scores by side, alive players, the round clock (or the planted bomb). roster: [{ team, alive, avatar, name,
   // me }] puts everyone's picture there (like CS2's), dimmed once they're dead; rosterKey changes when it does.
   top({ ct, t, aliveCT, aliveT, totalCT, totalT, clock, planted, phase, ffa = false, roster = null, rosterKey = 0 }) {
-    this.q('.top').classList.toggle('ffa', ffa);
-    this.set('[data-score-ct]', String(ct));
-    this.set('[data-score-t]', String(t));
+    const c = this.cache;
+    // (Every frame: text made and the page touched only for what changed.)
+    if (c.ffa !== ffa) { c.ffa = ffa; this.q('.top').classList.toggle('ffa', ffa); }
+    if (c.ctN !== ct) { c.ctN = ct; this.set('[data-score-ct]', String(ct)); }
+    if (c.tN !== t) { c.tN = t; this.set('[data-score-t]', String(t)); }
     const fresh = roster && rosterKey !== this.cache.rosterKey;
     if (fresh) this.cache.rosterKey = rosterKey;
     const act = roster ? (fresh ? tiles(roster, 'CT') : this.cache.act) : pips(aliveCT, totalCT, 'ct');
     const att = roster ? (fresh ? tiles(roster, 'T') : this.cache.att) : pips(aliveT, totalT, 't');
     if (act !== this.cache.act) this.q('[data-alive-ct]').innerHTML = this.cache.act = act;
     if (att !== this.cache.att) this.q('[data-alive-t]').innerHTML = this.cache.att = att;
-    const text = planted ? 'C4' : fmtTime(clock);
-    this.set('[data-clock]', text);
-    this.q('[data-clock]').className = 'clock' + (planted ? ' bomb' : clock <= 10 && phase === 'live' ? ' low' : phase === 'freeze' ? ' freeze' : '');
+    const secs = planted ? -1 : Math.max(0, Math.ceil(clock)), look = planted ? 1 : clock <= 10 && phase === 'live' ? 2 : phase === 'freeze' ? 3 : 0;
+    if (c.secs === secs && c.look === look) return;
+    c.secs = secs; c.look = look;
+    this.set('[data-clock]', planted ? 'C4' : fmtTime(clock));
+    this.q('[data-clock]').className = CLOCK_LOOK[look];
   }
 
   message(html, ms = 3000, cls = '') {

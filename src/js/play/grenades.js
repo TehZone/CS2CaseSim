@@ -244,7 +244,7 @@ export class Grenades {
   smokeBlocks(a, b) { return this.volume.active && this.volume.blocks(a, b); }
   inFire(p) { return this.fires.some((f) => Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius + 20 && Math.abs(p[2] - f.pos[2]) < 70); }
   // A fire on your level (not one on a ledge above or a floor below).
-  fireNear(p, r = 0) { return this.fires.find((f) => Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius + r && Math.abs(p[2] - f.pos[2]) < 70) || null; }
+  fireNear(p, r = 0) { return !this.fires.length ? null : this.fires.find((f) => Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius + r && Math.abs(p[2] - f.pos[2]) < 70) || null; }
 
   // Animation of clouds and flames, and the light of the fire nearest you (flickering). Grenades in the air are drawn
   // the fraction `a` of the way from where they were at the last tick to where they are (see Bot.sync).

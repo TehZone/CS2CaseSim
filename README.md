@@ -232,7 +232,7 @@ What's in a match:
   draw; every texture uploaded and new guns' shaders compiled before they're seen; the radar moved by the page's
   compositor, not redrawn. Bots move with your movement code on a collision test that allocates
   nothing, and their sight lines stop at the first wall. `CS2SIM_SMOKE=perf` measures each map's frame rate with the
-  bots playing.
+  bots playing (`CS2SIM_SMOKE_SHOTS`: a screenshot of each view, three bots stopped in front of you).
 - No stutters: everything a match shows is loaded behind the loading screen (every gun bots carry, as it lies on the
   floor and in a bot's hands, your viewmodels and the plain ones you see spectating, the bomb, the effects, the whole
   3D skybox, the flashbang's afterimage), with its shaders compiled and first used, its textures (its shader's own too:
@@ -241,6 +241,16 @@ What's in a match:
   shared between the models that use the same image; your gloves are baked once; skinned meshes take their bind-pose
   bounds; dropped and thrown guns are the bots' baked copies; a molotov lays out its flames over a few ticks; the smoke's
   lighting runs allocation-free; bots and grenades are drawn between ticks (the tick is 64 Hz, the screen faster).
+  Collections are rare and short. The game makes little garbage: your and the bots' movement, traces, sight lines and
+  smokes work in arrays kept for it; a bot's locomotion clips at weight 0 are stopped (and started again where they
+  would have been); its bones' keyframes are worked out in place (`keyframes.js`); three's float uniforms get caches and
+  setters of their own (`uniforms.js`) and its draw lists are sorted in place (`drawsort.js`); the HUD makes its text only
+  when it changes, net_graph 2's log nothing a frame. V8's memory reducer is off (it took freeze time for a quiet page:
+  35-70 ms collections a few seconds into a match, and a young generation collected three times as often), and three's
+  check that every model's attributes are on the GPU reads them by name from a list (`scripts/copy-vendor.mjs`): V8
+  had thrown that code away and made it again 90 times a second, and the code it threw away filled the heap to a full
+  collection every 45 s. (Mirage, 8 minutes with the bots playing: 584 minor collections and 12 full ones, the longest
+  35 ms, before; 108 and 3, the longest 12 ms, now, and 29% more frames.)
   `cl_showfps 2` (or `net_graph 1`, or Show fps in the settings) graphs each frame's time: a stutter is a red spike.
   `net_graph 2` also splits the frame (the bots' AI, their bodies, drawing, the HUD) and shows what the match holds
   (bodies shown, guns down, textures, geometries, the heap): what grows when it gets slower. With `net_graph 2` on,
@@ -258,7 +268,8 @@ What's in a match:
   how often each kind of event (a bot's shot, damage, a kill...) comes before a slow frame against before any, slow
   frames and long waits by the round's phase, and every shader compiled mid-match with what it was for and what in its
   key made it new (`CS2SIM_SMOKE_BUYMENU` buys with the buy menu open, `CS2SIM_SMOKE_BREAK` breaks every breakable;
-  `CS2SIM_SMOKE_PROFILE` and `CS2SIM_SMOKE_ALLOC` add a CPU and an allocation profile, with the long waits between
+  `CS2SIM_SMOKE_PROFILE` and `CS2SIM_SMOKE_ALLOC` add a CPU and an allocation profile (with who calls the builtins that
+  allocate; `CS2SIM_SMOKE_ALLOC_CALLERS`, a regex, picks others), with the long waits between
   frames on their own; `CS2SIM_SMOKE_LIVE` what the JS heap holds once the map is loaded, against the array buffers
   held outside it, and how long a full collection takes; `CS2SIM_SMOKE_TRACE=<round>` a Chromium trace of that round's
   freeze time, every process, `CS2SIM_SMOKE_TRACE_LIVE=<round>` of all of it, `CS2SIM_SMOKE_GCTRACE` of only V8's
@@ -326,7 +337,7 @@ What's in a match:
 npm install
 node node_modules/electron/install.js   # npm 11+ blocks Electron's download step
 npm run data      # rebuild src/data/game-data.json (add --refresh via `npm run data:refresh` for fresh downloads)
-npm run vendor    # copy three.js into src/vendor
+npm run vendor    # copy three.js into src/vendor (with the patch in scripts/copy-vendor.mjs)
 npm start         # run the game
 npm run dev       # browser preview at http://localhost:5178
 npm run dist      # build dist/CS2-Case-Simulator-Setup.exe and dist/CS2-Case-Simulator.exe

@@ -29,6 +29,9 @@ const angleTo = (from, to) => {
 const wrap = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
 const dist2 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 const NO_LADDERS = new Set(); // bots climb ladders on their paths themselves (climb)
+const _chest = [0, 0, 0];
+// A path point that's a jump it hasn't made yet (b: the bot).
+const jumpAhead = (p, b) => p.jump && b.pos[2] < p[2] + p.jump - STEP_HEIGHT;
 
 // A gun's inaccuracy (as yours, weapons.js): standing or crouched, the firing penalty, moving faster than a third of its
 // top speed, in the air. m: its mode (1 scoped). The bullets' spread adds to it.
@@ -191,7 +194,8 @@ export class Brain {
   // Keeps the current gun reloaded and switched to the best one.
   updateGun(dt, t) {
     const b = this.bot, gun = b.weapons[b.slot];
-    for (const w of Object.values(b.weapons)) {
+    for (const slot in b.weapons) { // (not Object.values: every bot, every tick)
+      const w = b.weapons[slot];
       if (!w?.punch) continue;
       const e = Math.exp(-6 * dt);
       w.punch[0] = w.punch[0] * e + w.punchVel[0] * dt; w.punch[1] = w.punch[1] * e + w.punchVel[1] * dt;
@@ -230,17 +234,17 @@ export class Brain {
   scan(t) {
     const g = this.game, b = this.bot, eye = b.eye();
     if (t < this.blindUntil) { if (this.target?.visible) { this.target.visible = false; this.target.lostAt = t; } return; }
-    const [aimP, aimY] = [b.pitch, b.yaw];
-    const fwd = [Math.cos((aimY * Math.PI) / 180), Math.sin((aimY * Math.PI) / 180)];
+    const fx = Math.cos((b.yaw * Math.PI) / 180), fy = Math.sin((b.yaw * Math.PI) / 180);
     let best = null, bestD = Infinity;
-    for (const e of g.enemiesOf(this.c)) {
-      const body = g.bodyOf(e);
-      const d = Math.hypot(body.chest[0] - eye[0], body.chest[1] - eye[1], body.chest[2] - eye[2]);
+    // (Ten bots, twenty times a second each: nothing made for an enemy out of range or out of view.)
+    for (const e of g.combatants) {
+      if (!e.alive || !g.hostile(this.c, e)) continue;
+      const chest = g.chestInto(e, _chest);
+      const d = Math.hypot(chest[0] - eye[0], chest[1] - eye[1], chest[2] - eye[2]);
       if (d > 4500) continue;
-      const to = [(body.chest[0] - eye[0]) / d, (body.chest[1] - eye[1]) / d];
-      const inView = to[0] * fwd[0] + to[1] * fwd[1] > Math.cos(((this.d.fov / 2) * Math.PI) / 180) || d < 220 || this.hurtBy === e;
+      const inView = ((chest[0] - eye[0]) / d) * fx + ((chest[1] - eye[1]) / d) * fy > Math.cos(((this.d.fov / 2) * Math.PI) / 180) || d < 220 || this.hurtBy === e;
       if (!inView) continue;
-      const seen = [body.head, body.chest].find((p) => g.canSee(eye, p));
+      const body = g.bodyOf(e), seen = g.canSee(eye, body.head) ? body.head : g.canSee(eye, body.chest) ? body.chest : undefined;
       // Stick with the enemy it's fighting unless another is clearly closer (two at about the same distance would
       // otherwise swap every scan, the aim flicking between them).
       const dd = this.target?.c === e && this.target.visible ? d * 0.7 : d;
@@ -684,15 +688,14 @@ export class Brain {
       let wp = this.path[this.pi];
       let dx = wp[0] - b.pos[0], dy = wp[1] - b.pos[1];
       let d = Math.hypot(dx, dy);
-      const under = (p) => p.jump && b.pos[2] < p[2] + p.jump - STEP_HEIGHT; // a jump there it hasn't made yet
-      while (d < 24 && !wp.ladder && !under(wp) && this.pi < this.path.length - 1) { this.pi++; wp = this.path[this.pi]; dx = wp[0] - b.pos[0]; dy = wp[1] - b.pos[1]; d = Math.hypot(dx, dy); }
+      while (d < 24 && !wp.ladder && !jumpAhead(wp, b) && this.pi < this.path.length - 1) { this.pi++; wp = this.path[this.pi]; dx = wp[0] - b.pos[0]; dy = wp[1] - b.pos[1]; d = Math.hypot(dx, dy); }
       const last = this.pi >= this.path.length - 1;
       // There once it's close, and up on the same level: a goal on a box isn't reached from the foot of it, so it keeps
       // on (slowing down near it) into the box, which it then jumps onto.
       const below = last && (b.vel[2] !== 0 || wp[2] - b.pos[2] > STEP_HEIGHT) && d > 2;
       // Slowing down to arrive (moving like you, it slides a bit when it lets go).
       const s = below && d < 32 ? max * Math.max(0.35, d / 32) : last ? max * Math.min(1, Math.max(0.3, d / 96)) : max;
-      if (under(wp) && d < 40) {
+      if (jumpAhead(wp, b) && d < 40) {
         // At the foot of a jump: straight at the ledge (across the edge onto it, not along it towards the next point),
         // up against it, then up (and on that way in the air until it's on top).
         const [ix, iy] = wp.into || [dx / (d || 1), dy / (d || 1)];
@@ -754,10 +757,10 @@ export class Brain {
       if (rise) { jump = true; this.jumpAt = t; b.jumped = true; b.tuck = rise > JUMP_HEIGHT ? CROUCH_JUMP_HEIGHT - JUMP_HEIGHT : 0; }
     }
     const tucking = !!b.tuck && air && t > this.jumpAt;
-    body.tick(dt, {
-      yaw: (Math.atan2(want[1], want[0]) * 180) / Math.PI, forward: Math.min(1, go / max), side: 0, pitch: 0,
-      maxSpeed: topSpeed, walk: this.walking(t) && !b.ducked, duck: b.ducked || tucking, jump, jumpPress: jump,
-    });
+    const cmd = (this.cmd ||= {}); // (one each, filled in each tick)
+    cmd.yaw = (Math.atan2(want[1], want[0]) * 180) / Math.PI; cmd.forward = Math.min(1, go / max); cmd.side = 0; cmd.pitch = 0;
+    cmd.maxSpeed = topSpeed; cmd.walk = this.walking(t) && !b.ducked; cmd.duck = b.ducked || tucking; cmd.jump = jump; cmd.jumpPress = jump;
+    body.tick(dt, cmd);
     if (body.velocity[2] < -3000) { const a = nav.nearestArea(body.origin); body.teleport([a.center[0], a.center[1], a.center[2]]); } // fell out of the map
     b.pos = body.origin.slice(); b.vel = body.velocity.slice();
     if (body.onGround && !jump) { if (b.tuck) b.ducked = false; b.jumped = false; b.tuck = 0; } // landed
@@ -813,11 +816,12 @@ export class Brain {
     const b = this.bot, c = this.game.collision;
     if (this.body?.world.of !== c) {
       const w = this.game.bodyWorld(() => this.c);
-      this.body = new PlayerMovement({ of: c, traceBox: w.traceBox, boxOverlap: (...a) => c.boxOverlap(...a), ladders: NO_LADDERS }, b.pos);
+      this.body = new PlayerMovement({ of: c, traceBox: w.traceBox, boxOverlap: (min, max, mask, dynamic) => c.boxOverlap(min, max, mask, dynamic), ladders: NO_LADDERS }, b.pos);
     }
     const m = this.body;
     if (m.origin[0] !== b.pos[0] || m.origin[1] !== b.pos[1] || m.origin[2] !== b.pos[2]) m.teleport(b.pos);
-    m.velocity = b.vel.slice();
+    const v = m.velocity; // (its own copy, as it was: bots move every tick)
+    v[0] = b.vel[0]; v[1] = b.vel[1]; v[2] = b.vel[2];
     return m;
   }
 

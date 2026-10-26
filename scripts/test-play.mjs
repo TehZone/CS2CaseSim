@@ -482,6 +482,120 @@ function fakeGame() {
   ok(twist > 25 && big < 65, 'bots: the upper body turns with the aim, at most 60° from the legs: ' + twist.toFixed(0) + '°, ' + big.toFixed(0) + '°');
 }
 
+// ---- the bots' locomotion: clips at weight 0 stopped, started again in step: the same pose as all 16 playing --------
+{
+  const THREE = await import('three');
+  const { Bot } = await import('../src/js/play/bots.js');
+  // A clip per path, each its own length, swinging the hip its own way. (About one axis: three blends three or more
+  // clips' rotations in the order they play, which stopping and starting them changes, a little, unless they share one.)
+  const clips = new Map(), axis = new THREE.Vector3(0, 1, 0);
+  const clipFor = (path) => {
+    if (!clips.has(path)) {
+      let h = 0;
+      for (const ch of path) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+      const dur = 0.6 + (h % 1000) / 700, amp = 0.3 + (h % 7) / 10, phase = (h % 13) / 2, times = [], values = [];
+      for (let i = 0; i <= 24; i++) { const t = (i / 24) * dur; times.push(t); values.push(...new THREE.Quaternion().setFromAxisAngle(axis, Math.sin((i / 24) * Math.PI * 2 + phase) * amp).toArray()); }
+      clips.set(path, new THREE.AnimationClip(path, dur, [new THREE.QuaternionKeyframeTrack('hip.quaternion', times, values)]));
+    }
+    return clips.get(path);
+  };
+  const rig = () => { const root = new THREE.Group(), hip = new THREE.Bone(); hip.name = 'hip'; root.add(hip); return { root, hip }; };
+  const mine = rig(), ref = rig();
+  const bot = Object.assign(Object.create(Bot.prototype), { assets: { clips: new Proxy({}, { get: (_, p) => clipFor(p) }) }, mixer: new THREE.AnimationMixer(mine.root),
+    mode: 'move', time: 0, yaw: 0, bodyYaw: 0, pitch: 0, vel: [0, 0, 0], ducked: false, climbing: null, airborne: false, bones: {}, gestureAction: null, armsAction: null });
+  Bot.prototype.setLocomotion.call(bot, 'rifle');
+  // The reference: every clip playing all along, its weight set each frame (as it was).
+  const mixer = new THREE.AnimationMixer(ref.root), act = (p) => { const a = mixer.clipAction(clipFor(p)); a.setLoop(THREE.LoopRepeat, Infinity); a.setEffectiveWeight(0); a.play(); return a; };
+  const P = (x) => `rifle/_default_rifle/${x}_rifle`, R = { idle: act(P('idle')), crouchIdle: act(P('idle_crouch')), air: act(P('inair_stand')), ladder: act(P('ladder_facing_slow')) };
+  for (const g of ['run', 'walk', 'crouch']) R[g] = ['n', 'e', 's', 'w'].map((d) => act(P(`${g}_${d}`)));
+  const all = [R.idle, R.crouchIdle, R.air, R.ladder, ...R.run, ...R.walk, ...R.crouch];
+  let worst = 0, late = 0, stopped = 0, frames = 0, seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let f = 0; f < 3000; f++) {
+    const dt = f % 3 === 0 ? 3 / 144 : 1 / 144; // (an out-of-view bot's three frames at once now and then)
+    if (f % 40 === 0) { const sp = rnd() < 0.2 ? 0 : rnd() * 260, dir = rnd() * Math.PI * 2; bot.vel = [Math.cos(dir) * sp, Math.sin(dir) * sp, 0]; bot.ducked = rnd() < 0.2; bot.yaw = rnd() * 360 - 180; }
+    bot.airborne = f % 700 > 650; bot.mode = f % 1100 > 1020 ? 'plant' : 'move';
+    Bot.prototype.animate.call(bot, dt);
+    // The weights the reference gives them (animate's, from where the body faces after this frame's turn).
+    const yr = (bot.bodyYaw * Math.PI) / 180, vf = bot.vel[0] * Math.cos(yr) + bot.vel[1] * Math.sin(yr), vr = bot.vel[0] * Math.sin(yr) - bot.vel[1] * Math.cos(yr);
+    const speed = Math.hypot(vf, vr), move = Math.min(1, speed / 60), run = bot.ducked ? 0 : Math.min(1, Math.max(0, (speed - 120) / 70));
+    const gw = { crouch: bot.ducked ? 1 : 0, run, walk: bot.ducked ? 0 : 1 - run }, a = Math.atan2(vr, vf);
+    const w = [Math.max(0, Math.cos(a)), Math.max(0, Math.sin(a)), Math.max(0, -Math.cos(a)), Math.max(0, -Math.sin(a))], sum = w.reduce((s, x) => s + x, 0) || 1;
+    if (bot.mode === 'plant') for (const x of all) x.setEffectiveWeight(0);
+    else if (bot.airborne) for (const x of all) x.setEffectiveWeight(x === R.air ? 1 : 0);
+    else {
+      for (const g of ['run', 'walk', 'crouch']) R[g].forEach((x, i) => { x.setEffectiveWeight(gw[g] * (w[i] / sum) * move); x.timeScale = Math.max(0.4, speed / (g === 'run' ? 230 : g === 'walk' ? 120 : 85)); });
+      R.idle.setEffectiveWeight(bot.ducked ? 0 : 1 - move); R.crouchIdle.setEffectiveWeight(bot.ducked ? 1 - move : 0); R.air.setEffectiveWeight(0); R.ladder.setEffectiveWeight(0);
+    }
+    mixer.update(dt);
+    worst = Math.max(worst, mine.hip.quaternion.angleTo(ref.hip.quaternion));
+    // Each clip that's playing where the reference's is in it.
+    for (const x of bot.loco.all) {
+      if (!x.isScheduled()) continue;
+      const d = Math.abs(x.time - mixer.existingAction(x.getClip()).time), dur = x.getClip().duration;
+      late = Math.max(late, Math.min(d, dur - d));
+    }
+    stopped += bot.loco.all.filter((x) => !x.isScheduled()).length; frames++;
+  }
+  ok(late < 1e-6, `bots: a locomotion clip started again is where it would have been playing all along (worst ${late.toExponential(1)} s)`);
+  ok(worst < 2e-3, `bots: stopping the locomotion clips at weight 0 leaves the pose as it was (worst ${worst.toExponential(1)} rad: three's blending order)`);
+  ok(stopped / frames > 10, `bots: most of the 16 locomotion clips are stopped at any time (${(stopped / frames).toFixed(1)} a frame)`);
+}
+
+// ---- bones' keyframes worked out in place (keyframes.js): exactly three's numbers --------------------------------
+{
+  const THREE = await import('three');
+  const original = THREE.Interpolant.prototype.evaluate;
+  const { quietKeyframes } = await import('../src/js/play/keyframes.js');
+  quietKeyframes();
+  let seed = 11, same = true, calls = 0;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let k = 0; k < 40 && same; k++) {
+    const n = 2 + Math.floor(rnd() * 30), times = [0];
+    for (let i = 1; i < n; i++) times.push(times[i - 1] + 0.01 + rnd() * 0.2);
+    const q = [], p = [];
+    for (let i = 0; i < n; i++) {
+      q.push(...new THREE.Quaternion().setFromEuler(new THREE.Euler(rnd() * 6 - 3, rnd() * 6 - 3, rnd() * 6 - 3)).toArray());
+      if (i % 5 === 3) q.splice(-4, 4, ...q.slice(-8, -4)); // (the same rotation twice: three's shortcut)
+      p.push(rnd(), rnd() * 10, -rnd());
+    }
+    for (const track of [new THREE.QuaternionKeyframeTrack('b.quaternion', times, q), new THREE.VectorKeyframeTrack('b.position', times, p)]) {
+      const mine = track.createInterpolant(), theirs = track.createInterpolant(), end = times[n - 1];
+      let t = -0.05;
+      for (let step = 0; step < 400 && same; step++) {
+        t = step % 97 === 0 ? rnd() * end * 1.2 - 0.05 : t + rnd() * 0.03; // (on, now and then a jump: past the end, before the start)
+        if (t > end + 0.05) t -= end; // (looping)
+        const a = Array.from(mine.evaluate(t)), b = Array.from(original.call(theirs, t));
+        calls++; if (a.join() !== b.join()) same = false;
+      }
+    }
+  }
+  ok(same, `animation: keyframes worked out in place give exactly three's numbers (${calls} times)`);
+}
+
+// ---- what's drawn, sorted in place with comparisons that make nothing: the same order as three's own sort ----------
+{
+  const { quietSorting } = await import('../src/js/play/drawsort.js');
+  // three's (r186) painterSortStable and reversePainterSortStable, which return differences.
+  const painter = (a, b) => (a.groupOrder !== b.groupOrder ? a.groupOrder - b.groupOrder : a.renderOrder !== b.renderOrder ? a.renderOrder - b.renderOrder
+    : a.material.id !== b.material.id ? a.material.id - b.material.id : a.materialVariant !== b.materialVariant ? a.materialVariant - b.materialVariant : a.z !== b.z ? a.z - b.z : a.id - b.id);
+  const reverse = (a, b) => (a.groupOrder !== b.groupOrder ? a.groupOrder - b.groupOrder : a.renderOrder !== b.renderOrder ? a.renderOrder - b.renderOrder : a.z !== b.z ? b.z - a.z : a.id - b.id);
+  const list = { opaque: [], transmissive: [], transparent: [] }, sorts = {};
+  quietSorting({ setOpaqueSort: (f) => { sorts.opaque = f; }, setTransparentSort: (f) => { sorts.transparent = f; }, renderLists: { get: () => list } }, [{}]);
+  let seed = 3, same = true;
+  const rnd = (n) => ((seed = (seed * 16807) % 2147483647) % n);
+  for (let round = 0; round < 200 && same; round++) {
+    const items = Array.from({ length: 1 + rnd(160) }, (_, id) => ({ id, groupOrder: rnd(3) ? 0 : rnd(3), renderOrder: rnd(4) ? 0 : rnd(5) - 2, material: { id: rnd(30) },
+      materialVariant: rnd(5) ? 0 : 1, z: rnd(6) ? rnd(1000) / 997 : 0.5 }));
+    for (const [mine, theirs] of [[sorts.opaque, painter], [sorts.transparent, reverse]]) {
+      list.opaque.length = 0; list.opaque.push(...items.slice().reverse());
+      const want = items.slice().reverse().sort(theirs).map((x) => x.id).join();
+      if (list.opaque.sort(mine).map((x) => x.id).join() !== want) same = false;
+    }
+  }
+  ok(same, 'drawing: the render lists sorted in place come out in three\'s own order');
+}
+
 // ---- CS2's special inspects and draws: now and then, never twice in a row, cl_inspect_rare forcing them on or off --
 {
   const { Arsenal } = await import('../src/js/play/weapons.js');

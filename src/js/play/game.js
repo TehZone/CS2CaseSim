@@ -15,7 +15,7 @@ import { SoundBank } from './sound.js';
 import { Soundscapes } from './soundscape.js';
 import { FrameLog } from './framelog.js';
 import { buildViewmodel } from './viewmodel.js';
-import { Arsenal, Gun, basis, refillAmmo } from './weapons.js';
+import { Arsenal, Gun, basis, refillAmmo, WHEEL } from './weapons.js';
 import { BotAssets, Bot, BOT_NAMES, rayCapsule, bindBounds } from './bots.js';
 import { Brain, botGun, inaccuracyOf } from './ai.js';
 import { teamPlan, teamEconomy } from './strats.js';
@@ -33,6 +33,9 @@ import { Drops } from './drops.js';
 import { Balls } from './props.js';
 import { Doors } from './doors.js';
 import { Post } from './post.js';
+import { numberUniforms } from './uniforms.js';
+import { quietSorting } from './drawsort.js';
+import { quietKeyframes } from './keyframes.js';
 import { Radio } from './radio.js';
 import { MODES, WINGMAN_RULES, Deathmatch, ARMS_RACE, PROTECT } from './modes.js';
 import { act, online } from '../backend.js';
@@ -79,6 +82,9 @@ const PENETRATION = { wood: 1, wood_panel: 1, wood_plank: 1, wood_crate: 1.2, wo
 const MUSIC = 'valve_cs2_01';
 
 const _frustum = new THREE.Frustum(), _m4 = new THREE.Matrix4(), _sphere = new THREE.Sphere(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _euler = new THREE.Euler();
+const PARTS = ['ai', 'bots', 'draw', 'hud']; // (net_graph 2's split of the frame)
+
+const _d3 = [0, 0, 0], _feet = [0, 0, 0], _from = [0, 0, 0], DOWN = [0, 0, -1]; // (plain arrays: see collision.js)
 
 export class Game {
   // difficulty: the bots' rank tier (skill.js: silver .. global; the old easy .. expert work too). roster (matchmaking,
@@ -88,6 +94,7 @@ export class Game {
   constructor(root, { map = 'de_dust2', mode = 'competitive', team = 'CT', teamSize = 5, difficulty = 'gold', length = 'short', overtime = true, friendlyFire = false,
     site = 'A', minutes = 10, ffa = true, sensitivity = 1.25, quality = 'balanced', settings = {}, roster = null, ranked = false, quiet = false, onStatus = () => {} } = {}) {
     Object.assign(this, { root, mapId: map, team, onStatus, ranked: !!ranked, quiet: !!quiet });
+    quietKeyframes(); // (the bots' animation: see keyframes.js)
     this.enemyTeam = team === 'T' ? 'CT' : 'T';
     this.mode = MODES[mode] ? mode : 'competitive';
     this.respawnMode = !!MODES[this.mode].respawn;
@@ -263,6 +270,7 @@ export class Game {
       for (let i = 0; i < this.teamSize; i++) addBot(this.enemyTeam, 'B');
     }
     this.combatants = [this.me, ...this.bots.map((b) => b.c)];
+    this.botByC = new Map(this.bots.map((b) => [b.c, b])); // (botOf: asked thousands of times a second)
     // What the match's reward goes by: the other team's ranks (everyone's in free for all).
     if (this.roster) {
       const them = this.bots.filter((b) => b.c.squad === 'B');
@@ -333,6 +341,8 @@ export class Game {
     this.drawOnce([...this.warmed || [], ...bodies.map((b) => [b.root, this.scene]), ...hidden.map((o) => [o, this.scene]),
       ...(this.effects.warm || []).map((o) => [o, this.scene]), [this.effects.flash, this.vmScene], ...(sky ? [[sky, sky]] : [])]);
     this.warmed = null;
+    numberUniforms(this.renderer); // (every shader's compiled now: see uniforms.js)
+    quietSorting(this.renderer, [this.scene, this.vmScene, sky]); // (see drawsort.js)
     for (const o of hidden) o.visible = false;
     for (const b of bodies) {
       b.root.visible = b.root.userData.wasVisible;
@@ -763,6 +773,7 @@ export class Game {
 
   // ---- rounds (called by the match) -------------------------------------------------------------------------------
   onRoundStart(round, { halftime, pistol, overtime, respawn }) {
+    numberUniforms(this.renderer); // (a shader new since: see uniforms.js)
     if (!respawn) { this.balls?.reset(); this.doors?.reset(); }
     if (respawn) { this.startRespawnMode(); return; }
     // (No full collection here: one stops everything while it goes through the whole heap, 100 ms to 360 ms a round start
@@ -958,7 +969,9 @@ export class Game {
   // The floor under a point (game units): the collision mesh straight down from a step above it, or null. CS2's
   // spawn points float 24-35 units up, and the nav mesh runs a few units above the real floor, so bots stand on this.
   floorAt(p, below = 200) {
-    const hit = this.collision.raycast([p[0], p[1], p[2] + 18], [0, 0, -1], below + 18, FLAG_PLAYER);
+    const from = _from; // (bots ask this every tick as they move)
+    from[0] = p[0]; from[1] = p[1]; from[2] = p[2] + 18;
+    const hit = this.collision.raycast(from, DOWN, below + 18, FLAG_PLAYER);
     return hit ? p[2] + 18 - hit.t : null;
   }
   onFloor(p) { const z = this.floorAt(p); return z == null ? p.slice() : [p[0], p[1], z]; }
@@ -1339,12 +1352,16 @@ export class Game {
     m.tick(TICK);
     // You
     const frozen = m.phase === 'freeze' || !me.alive || this.planting || this.defusing || m.phase === 'over';
-    const cmd = frozen ? { forward: 0, side: 0, yaw: inp.yaw, pitch: inp.pitch, jump: false, duck: inp.held('duck') && me.alive, walk: false, maxSpeed: this.arsenal.maxSpeed() } : {
-      forward: (inp.held('forward') ? 1 : 0) - (inp.held('back') ? 1 : 0),
-      side: (inp.held('right') ? 1 : 0) - (inp.held('left') ? 1 : 0),
-      yaw: inp.yaw, pitch: inp.pitch, jump: inp.held('jump'), jumpPress: inp.notched('jump'), duck: inp.held('duck'), walk: inp.held('walk'),
-      maxSpeed: this.arsenal.maxSpeed(),
-    };
+    const cmd = (this.cmd ||= {}); // (one, filled in each tick)
+    if (frozen) {
+      cmd.forward = 0; cmd.side = 0; cmd.yaw = inp.yaw; cmd.pitch = inp.pitch; cmd.jump = false; cmd.jumpPress = false; cmd.duck = inp.held('duck') && me.alive; cmd.walk = false;
+      cmd.maxSpeed = this.arsenal.maxSpeed();
+    } else {
+      cmd.forward = (inp.held('forward') ? 1 : 0) - (inp.held('back') ? 1 : 0);
+      cmd.side = (inp.held('right') ? 1 : 0) - (inp.held('left') ? 1 : 0);
+      cmd.yaw = inp.yaw; cmd.pitch = inp.pitch; cmd.jump = inp.held('jump'); cmd.jumpPress = inp.notched('jump'); cmd.duck = inp.held('duck'); cmd.walk = inp.held('walk');
+      cmd.maxSpeed = this.arsenal.maxSpeed();
+    }
     if (me.alive) {
       const wasGround = this.player.onGround;
       if (this.noclip) this.flyNoclip(cmd); else this.player.tick(TICK, cmd);
@@ -1538,19 +1555,21 @@ export class Game {
   traceBodies(start, end, mins, maxs, flags, self, only) {
     const tr = this.collision.traceBox(start, end, mins, maxs, flags, only);
     if (!(flags & FLAG_PLAYER) || only || !this.combatants || (self === this.me && this.noclip)) return tr;
-    const d = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
+    const d = _d3;
+    for (let k = 0; k < 3; k++) d[k] = end[k] - start[k];
     let best = tr.normal ? tr.fraction : 1, axis = -1, sign = 0;
     for (const c of this.combatants) {
       if (c === self || !c.alive) continue;
-      const p = c === this.me ? this.player.origin : this.botOf(c)?.pos;
+      const bot = c === this.me ? null : this.botOf(c), p = bot ? bot.pos : c === this.me ? this.player.origin : null;
       if (!p) continue;
-      const top = (c === this.me ? this.player.ducked : this.botOf(c).ducked) ? 54 : 72;
-      const lo = [p[0] - 16 - maxs[0], p[1] - 16 - maxs[1], p[2] - maxs[2]], hi = [p[0] + 16 - mins[0], p[1] + 16 - mins[1], p[2] + top - mins[2]];
+      const top = (bot ? bot.ducked : this.player.ducked) ? 54 : 72;
+      // (Their box, the hull's size added, an axis at a time: bots trace through everyone many times a tick.)
       let t0 = -Infinity, t1 = Infinity, ax = -1, sg = 0;
       for (let k = 0; k < 3 && t0 <= t1; k++) {
-        if (Math.abs(d[k]) < 1e-9) { if (start[k] <= lo[k] || start[k] >= hi[k]) t0 = Infinity; continue; }
-        let a = (lo[k] - start[k]) / d[k], b = (hi[k] - start[k]) / d[k], s = -1;
-        if (a > b) { [a, b] = [b, a]; s = 1; }
+        const lo = p[k] - maxs[k] - (k < 2 ? 16 : 0), hi = p[k] - mins[k] + (k < 2 ? 16 : top);
+        if (Math.abs(d[k]) < 1e-9) { if (start[k] <= lo || start[k] >= hi) t0 = Infinity; continue; }
+        let a = (lo - start[k]) / d[k], b = (hi - start[k]) / d[k], s = -1;
+        if (a > b) { const x = a; a = b; b = x; s = 1; }
         if (a > t0) { t0 = a; ax = k; sg = s; }
         if (b < t1) t1 = b;
       }
@@ -1649,7 +1668,11 @@ export class Game {
   }
 
   // ---- combat ---------------------------------------------------------------------------------------------------------
-  botOf(c) { return this.bots.find((b) => b.c === c) || null; }
+  botOf(c) {
+    if (this.botByC) return this.botByC.get(c) || null;
+    for (const b of this.bots) if (b.c === c) return b;
+    return null;
+  }
   // Enemies: the other team, or everyone else in free-for-all.
   hostile(a, b) { return !!a && !!b && a !== b && (this.ffa || a.team !== b.team); }
   enemiesOf(c) { return this.combatants.filter((x) => x.alive && this.hostile(c, x)); }
@@ -1657,12 +1680,18 @@ export class Game {
   // Where a combatant's head, chest and feet are (game units).
   bodyOf(c) {
     if (c === this.me) {
-      const o = this.player.origin, eye = this.player.eye(), s = this.player.ducked ? 0.75 : 1;
-      return { feet: o, eye, head: [eye[0], eye[1], eye[2] + 1], chest: [o[0], o[1], o[2] + 50 * s] };
+      const o = this.player.origin, eye = this.player.eye();
+      return { feet: o, eye, head: [eye[0], eye[1], eye[2] + 1], chest: this.chestInto(c, [0, 0, 0]) };
     }
     const b = this.botOf(c);
     const eye = b.eye();
-    return { feet: b.pos, eye, head: b.bonePos('head_0') || [eye[0], eye[1], eye[2] + 1], chest: [b.pos[0], b.pos[1], b.pos[2] + (b.ducked ? 36 : 50)] };
+    return { feet: b.pos, eye, head: b.bonePos('head_0') || [eye[0], eye[1], eye[2] + 1], chest: this.chestInto(c, [0, 0, 0]) };
+  }
+  // Just the chest, into out (a bot looking about for enemies: most are out of range or out of view).
+  chestInto(c, out) {
+    const b = c === this.me ? null : this.botOf(c), p = b ? b.pos : this.player.origin;
+    out[0] = p[0]; out[1] = p[1]; out[2] = p[2] + (b ? (b.ducked ? 36 : 50) : 50 * (this.player.ducked ? 0.75 : 1));
+    return out;
   }
   bodies() { return this.combatants.map((c) => ({ c, feet: this.positionOf(c) })); }
   // Seeing someone: a clear line that doesn't pass through a smoke.
@@ -1714,8 +1743,12 @@ export class Game {
   // Where you hear from (your eye, or the camera while dead), and whether a wall is between you and a sound.
   earPos() { return this.camEye || this.player.eye(); }
   soundBlocked(ear, pos) {
-    const d = [pos[0] - ear[0], pos[1] - ear[1], pos[2] + 8 - ear[2]], l = Math.hypot(...d);
-    return l > 1 && !!this.collision.raycast(ear, d.map((v) => v / l), l - 16, FLAG_BULLET);
+    const d = _d3;
+    d[0] = pos[0] - ear[0]; d[1] = pos[1] - ear[1]; d[2] = pos[2] + 8 - ear[2];
+    const l = Math.hypot(d[0], d[1], d[2]);
+    if (l <= 1) return false;
+    d[0] /= l; d[1] /= l; d[2] /= l;
+    return !!this.collision.raycast(ear, d, l - 16, FLAG_BULLET);
   }
 
   // A bot fires its gun: CS2's inaccuracy and spread, and recoil it partly controls.
@@ -2070,7 +2103,8 @@ export class Game {
     const t0 = performance.now();
     const log = this.settings.netGraph === 2 ? this.startLog() : null;
     log?.begin(t0);
-    this.parts = { ai: 0, draw: 0, bots: 0, hud: this.parts?.hud || 0 }; // (where the frame goes: net_graph 2)
+    const parts = (this.parts ||= { ai: 0, draw: 0, bots: 0, hud: 0 }); // (where the frame goes: net_graph 2; the HUD's is last frame's)
+    parts.ai = 0; parts.draw = 0; parts.bots = 0;
     let steps = 0;
     if (!this.paused) {
       this.acc += dt;
@@ -2085,7 +2119,8 @@ export class Game {
     let camEye;
     if (me.alive) {
       const eye = this.player.eye();
-      camEye = [0, 1, 2].map((i) => this.prevEye[i] + (eye[i] - this.prevEye[i]) * a);
+      const p = this.prevEye;
+      camEye = [p[0] + (eye[0] - p[0]) * a, p[1] + (eye[1] - p[1]) * a, p[2] + (eye[2] - p[2]) * a];
       const [pitch, yaw] = this.arsenal.viewAngles(this.input.pitch, this.input.yaw);
       this.camera.rotation.set((-pitch * Math.PI) / 180, (yaw * Math.PI) / 180 + Math.PI, 0);
     } else if (this.deathCam && this.now < this.deathCam.until) {
@@ -2123,7 +2158,7 @@ export class Game {
       this.hud.scoped(me.alive && gun?.zoom && /SNIPER/.test(gun.stats.type));
     }
     // Viewmodel follows the view, with a little bob while running.
-    for (const g of Object.values(this.arsenal.guns)) g.vm.rig.visible = me.alive && g === gun && !(gun.zoom && gun.stats.hideViewmodelZoomed) && !this.defusing;
+    for (const slot in this.arsenal.guns) { const g = this.arsenal.guns[slot]; g.vm.rig.visible = me.alive && g === gun && !(gun.zoom && gun.stats.hideViewmodelZoomed) && !this.defusing; }
     if (gun && me.alive) {
       gun.vm.update(this.paused ? 0 : dt);
       const sp = this.player.onGround ? Math.min(1, this.player.speed2d() / 250) : 0;
@@ -2140,14 +2175,16 @@ export class Game {
     this.camera.updateMatrixWorld();
     _frustum.setFromProjectionMatrix(_m4.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse));
     const tb = performance.now();
-    for (const b of [...this.bots, this.myBody]) {
+    for (let i = 0; i <= this.bots.length; i++) {
+      const b = i < this.bots.length ? this.bots[i] : this.myBody; // (the bots, then your own body)
       // A body lies there a while, then sinks into the floor and is gone (nine in view cost a quarter of a frame).
       const gone = b.deadAt != null ? (this.now - b.deadAt - BODY_STAY) / BODY_SINK : -1;
       if (gone >= 1) b.root.visible = false;
       if (!b.root.visible) { b.frozen = true; continue; } // (a hidden body skips the matrix pass too)
       b.sync(a);
       if (gone > 0) b.root.position.y -= gone * 40 * IN;
-      const seen = _frustum.intersectsSphere(_sphere.set(toGl([b.pos[0], b.pos[1], b.pos[2] + 36], _v3), 60 * IN));
+      _feet[0] = b.pos[0]; _feet[1] = b.pos[1]; _feet[2] = b.pos[2] + 36;
+      const seen = _frustum.intersectsSphere(_sphere.set(toGl(_feet, _v3), 60 * IN));
       // Posed this frame (animated, its bones worked out and sent to the GPU): in view, and a body that's done falling
       // only once (it lies still until it sinks), a bot far off every other frame (a frame behind there is a fraction of
       // a pixel). Out of view its ~100 bones skip the frame's matrix pass (see Bot): a shot, its muzzle or a head bone
@@ -2163,7 +2200,7 @@ export class Game {
       b.animDt = (b.animDt || 0) + (this.paused ? 0 : dt);
       if (pose || (!seen && (this.frameNo + b.index) % 3 === 0)) { b.animate(b.animDt); b.animDt = 0; }
       // Lit by the probes where it stands (a few times a second is plenty).
-      if (probes && (this.frameNo + b.index) % 6 === 0) b.amb.set(probes, [b.pos[0], b.pos[1], b.pos[2] + 36]);
+      if (probes && (this.frameNo + b.index) % 6 === 0) { _feet[0] = b.pos[0]; _feet[1] = b.pos[1]; _feet[2] = b.pos[2] + 36; b.amb.set(probes, _feet); }
     }
     this.parts.bots = performance.now() - tb;
     if (probes && this.frameNo % 3 === 0) {
@@ -2199,11 +2236,12 @@ export class Game {
     log?.gpuBegin();
     Bot.drawing = true;
     try {
-      this.post.render(this.scene, this.camera, {
-        camPos: camEye, captureFlash: this.flashCapture, dt: this.paused ? 0 : dt, sky3d: s3,
-        flashImage: me.alive && flashLeft > 0 ? Math.min(1, flashLeft / Math.max(0.6, this.flashSecs * 0.85)) * 0.9 : 0,
-        overlay: (me.alive || this.specVm) && this.cv.r_drawviewmodel ? { scene: this.vmScene, camera: this.vmCamera } : null,
-      });
+      // (Its options in one object, filled in each frame.)
+      const o = (this.drawOpts ||= { overlayOf: { scene: this.vmScene, camera: this.vmCamera } });
+      o.camPos = camEye; o.captureFlash = this.flashCapture; o.dt = this.paused ? 0 : dt; o.sky3d = s3;
+      o.flashImage = me.alive && flashLeft > 0 ? Math.min(1, flashLeft / Math.max(0.6, this.flashSecs * 0.85)) * 0.9 : 0;
+      o.overlay = (me.alive || this.specVm) && this.cv.r_drawviewmodel ? o.overlayOf : null;
+      this.post.render(this.scene, this.camera, o);
     } finally { Bot.drawing = false; }
     log?.gpuEnd();
     this.flashCapture = false;
@@ -2239,7 +2277,7 @@ export class Game {
   graphFrame(dt, t0, t1) {
     const t2 = performance.now(), info = this.renderer.info, k = 0.05, gr = this.graph || (this.graph = { ms: 16, sim: 0, cpu: 0, calls: 0, tris: 0, ai: 0, bots: 0, draw: 0, hud: 0 });
     gr.ms += (dt * 1000 - gr.ms) * k; gr.sim += (t1 - t0 - gr.sim) * k; gr.cpu += (t2 - t0 - gr.cpu) * k;
-    for (const p of ['ai', 'bots', 'draw', 'hud']) gr[p] += (this.parts[p] - gr[p]) * k;
+    for (const p of PARTS) gr[p] += (this.parts[p] - gr[p]) * k;
     gr.calls = info.render.calls; gr.tris = info.render.triangles;
     info.autoReset = false; info.reset();
     if ((this.graphAt = (this.graphAt || 0) - dt) > 0) return;
@@ -2264,7 +2302,12 @@ export class Game {
   updateHud(dt) {
     const m = this.match, me = this.me, gun = this.arsenal.gun, hud = this.hud;
     if (!m) return;
-    const sideScore = (side) => m.score[this.combatants.find((c) => c.team === side)?.squad] ?? 0;
+    // (Every frame: the teams counted in one go, and what's built for the HUD built only when it changed.)
+    let ctSquad, tSquad, aliveCT = 0, aliveT = 0, totalCT = 0, totalT = 0;
+    for (const c of this.combatants) {
+      if (c.team === 'CT') { if (ctSquad === undefined) ctSquad = c.squad; totalCT++; if (c.alive) aliveCT++; }
+      else if (c.team === 'T') { if (tSquad === undefined) tSquad = c.squad; totalT++; if (c.alive) aliveT++; }
+    }
     if (this.respawnMode) {
       // Deathmatch / Arms Race: your points (or level) against the leader's.
       const lead = this.combatants.slice().sort((a, b) => m.rank(b) - m.rank(a))[0];
@@ -2279,30 +2322,42 @@ export class Game {
       this.rosterKey = rosterKey;
       this.roster = this.combatants.map((c) => ({ team: c.team, alive: c.alive, avatar: c.identity?.avatar || null, name: c.name, me: c === me }));
     }
-    hud.top({
-      ffa: this.ffa,
-      ct: sideScore('CT'), t: sideScore('T'),
-      aliveCT: m.alive('CT').length, aliveT: m.alive('T').length,
-      totalCT: this.combatants.filter((c) => c.team === 'CT').length, totalT: this.combatants.filter((c) => c.team === 'T').length,
-      clock: m.phase === 'end' ? 0 : m.timeout && m.phase === 'freeze' ? m.timeout.left : m.time, planted: m.phase === 'planted', phase: m.phase,
-      roster: this.ffa ? null : this.roster, rosterKey,
-    });
+    const top = (this.topData ||= {});
+    top.ffa = this.ffa; top.ct = m.score[ctSquad] ?? 0; top.t = m.score[tSquad] ?? 0;
+    top.aliveCT = aliveCT; top.aliveT = aliveT; top.totalCT = totalCT; top.totalT = totalT;
+    top.clock = m.phase === 'end' ? 0 : m.timeout && m.phase === 'freeze' ? m.timeout.left : m.time; top.planted = m.phase === 'planted'; top.phase = m.phase;
+    top.roster = this.ffa ? null : this.roster; top.rosterKey = rosterKey;
+    hud.top(top);
     const s = this.spectating && !me.alive ? this.spectating.c : me;
     hud.vitals(s.health, s.armor, s.helmet);
-    hud.money(this.respawnMode ? null : me.money, { buyzone: me.alive && m.buyOpen && this.inBuyZone() && !this.armsRace, c4: me.hasC4, kit: me.defuser });
+    const mo = (this.moneyOpts ||= {});
+    mo.buyzone = me.alive && m.buyOpen && this.inBuyZone() && !this.armsRace; mo.c4 = me.hasC4; mo.kit = me.defuser;
+    hud.money(this.respawnMode ? null : me.money, mo);
     hud.spectate(!me.alive && this.spectating && !(this.deathCam && this.now < this.deathCam.until) ? this.spectating.c.name : null, !this.specThird);
     hud.crosshair(me.alive ? !this.buyMenu.isOpen : !!this.specVm);
     const left = (this.flashUntil || 0) - this.now;
     hud.flashed(left > 0 ? Math.min(1, left / Math.max(0.5, this.flashSecs * 0.6)) : 0);
-    hud.nades(me.alive ? NADE_ORDER.filter((id) => me.nades[id] > 0).map((id) => [id, NADES[id].short, me.nades[id]]) : [], gun?.nade ? gun.id : null);
+    // Your grenades (a count a kind, and the one in hand, as a number: the list made again only when it changes).
+    let nadeKey = me.alive ? 1 : 0;
+    if (me.alive) for (const id of NADE_ORDER) nadeKey = nadeKey * 8 + Math.min(7, Math.max(0, me.nades[id] | 0));
+    nadeKey = nadeKey * 16 + (gun?.nade ? NADE_ORDER.indexOf(gun.id) + 1 : 0);
+    if (nadeKey !== this.nadeKey) {
+      this.nadeKey = nadeKey;
+      hud.nades(me.alive ? NADE_ORDER.filter((id) => me.nades[id] > 0).map((id) => [id, NADES[id].short, me.nades[id]]) : [], gun?.nade ? gun.id : null);
+    }
     if (me.alive && gun && !gun.melee) hud.setCrosshair(gun.nade ? 0 : this.arsenal.inaccuracy(gun)); // (a grenade: the crosshair at rest)
-    // The weapon list on the right whenever what you hold or carry changes.
-    const listKey = me.alive && gun ? this.arsenal.order().map((sl) => sl + ':' + this.arsenal.guns[sl].id).join(',') + '|' + gun.slot + '|' + !!this.icons : '';
-    if (listKey !== this.listKey) { if (listKey && this.listKey !== undefined) this.showWeaponList(); this.listKey = listKey; }
+    // The weapon list on the right whenever what you hold or carry changes (slot by slot: no key made every frame).
+    const live = !!(me.alive && gun), seen = (this.listSeen ||= {});
+    let changed = live !== this.listLive;
+    if (live) {
+      if (gun.slot !== seen.slot || !!this.icons !== seen.icons) { seen.slot = gun.slot; seen.icons = !!this.icons; changed = true; }
+      for (const sl of WHEEL) { const id = this.arsenal.guns[sl]?.id; if (seen[sl] !== id) { seen[sl] = id; changed = true; } }
+    }
+    if (changed) { if (live && this.listLive !== undefined) this.showWeaponList(); this.listLive = live; }
     const sg = !me.alive && this.specVm ? this.specVm.bot.weapons[this.specVm.bot.slot] : null;
     const shown = me.alive ? gun : sg && { id: sg.id, name: ITEM_NAMES[sg.id] || sg.id, clip: sg.clip, reserve: sg.reserve, melee: sg.melee, nade: isGrenade(sg.id) };
-    const ammoKey = shown ? `${shown.name}|${shown.clip}|${shown.reserve}` : '';
-    if (ammoKey !== this.ammoKey) { this.ammoKey = ammoKey; hud.ammo(shown || null); }
+    const am = (this.ammoSeen ||= {});
+    if ((shown?.name ?? null) !== am.name || shown?.clip !== am.clip || shown?.reserve !== am.reserve) { am.name = shown?.name ?? null; am.clip = shown?.clip; am.reserve = shown?.reserve; hud.ammo(shown || null); }
     // Planting / defusing progress.
     if (this.respawnMode && !me.alive && me.respawnAt != null) hud.progress('Respawning', Math.min(1, 1 - (me.respawnAt - this.now) / 2));
     else if (this.planting) hud.progress('Planting the bomb', Math.min(1, (this.now - this.planting.start) / m.rules.plantTime));

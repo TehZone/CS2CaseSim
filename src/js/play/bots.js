@@ -45,18 +45,34 @@ const HOLD = {
 const PISTOL_RE = /^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/;
 const wrap = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
 const _lerp = [0, 0, 0], _tip = new THREE.Vector3();
+const _dirW = new Float64Array(4); // (animate: how much each direction's clip counts)
+// A locomotion set's clocks (see locoWeight): the idles' and the jump's, the ladder's, then each gait's. (By number, in a
+// typed array: they're read and written every frame for every bot, and by name V8 boxed each one.)
+const ONE = 0, LADDER = 1, GAIT0 = 2;
+
+// A locomotion clip's weight. One at 0 is stopped: the mixer works through every clip it plays each frame, whatever its
+// weight, and most of a bot's 16 are at 0 at any time. Started again,
+// it's where it would have been had it played on all along: its clock (l.clock) is the time its clips have run, at
+// their speed, since the set began (a gait's four always run at one speed, and all of them started together).
+function locoWeight(l, act, w) {
+  if (!act) return;
+  if (w > 0) { if (!act.isScheduled()) { act.play(); act.time = l.clock[act.cs2Clock] % act.getClip().duration; } }
+  else if (act.isScheduled()) act.stop();
+  act.setEffectiveWeight(w);
+}
+const _axis = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _twist = new THREE.Quaternion(), _bend = new THREE.Quaternion(), _pq = new THREE.Quaternion(), _inv = new THREE.Quaternion();
 
 // Skinned meshes' bounds from their bind pose. three works out the posed ones vertex by vertex, through the bones, the
 // first time it draws one (tens of ms for an agent or a viewmodel, and garbage for every vertex) only to sort it by
 // distance; the bind pose is near enough for that (Play draws them all: none is culled by its bounds).
 export function bindBounds(root) {
   root?.traverse((o) => {
-    if (!o.isSkinnedMesh || o.boundingSphere) return;
+    if (!o.isSkinnedMesh) return;
     const g = o.geometry;
-    if (!g.boundingSphere) g.computeBoundingSphere();
-    if (!g.boundingBox) g.computeBoundingBox();
-    o.boundingSphere = g.boundingSphere.clone();
-    o.boundingBox = g.boundingBox.clone();
+    // (Each on its own: a model drawn once has its sphere but not its box, and a box from the bones (Box3.expandByObject,
+    // sitting the C4 on the floor) was 5 MB of garbage each time.)
+    if (!o.boundingSphere) { if (!g.boundingSphere) g.computeBoundingSphere(); o.boundingSphere = g.boundingSphere.clone(); }
+    if (!o.boundingBox) { if (!g.boundingBox) g.computeBoundingBox(); o.boundingBox = g.boundingBox.clone(); }
   });
 }
 // Standing still, the body turns to the aim only once it's this far off (CS2's turn in place); the spine twists the rest.
@@ -365,10 +381,12 @@ export class Bot {
     if (this.loco?.set === set) return;
     if (this.loco) for (const a of this.loco.all) a.stop();
     const clip = (p) => this.assets.clips[p];
-    const act = (p) => { const c = clip(p); if (!c) return null; const a = this.mixer.clipAction(c); a.setLoop(THREE.LoopRepeat, Infinity); a.setEffectiveWeight(0); a.play(); return a; };
-    const loco = { set, idle: act(`${set}/_default_${set}/idle_${set}`), crouchIdle: act(`${set}/_default_${set}/idle_crouch_${set}`), air: act(`${set}/_default_${set}/inair_stand_${set}`) };
-    for (const g of GAITS) loco[g] = DIRS.map((d) => act(locoPath(set, g, d)));
-    loco.ladder = act(`${set}/_default_${set}/ladder_facing_slow_${set}`);
+    // (clock: which of the set's clocks it keeps time by, see locoWeight.)
+    const act = (p, clock) => { const c = clip(p); if (!c) return null; const a = this.mixer.clipAction(c); a.setLoop(THREE.LoopRepeat, Infinity); a.setEffectiveWeight(0); a.play(); a.cs2Clock = clock; return a; };
+    const loco = { set, idle: act(`${set}/_default_${set}/idle_${set}`, ONE), crouchIdle: act(`${set}/_default_${set}/idle_crouch_${set}`, ONE), air: act(`${set}/_default_${set}/inair_stand_${set}`, ONE) };
+    GAITS.forEach((g, i) => { loco[g] = DIRS.map((d) => act(locoPath(set, g, d), GAIT0 + i)); });
+    loco.ladder = act(`${set}/_default_${set}/ladder_facing_slow_${set}`, LADDER);
+    loco.clock = new Float64Array(GAIT0 + GAITS.length);
     loco.all = [loco.idle, loco.crouchIdle, loco.air, loco.ladder, ...GAITS.flatMap((g) => loco[g])].filter(Boolean);
     this.loco = loco;
   }
@@ -468,7 +486,7 @@ export class Bot {
     const clip = mode === 'plant' ? this.assets.clips[PLANT] : mode === 'defuse' ? this.assets.clips[DEFUSE]
       : mode === 'dead' ? this.assets.clips[DEATHS[Math.floor(Math.random() * (opts.headshot ? 2 : DEATHS.length))]] : null;
     if (mode === 'dead') {
-      for (const a of this.loco?.all || []) a.fadeOut(0.1);
+      for (const a of this.loco?.all || []) if (a.isScheduled()) a.fadeOut(0.1);
       this.armsAction?.fadeOut(0.1);
       this.gestureAction?.fadeOut(0.1);
       this.gestureAction = null;
@@ -507,11 +525,11 @@ export class Bot {
       if (this.climbing) this.armsAction.fadeOut(0.15); else { this.armsAction.play(); this.armsAction.fadeIn(0.15); }
     }
     this.wasClimbing = !!this.climbing;
-    if (l && (this.mode === 'plant' || this.mode === 'defuse')) for (const a of l.all) a.setEffectiveWeight(0); // (see setMode)
+    if (l && (this.mode === 'plant' || this.mode === 'defuse')) for (const a of l.all) locoWeight(l, a, 0); // (see setMode)
     else if (l && this.mode === 'move' && (this.climbing || this.airborne)) {
       // Climbing a ladder (the clip runs with the climbing speed) or in the air (falling off a ledge).
       const k = this.climbing ? 'ladder' : 'air';
-      for (const a of l.all) a.setEffectiveWeight(a === l[k] ? 1 : 0);
+      for (const a of l.all) locoWeight(l, a, a === l[k] ? 1 : 0);
       if (this.climbing && l.ladder) l.ladder.timeScale = Math.min(1.6, Math.abs(this.vel[2]) / 100);
     } else if (l && this.mode === 'move') {
       const yr = (this.bodyYaw * Math.PI) / 180;
@@ -521,15 +539,24 @@ export class Bot {
       const move = Math.min(1, speed / 60);
       // Walking and running cross-fade by speed (switching at one speed popped from one clip to the other).
       const run = this.ducked ? 0 : Math.min(1, Math.max(0, (speed - 120) / 70));
-      const gaitW = { crouch: this.ducked ? 1 : 0, run, walk: this.ducked ? 0 : 1 - run };
-      const a = Math.atan2(vr, vf);
-      const w = [Math.max(0, Math.cos(a)), Math.max(0, Math.sin(a)), Math.max(0, -Math.cos(a)), Math.max(0, -Math.sin(a))];
-      const sum = w.reduce((s, x) => s + x, 0) || 1;
-      for (const g of GAITS) l[g].forEach((act, i) => { if (!act) return; act.setEffectiveWeight(gaitW[g] * (w[i] / sum) * move); act.timeScale = Math.max(0.4, speed / (g === 'run' ? 230 : g === 'walk' ? 120 : 85)); });
-      l.idle?.setEffectiveWeight(this.ducked ? 0 : 1 - move);
-      l.crouchIdle?.setEffectiveWeight(this.ducked ? 1 - move : 0);
-      l.air?.setEffectiveWeight(0);
-      l.ladder?.setEffectiveWeight(0);
+      const a = Math.atan2(vr, vf), w = _dirW;
+      w[0] = Math.max(0, Math.cos(a)); w[1] = Math.max(0, Math.sin(a)); w[2] = Math.max(0, -Math.cos(a)); w[3] = Math.max(0, -Math.sin(a));
+      const sum = w[0] + w[1] + w[2] + w[3] || 1;
+      for (const g of GAITS) {
+        const gw = g === 'crouch' ? (this.ducked ? 1 : 0) : g === 'run' ? run : this.ducked ? 0 : 1 - run, ts = Math.max(0.4, speed / (g === 'run' ? 230 : g === 'walk' ? 120 : 85));
+        const acts = l[g];
+        for (let i = 0; i < acts.length; i++) { const act = acts[i]; if (!act) continue; locoWeight(l, act, gw * (w[i] / sum) * move); act.timeScale = ts; }
+      }
+      locoWeight(l, l.idle, this.ducked ? 0 : 1 - move);
+      locoWeight(l, l.crouchIdle, this.ducked ? 1 - move : 0);
+      locoWeight(l, l.air, 0);
+      locoWeight(l, l.ladder, 0);
+    }
+    if (l) {
+      // Each clock on by this frame's time at its clips' speed (a gait's four run at one speed: see above).
+      const c = l.clock;
+      c[ONE] += dt; c[LADDER] += dt * (l.ladder?.timeScale ?? 1);
+      for (let i = 0; i < GAITS.length; i++) { const d = l[GAITS[i]], a = d[0] || d[1] || d[2] || d[3]; if (a) c[GAIT0 + i] += dt * a.timeScale; }
     }
     // The animation's own spine pose back first: the mixer only writes a bone when its animated value changes, so a
     // bend left on it from the last frame would be bent again (and again...), twisting the torso round and round.
@@ -556,10 +583,10 @@ export class Bot {
   // spine_1..3 by a third each), from the pose the animation gave them this frame (see unbendSpine).
   bendSpine() {
     const yr = (this.yaw * Math.PI) / 180;
-    const axis = new THREE.Vector3(-Math.cos(yr), 0, Math.sin(yr)); // the bot's right, in glTF axes
+    const axis = _axis.set(-Math.cos(yr), 0, Math.sin(yr)); // the bot's right, in glTF axes
     const angle = (-this.pitch * Math.PI) / 180 / 3;
-    const twist = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ((Math.max(-TWIST_LIMIT, Math.min(TWIST_LIMIT, wrap(this.yaw - this.bodyYaw))) * Math.PI) / 180) / 3);
-    const pq = new THREE.Quaternion(), q = new THREE.Quaternion().setFromAxisAngle(axis, angle).multiply(twist);
+    const twist = _twist.setFromAxisAngle(_up, ((Math.max(-TWIST_LIMIT, Math.min(TWIST_LIMIT, wrap(this.yaw - this.bodyYaw))) * Math.PI) / 180) / 3);
+    const pq = _pq, q = _bend.setFromAxisAngle(axis, angle).multiply(twist);
     this.spineBase ||= {};
     for (const n of SPINE) {
       const b = this.bones[n];
@@ -567,7 +594,7 @@ export class Bot {
       (this.spineBase[n] ||= new THREE.Quaternion()).copy(b.quaternion);
       b.parent.updateWorldMatrix(true, false);
       b.parent.getWorldQuaternion(pq);
-      b.quaternion.premultiply(pq.clone().invert().multiply(q).multiply(pq));
+      b.quaternion.premultiply(_inv.copy(pq).invert().multiply(q).multiply(pq));
     }
     this.bent = true;
   }

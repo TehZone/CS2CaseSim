@@ -9,6 +9,7 @@ import { esc } from '../util.js';
 const SLOW_MS = 30, SLOW_X = 1.8; // a frame this long, and this many times the usual, is written down on its own
 const MAX_SLOW = 4000, MAX_LONG = 4000, RING = 1024;
 const BINS = 301; // frame times to the millisecond (the last: 300 ms or more)
+const NONE = Object.freeze([]), NO_EVENTS = new Map(); // (a frame with nothing compiled, nothing happened: most of them)
 // What happened in the game, timed: [what of the game's ('' the game itself), its method, what the log calls it (or
 // a function of its arguments that says)].
 const HOOKS = [['', 'kill', 'kill'], ['', 'botShoot', 'bot shot'], ['', 'damage', 'damage'], ['arsenal', 'shoot', 'you shot'],
@@ -74,11 +75,11 @@ export class FrameLog {
       o[name] = function (...a) { const t = performance.now(); try { return f.apply(this, a); } finally { log.mark(typeof label === 'function' ? label(...a) : label, t, performance.now() - t); } };
     }
     const play = g.sounds?.play;
-    if (play) g.sounds.play = function (...a) { log.sounds++; return play.apply(this, a); };
+    if (play) g.sounds.play = function (event, opts) { log.sounds++; return play.call(this, event, opts); };
     // A shader compiled as something was drawn: what for (its material, and the model's name or its parent's).
     const r = g.renderer, draw = r?.renderBufferDirect;
-    if (draw) r.renderBufferDirect = function (cam, scene, geo, mat, obj) {
-      const n = r.info.programs?.length ?? 0, out = draw.apply(this, arguments);
+    if (draw) r.renderBufferDirect = function (cam, scene, geo, mat, obj, group) {
+      const n = r.info.programs?.length ?? 0, out = draw.call(this, cam, scene, geo, mat, obj, group); // (not apply(arguments): an object a draw)
       if ((r.info.programs?.length ?? 0) > n && log.compiled.length < 6) log.compiled.push(`${mat.name || mat.type}${scene ? '' : ' (shadow)'} on ${obj.name || obj.parent?.name || obj.type}`);
       return out;
     };
@@ -143,12 +144,12 @@ export class FrameLog {
   begin(t0) {
     const g = this.g, info = g.renderer.info, last = this.last, at = this.at;
     const tex = info.memory.textures, geo = info.memory.geometries, prog = info.programs?.length ?? 0, heap = heapNow();
-    const changed = [tex - at.tex, geo - at.geo, prog - at.prog], heapBetween = heap - (this.heapEnd ?? heap);
+    const texIn = tex - at.tex, geoIn = geo - at.geo, progIn = prog - at.prog, heapBetween = heap - (this.heapEnd ?? heap);
     at.tex = tex; at.geo = geo; at.prog = prog; at.heap = heap;
-    const sounds = this.sounds, compiled = this.compiled;
-    this.sounds = 0; this.compiled = [];
-    // What happened since the last frame started.
-    const e = this.ev, events = new Map();
+    const sounds = this.sounds, compiled = this.compiled.length ? this.compiled : NONE;
+    this.sounds = 0; if (compiled !== NONE) this.compiled = [];
+    // What happened since the last frame started. (Nothing made for a frame where nothing did: it runs every frame.)
+    const e = this.ev, events = e.n > e.from ? new Map() : NO_EVENTS;
     for (let k = Math.max(e.from, e.n - RING); k < e.n; k++) {
       const i = k % RING, x = events.get(e.what[i]) || [0, 0];
       x[0]++; x[1] += e.d[i]; events.set(e.what[i], x);
@@ -175,7 +176,7 @@ export class FrameLog {
     if (this.slow.length >= MAX_SLOW) return;
     const flags = [g.input?.held?.('scores') && 'scoreboard', g.buyMenu?.isOpen && 'buy menu', g.console?.isOpen && 'console', g.me && !g.me.alive && 'you dead'].filter(Boolean);
     const rec = { t: t0, start: last.start, round: g.match?.round ?? 0, phase: g.match?.phase || '', int, usual: this.avg, work: last.cpu, idle, sim: last.sim, ticks: last.ticks,
-      ai: last.ai, bots: last.bots, draw: last.draw, hud: last.hud, gpu: null, heapIn: last.heapIn, heapBetween, changed: { tex: changed[0], geo: changed[1], prog: changed[2] }, compiled, sounds, flags,
+      ai: last.ai, bots: last.bots, draw: last.draw, hud: last.hud, gpu: null, heapIn: last.heapIn, heapBetween, changed: { tex: texIn, geo: geoIn, prog: progIn }, compiled, sounds, flags,
       events: [...events].sort((a, b) => b[1][1] - a[1][1]).map(([k, [c, d]]) => `${k}${c > 1 ? ' ×' + c : ''}${d >= 0.5 ? ` (${d.toFixed(1)} ms)` : ''}`) };
     this.slow.push(rec);
     this.gpuFor.set(last.frameNo, rec);
@@ -186,7 +187,8 @@ export class FrameLog {
     const g = this.g, p = g.parts, end = performance.now(), last = this.last, s = this.sec, heap = heapNow();
     this.readGpu();
     const cpu = end - t0;
-    Object.assign(last, { start: t0, end, cpu, sim: t1 - t0, ticks, ai: p.ai, bots: p.bots, draw: p.draw, hud: p.hud, heapIn: heap - this.at.heap, frameNo: g.frameNo });
+    last.start = t0; last.end = end; last.cpu = cpu; last.sim = t1 - t0; last.ticks = ticks; last.ai = p.ai; last.bots = p.bots; last.draw = p.draw; last.hud = p.hud;
+    last.heapIn = heap - this.at.heap; last.frameNo = g.frameNo;
     this.heapEnd = heap;
     this.done = g.frameNo;
     this.round.cpu += cpu;

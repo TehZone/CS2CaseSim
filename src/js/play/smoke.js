@@ -21,19 +21,21 @@ const BLOOM = 1.2, GROW = 0.25, BLOOM_DONE = 0.05 + BLOOM + GROW;
 const TUNNEL = 1.15, TUNNEL_SIDE = 0.55, BLAST = 2.4, BLAST_CORE = 1.6, BLAST_RADIUS = 190, REFILL = 0.7;
 const BLOCK = 30; // units of full smoke that hide what's behind
 export const LIGHT_SCALE = 2; // voxel light is stored halved (it goes above 1)
+const DIMS = [NX, NY, NZ], _dir = [0, 0, 0], _lo = [0, 0, 0], _hi = [0, 0, 0]; // (scratch: plain arrays, see collision.js)
 
-// Binary min-heap of (cost, cell).
+// Binary min-heap of (cost, cell). (Nothing made as it goes: pop returns the cell and leaves its cost in topCost.)
 class Heap {
-  constructor() { this.c = []; this.i = []; }
+  constructor() { this.c = []; this.i = []; this.topCost = 0; }
   get size() { return this.c.length; }
   push(cost, idx) {
     const c = this.c, i = this.i;
     let k = c.length;
     c.push(cost); i.push(idx);
-    while (k > 0) { const p = (k - 1) >> 1; if (c[p] <= c[k]) break; [c[p], c[k]] = [c[k], c[p]]; [i[p], i[k]] = [i[k], i[p]]; k = p; }
+    while (k > 0) { const p = (k - 1) >> 1; if (c[p] <= c[k]) break; swap(c, i, p, k); k = p; }
   }
   pop() {
-    const c = this.c, i = this.i, top = [c[0], i[0]], lc = c.pop(), li = i.pop();
+    const c = this.c, i = this.i, top = i[0], lc = c.pop(), li = i.pop();
+    this.topCost = c.length ? c[0] : lc; // (before c[0] is overwritten: the cost of the one popped)
     if (c.length) {
       c[0] = lc; i[0] = li;
       let k = 0;
@@ -43,12 +45,15 @@ class Heap {
         if (l < c.length && c[l] < c[m]) m = l;
         if (r < c.length && c[r] < c[m]) m = r;
         if (m === k) break;
-        [c[m], c[k]] = [c[k], c[m]]; [i[m], i[k]] = [i[k], i[m]]; k = m;
+        swap(c, i, m, k); k = m;
       }
     }
     return top;
   }
 }
+function swap(c, i, a, b) { const x = c[a]; c[a] = c[b]; c[b] = x; const y = i[a]; i[a] = i[b]; i[b] = y; }
+// The flood fill's neighbours: [dx, dy, dz, the cost of the step] (rising costs more, sinking less).
+const NEIGHBOURS = [1, 0, 0, 1, -1, 0, 0, 1, 0, 1, 0, 1, 0, -1, 0, 1, 0, 0, 1, 1.35, 0, 0, -1, 0.9];
 
 // One smoke cloud on a 32 x 32 x 16 grid of 16-unit cells around where the grenade popped.
 export class SmokeField {
@@ -89,8 +94,10 @@ export class SmokeField {
     const k = this.idx(x, y, z);
     if (!this.state[k]) {
       // The whole cell, a little oversized: neighbouring cells overlap, so no surface (a floor, a wall) slips between them.
-      const lo = [this.min[0] + x * VOX - 0.5, this.min[1] + y * VOX - 0.5, this.min[2] + z * VOX - 0.5];
-      this.state[k] = this.world.boxOverlap(lo, [lo[0] + VOX + 1, lo[1] + VOX + 1, lo[2] + VOX + 1], FLAG_BULLET) ? 3 : 1;
+      const lo = _lo, hi = _hi;
+      lo[0] = this.min[0] + x * VOX - 0.5; lo[1] = this.min[1] + y * VOX - 0.5; lo[2] = this.min[2] + z * VOX - 0.5;
+      for (let i = 0; i < 3; i++) hi[i] = lo[i] + VOX + 1;
+      this.state[k] = this.world.boxOverlap(lo, hi, FLAG_BULLET) ? 3 : 1;
     }
     return this.state[k] !== 3;
   }
@@ -99,15 +106,15 @@ export class SmokeField {
   fill(budget = FILL_PER_TICK) {
     const h = this.heap;
     while (budget-- > 0 && h.size && this.cells.length < MAX_CELLS) {
-      const [c, k] = h.pop();
+      const k = h.pop(), c = h.topCost;
       if (this.state[k] === 2 || c > this.cost[k]) continue;
       if (c > MAX_COST) { h.c.length = 0; h.i.length = 0; break; }
       this.state[k] = 2;
       this.cells.push(k);
       this.maxCost = Math.max(this.maxCost, c);
       const x = k % NX, y = Math.floor(k / NX) % NY, z = Math.floor(k / (NX * NY));
-      for (const [dx, dy, dz, w] of [[1, 0, 0, 1], [-1, 0, 0, 1], [0, 1, 0, 1], [0, -1, 0, 1], [0, 0, 1, 1.35], [0, 0, -1, 0.9]]) {
-        const nx = x + dx, ny = y + dy, nz = z + dz;
+      for (let j = 0; j < NEIGHBOURS.length; j += 4) {
+        const dz = NEIGHBOURS[j + 2], w = NEIGHBOURS[j + 3], nx = x + NEIGHBOURS[j], ny = y + NEIGHBOURS[j + 1], nz = z + dz;
         if (nz > this.startZ + MAX_RISE) continue;
         const n = this.idx(nx, ny, nz);
         if (!this.isFree(nx, ny, nz)) { if (dz && this.state[n] === 3 && !this.inSkin[n]) { this.inSkin[n] = 1; this.skin.push(n); } continue; }
@@ -139,8 +146,8 @@ export class SmokeField {
   heal(dt) {
     if (!this.holes) return;
     let any = false;
-    for (const k of this.cells) {
-      const h = this.hole[k];
+    for (let j = 0; j < this.cells.length; j++) { // (indexed: every tick of a smoke with a hole in it)
+      const k = this.cells[j], h = this.hole[k];
       if (h <= 0) continue;
       this.hole[k] = Math.max(0, h - dt);
       any = true;
@@ -148,18 +155,20 @@ export class SmokeField {
     this.holes = any;
   }
 
-  // The part of a segment inside this grid: [t0, t1] along the unit direction, or null.
+  // The part of a segment inside this grid: [t0, t1] along the unit direction (into this.seg), or null.
   clip(o, d, maxT) {
     let t0 = 0, t1 = maxT;
     for (let i = 0; i < 3; i++) {
-      const lo = this.min[i] + VOX, hi = this.min[i] + ([NX, NY, NZ][i] - 1) * VOX;
+      const lo = this.min[i] + VOX, hi = this.min[i] + (DIMS[i] - 1) * VOX;
       if (Math.abs(d[i]) < 1e-9) { if (o[i] < lo || o[i] > hi) return null; continue; }
       let a = (lo - o[i]) / d[i], b = (hi - o[i]) / d[i];
-      if (a > b) [a, b] = [b, a];
+      if (a > b) { const x = a; a = b; b = x; }
       t0 = Math.max(t0, a); t1 = Math.min(t1, b);
       if (t0 > t1) return null;
     }
-    return [t0, t1];
+    const seg = (this.seg ||= new Float64Array(2));
+    seg[0] = t0; seg[1] = t1;
+    return seg;
   }
 
   // A bullet passing through: a tunnel about a cell wide.
@@ -193,7 +202,8 @@ export class SmokeField {
   thickness(a, b, now) {
     const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2], l = Math.hypot(dx, dy, dz);
     if (l < 1e-6) return 0;
-    const d = [dx / l, dy / l, dz / l];
+    const d = _dir;
+    d[0] = dx / l; d[1] = dy / l; d[2] = dz / l;
     const seg = this.clip(a, d, l);
     if (!seg) return 0;
     const dens = this.dens;
@@ -238,11 +248,13 @@ export class SmokeField {
         for (let k = z * NX * NY; k < (z + 1) * NX * NY; k++) put(k, 0, rgb);
       }
     }
-    for (const k of this.skin) data[(base + k) * 4 + 3] = 0;
+    // (Indexed loops here: thousands of cells a frame, and for...of made an object for each.)
+    for (let j = 0; j < this.skin.length; j++) data[(base + this.skin[j]) * 4 + 3] = 0;
     const dens = this.dens ||= new Float32Array(N); // (cells that aren't smoke stay 0)
     const life = now - this.born, left = this.until - now, mc = this.maxCost;
-    for (const k of this.cells) {
-      const c = this.cost[k];
+    const cells = this.cells;
+    for (let j = 0; j < cells.length; j++) {
+      const k = cells[j], c = this.cost[k];
       const reach = 0.05 + BLOOM * (1 - Math.sqrt(Math.max(0, 1 - Math.min(1, c / mc))));
       const grow = Math.min(1, Math.max(0, (life - reach) / GROW)), fade = Math.min(1, Math.max(0, left / FADE + (1 - c / mc) * 0.7));
       dens[k] = grow * fade * (1 - Math.min(1, this.hole[k] / REFILL)); // (cellDensity)
@@ -251,8 +263,8 @@ export class SmokeField {
     const s1x = step(20, 0), s1y = step(20, 1), s1z = step(20, 2), s2x = step(52, 0), s2y = step(52, 1), s2z = step(52, 2);
     const s3x = step(96, 0), s3y = step(96, 1), s3z = step(96, 2), layer = NX * NY;
     const g = lit.ground, sky = lit.sky, sun = lit.sun, startZ = this.startZ ?? 3;
-    for (const k of this.cells) {
-      const x = k % NX, y = Math.floor(k / NX) % NY, z = Math.floor(k / layer);
+    for (let j = 0; j < cells.length; j++) {
+      const k = cells[j], x = k % NX, y = Math.floor(k / NX) % NY, z = Math.floor(k / layer);
       let toSun = 0, above = 0, X = x + s1x, Y = y + s1y, Z = z + s1z;
       if (X >= 0 && Y >= 0 && Z >= 0 && X < NX && Y < NY && Z < NZ) toSun += dens[X + NX * (Y + NY * Z)];
       X = x + s2x; Y = y + s2y; Z = z + s2z;
