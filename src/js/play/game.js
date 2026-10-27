@@ -29,7 +29,7 @@ import { iconFor, iconPictures } from './icons.js';
 import { Radar } from './radar.js';
 import { buildCS2Model, buildGloveScene } from '../cs2/skin.js';
 import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, aimThrow as aimThrowPitch } from './grenades.js';
-import { Drops } from './drops.js';
+import { Drops, gunSkin, LOCAL } from './drops.js';
 import { Balls } from './props.js';
 import { Doors } from './doors.js';
 import { Post } from './post.js';
@@ -46,6 +46,7 @@ import { botIdentities, pickIdentities } from './identity.js';
 import { tierOf, TO_DIFFICULTY, botSkill, groupOfSkill, ratingOfSkill, skillParams, tierOfGroup, mmrOfSkill } from './skill.js';
 import { premierInfo, formatRating } from '../engine/premier.js';
 import { loadLineups } from './utility.js';
+import { Spots } from './spots.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
 export const TICK = 1 / 64;
@@ -237,6 +238,9 @@ export class Game {
     this.impacts = await cs2Play('impacts').catch(() => ({}));
     await rankPictures(); // (the emblems as pictures: see rank.js)
     this.midSpot = this.findMid();
+    // Where bots hold (spots.js), worked out now rather than as a round starts.
+    this.spots = new Spots(this);
+    if (!this.respawnMode) { status('Working out where bots hold…'); const t0 = performance.now(); await this.spots.prepare(); this.spotsMs = performance.now() - t0; }
 
     status('Loading players…');
     this.me = new Combatant({ name: 'You', team: this.team, squad: 'A', bot: false });
@@ -301,9 +305,11 @@ export class Game {
     // hold them (in their own materials, see Bot.lightOwn: the first bot to hold each one compiled it mid-round), your
     // viewmodels and the plain ones you see spectating a bot, each with its shaders compiled and its textures on the GPU.
     const guns = [...new Set([...BOT_GUNS, ...PRELOAD, ...(this.armsRace ? ARMS_RACE : [])])];
+    // (And your skins on those guns as they'll lie on the floor when you drop one, and in a bot's hands if it picks one up.)
+    const worldGuns = [...BOT_GUNS.map((id) => [id, null]), ...guns.filter((id) => !/knife|bayonet/.test(id) && this.ownSkin(id)).map((id) => [id, this.ownSkin(id)])];
     const jobs = [
-      ...BOT_GUNS.map((id) => async () => {
-        const tpl = await this.botAssets.weapon(id);
+      ...worldGuns.map(([id, item]) => async () => {
+        const tpl = await this.botAssets.weapon(id, item);
         if (!tpl) return;
         const { model } = this.botAssets.staticWeapon(tpl), held = model.clone();
         await this.warm(model, this.scene);
@@ -366,7 +372,8 @@ export class Game {
 
   // A model ready to be drawn: its shaders compiled and its textures uploaded (and drawn once as Play loads: drawOnce).
   async warm(obj, scene) {
-    if (!obj || this.disposed) return;
+    if (!obj || this.disposed || this.warming?.has(obj)) return;
+    (this.warming ||= new Set()).add(obj); // (one viewmodel can be two looks': with no gloves or skin, yours is a bot's)
     await this.precompile(obj, scene);
     (this.warmed ||= []).push([obj, scene]);
     obj.traverse((o) => {
@@ -487,29 +494,30 @@ export class Game {
     const kdef = knife ? itemDef(knife) : DEFAULT_KNIFE[team];
     return kdef.wid?.startsWith('weapon_') ? kdef.wid : Object.values(D.skins).find((s) => s.w === kdef.w && s.wid.startsWith('weapon_'))?.wid || 'weapon_knife';
   }
-  // The viewmodel (with your equipped skin and gloves) for a weapon, built once per match.
-  // plain: without your skins and gloves (a bot's gun, seen while spectating it).
-  vmData(wid, { plain = false } = {}) {
-    // The plain look (a bot's gun, spectating) is your own when you have no skin for it and no gloves: the same rig.
-    if (plain && !equipped('gloves') && !this.ownSkin(wid)) plain = false;
-    const key = (plain ? 'plain:' : '') + wid;
+  // The viewmodel for a weapon, built once per match for each look: your equipped skin and gloves; skin: the skin of
+  // the gun in your hands (see drops.js gunSkin: one you picked up, a bot's default, null) with your gloves; plain: a
+  // bot's hands (no gloves of yours) and its gun's skin (the default, unless that's given), seen spectating it.
+  vmData(wid, { plain = false, skin } = {}) {
+    const knife = /knife|bayonet/.test(wid);
+    if (knife || wid === 'weapon_c4' || NADES[wid]) skin = undefined; // (your own, never dropped)
+    const shown = skin === undefined ? (plain ? null : this.ownSkin(wid)) : skin?.item && itemDef(skin.item) ? skin.item : null;
+    const gloves = plain ? null : equipped('gloves');
+    // (Looks that come out the same share one: a bot's default gun is yours when you have no skin for it or gloves.)
+    const key = (gloves ? 'gloves:' : '') + (shown ? 'item:' + (shown.uid || JSON.stringify(shown)) + ':' : '') + wid;
     if (!this.vmCache.has(key)) {
       const job = (async () => {
         const vanilla = Object.values(D.skins).find((s) => s.wid === wid);
-        let item = null, def;
-        if (/knife|bayonet/.test(wid)) {
-          item = plain ? null : equipped('knife');
-          def = item ? itemDef(item) : DEFAULT_KNIFE[wid === 'weapon_knife_t' ? 'T' : 'CT'];
-        } else if (wid === 'weapon_c4') def = { wid, w: 'C4 Explosive', n: 'C4 Explosive', cat: 'equipment', v: true };
+        const item = shown;
+        let def;
+        if (knife) def = item ? itemDef(item) : DEFAULT_KNIFE[wid === 'weapon_knife_t' ? 'T' : 'CT'];
+        else if (wid === 'weapon_c4') def = { wid, w: 'C4 Explosive', n: 'C4 Explosive', cat: 'equipment', v: true };
         else if (NADES[wid]) def = { wid, w: NADES[wid].name, n: NADES[wid].name, cat: 'equipment', v: true };
         else {
           const w = vanilla?.w || ITEM_NAMES[wid] || wid;
-          item = plain ? null : equipped('w:' + w);
           def = item ? itemDef(item) : { wid, w, n: w, cat: vanilla?.cat || 'rifle', v: true };
         }
         const data = await cs2Play('weapon', wid);
         // Your gloves are baked once for every weapon's arms.
-        const gloves = plain ? null : equipped('gloves');
         if (gloves) this.gloveScene ||= buildGloveScene(gloves, itemDef(gloves), this.renderer);
         const vm = await buildViewmodel(item || { t: 'skin', fl: 0, sd: 0 }, def, data, { gloves, gloveScene: gloves ? this.gloveScene : null, renderer: this.renderer });
         this.sounds.add(data.sounds);
@@ -531,13 +539,16 @@ export class Game {
     const vanilla = Object.values(D.skins).find((s) => s.wid === wid);
     return equipped('w:' + (vanilla?.w || ITEM_NAMES[wid] || wid));
   }
-  // A fresh gun (full ammo) for one of your slots.
-  async myGun(slot, wid) {
-    const { data, vm, name } = await this.vmData(wid);
-    return new Gun({ slot, id: wid, name, stats: data.stats || this.stats[wid] || {}, sounds: data.sounds, vm });
+  // A fresh gun (full ammo) for one of your slots: with your skin for it, or skin (one you picked up: see gunSkin).
+  async myGun(slot, wid, skin) {
+    if (skin === undefined) skin = gunSkin(this.ownSkin(wid));
+    const { data, vm, name } = await this.vmData(wid, { skin });
+    const gun = new Gun({ slot, id: wid, name, stats: data.stats || this.stats[wid] || {}, sounds: data.sounds, vm });
+    gun.skin = skin;
+    return gun;
   }
-  async giveMe(slot, wid, select = true) {
-    const gun = await this.myGun(slot, wid);
+  async giveMe(slot, wid, select = true, skin) {
+    const gun = await this.myGun(slot, wid, skin);
     if (this.disposed) return;
     this.arsenal.give(slot, gun, this.now, select);
   }
@@ -804,6 +815,7 @@ export class Game {
     this.radio?.close();
     // Each side's buy (save, force, full), then the plans: who throws which lineup goes by who has which grenade.
     const econ = { T: teamEconomy(this, 'T', pistol), CT: teamEconomy(this, 'CT', pistol) };
+    this.spots.roundStart();
     for (const b of this.bots) { b.brain.roundStart(null); b.brain.buy(econ[b.c.team]); }
     this.dropRifles(econ);
     this.plans = { T: teamPlan(this, 'T', econ.T), CT: teamPlan(this, 'CT', econ.CT) };
@@ -886,7 +898,7 @@ export class Game {
       }
       b.spawn(this.onFloor(sp.origin), sp.yaw);
       b.slot = b.weapons.primary ? 'primary' : b.weapons.secondary ? 'secondary' : 'knife';
-      b.equip(b.weapons[b.slot].id);
+      b.equip(b.weapons[b.slot].id, { skin: b.weapons[b.slot].skin });
       b.brain.roundStart({});
       b.brain.startDelay = 0;
     }
@@ -989,7 +1001,7 @@ export class Game {
     if (c.hasC4) b.weapons.c4 = botGun('weapon_c4', this.stats.weapon_c4); else delete b.weapons.c4;
     b.spawn(this.onFloor(sp.origin), sp.yaw);
     b.slot = b.weapons.primary ? 'primary' : 'secondary';
-    b.equip(b.weapons[b.slot].id);
+    b.equip(b.weapons[b.slot].id, { skin: b.weapons[b.slot].skin }); // (a gun it picked up keeps its skin)
   }
   giveBot(b, id) {
     if (isGrenade(id)) return; // counted in c.nades; bots throw straight from their hand
@@ -1003,7 +1015,7 @@ export class Game {
     b.pendingThrow = null;
     b.slot = slot;
     b.weapons[slot].nextAttack = Math.max(b.weapons[slot].nextAttack, t + 0.5);
-    b.equip(b.weapons[slot].id);
+    b.equip(b.weapons[slot].id, { skin: b.weapons[slot].skin });
   }
 
   onRoundEnd(winner, reason, mvp) {
@@ -1436,15 +1448,16 @@ export class Game {
   pickUp(c, it) {
     if (!this.drops.take(it)) return;
     const slot = slotOf(it.id);
+    // The gun as it was: its ammo, and its skin (yours, someone else's, or a bot's default: see drops.js).
     if (c === this.me) {
       this.sounds.play('Player.PickupWeapon', { volume: 0.6 });
-      this.giveMe(slot, it.id, false).then(() => { const gun = this.arsenal.guns[slot]; if (gun) { gun.clip = it.clip; gun.reserve = it.reserve; } });
+      this.giveMe(slot, it.id, false, it.skin || null).then(() => { const gun = this.arsenal.guns[slot]; if (gun) { gun.clip = it.clip; gun.reserve = it.reserve; } });
     } else {
       const b = this.botOf(c);
       const gun = botGun(it.id, this.stats[it.id]);
-      gun.clip = it.clip; gun.reserve = it.reserve;
+      gun.clip = it.clip; gun.reserve = it.reserve; gun.skin = it.skin || null;
       b.weapons[slot] = gun;
-      if (slot === 'primary') { b.slot = 'primary'; b.equip(it.id); }
+      if (slot === 'primary') { b.slot = 'primary'; b.equip(it.id, { skin: gun.skin }); }
     }
   }
   // G: drop the gun in your hand (or the bomb).
@@ -1988,7 +2001,7 @@ export class Game {
     c.alive = false;
     c.health = 0;
     this.match.onKill(c, attacker, weapon?.stats || weapon, { headshot });
-    if (attacker === this.me && c !== this.me && (this.ffa || c.team !== this.me.team)) this.countStatTrak(weapon?.id);
+    if (attacker === this.me && c !== this.me && (this.ffa || c.team !== this.me.team)) this.countStatTrak(weapon);
     if (!this.ffa) this.killChatter(c, attacker);
     if (!this.respawnMode && attacker && attacker !== c && attacker.team !== c.team) {
       const at = this.positionOf(c);
@@ -2023,16 +2036,16 @@ export class Game {
     }
   }
 
-  // A kill with your StatTrak™ gun or knife counts on its counter: saved on the item and shown on the weapon.
-  async countStatTrak(wid) {
-    if (!wid || NADES[wid]) return;
-    const item = /knife|bayonet/.test(wid) ? equipped('knife')
-      : equipped('w:' + (Object.values(D.skins).find((s) => s.wid === wid)?.w || ITEM_NAMES[wid] || wid));
+  // A kill with your own StatTrak™ gun or knife counts on its counter: saved on the item and shown on the weapon. With
+  // a gun of someone else's (picked up), it doesn't, as in CS2; nor does a bot's kill with yours.
+  async countStatTrak(gun) {
+    if (!gun?.id || NADES[gun.id] || gun.skin?.owner !== LOCAL) return;
+    const item = S.inv.find((i) => i.uid === gun.skin.item.uid);
     if (!item?.stt) return;
     try {
       const { kills } = await act('play.stattrak', { uid: item.uid });
-      const held = await this.vmCache.get(wid);
-      held?.vm.model.userData.statTrak?.set(kills);
+      gun.skin.item.kills = kills;
+      gun.vm?.model.userData.statTrak?.set(kills);
     } catch (e) { console.warn('StatTrak count', e); }
   }
 
@@ -2053,27 +2066,27 @@ export class Game {
     if (this.input.takeClicked() & 1 || !this.spectating?.c.alive) this.nextSpectate();
     if (pressed?.has('jump')) this.specThird = !this.specThird;
   }
-  // First-person spectating: the bot's own body is hidden and its gun shows as a viewmodel (the default look), drawing,
-  // shooting, reloading and throwing with it.
+  // First-person spectating: the bot's own body is hidden and its gun shows as a viewmodel (the default look, or the skin
+  // of a gun it picked up), drawing, shooting, reloading and throwing with it.
   updateSpecView(dt) {
     const s = !this.me.alive && !this.specThird && !(this.deathCam && this.now < this.deathCam.until) && this.spectating?.c.alive ? this.spectating : null;
     const show = (b, on) => { b.model.visible = on; if (b.weaponModel) b.weaponModel.visible = on; };
     if (this.specHidden && this.specHidden !== s) { show(this.specHidden, true); this.specHidden = null; }
     if (s) { show(s, false); this.specHidden = s; }
-    const wid = s?.holding;
-    if (this.specVm && (this.specVm.bot !== s || this.specVm.wid !== wid)) {
+    const wid = s?.holding, skin = s?.holdingSkin || null; // (its gun's skin: one it picked up, else the default)
+    if (this.specVm && (this.specVm.bot !== s || this.specVm.wid !== wid || this.specVm.skin !== skin)) {
       if (this.specVm.vm !== this.arsenal.gun?.vm) this.specVm.vm.rig.visible = false; // (it may be your own gun's: see vmData)
       this.specVm = null;
     }
-    const key = s && wid ? s.c.name + '|' + wid : null;
+    const key = s && wid ? s.c.name + '|' + wid + '|' + (skin?.item.uid || '') : null;
     if (key && !this.specVm && this.specLoading !== key) {
       this.specLoading = key;
-      this.vmData(wid, { plain: true }).then(({ vm }) => {
+      this.vmData(wid, { plain: true, skin }).then(({ vm }) => {
         if (this.specLoading !== key) return;
         this.specLoading = null;
-        if (this.spectating !== s || s.holding !== wid || this.disposed) return;
+        if (this.spectating !== s || s.holding !== wid || (s.holdingSkin || null) !== skin || this.disposed) return;
         const draw = vm.has('draw') ? vm.play('draw') : (vm.play('idle', { loop: true }), 0);
-        this.specVm = { bot: s, wid, vm, animEnd: this.now + draw };
+        this.specVm = { bot: s, wid, skin, vm, animEnd: this.now + draw };
       }).catch(() => { if (this.specLoading === key) this.specLoading = null; });
     }
     const v = this.specVm;

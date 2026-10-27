@@ -777,7 +777,7 @@ function fakeGame() {
 {
   const K = await import('../src/js/play/skill.js');
   const silver = K.skillParams(0), ge = K.skillParams(1);
-  ok(silver.reaction[0] > ge.reaction[0] * 3 && silver.aimErr > ge.aimErr * 3 && silver.utility < 0.2 && ge.utility > 0.9 && silver.strafe > ge.strafe * 5 && silver.crosshair > ge.crosshair * 10,
+  ok(silver.reaction[0] > ge.reaction[0] * 2 && silver.flickErr > ge.flickErr * 3 && silver.flickMin > ge.flickMin * 5 && silver.pursuitLag > ge.pursuitLag * 3 && silver.utility < 0.2 && ge.utility > 0.9 && silver.strafe > ge.strafe * 5 && silver.crosshair > ge.crosshair * 10,
     "skill: Silvers react slower, aim worse, rarely throw utility, counter-strafe late and look at the floor; Global Elites don't");
   ok([1, 6, 7, 10, 11, 14, 15, 17, 18].every((g) => K.groupOfSkill(K.skillOfGroup(g)) === g), 'skill: skill groups and skill map back and forth');
   const band = (g) => K.ratingOfSkill(K.skillOfGroup(g));
@@ -906,6 +906,157 @@ function fakeGame() {
     const off = list.map((l) => { const r = landing(col, l); return r ? Math.hypot(r.pos[0] - l.land[0], r.pos[1] - l.land[1], r.pos[2] - l.land[2]) : Infinity; });
     ok(list.length && off.every((d) => d < 2), 'lineups: every ' + map + ' lineup lands where it was found (' + list.length + ')');
   }
+}
+
+// ---- bots' aim (aim.js): still for the reaction, a flick that lands off, corrections, then following with a lag -----
+{
+  const { Aim, minJerk } = await import('../src/js/play/aim.js');
+  const K = await import('../src/js/play/skill.js');
+  const seeded = (s) => () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  // A target 40° to the side, 800 units off (its head about 0.29° across, half), still unless target(t) moves it.
+  const run = (skill, seed, target = () => [0, 40], secs = 2.5) => {
+    const p = K.skillParams(skill), aim = new Aim(seeded(seed)), view = [0, 0], out = [0, 0], dt = 1 / 64;
+    const react = (p.reaction[0] + p.reaction[1]) / 2, trace = [];
+    aim.start(0, react);
+    let prev = target(0), landed = null, was = aim.phase;
+    for (let t = 0; t < secs; t += dt) {
+      const at = target(t), vel = [(at[0] - prev[0]) / dt, (at[1] - prev[1]) / dt];
+      prev = at;
+      aim.step(dt, t, view, at, vel, 0.29, p, out);
+      view[0] = out[0]; view[1] = out[1];
+      const err = Math.hypot(at[0] - view[0], at[1] - view[1]);
+      if (was === 'move' && aim.phase !== 'move' && landed == null) landed = err; // (where the first flick put it)
+      was = aim.phase;
+      trace.push({ t, err, view: view.slice() });
+    }
+    const last = trace.findLastIndex((x) => x.err >= 1);
+    return { trace, react, landed, settled: last < 0 ? 0 : trace[last].t + dt };
+  };
+  const ge = run(1, 7);
+  ok(ge.trace.filter((x) => x.t < ge.react - 1e-9).every((x) => x.view[0] === 0 && x.view[1] === 0), `aim: nothing moves for its reaction time (${Math.round(ge.react * 1000)} ms for a Global Elite)`);
+  const med = (xs) => xs.slice().sort((a, b) => a - b)[xs.length >> 1];
+  const many = (skill) => Array.from({ length: 41 }, (_, i) => run(skill, 11 + i * 7));
+  const G = many(1), Sv = many(0);
+  const gSettle = med(G.map((r) => r.settled)), sSettle = med(Sv.map((r) => r.settled)), gLand = med(G.map((r) => r.landed)), sLand = med(Sv.map((r) => r.landed));
+  ok(gSettle > ge.react + 0.12 && gSettle < 0.8, `aim: a Global Elite is on a head 40° off after ${Math.round(gSettle * 1000)} ms (reaction, flick and correction), not at once`);
+  ok(sSettle > gSettle * 1.8, `aim: a Silver takes much longer: ${Math.round(sSettle * 1000)} ms`);
+  ok(gLand > 0.4 && gLand < 6 && sLand > gLand * 2, `aim: the first flick lands off (median ${gLand.toFixed(1)}° for a Global Elite, ${sLand.toFixed(1)}° for a Silver)`);
+  ok(Math.abs(minJerk(0.5) - 0.5) < 1e-12 && minJerk(0.6) - minJerk(0.4) > (minJerk(0.2) - minJerk(0)) * 3 && minJerk(1) === 1, 'aim: a flick is fast in the middle and slows into the end (minimum jerk)');
+  // Following a strafing target (12° either way, turning back every 0.6 s): it keeps up, but each turn takes it off them
+  // for a moment (it used to stay on the head however they moved).
+  const strafe = (t) => [0, 40 + (t < 1.5 ? 0 : 12 * (1 - Math.abs((((t - 1.5) / 0.6) % 2) - 1) * 2))];
+  const follow = (skill) => { const r = run(skill, 5, strafe, 4); const w = r.trace.filter((x) => x.t > 2.2); return { max: Math.max(...w.map((x) => x.err)), mean: w.reduce((s, x) => s + x.err, 0) / w.length }; };
+  const fg = follow(1), fs = follow(0);
+  ok(fg.max > 0.3 && fg.mean < 2, `aim: a Global Elite follows a strafing target (${fg.mean.toFixed(2)}° off on average) but a change of direction throws it off for a moment (up to ${fg.max.toFixed(2)}°)`);
+  ok(fs.max > fg.max * 2, `aim: a Silver's lag is worse (up to ${fs.max.toFixed(2)}°)`);
+}
+
+// ---- bots' senses: a sound gives a rough idea where; they look for it where it would come from, not through walls ---
+{
+  const { Brain } = await import('../src/js/play/ai.js');
+  // A wall between the bot (0, 0) and a noise at (600, 0), with a gap at its north end (y 300 and up).
+  const Wl = world([[[-2000, -2000, -64], [2000, 2000, 0]], [[200, -1000, 0], [240, 300, 200]]]);
+  const g = { lineOfSight: (a, b) => !Wl.occluded(a, b, FLAG_BULLET, 2), nav: { groundAt: () => 0, path: () => ({ points: [[220, 360, 0], [400, 360, 0], [600, 0, 0]] }) } };
+  const bot = { pos: [0, 0, 0], eye: () => [0, 0, 64] };
+  const brain = Object.assign(Object.create(Brain.prototype), { game: g, bot, d: { hear: 1, patience: 0.5 } });
+  let off = 0, n = 0, still = true;
+  for (let i = 0; i < 200; i++) {
+    brain.heard = null;
+    brain.hear([600, 0, 0], 2600, i * 10);
+    off += Math.hypot(brain.heard.pos[0] - 600, brain.heard.pos[1]); n++;
+    const at = brain.heard.pos.slice();
+    brain.hear([640, 30, 0], 900, i * 10 + 0.4); // (the same footsteps going on nearby)
+    still &&= brain.heard.pos[0] === at[0] && brain.heard.pos[1] === at[1];
+  }
+  ok(off / n > 60 && off / n < 300, `senses: a noise behind a wall 600 units off is placed ${Math.round(off / n)} units out on average (it had the exact spot)`);
+  ok(still, "senses: the same footsteps going on nearby don't move where it thinks they are (it used to follow each step)");
+  const w = brain.watchPoint({ pos: [600, 0, 0] }, 0);
+  ok(w && Math.hypot(w[0] - 220, w[1] - 360) < 1, `senses: it looks for a noise behind a wall at the gap they'd come through (${w?.map(Math.round)}), not through the wall`);
+  const open = Object.assign(Object.create(Brain.prototype), { game: { ...g, lineOfSight: () => true }, bot });
+  const v = open.watchPoint({ pos: [600, 0, 0] }, 0);
+  ok(v && v[0] === 600 && v[1] === 0, 'senses: one it can see the spot of, it looks at');
+}
+
+// ---- bots round each other: past on the right of one coming the other way, round one standing in the way ---------------
+{
+  const { Brain } = await import('../src/js/play/ai.js');
+  const a = { c: { alive: true }, pos: [0, 0, 0], vel: [220, 0, 0] }, b = { c: { alive: true }, pos: [60, 6, 0], vel: [-220, 0, 0] };
+  const bots = [a, b];
+  const g = { combatants: [a.c, b.c], me: null, botOf: (c) => bots.find((x) => x.c === c), nav: { groundAt: () => 0 }, collision: { traceBox: () => ({ fraction: 1 }) } };
+  const brain = (x) => Object.assign(Object.create(Brain.prototype), { game: g, bot: x, dodge: 0, dodgeUntil: 0, dodgeFor: null, dodgeFlips: 0 });
+  const wa = [250, 0], wb = [-250, 0];
+  brain(a).avoid(wa, 0); brain(b).avoid(wb, 0);
+  ok(wa[1] < -50 && wb[1] > 50 && Math.abs(Math.hypot(...wa) - 250) < 1e-6, 'avoid: two bots meeting in a corridor each pass on their right (they used to stop face to face)');
+  b.vel = [0, 0, 0]; b.pos = [50, 10, 0];
+  const ws = [250, 0];
+  brain(a).avoid(ws, 1);
+  ok(ws[1] < -50, 'avoid: round the other side of someone standing a little to one side');
+  const free = [250, 0];
+  b.pos = [-80, 0, 0];
+  brain(a).avoid(free, 2);
+  ok(free[1] === 0, "avoid: someone behind isn't in the way");
+  ok(brain(a).occupied([-70, 10, 0]) && !brain(a).occupied([200, 0, 0]), 'avoid: a point someone stands on counts as reached');
+}
+
+// ---- where bots hold (spots.js): cover, facing the way in, a different spot each, and not the same every round ---------
+{
+  const { Spots } = await import('../src/js/play/spots.js');
+  const { NavMesh } = await import('../src/js/play/nav.js');
+  // The terrorists' side (west) through a doorway (x -400, |y| < 60) into a big room with the site; a crate on it.
+  const Wr = world([[[-2000, -2000, -64], [2000, 2000, 0]], [[-400, -1000, 0], [-360, -60, 200]], [[-400, 60, 0], [-360, 1000, 200]], [[300, 250, 0], [360, 310, 60]]]);
+  const sq = (x0, y0, x1, y1) => [[x0, y0, 0], [x1, y0, 0], [x1, y1, 0], [x0, y1, 0]];
+  const hiding = [[500, -400, 0], [700, 300, 0], [400, 520, 0], [900, 0, 0], [380, 330, 0], [800, -600, 0], [1100, 400, 0], [600, -150, 0]];
+  const nav = new NavMesh({ areas: [
+    { id: 1, flags: 0, c: sq(-1800, -1000, -400, 1000), e: [[], [2], [], []], h: [] },
+    { id: 2, flags: 0, c: sq(-400, -60, -360, 60), e: [[], [3], [], [1]], h: [] },
+    { id: 3, flags: 0, c: sq(-360, -1000, 1800, 1000), e: [[], [], [], [2]], h: hiding },
+  ] });
+  const info = { bombsites: [{ site: 'A', min: [200, -200, 0], max: [600, 200, 40] }], places: [], spawns: { T: [{ origin: [-1500, 0, 0] }], CT: [{ origin: [1500, 0, 0] }] } };
+  const game = { map: { info }, nav, collision: Wr, enemySpawnCenter: (team) => info.spawns[team === 'T' ? 'CT' : 'T'][0].origin };
+  const sp = new Spots(game, (() => { let s = 99; return () => ((s = (s * 16807) % 2147483647) / 2147483647); })());
+  await sp.prepare();
+  const p = sp.place('hold:A');
+  ok(p && p.ways.length === 1 && p.spots.length >= 4, `spots: the site's way in and ${p?.spots.length} spots that watch it`);
+  const door = [-380, 0];
+  const bots = ['one', 'two', 'three'].map((name) => ({ c: { name, team: 'CT' } }));
+  sp.roundStart();
+  const picks = bots.map((b) => sp.pick(b, 'hold:A'));
+  const apart = picks.every((s, i) => s && picks.every((o, j) => i === j || Math.hypot(s.pos[0] - o.pos[0], s.pos[1] - o.pos[1]) >= 100));
+  ok(apart, 'spots: three CTs on a site each get their own spot, 100+ units apart');
+  const facing = picks.every((s) => {
+    const yaw = (Math.atan2(door[1] - s.pos[1], door[0] - s.pos[0]) * 180) / Math.PI;
+    return Math.hypot(s.at[0] - door[0], s.at[1] - door[1]) < 260 && Math.abs(((yaw - s.look[1] + 540) % 360) - 180) < 20 && !Wr.occluded([s.pos[0], s.pos[1], s.pos[2] + 64], s.at, FLAG_BULLET, 2);
+  });
+  ok(facing, 'spots: each watches the doorway the terrorists come through, facing it (not the wall towards their spawn)');
+  let changed = 0, prev = picks[0].pos;
+  for (let r = 0; r < 8; r++) { sp.roundStart(); const s = sp.pick(bots[0], 'hold:A'); if (Math.hypot(s.pos[0] - prev[0], s.pos[1] - prev[1]) > 100) changed++; prev = s.pos; }
+  ok(changed >= 6, `spots: round to round a bot holds somewhere else (${changed} of 8 rounds)`);
+}
+
+// ---- guns keep their skins: dropped, picked up by a bot or by you; a bot's is the default -------------------------------
+{
+  const { Drops, gunSkin, LOCAL } = await import('../src/js/play/drops.js');
+  const item = { uid: 'u1', t: 'skin', id: 'skin-ak', fl: 0.12, sd: 661, stt: true, kills: 5, stk: [{ id: 's1', x: 0.4, y: 0.5 }], kc: { id: 'c1' } };
+  const s = gunSkin(item);
+  ok(s.owner === LOCAL && s.item !== item && JSON.stringify(s.item) === JSON.stringify(item) && gunSkin(null) === null,
+    "skins: a gun's skin is a copy of the whole item (finish, float, pattern, StatTrak, stickers, charm) and whose it is, as plain JSON");
+  const asked = [];
+  const g = { now: 0, scene: new THREE.Scene(), botAssets: { weapon: (id, it) => { asked.push(it); return Promise.resolve(null); } } };
+  const drops = new Drops(g);
+  const mine = drops.drop({ id: 'weapon_ak47', clip: 30, reserve: 90, skin: s }, [0, 0, 0]);
+  const theirs = drops.drop({ id: 'weapon_ak47', clip: 30, reserve: 90 }, [0, 0, 0]);
+  ok(mine.skin === s && asked[0] === s.item && theirs.skin === null && asked[1] == null, "skins: a dropped gun keeps its skin and lies there with it; a bot's is the default");
+  const given = [], equips = [];
+  const bot = { weapons: {}, equip: (id, o) => equips.push(o.skin) };
+  const me = { name: 'You' }, other = { name: 'bot' };
+  const ak = { clip: 30, reserve: 90, recoilSeed: 1, recoilAngle: [0, 0], recoilAngleVariance: [0, 0], recoilMagnitude: [1, 1], recoilMagnitudeVariance: [0, 0] };
+  const fake = { me, drops: { take: () => true }, sounds: { play() {} }, arsenal: { guns: {} }, stats: { weapon_ak47: ak }, botOf: () => bot, giveMe: (slot, id, sel, skin) => { given.push(skin); return Promise.resolve(); } };
+  const { Game } = await import('../src/js/play/game.js');
+  Game.prototype.pickUp.call(fake, other, mine);
+  ok(bot.weapons.primary?.skin === s && equips[0] === s, 'skins: a bot that picks your gun up holds it with your skin, and drops it with it');
+  Game.prototype.pickUp.call(fake, me, mine);
+  Game.prototype.pickUp.call(fake, me, theirs);
+  ok(given[0] === s && given[1] === null, "skins: you pick yours up with your skin, a bot's with the default (not your own skin for it)");
 }
 
 console.log(`${pass} passed, ${fail} failed`);

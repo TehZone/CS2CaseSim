@@ -1,10 +1,14 @@
 // Bot brains: what CS2's bots do in a competitive round. Terrorists pick a bomb site, walk there over the nav mesh and
 // plant; counter-terrorists split up to hold the sites and rotate on contact; after the plant both teams play the bomb
-// (retake and defuse). In a fight a bot reacts after a human-like delay, turns towards the enemy with limited speed,
-// its aim error shrinking as it tracks, stops to shoot, controls part of the recoil and fires in bursts.
-// Bots buy by their money like CS2's bots (eco, force, full buy, an AWP now and then). Your teammates follow your
-// radio commands (radio.js): go to a site, rush, follow you, hold, regroup, fall back, cover you.
+// (retake and defuse). They hold spots with cover facing the ways in (spots.js), different ones round to round. In a
+// fight a bot reacts after a human-like delay and aims like a player's hand (aim.js: a flick that lands a little off,
+// a correction, then following with a lag), stops to shoot, controls part of the recoil and fires in bursts. It knows
+// where enemies are from what it sees and, roughly, from what it hears: it looks for a noise behind a wall where they'd
+// come from (the corner, the doorway), not at them through it. Bots buy by their money like CS2's bots (eco, force,
+// full buy, an AWP now and then). Your teammates follow your radio commands (radio.js): go to a site, rush, follow you,
+// hold, regroup, fall back, cover you.
 import { FLAG_BULLET, FLAG_PLAYER } from './collision.js';
+import { Aim } from './aim.js';
 import { Gun } from './weapons.js';
 import { setOf } from './bots.js';
 import { PlayerMovement } from './movement.js';
@@ -28,6 +32,8 @@ const angleTo = (from, to) => {
 };
 const wrap = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
 const dist2 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
+const _view = [0, 0], _at = [0, 0], _aimOut = [0, 0];
 const NO_LADDERS = new Set(); // bots climb ladders on their paths themselves (climb)
 const _chest = [0, 0, 0];
 // A path point that's a jump it hasn't made yet (b: the bot).
@@ -67,6 +73,7 @@ export class Brain {
     this.stuckT = 0; this.lastProgress = [0, 0, 0]; this.stuckTries = 0; this.restUntil = 0;
     this.heading = null; // where it means to go (degrees), which it faces while moving
     this.task = 'idle'; // goto | hold | plant | defuse | pickup | hunt
+    this.aim = new Aim();
   }
 
   get c() { return this.bot.c; }
@@ -82,13 +89,17 @@ export class Brain {
     this.order = null;
     this.calledSite = false;
     this.approach = null; this.lineupAim = null; this.lineupFace = null; this.trade = null; this.spots = {}; this.retaking = false;
+    this.hurtBy = null; this.hurtAt = -99; this.holdPitch = null;
+    this.dodge = 0; this.dodgeUntil = 0; this.dodgeFor = null; this.dodgeFlips = 0; this.viaDone = false;
+    this.aim = new Aim();
   }
 
   // A radio command from you (your teammates only).
   obey(kind, { pos, target, t }) {
     const b = this.bot;
     if (kind === 'spotted') { this.heard = { pos: target, t }; this.nextScan = t; return; }
-    this.path = null; this.goal = null; this.holdYaw = null; this.spots = {}; this.nextThink = t; this.startDelay = 0;
+    this.path = null; this.goal = null; this.holdYaw = null; this.holdPitch = null; this.spots = {}; this.nextThink = t; this.startDelay = 0;
+    this.game.spots?.release(b);
     if (kind === 'siteA' || kind === 'siteB' || kind === 'rush') { this.order = null; return; }
     this.order = { kind, pos: pos.slice(), until: kind === 'fallback' ? t + 25 : kind === 'cover' ? t + 20 : Infinity };
     if (kind === 'hold') this.holdYaw = b.yaw;
@@ -107,7 +118,7 @@ export class Brain {
           const yr = (g.input.yaw * Math.PI) / 180, side = (b.index % 2 ? 1 : -1) * 50;
           const spot = [mp[0] - Math.cos(yr) * 70 + Math.sin(yr) * side, mp[1] - Math.sin(yr) * 70 - Math.cos(yr) * side, mp[2]];
           this.setTask('goto', g.nav.findArea(spot, 60) ? spot : mp);
-        } else { this.task = 'hold'; this.path = null; this.holdYaw = g.input.yaw + (b.index % 2 ? 35 : -35); }
+        } else { this.task = 'hold'; this.path = null; this.holdYaw = g.input.yaw + (b.index % 2 ? 35 : -35); this.holdPitch = null; }
         return true;
       case 'hold':
         this.task = 'hold'; this.path = null;
@@ -242,22 +253,30 @@ export class Brain {
       const chest = g.chestInto(e, _chest);
       const d = Math.hypot(chest[0] - eye[0], chest[1] - eye[1], chest[2] - eye[2]);
       if (d > 4500) continue;
-      const inView = ((chest[0] - eye[0]) / d) * fx + ((chest[1] - eye[1]) / d) * fy > Math.cos(((this.d.fov / 2) * Math.PI) / 180) || d < 220 || this.hurtBy === e;
+      const dh = Math.hypot(chest[0] - eye[0], chest[1] - eye[1]) || 1, cos = ((chest[0] - eye[0]) / dh) * fx + ((chest[1] - eye[1]) / dh) * fy;
+      // (Someone who just shot it: it turns to them wherever they are, for a moment.)
+      const inView = cos > Math.cos(((this.d.fov / 2) * Math.PI) / 180) || d < 220 || (this.hurtBy === e && t - this.hurtAt < 1.5);
       if (!inView) continue;
       const body = g.bodyOf(e), seen = g.canSee(eye, body.head) ? body.head : g.canSee(eye, body.chest) ? body.chest : undefined;
       // Stick with the enemy it's fighting unless another is clearly closer (two at about the same distance would
       // otherwise swap every scan, the aim flicking between them).
       const dd = this.target?.c === e && this.target.visible ? d * 0.7 : d;
-      if (seen && dd < bestD) { best = { c: e, point: seen, d }; bestD = dd; }
+      if (seen && dd < bestD) { best = { c: e, point: seen, d, cos }; bestD = dd; }
     }
     if (best) {
       g.spot(best.c, this.c);
-      if (!this.target || this.target.c !== best.c) {
-        this.target = { c: best.c, since: t, react: t + rnd(...this.d.reaction) * (this.target?.c === best.c ? 0.3 : 1), shots: 0, pauseUntil: 0 };
-        const a = Math.random() * Math.PI * 2;
-        this.aimErr = [Math.sin(a) * this.d.aimErr, Math.cos(a) * this.d.aimErr * 1.4];
-        this.aimHead = Math.random() < this.d.head;
-        this.crouchFight = Math.random() < 0.25 && best.d > 900;
+      // Its reaction (the rank's, and longer the further from where it was looking they are), then its aim moves (aim.js).
+      // The same enemy back in sight after a moment out of it: a quicker reaction, it was half expecting them there.
+      const fresh = !this.target || this.target.c !== best.c, back = !fresh && !this.target.visible && t - (this.target.lostAt ?? t) > 0.25;
+      if (fresh || back) {
+        const off = (Math.acos(Math.max(-1, Math.min(1, best.cos))) * 180) / Math.PI;
+        const react = rnd(...this.d.reaction) * (back ? 0.6 : 1) + (this.d.periph || 0) * Math.min(1, off / 60);
+        if (fresh) {
+          this.target = { c: best.c, since: t, react: t + react, shots: 0, pauseUntil: 0, vel: [0, 0], ang: null };
+          this.aimHead = Math.random() < this.d.head;
+          this.crouchFight = Math.random() < 0.25 && best.d > 900;
+        } else { this.target.react = t + react; this.target.ang = null; this.target.vel[0] = this.target.vel[1] = 0; }
+        this.aim.start(t, react);
       }
       if (!this.target.visible && t - (this.target.calledAt ?? -99) > 6) { this.target.calledAt = t; g.radio.chatter(this.c, 'spotted', { where: g.placeOf(best.c) ? 'at ' + g.placeOf(best.c).replace(/([a-z])([A-Z])/g, '$1 $2') : '' }); }
       this.target.visible = true;
@@ -272,24 +291,62 @@ export class Brain {
     if (this.target && !this.target.c.alive) this.target = null;
   }
 
-  // Someone shot at us or a gun went off nearby.
+  // A gun went off nearby, or footsteps. A sound gives a rough idea where it came from, not the spot: off by more the
+  // further it was, more again through a wall; and while the same footsteps or shots go on about there, the idea stays
+  // put rather than following each one (it used to have each one's exact spot, and turned to follow enemies through
+  // walls step by step).
   hear(pos, loud, t) {
     if (this.target?.visible) return;
-    const d = Math.hypot(pos[0] - this.bot.pos[0], pos[1] - this.bot.pos[1]);
+    const b = this.bot, d = Math.hypot(pos[0] - b.pos[0], pos[1] - b.pos[1]);
     if (d > loud * this.d.hear) return;
+    const h = this.heard;
+    if (h?.src && t - h.t < 1.2 && dist2(h.src, pos) < 250) { h.t = t; return; }
+    const clear = this.game.lineOfSight(b.eye(), [pos[0], pos[1], pos[2] + 40]);
     // An impatient (lower-ranked) bot goes to see; a patient one holds its angle and waits for it.
-    this.heard = { pos: pos.slice(), t, peek: Math.random() > this.d.patience };
+    this.heard = { ...this.guess(pos, d, clear ? 0.05 : 0.14), t, peek: Math.random() > this.d.patience };
   }
-  // A teammate just died near here: go for the killer (trading), as fast as its rank goes.
+  // Roughly where something at pos (d away) is, on the ground there: off by share of the distance (one standard
+  // deviation) and a little more.
+  guess(pos, d, share) {
+    const sd = d * share + 24, x = pos[0] + gauss() * sd, y = pos[1] + gauss() * sd;
+    return { pos: [x, y, this.game.nav?.groundAt(x, y, pos[2] + 8, 16, 200) ?? pos[2]], src: pos.slice(), watch: null };
+  }
+  // A teammate just died near here: go for the killer (trading), as fast as its rank goes; where the killer is it knows
+  // only roughly (where the shots came from).
   traded(killer, pos, t) {
     if (this.target?.visible || Math.random() > this.d.trade) return;
     this.trade = { c: killer, pos: pos.slice(), until: t + 4 };
-    this.heard = { pos: this.game.bodyOf(killer).feet.slice(), t };
+    const at = this.game.bodyOf(killer).feet;
+    this.heard = { ...this.guess(at, dist2(at, this.bot.pos), 0.1), t };
     this.nextThink = t;
   }
+  // Shot: it knows which way it came from (and turns to look, see scan), roughly how far.
   hurt(attacker, t) {
-    this.hurtBy = attacker;
-    if (!this.target?.visible && attacker) { this.heard = { pos: this.game.bodyOf(attacker).feet.slice(), t }; this.nextScan = t; }
+    this.hurtBy = attacker; this.hurtAt = t;
+    if (!this.target?.visible && attacker) {
+      const at = this.game.bodyOf(attacker).feet;
+      this.heard = { ...this.guess(at, dist2(at, this.bot.pos), 0.05), t };
+      this.nextScan = t;
+    }
+  }
+  // Where to look for an enemy it heard or lost sight of (h: heard or lastSeen): there if it can see the spot, else the
+  // way they'd come from it (the last of the way there it can see: the corner of a wall, a doorway), not at the wall
+  // between; null when it can see none of it. Worked out again every second or so.
+  watchPoint(h, t) {
+    if (h.watchAt != null && t < h.watchAt + 1) return h.watch;
+    const g = this.game, eye = this.bot.eye(), at = [h.pos[0], h.pos[1], h.pos[2] + 60];
+    let w = at;
+    if (!g.lineOfSight(eye, at)) {
+      const pts = g.nav?.path(this.bot.pos, h.pos)?.points;
+      w = null;
+      for (let i = 0; pts && i < pts.length && i < 32; i++) {
+        const p = [pts[i][0], pts[i][1], pts[i][2] + 60];
+        if (dist2(p, eye) < 64) continue;
+        if (g.lineOfSight(eye, p)) w = p; else if (w) break;
+      }
+    }
+    h.watch = w; h.watchAt = t;
+    return w;
   }
 
   // ---- fighting ---------------------------------------------------------------------------------------------------
@@ -300,9 +357,16 @@ export class Brain {
     const eye = b.eye();
     const aimAt = this.aimHead ? body.head : body.chest;
     const [p, y] = angleTo(eye, aimAt);
-    const k = Math.exp(-dt * 2.2);
-    this.aimErr[0] *= k; this.aimErr[1] *= k;
-    this.turnTo(p + this.aimErr[0], y + this.aimErr[1], dt, 1);
+    // How fast the point it aims at moves across its view (deg/s, smoothed), for its hand to follow (aim.js).
+    if (tg.ang) {
+      const kv = 1 - Math.exp(-dt / 0.05);
+      tg.vel[0] += ((p - tg.ang[0]) / dt - tg.vel[0]) * kv; tg.vel[1] += (wrap(y - tg.ang[1]) / dt - tg.vel[1]) * kv;
+    } else tg.ang = [0, 0];
+    tg.ang[0] = p; tg.ang[1] = y;
+    const dist = Math.max(1, tg.dist || 1), deg = (u) => (Math.atan(u / dist) * 180) / Math.PI;
+    _view[0] = b.pitch; _view[1] = b.yaw; _at[0] = p; _at[1] = y;
+    this.aim.step(dt, t, _view, _at, tg.vel, deg(this.aimHead ? 4 : 9), this.d, _aimOut);
+    b.pitch = _aimOut[0]; b.yaw = _aimOut[1];
     const gun = b.weapons[b.slot];
     if (b.slot === 'c4') return true;
     if (b.pendingThrow) return false; // a grenade in hand: throw it first
@@ -321,8 +385,12 @@ export class Brain {
       gun.zoomReady = t + (gun.stats.zoomTime?.[1] || 0.05) + rnd(0.05, 0.15) + (1 - this.d.skill) * 0.25;
       g.botSound(b, 'Weapon_AWP.Zoom', 0.4);
     } else if (!scope && gun.zoom) gun.zoom = 0;
-    const tol = Math.max(0.6, Math.min(5, (Math.atan(10 / Math.max(1, tg.dist)) * 180) / Math.PI));
-    const onTarget = Math.abs(wrap(b.yaw - y)) < tol + Math.abs(this.aimErr[1]) && Math.abs(b.pitch - p) < tol + Math.abs(this.aimErr[0]);
+    // On them: the crosshair on their head, or on their body (then it's a body shot). It shoots once its aim follows
+    // them, between corrections while it's on them, or (a higher rank) as a flick arrives on them.
+    const ph = this.aim.phase, ready = ph === 'track' || ph === 'dwell' || (this.d.flickShot && this.aim.progress(t) > 0.85);
+    const head = angleTo(eye, body.head), chest = this.aimHead ? angleTo(eye, body.chest) : [p, y];
+    const onTarget = ready && (Math.hypot(b.pitch - head[0], wrap(b.yaw - head[1])) < Math.max(0.2, deg(4.5))
+      || (Math.abs(wrap(b.yaw - chest[1])) < Math.max(0.3, deg(10)) && Math.abs(b.pitch - chest[0]) < Math.max(0.4, deg(18))));
     const settled = (!scope || (gun.zoom && t >= gun.zoomReady)) && this.accurate(gun, tg);
     if (t >= tg.react && t >= tg.pauseUntil && onTarget && settled && t >= gun.nextAttack && gun.clip > 0 && !g.teammateInLine(b, aimAt) && !g.cv?.bot_dont_shoot) {
       const auto = gun.stats.fullAuto;
@@ -366,10 +434,18 @@ export class Brain {
     // Blind: looking about, around where it faced when the flash went off (targets relative to the current facing
     // would add up, frame after frame, into spinning).
     if (t < this.blindUntil) { this.turnTo(8 + Math.sin(t * 9) * 3, (this.blindYaw ?? b.yaw) + Math.sin(t * 3.1 + b.index) * 35, dt, 0.4); return; }
-    if (this.lastSeen && t - this.lastSeen.t < 4) { const [p, y] = angleTo(b.eye(), [this.lastSeen.pos[0], this.lastSeen.pos[1], this.lastSeen.pos[2] + 60]); this.turnTo(p, y, dt, 0.7); return; }
-    if (this.heard && t - this.heard.t < 3) { const [p, y] = angleTo(b.eye(), [this.heard.pos[0], this.heard.pos[1], this.heard.pos[2] + 60]); this.turnTo(p, y, dt, 0.6); return; }
+    // Where an enemy was last seen, or heard: there, or where they'd come from there (see watchPoint).
+    const seenAt = this.lastSeen && t - this.lastSeen.t < 4 && this.watchPoint(this.lastSeen, t);
+    if (seenAt) { const [p, y] = angleTo(b.eye(), seenAt); this.turnTo(p, y, dt, 0.7); return; }
+    const heardAt = this.heard && t - this.heard.t < 3 && this.watchPoint(this.heard, t);
+    if (heardAt) { const [p, y] = angleTo(b.eye(), heardAt); this.turnTo(p, y, dt, 0.6); return; }
     if (this.lineupFace) { this.turnTo(this.lineupFace[0], this.lineupFace[1], dt, 0.35); return; } // lining up a throw
-    if (this.task === 'hold' && this.holdYaw != null && Math.hypot(b.vel[0], b.vel[1]) < 20) { this.glance(dt, t, this.holdYaw, 15, 0.2); return; }
+    // Holding a spot: the angle it holds (at head height where they'd show, for a good player; lower for a Silver).
+    if (this.task === 'hold' && this.holdYaw != null && Math.hypot(b.vel[0], b.vel[1]) < 20) {
+      // (An angle worked out for the spot is held steadier: a glance off it is a few degrees.)
+      this.glance(dt, t, this.holdYaw, this.holdPitch == null ? 15 : 6, 0.2, this.holdPitch == null ? this.d.crosshair : this.holdPitch + this.d.crosshair * 0.8);
+      return;
+    }
     // Moving: face the way it's going (the path, not its velocity, which teammates shoving past and walls jostle), the
     // crosshair at head height for a good player, down at the floor for a Silver.
     if (this.heading != null && Math.hypot(b.vel[0], b.vel[1]) > 30) this.turnTo(this.d.crosshair, this.heading, dt, 0.5);
@@ -381,12 +457,12 @@ export class Brain {
   }
   // Standing still like a player: aim steady at an angle, and every few seconds maybe a small glance to one side (eased,
   // then still again), not a constant sweep.
-  glance(dt, t, base, spread, rate) {
+  glance(dt, t, base, spread, rate, pitch = this.d.crosshair) {
     if (t >= this.glanceAt) {
       this.glanceAt = t + 3 + Math.random() * 4;
       this.glanceOff = Math.random() < 0.5 ? 0 : (Math.random() * 2 - 1) * spread;
     }
-    this.turnTo(this.d.crosshair, base + this.glanceOff, dt, rate);
+    this.turnTo(pitch, base + this.glanceOff, dt, rate);
   }
 
   // ---- objectives -------------------------------------------------------------------------------------------------
@@ -427,15 +503,21 @@ export class Brain {
       const mine = plan.throws?.find((x) => x.by === c && !x.done);
       if (mine && stage !== 'setup' && this.doLineup(mine, t)) return;
       const going = stage === 'execute' && t >= (plan.execStart ?? 0) + this.entryDelay(plan);
+      // A rush coming in by another way than the shortest (see strats.js): through its doorway first.
+      if (plan.via && plan.rush && !this.viaDone && site) {
+        if (dist2(plan.via, b.pos) > 120 && !m.siteAt(b.pos)) return this.setTask('goto', plan.via);
+        this.viaDone = true;
+      }
       if (c.hasC4 && site) {
         if (!this.calledSite && Math.hypot(site.min[0] - b.pos[0], site.min[1] - b.pos[1]) < 2200) { this.calledSite = true; g.radio.chatter(c, 'goingToPlant', { site: site.site }); }
         if (m.siteAt(b.pos) && !this.recentlySawEnemy(t, 2.5)) { this.setTask('plant'); g.botPlant(b, t); return; }
         if (stage === 'execute' && (going || plan.rush)) return this.setTask('goto', this.siteSpot(site, 'plant'));
-        return this.holdAt(this.gatherSpot(plan), t, this.siteCenter(site));
+        return this.holdGather(plan.site, t, plan.route);
       }
       if (stage === 'setup') return this.setupHold(plan, role, t);
-      if (plan.lurk === c && m.time > 30) return this.holdIn(siteBox(plan.site === 'A' ? 'B' : 'A') || site, t, true);
-      if (stage === 'gather' || !going) return this.holdAt(this.gatherSpot(plan), t, this.siteCenter(site));
+      // The lurker: by the other site's way in, for the CTs rotating out of it.
+      if (plan.lurk === c && m.time > 30 && siteBox(plan.site === 'A' ? 'B' : 'A')) return this.holdGather(plan.site === 'A' ? 'B' : 'A', t);
+      if (stage === 'gather' || !going) return this.holdGather(plan.site, t, plan.route);
       return this.holdIn(site, t, true);
     }
     // CT
@@ -463,7 +545,7 @@ export class Brain {
     const assigned = this.plan.assign?.get(c) || 'A';
     const anchor = this.plan.rotate && assigned !== this.plan.rotate && this.d.skill > 0.6 && [...(this.plan.assign || [])].filter(([x, sg]) => sg === assigned && x.alive).length === 1;
     const site = this.plan.rotate && !anchor ? this.plan.rotate : assigned;
-    if (site === 'mid' && g.midSpot) return this.holdAt(g.midSpot, t);
+    if (site === 'mid' && g.midSpot) { const s = this.spotAt('mid:CT', () => g.midSpot); return this.holdAt(s.pos, t, null, s.look); }
     return this.holdIn(siteBox(site), t, false);
   }
 
@@ -510,25 +592,31 @@ export class Brain {
     return true;
   }
   siteCenter(site) { return site ? [(site.min[0] + site.max[0]) / 2, (site.min[1] + site.max[1]) / 2, site.min[2]] : null; }
-  // Its own spot near where the team gathers for the site.
-  gatherSpot(plan) {
-    const key = 'gather' + plan.site;
+  // A spot of its own to hold at a place this round (spots.js: some cover, facing a way in; key as there), kept for the
+  // round: { pos, look: [pitch, yaw] }. Where nothing was worked out: fallback()'s point, facing as holdAt does.
+  spotAt(key, fallback) {
     if (!this.spots[key]) {
-      const p = stagingPoint(this.game, plan.site);
-      this.spots[key] = this.game.nav.randomPointIn([p[0] - 260, p[1] - 260, p[2] - 120], [p[0] + 260, p[1] + 260, p[2] + 120])?.point || p;
+      const awp = /awp|ssg08|scar20|g3sg1/.test(this.bot.weapons.primary?.id || '');
+      this.spots[key] = this.game.spots?.pick(this.bot, key, { awp }) || { pos: fallback(), look: null };
     }
     return this.spots[key];
+  }
+  // Its own spot near where the team gathers for a site (coming in by one of its ways: see strats.js), watching the way
+  // out of it.
+  holdGather(siteId, t, route = 0) {
+    const s = this.spotAt('gather:' + siteId + (route ? '/' + route : ''), () => {
+      const p = this.game.spots?.staging(siteId, route) || stagingPoint(this.game, siteId);
+      return this.game.nav.randomPointIn([p[0] - 260, p[1] - 260, p[2] - 120], [p[0] + 260, p[1] + 260, p[2] + 120])?.point || p;
+    });
+    return this.holdAt(s.pos, t, this.siteCenter(this.game.map.info.bombsites.find((x) => x.site === siteId)), s.look);
   }
   // A default: spread out for map control (the lurker on the other site's way in, the entry in mid, the rest by both
   // sites' ways in), holding there until it's time to gather.
   setupHold(plan, role, t) {
     const g = this.game;
-    if (!this.spots.setup) {
-      const other = g.map.info.bombsites.map((x) => x.site).find((x) => x !== plan.site) || plan.site;
-      const where = role === 'lurk' ? stagingPoint(g, other) : role === 'entry' && g.midSpot ? g.midSpot : stagingPoint(g, this.bot.index % 2 ? plan.site : other);
-      this.spots.setup = g.nav.randomPointIn([where[0] - 220, where[1] - 220, where[2] - 120], [where[0] + 220, where[1] + 220, where[2] + 120])?.point || where;
-    }
-    return this.holdAt(this.spots.setup, t, null);
+    const other = g.map.info.bombsites.map((x) => x.site).find((x) => x !== plan.site) || plan.site;
+    if (role === 'entry' && g.midSpot) { const s = this.spotAt('mid:T', () => g.midSpot); return this.holdAt(s.pos, t, null, s.look); }
+    return role === 'lurk' || !(this.bot.index % 2) ? this.holdGather(other, t) : this.holdGather(plan.site, t, plan.route);
   }
   // When it goes onto the site in the execute (seconds after it starts): the entry first, as the pop flash bursts if
   // there is one, the rest a moment apart (closer at higher ranks, near enough to trade).
@@ -639,28 +727,36 @@ export class Brain {
     }
     return this.spots[key];
   }
+  // Holding a bomb site: the CTs' spots watch the terrorists' ways in, the terrorists' (once they've taken it) the CTs'.
   holdIn(site, t, attacking) {
     if (!site) return;
-    const spot = this.siteSpot(site, attacking ? 'push' : 'hold');
-    this.holdAt(spot, t, attacking ? null : this.game.enemySpawnCenter(this.c.team));
+    const s = this.spotAt((attacking ? 'push:' : 'hold:') + site.site, () => this.siteSpot(site, attacking ? 'push' : 'hold'));
+    this.holdAt(s.pos, t, attacking ? null : this.game.enemySpawnCenter(this.c.team), s.look);
   }
-  holdAt(spot, t, faceTo = null) {
+  // There, then still, facing look ([pitch, yaw]) or towards faceTo (else the enemy's spawn).
+  holdAt(spot, t, faceTo = null, look = null) {
     const b = this.bot;
     const d = Math.hypot(spot[0] - b.pos[0], spot[1] - b.pos[1]);
-    if (d > 40) return this.setTask('goto', spot);
+    if (d > 40 && !(d < 90 && this.occupied(spot))) return this.setTask('goto', spot); // (someone on it: near enough)
     this.task = 'hold';
+    if (this.holdYaw != null) return;
+    if (look) { this.holdPitch = look[0]; this.holdYaw = look[1]; return; }
     const face = faceTo || this.game.enemySpawnCenter(this.c.team);
-    if (this.holdYaw == null) this.holdYaw = (Math.atan2(face[1] - b.pos[1], face[0] - b.pos[0]) * 180) / Math.PI;
+    this.holdYaw = (Math.atan2(face[1] - b.pos[1], face[0] - b.pos[0]) * 180) / Math.PI;
+    this.holdPitch = null;
   }
+  // Near something (the planted bomb for the terrorists: a spot of the site's that sees it, to stop a defuse).
   holdNear(pos, r, kind, t) {
     this.spots ||= {};
-    const key = 'near' + kind;
-    if (!this.spots[key] || dist2(this.spots[key], pos) > r * 1.5) {
-      const p = this.game.nav.randomPointIn([pos[0] - r, pos[1] - r, pos[2] - 100], [pos[0] + r, pos[1] + r, pos[2] + 100]);
-      this.spots[key] = p ? p.point : pos.slice();
-      this.holdYaw = null;
+    const key = 'near' + kind, site = this.game.match.bomb?.site;
+    if (!this.spots[key] || dist2(this.spots[key].pos, pos) > r * 1.5) {
+      const s = kind === 'bomb' && site ? this.game.spots?.pick(this.bot, 'push:' + site, { see: pos, within: r * 1.8 }) : null;
+      const p = s ? null : this.game.nav.randomPointIn([pos[0] - r, pos[1] - r, pos[2] - 100], [pos[0] + r, pos[1] + r, pos[2] + 100]);
+      this.spots[key] = s || { pos: p ? p.point : pos.slice(), look: null };
+      this.holdYaw = null; this.holdPitch = null;
     }
-    this.holdAt(this.spots[key], t, kind === 'bomb' ? this.game.enemySpawnCenter(this.c.team) : pos);
+    const s = this.spots[key];
+    this.holdAt(s.pos, t, kind === 'bomb' ? this.game.enemySpawnCenter(this.c.team) : pos, s.look);
   }
 
   // ---- movement over the nav mesh ---------------------------------------------------------------------------------
@@ -670,7 +766,7 @@ export class Brain {
     this.path = p ? p.points : [Object.assign(goal.slice(), { direct: true })]; // no way there on the mesh: straight at it
     this.pi = 0;
     this.stuckT = 0;
-    this.holdYaw = null;
+    this.holdYaw = null; this.holdPitch = null;
   }
 
   move(dt, t, moving) {
@@ -689,6 +785,8 @@ export class Brain {
       let dx = wp[0] - b.pos[0], dy = wp[1] - b.pos[1];
       let d = Math.hypot(dx, dy);
       while (d < 24 && !wp.ladder && !jumpAhead(wp, b) && this.pi < this.path.length - 1) { this.pi++; wp = this.path[this.pi]; dx = wp[0] - b.pos[0]; dy = wp[1] - b.pos[1]; d = Math.hypot(dx, dy); }
+      // Someone standing on the point it's making for (a teammate in a doorway, on its spot): as good as there.
+      while (d < 80 && !wp.ladder && !jumpAhead(wp, b) && this.pi < this.path.length - 1 && this.occupied(wp)) { this.pi++; wp = this.path[this.pi]; dx = wp[0] - b.pos[0]; dy = wp[1] - b.pos[1]; d = Math.hypot(dx, dy); }
       const last = this.pi >= this.path.length - 1;
       // There once it's close, and up on the same level: a goal on a box isn't reached from the foot of it, so it keeps
       // on (slowing down near it) into the box, which it then jumps onto.
@@ -737,7 +835,8 @@ export class Brain {
     }
     // Face where it's going, unless that's only a few units away (pushed around a point, it would swing round it).
     if ((want[0] || want[1]) && !counter && (!this.path || Math.hypot(this.path[this.pi][0] - b.pos[0], this.path[this.pi][1] - b.pos[1]) > 24 || burning)) this.heading = (Math.atan2(want[1], want[0]) * 180) / Math.PI;
-    // (Other players block it like walls, without shoving: see Game.traceBodies.)
+    // (Other players block it like walls, without shoving: see Game.traceBodies. So it steers round them: see avoid.)
+    if ((want[0] || want[1]) && !counter && !burning && this.path) this.avoid(want, t);
     // Off the mesh (pushed by a teammate, or heading straight for somewhere the mesh has no way to), or a drop with no
     // floor at all: don't go there.
     const speed = Math.hypot(want[0], want[1]);
@@ -772,7 +871,11 @@ export class Brain {
     if (moving && this.path && !b.climbing) {
       this.stuckT += dt;
       if (this.stuckT > 1) {
-        if (dist2(b.pos, this.lastProgress) < 20 && this.goal) {
+        if (dist2(b.pos, this.lastProgress) < 20 && this.goal && this.dodgeFor && t < this.dodgeUntil + 0.5 && this.dodgeFlips < 2) {
+          // Held up by someone it was steering round: the other way round them, for longer (not a new path: it would be
+          // the same one).
+          this.dodge = -this.dodge; this.dodgeUntil = t + 1.2; this.dodgeFlips++;
+        } else if (dist2(b.pos, this.lastProgress) < 20 && this.goal) {
           // Stuck below a jump it can't make (the nav mesh links a ledge that a crate, an overhang or a wall keeps you
           // off): every bot goes another way from now on.
           const wp = this.path[this.pi];
@@ -780,11 +883,52 @@ export class Brain {
           else if (this.stuckTries >= 1 && wp?.link && b.pos[2] < wp[2] + wp.jump - STEP_HEIGHT) { nav.failed.add(wp.link); this.stuckTries = 0; this.goTo(this.goal); }
           else if (++this.stuckTries >= 3) { this.path = null; this.stuckTries = 0; this.restUntil = t + 2 + Math.random() * 2; b.vel[0] = b.vel[1] = 0; }
           else this.goTo(this.goal);
-        } else this.stuckTries = 0;
+        } else { this.stuckTries = 0; this.dodgeFlips = 0; }
         this.lastProgress = b.pos.slice();
         this.stuckT = 0;
       }
     }
+  }
+
+  // Steers want (its velocity) round whoever is just ahead in the way, as a player would: past on its right of someone
+  // coming the other way (both do, so they pass), round the side with room of someone standing or going the same way;
+  // the side kept a moment once chosen.
+  avoid(want, t) {
+    const g = this.game, b = this.bot, sp = Math.hypot(want[0], want[1]), ux = want[0] / sp, uy = want[1] / sp;
+    let best = null, bd = 90;
+    for (const c of g.combatants) {
+      if (c === this.c || !c.alive) continue;
+      const p = c === g.me ? g.player.origin : g.botOf(c)?.pos;
+      if (!p || Math.abs(p[2] - b.pos[2]) > 64) continue;
+      const dx = p[0] - b.pos[0], dy = p[1] - b.pos[1], ahead = dx * ux + dy * uy, left = dy * ux - dx * uy;
+      if (ahead <= 0 || ahead >= bd || Math.abs(left) > 40) continue; // (two hulls 32 wide: within 40 to the side is in the way)
+      best = { c, ahead, left }; bd = ahead;
+    }
+    if (!best) { this.dodgeFor = null; return; }
+    if (this.dodgeFor !== best.c || t > this.dodgeUntil) {
+      const v = best.c === g.me ? g.player.velocity : g.botOf(best.c).vel;
+      let side = v[0] * ux + v[1] * uy < -40 ? -1 : best.left > 0 ? -1 : 1; // (-1 its right, 1 its left)
+      const room = (k) => {
+        const x = b.pos[0] - uy * k * 40 + ux * 16, y = b.pos[1] + ux * k * 40 + uy * 16;
+        return g.nav.groundAt(x, y, b.pos[2], STEP_HEIGHT, 40) !== null
+          && g.collision.traceBox([b.pos[0], b.pos[1], b.pos[2] + 20], [x, y, b.pos[2] + 20], [-16, -16, 0], [16, 16, 50], FLAG_PLAYER).fraction >= 1;
+      };
+      if (!room(side) && room(-side)) side = -side;
+      if (this.dodgeFor !== best.c) this.dodgeFlips = 0;
+      this.dodge = side; this.dodgeFor = best.c; this.dodgeUntil = t + 0.6;
+    }
+    const k = Math.min(1.2, 0.3 + (90 - best.ahead) / 50), nx = ux - uy * this.dodge * k, ny = uy + ux * this.dodge * k, nl = Math.hypot(nx, ny);
+    want[0] = (nx / nl) * sp; want[1] = (ny / nl) * sp;
+  }
+  // Someone else (alive) standing on a point.
+  occupied(p) {
+    const g = this.game;
+    for (const c of g.combatants) {
+      if (c === this.c || !c.alive) continue;
+      const q = c === g.me ? g.player.origin : g.botOf(c)?.pos;
+      if (q && Math.hypot(q[0] - p[0], q[1] - p[1]) < 36 && Math.abs(q[2] - p[2]) < 60) return true;
+    }
+    return false;
   }
 
   // Is there a low ceiling just ahead (a vent, a hole in a wall): standing it would bump into it, crouched it goes on?

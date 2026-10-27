@@ -9,6 +9,7 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2Play } from '../cs2/api.js';
 import { loadGltf, shareSkeletons } from '../cs2/rig.js';
 import { buildCS2Model } from '../cs2/skin.js';
+import { itemDef } from '../items.js';
 import { toGl, fromGl, ambientLit, ambientCube, bakeSkin, barrelTip } from './world.js';
 
 export const AGENTS = {
@@ -281,16 +282,31 @@ export class BotAssets {
     }
     return this.holds.get(id);
   }
-  weapon(id) {
-    if (!this.weapons.has(id)) {
-      const def = { wid: id, w: id, n: id, cat: /knife|bayonet/.test(id) ? 'knife' : 'rifle', v: true };
-      this.weapons.set(id, buildCS2Model({ t: 'skin', fl: 0, sd: 0 }, def, this.renderer, { quick: true }).then((m) => {
+  // A gun's model as bots hold it and as it lies on the floor: the default look, or an inventory item's (a skin as its
+  // owner has it: the finish, wear and pattern, its stickers, charm and StatTrak™ counter, as it shows in their hands).
+  weapon(id, item = null) {
+    const def = item && itemDef(item);
+    if (!def) item = null;
+    const key = item ? id + '#' + (item.uid || JSON.stringify(item)) : id;
+    if (!this.weapons.has(key)) {
+      this.weapons.set(key, buildCS2Model(item || { t: 'skin', fl: 0, sd: 0 }, def || { wid: id, w: id, n: id, cat: /knife|bayonet/.test(id) ? 'knife' : 'rifle', v: true }, this.renderer, { quick: true }).then((m) => {
         const root = m?.userData.root;
-        if (root) this.light(root);
-        return root || null;
+        if (!root) return null;
+        // The stickers sit on the inspect model's frame round it: onto the gun itself, where they are on it, each in a
+        // plain material of its picture (CS2's sticker shader, its foil and holo, is a patch the world's lighting here
+        // would replace; in a bot's hands or on the floor it's the picture that shows).
+        m.updateMatrixWorld(true);
+        for (const o of m.children.slice()) {
+          if (!o.userData.decal) continue;
+          const src = o.material, map = src.map || src.userData.cs2Uniforms?.cs2Sticker.value || null;
+          o.material = new THREE.MeshStandardMaterial({ map, transparent: true, opacity: src.opacity, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, roughness: 0.45, metalness: 0.05 });
+          root.attach(o);
+        }
+        this.light(root);
+        return root;
       }).catch((e) => { console.warn('bot weapon model failed', id, e); return null; }));
     }
-    return this.weapons.get(id);
+    return this.weapons.get(key);
   }
 }
 
@@ -393,12 +409,13 @@ export class Bot {
 
   // Shows the bot holding a weapon (its CS2 model in the right hand where its hold pose puts it: see handGrip; its hold
   // pose on the arms) and drawing it.
-  async equip(id, { draw = true } = {}) {
+  // skin: whose gun it is (see drops.js gunSkin; null the default look).
+  async equip(id, { draw = true, skin = null } = {}) {
     const changed = this.holding !== id;
-    this.holding = id;
+    this.holding = id; this.holdingSkin = skin;
     this.setLocomotion(setOf(id));
-    const [tpl, arms] = await Promise.all([this.assets.weapon(id), this.assets.hold(id)]);
-    if (this.holding !== id) return;
+    const [tpl, arms] = await Promise.all([this.assets.weapon(id, skin?.item), this.assets.hold(id)]);
+    if (this.holding !== id || this.holdingSkin !== skin) return;
     this.weaponModel?.removeFromParent();
     this.weaponModel = null;
     if (tpl && this.bones.wpn && this.mode !== 'dead') {
@@ -472,7 +489,7 @@ export class Bot {
     this.gestureAction = null;
     this.climbing = null; this.airborne = false; this.jumped = false; this.tuck = 0; this.pendingThrow = null;
     this.root.visible = true;
-    if (this.holding) { const h = this.holding; this.holding = null; this.equip(h, { draw: false }); }
+    if (this.holding) { const h = this.holding; this.holding = null; this.equip(h, { draw: false, skin: this.holdingSkin }); }
     this.hasPrev = false; // (not drawn sliding over from where it died)
     this.sync();
   }

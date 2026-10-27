@@ -260,7 +260,9 @@ function createWindow() {
 
 // `CS2SIM_SMOKE=1 electron .` loads the game hidden, opens a case preview in 3D, screenshots it and quits.
 const SMOKE = !!process.env.CS2SIM_SMOKE;
-if (SMOKE) app.setPath('userData', path.join(app.getPath('temp'), 'cs2sim-smoke'));
+// (CS2SIM_SMOKE_USERDATA: another profile, for a second smoke run beside the first; with CS2SIM_CACHE at the first's
+// cs2cache it needs nothing exported again.)
+if (SMOKE) app.setPath('userData', process.env.CS2SIM_SMOKE_USERDATA ? path.resolve(process.env.CS2SIM_SMOKE_USERDATA) : path.join(app.getPath('temp'), 'cs2sim-smoke'));
 // The frame rate is the monitor's (vsync) unless the player unlocked it in Play's settings (display.json, read at start:
 // Chromium only takes these switches before it starts). A perf run always measures as fast as Play goes.
 const displayFile = path.join(app.getPath('userData'), 'display.json');
@@ -1143,6 +1145,210 @@ async function runHitchSmoke(win) {
 // (spectating), logging each round's plans (the terrorists' strat, site and buy, the CTs' setup, who throws which lineup),
 // every lineup thrown and how far from its spot it landed, kills, plants and who won; and a scoreboard screenshot
 // (userData/bots-<map>-<tier>.png: the bots' real players and ranks).
+// And how they behave, from what any version of them shows (where they are, where they look and go, what they shoot),
+// every tick: aiming at an enemy behind a wall (one it hasn't been able to see for a second, within 4 degrees of its
+// crosshair; and following one that way as it moves), held up by another player (on its way, hardly moving, someone
+// within 52 units), where it holds (staring at a wall, how far it sees that way, cover round it, whether it watches a way
+// in to the site, the same spot as an earlier round, a teammate on top of it), and its fights (from when it has an
+// enemy in sight as its target: how far off its aim is 0.1 to 1 s on, how fast it turns, its first shot, its first hit).
+const botMetricsJs = `(() => { const g = window.__playGame, D2R = Math.PI / 180, BULLET = 2;
+  const M = window.__botMetrics = { ticks: 0, botTicks: 0, wallTicks: 0, wallTurning: 0, wallWhy: {}, tracks: [], blockedTicks: 0, blocked: [], stuckTicks: 0, stuck: [], holds: [], eng: [], kills: 0, hs: 0, rounds: new Set() };
+  const seen = new Map(), streak = new Map(), runs = new Map(), engOf = new Map(), cur = new Map(), prevAng = new Map();
+  const live = () => g.match.phase === 'live' || g.match.phase === 'planted';
+  const ang = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))) / D2R;
+  const unit = (from, to) => { const d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]], l = Math.hypot(d[0], d[1], d[2]) || 1; return [d[0] / l, d[1] / l, d[2] / l, l]; };
+  const visible = (eye, e) => { const body = g.bodyOf(e); return g.lineOfSight(eye, body.head) || g.lineOfSight(eye, body.chest); };
+  const posOf = (x) => (x === g.me ? g.player.origin : g.botOf(x).pos);
+  // (A follow: half a second or more on one hidden enemy as they moved 48+ units and its view turned 8+ degrees with them.)
+  const endStreak = (b) => { const s = streak.get(b); streak.delete(b); if (s && s.n >= 32 && s.moved >= 48 && s.turned >= 8) M.tracks.push({ secs: +(s.n / 64).toFixed(2), moved: Math.round(s.moved), turned: Math.round(s.turned), why: s.why }); };
+  const run = (key, on, list) => { const n = runs.get(key) || 0; if (on) { runs.set(key, n + 1); return; } if (n >= 64 && list) list.push(+(n / 64).toFixed(1)); runs.set(key, 0); };
+  const sample = () => {
+    if (!live()) return;
+    M.ticks++;
+    const now = g.now, every = M.ticks % 8 === 0;
+    M.rounds.add(g.match.round);
+    for (const b of g.bots) {
+      const c = b.c;
+      if (!c.alive) { endStreak(b); run('b' + b.index, false, M.blocked); run('s' + b.index, false, M.stuck); continue; }
+      M.botTicks++;
+      const eye = b.eye(), fwd = g.viewDir(c), br = b.brain;
+      let on = null;
+      for (const e of g.combatants) {
+        if (!e.alive || !g.hostile(c, e)) continue;
+        const key = b.index + ':' + e.name, body = g.bodyOf(e), u = unit(eye, body.head);
+        if (u[3] > 3500) continue;
+        if (every && visible(eye, e)) seen.set(key, now);
+        if (ang(fwd, u) > 4) continue;
+        if (visible(eye, e)) { seen.set(key, now); continue; }
+        if (now - (seen.get(key) ?? -99) > 1) { on = { e, feet: body.feet.slice() }; break; }
+      }
+      if (on) {
+        M.wallTicks++;
+        // Why it looks there, as its brain has it: fighting someone, where it last saw or heard an enemy, holding an
+        // angle, on the move, or something else.
+        const why = br.target?.visible ? 'fight' : br.lastSeen && now - br.lastSeen.t < 4 ? 'lastSeen' : br.heard && now - br.heard.t < 3 ? 'heard' : br.task === 'hold' ? 'hold' : Math.hypot(b.vel[0], b.vel[1]) > 30 ? 'moving' : 'other';
+        M.wallWhy[why] = (M.wallWhy[why] || 0) + 1;
+        const p0 = prevAng.get(b), turn = p0 ? Math.hypot(((((b.yaw - p0[0] + 180) % 360) + 360) % 360) - 180, b.pitch - p0[1]) : 0;
+        if (turn * 64 > 10) M.wallTurning++;
+        const s = streak.get(b);
+        if (s && s.e === on.e) { s.n++; s.turned += turn; s.moved = Math.max(s.moved, Math.hypot(on.feet[0] - s.from[0], on.feet[1] - s.from[1])); }
+        else { endStreak(b); streak.set(b, { e: on.e, n: 1, from: on.feet, moved: 0, turned: 0, why }); }
+      } else endStreak(b);
+      const speed = Math.hypot(b.vel[0], b.vel[1]);
+      const going = !!(br.path && br.path.length && br.task !== 'hold' && b.mode === 'move' && !b.climbing);
+      const near = going && speed < 30 && g.combatants.some((x) => { if (x === c || !x.alive) return false; const p = posOf(x); return Math.hypot(p[0] - b.pos[0], p[1] - b.pos[1]) < 52 && Math.abs(p[2] - b.pos[2]) < 72; });
+      if (near) M.blockedTicks++;
+      run('b' + b.index, near, M.blocked);
+      if (going && speed < 30) M.stuckTicks++;
+      run('s' + b.index, going && speed < 30, M.stuck);
+      if (br.task === 'hold' && speed < 20) {
+        const mine = M.holds.filter((h) => h.round === g.match.round && h.bot === c.name);
+        if (!mine.some((h) => Math.hypot(h.pos[0] - b.pos[0], h.pos[1] - b.pos[1]) < 150)) M.holds.push({ round: g.match.round, bot: c.name, team: c.team, phase: g.match.phase, pos: b.pos.slice(), yaw: br.holdYaw ?? b.yaw, nth: mine.length, order: !!br.order });
+      }
+      const prev = prevAng.get(b), yp = [b.yaw, b.pitch];
+      prevAng.set(b, yp);
+      const rate = prev ? Math.hypot(((((yp[0] - prev[0] + 180) % 360) + 360) % 360) - 180, yp[1] - prev[1]) * 64 : 0;
+      const tg = br.target;
+      if (tg && tg.visible && tg.c.alive) {
+        const k = b.index + ':' + tg.c.name, body = g.bodyOf(tg.c), u = unit(eye, body.head);
+        let en = engOf.get(k);
+        if (!en || now - en.last > 2) {
+          en = { bot: c.name, skill: +(c.skill ?? 0).toFixed(2), c: tg.c, t0: now, last: now, d: Math.round(u[3]), err0: +ang(fwd, u).toFixed(1), err: {}, peak: 0, shot: null, hit: null, shots: 0 };
+          M.eng.push(en); engOf.set(k, en);
+        }
+        en.last = now; cur.set(b, en);
+        const dt = now - en.t0;
+        for (const at of [0.1, 0.2, 0.3, 0.5, 1]) if (dt >= at - 1e-9 && en.err[at] == null) en.err[at] = +ang(fwd, u).toFixed(2);
+        if (dt < 1.5) en.peak = Math.max(en.peak, Math.round(rate));
+      }
+    }
+  };
+  const tick = g.tick; g.tick = function (...a) { const r = tick.apply(this, a); sample(); return r; };
+  const shoot = g.botShoot; g.botShoot = function (b, ...a) { const en = cur.get(b); if (en && g.now - en.last < 0.25) { en.shots++; if (en.shot == null) en.shot = +(g.now - en.t0).toFixed(3); } return shoot.call(this, b, ...a); };
+  const damage = g.damage; g.damage = function (c, dmg, o = {}) {
+    const b = o.attacker?.bot ? g.botOf(o.attacker) : null, en = b && cur.get(b);
+    if (en && en.c === c && en.hit == null && c.alive) en.hit = { dt: +(g.now - en.t0).toFixed(3), head: o.group === 'head', shots: en.shots };
+    return damage.call(this, c, dmg, o); };
+  const kill = g.kill; g.kill = function (c, a, w, hs, ...r) { if (c.alive && a?.bot && a !== c) { M.kills++; if (hs) M.hs++; } return kill.call(this, c, a, w, hs, ...r); };
+  const med = (xs) => { const a = xs.filter((x) => x != null && !Number.isNaN(x)).sort((p, q) => p - q); return a.length ? a[Math.floor(a.length / 2)] : null; };
+  const pct = (n, d) => (d ? +((100 * n) / d).toFixed(1) : null);
+  // The ways into each bomb site: the nav paths there from the terrorists' spawn, mid and the other site, a point every 48 units.
+  const ways = new Map();
+  const waysTo = (s) => {
+    if (ways.has(s.site)) return ways.get(s.site);
+    const center = [(s.min[0] + s.max[0]) / 2, (s.min[1] + s.max[1]) / 2, s.min[2] + 8], pts = [];
+    const mid = g.map.info.places.find((x) => /^Middle$/i.test(x.name)) || g.map.info.places.find((x) => /mid/i.test(x.name));
+    const other = g.map.info.bombsites.find((x) => x.site !== s.site);
+    const from = [g.enemySpawnCenter('CT'), mid && [(mid.min[0] + mid.max[0]) / 2, (mid.min[1] + mid.max[1]) / 2, mid.min[2]], other && [(other.min[0] + other.max[0]) / 2, (other.min[1] + other.max[1]) / 2, other.min[2]]].filter(Boolean);
+    for (const f of from) {
+      const p = g.nav.path(f, center)?.points || [];
+      for (let i = 1; i < p.length; i++) { const l = Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]); for (let s2 = 0; s2 < l; s2 += 48) { const k = s2 / l; pts.push([p[i - 1][0] + (p[i][0] - p[i - 1][0]) * k, p[i - 1][1] + (p[i][1] - p[i - 1][1]) * k, p[i - 1][2] + (p[i][2] - p[i - 1][2]) * k + 60]); } }
+    }
+    ways.set(s.site, pts);
+    return pts;
+  };
+  M.report = () => {
+    for (const b of g.bots) { endStreak(b); run('b' + b.index, false, M.blocked); run('s' + b.index, false, M.stuck); }
+    const holds = M.holds.map((h) => {
+      const eye = [h.pos[0], h.pos[1], h.pos[2] + 64], yr = h.yaw * D2R, dir = [Math.cos(yr), Math.sin(yr), 0];
+      const view = g.collision.raycast(eye, dir, 4000, BULLET), sight = view ? view.t : 4000;
+      let cover = 0;
+      for (let k = 0; k < 16; k++) { const a = (k / 16) * Math.PI * 2; if (g.collision.raycast([h.pos[0], h.pos[1], h.pos[2] + 40], [Math.cos(a), Math.sin(a), 0], 100, BULLET)) cover++; }
+      const sites = g.map.info.bombsites.map((s) => ({ s, d: Math.hypot(h.pos[0] - (s.min[0] + s.max[0]) / 2, h.pos[1] - (s.min[1] + s.max[1]) / 2) })).sort((a, b) => a.d - b.d);
+      const site = sites[0] && sites[0].d < 1800 ? sites[0].s : null;
+      let watches = null;
+      if (site && h.team === 'CT' && h.phase === 'live') watches = waysTo(site).some((p) => { const u = unit(eye, p); return u[3] > 250 && u[3] < 3000 && ang(dir, [u[0], u[1], 0].map((v, i, a) => v / (Math.hypot(a[0], a[1]) || 1))) < 50 && g.lineOfSight(eye, p); });
+      return { ...h, pos: h.pos.map(Math.round), yaw: Math.round(h.yaw), site: site?.site || null, sight: Math.round(sight), stare: sight < 200, cover, watches };
+    });
+    // The same spot again: a bot's first hold of a round within 150 units of its first hold of an earlier round on that side.
+    const firsts = holds.filter((h) => h.nth === 0 && h.phase === 'live' && !h.order);
+    let again = 0, later = 0;
+    for (const h of firsts) {
+      const before = firsts.filter((x) => x.bot === h.bot && x.team === h.team && x.round < h.round);
+      if (!before.length) continue;
+      later++;
+      if (before.some((x) => Math.hypot(x.pos[0] - h.pos[0], x.pos[1] - h.pos[1]) < 150)) again++;
+    }
+    const crowded = holds.filter((h) => holds.some((x) => x !== h && x.round === h.round && x.team === h.team && Math.hypot(x.pos[0] - h.pos[0], x.pos[1] - h.pos[1]) < 80)).length;
+    const ctLive = holds.filter((h) => h.watches != null);
+    const eng = M.eng.map(({ c, last, ...e }) => e);
+    const hits = eng.filter((e) => e.hit);
+    const bt = Math.max(1, M.botTicks);
+    return {
+      summary: {
+        rounds: M.rounds.size, botSeconds: Math.round(M.botTicks / 64),
+        wallAimPct: pct(M.wallTicks, bt), wallAimTurningPct: pct(M.wallTurning, bt), wallWhy: M.wallWhy, wallFollows: M.tracks.length, wallFollowSecs: +M.tracks.reduce((s, t) => s + t.secs, 0).toFixed(1),
+        blockedSecsPerRound: +(M.blockedTicks / 64 / Math.max(1, M.rounds.size)).toFixed(1), blockedOver1s: M.blocked.length, blockedOver3s: M.blocked.filter((x) => x >= 3).length,
+        stuckSecsPerRound: +(M.stuckTicks / 64 / Math.max(1, M.rounds.size)).toFixed(1), stuckOver3s: M.stuck.filter((x) => x >= 3).length,
+        holds: holds.length, stareAtWallPct: pct(holds.filter((h) => h.stare).length, holds.length), medianSight: med(holds.map((h) => h.sight)), medianCover: med(holds.map((h) => h.cover)),
+        ctWatchesWayInPct: pct(ctLive.filter((h) => h.watches).length, ctLive.length), sameSpotAgainPct: pct(again, later), crowdedPct: pct(crowded, holds.length),
+        fights: eng.length, firstShotS: med(eng.map((e) => e.shot)), firstHitS: med(hits.map((e) => e.hit.dt)), firstHitHeadPct: pct(hits.filter((e) => e.hit.head).length, hits.length),
+        shotsToFirstHit: med(hits.map((e) => e.hit.shots)), err0: med(eng.map((e) => e.err0)),
+        err100ms: med(eng.map((e) => e.err[0.1])), err200ms: med(eng.map((e) => e.err[0.2])), err300ms: med(eng.map((e) => e.err[0.3])), err500ms: med(eng.map((e) => e.err[0.5])), err1s: med(eng.map((e) => e.err[1])),
+        headWithin1degAt200msPct: pct(eng.filter((e) => e.err[0.2] != null && e.err[0.2] < 1).length, eng.filter((e) => e.err[0.2] != null).length),
+        peakTurnDegS: med(eng.map((e) => e.peak)), kills: M.kills, headshotKillPct: pct(M.hs, M.kills),
+      },
+      holds, eng: eng.slice(0, 400), tracks: M.tracks, blocked: M.blocked,
+    };
+  };
+  return 1; })()`;
+
+// `CS2SIM_SMOKE=drops` checks that guns keep their skins (put a save.json with skins equipped in the smoke profile
+// first): on Dust II (CS2SIM_SMOKE_MAP) as a terrorist with the bots stopped, you buy an AK-47 (your skin), drop it, a
+// bot picks it up and holds it, dies and drops it, you pick it up again (yours), then pick up a bot's (the default),
+// logging each gun's skin, with screenshots (userData/drops-*.png) of yours on the floor, in the bot's hands and in yours,
+// and of the bot's in yours.
+async function runDropsSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `drops-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  const map = process.env.CS2SIM_SMOKE_MAP || 'de_dust2';
+  await wait(3000);
+  // (three's warnings with where they came from.)
+  await js(`console.warn = ((f) => (...a) => f(...a, new Error().stack.split('\\n').slice(2, 6).join(' <- ')))(console.warn);
+    console.error = ((f) => (...a) => f(...a, new Error().stack.split('\\n').slice(2, 6).join(' <- ')))(console.error); 1`);
+  await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'competitive', map: '${map}', teamSize: 5, team: 'T' })); })(); 1`);
+  await js(`document.querySelector('#topbar [data-page=stats]').click(); setTimeout(() => document.querySelector('#topbar [data-page=play]').click(), 200); 1`);
+  await wait(1500);
+  if (!(await smokeStartMap(win, map, 'drops'))) return app.quit();
+  const step = async (label, code) => { const r = await js(`(async () => { const g = window.__playGame, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const skinOf = (s) => (s === undefined ? 'undefined' : s ? (s.owner + ' ' + s.item.id + ' ' + s.item.uid) : 'default');
+    ${code} })()`); console.log('SMOKE drops ' + label + ': ' + r); return r; };
+  await step('setup', `document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
+    const css = document.createElement('style'); css.textContent = '.play-click, .play-scrim { display: none !important; }'; document.head.appendChild(css);
+    g.console.run('sv_cheats 1'); g.cv.bot_stop = 1; g.god = true; g.console.run('impulse 101');
+    await g.buy('weapon_ak47'); for (let i = 0; i < 50 && !g.arsenal.guns.primary; i++) await sleep(100);
+    if (g.match.phase === 'freeze') { g.match.time = 0; await sleep(400); } g.match.time = 9999;
+    const own = g.ownSkin('weapon_ak47');
+    return 'spots ' + Math.round(g.spotsMs) + ' ms; your AK-47 skin: ' + (own ? own.id + ' ' + own.uid + ' (' + (own.stk?.length || 0) + ' stickers)' : 'none') + '; the AK in your hands: ' + skinOf(g.arsenal.guns.primary?.skin) + ' named ' + g.arsenal.guns.primary?.name;`);
+  // Your AK on the floor, looked at from a little way off.
+  await step('dropped', `g.console.run('cl_drawhud 0');
+    for (let i = 0; i < 20 && !g.drops.list.length; i++) { g.arsenal.select('primary', g.now); await sleep(300); if (g.arsenal.gun?.slot === 'primary') g.dropMine(); }
+    await sleep(2500);
+    const it = g.drops.list.at(-1); g.player.teleport([it.pos[0] - 40, it.pos[1], it.pos[2]]); g.input.yaw = 0; g.input.pitch = 56; await sleep(800);
+    return 'on the floor: ' + skinOf(it.skin) + ', model built: ' + it.obj.children.length + ', templates: ' + [...g.botAssets.weapons.keys()].filter((k) => k.includes('#')).join(' ');`);
+  await shot('floor');
+  // A bot with no rifle walks over it: it holds your skin.
+  await step('bot picks it up', `const it = g.drops.list.at(-1), b = g.bots.find((x) => x.c.alive && x.c.team === 'CT');
+    delete b.weapons.primary; b.pos = it.pos.slice(); b.pos[2] += 2; await sleep(1500);
+    g.player.teleport([b.pos[0] - 90, b.pos[1] - 40, b.pos[2]]); g.input.yaw = Math.atan2(40, 90) * 180 / Math.PI; g.input.pitch = 5; b.yaw = 180 + g.input.yaw; await sleep(1500);
+    window.__dropBot = b;
+    return b.c.name + ' holds ' + b.weapons.primary?.id + ' ' + skinOf(b.weapons.primary?.skin) + ' (model ' + b.holding + ' ' + skinOf(b.holdingSkin) + ')';`);
+  await shot('bot');
+  await step('bot dies', `const b = window.__dropBot; g.kill(b.c, g.me, g.arsenal.guns.secondary, false); await sleep(1500);
+    const it = g.drops.list.at(-1); return 'it dropped ' + it.id + ' ' + skinOf(it.skin);`);
+  await step('you pick it up', `const it = g.drops.list.at(-1); g.player.teleport([it.pos[0], it.pos[1], it.pos[2]]); await sleep(2500);
+    g.input.pitch = 0; g.arsenal.select('primary', g.now); await sleep(1200);
+    const gun = g.arsenal.guns.primary; return 'in your hands: ' + gun?.id + ' ' + skinOf(gun?.skin) + ' named ' + gun?.name;`);
+  await shot('yours-again');
+  await step("a bot's AK", `g.dropMine(); await sleep(300); g.player.teleport([g.player.origin[0] + 300, g.player.origin[1], g.player.origin[2] + 10]); await sleep(500);
+    const b = g.bots.find((x) => x.c.alive && x.c.team === 'CT'); g.giveBot(b, 'weapon_ak47'); g.kill(b.c, g.me, g.arsenal.guns.secondary, false); await sleep(1500);
+    const it = g.drops.list.at(-1); g.player.teleport([it.pos[0], it.pos[1], it.pos[2]]); await sleep(2500); g.arsenal.select('primary', g.now); await sleep(1200);
+    const gun = g.arsenal.guns.primary; return 'its drop ' + skinOf(it.skin) + '; in your hands: ' + gun?.id + ' ' + skinOf(gun?.skin) + ' named ' + gun?.name;`);
+  await shot('default');
+  app.quit();
+}
+
 async function runBotsSmoke(win) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const js = (code) => win.webContents.executeJavaScript(code);
@@ -1185,6 +1391,9 @@ async function runBotsSmoke(win) {
           B.wins[w]++; B.log.push('  round ' + g.match.round + ' won by ' + w + ' (' + reason + ')' + (g.match.bomb?.site ? ' bomb ' + g.match.bomb.site : '')); return end(w, reason, mvp); };
         const planted = g.match.planted.bind(g.match); g.match.planted = function (...a) { B.plants++; return planted(...a); };
         return 1; })()`);
+      // CS2SIM_SMOKE_TIMESCALE: the match played faster (host_timescale; the bots still think every tick of it).
+      if (process.env.CS2SIM_SMOKE_TIMESCALE) await js(`(() => { const g = window.__playGame; g.console.run('sv_cheats 1'); g.console.run('host_timescale ${+process.env.CS2SIM_SMOKE_TIMESCALE}'); return 1; })()`);
+      await js(botMetricsJs);
       const t0 = Date.now();
       let shot = false;
       while (Date.now() - t0 < secs * 1000) {
@@ -1203,7 +1412,10 @@ async function runBotsSmoke(win) {
       console.log(`SMOKE bots ${map} ${tier}: ${r.kills} kills, ${r.plants} plants, rounds T ${r.wins.T} / CT ${r.wins.CT}, ${land.length} lineups thrown, ${good.length} landed on their spot`);
       console.log(r.log.map((l) => '  ' + l).join('\n'));
       console.log('  lineups: ' + land.map((x) => `${x.by}:${x.id} ${x.off}u`).join(', '));
-      summary.push({ map, tier, kills: r.kills, plants: r.plants, wins: r.wins, thrown: land.length, landed: good.length });
+      const metrics = JSON.parse(await js(`JSON.stringify(window.__botMetrics.report())`));
+      console.log(`SMOKE bots ${map} ${tier} behaviour: ` + JSON.stringify(metrics, null, 1));
+      fs.writeFileSync(path.join(app.getPath('userData'), `bots-${map}-${tier}.json`), JSON.stringify(metrics, null, 1));
+      summary.push({ map, tier, kills: r.kills, plants: r.plants, wins: r.wins, thrown: land.length, landed: good.length, ...metrics.summary });
       await js(`document.querySelector('.play-root [data-leave]')?.click(); 1`);
       await wait(2500);
     }
@@ -2308,6 +2520,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'perf') { win.webContents.once('did-finish-load', () => runPerfSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'maps') { win.webContents.once('did-finish-load', () => runMapsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'drops') { win.webContents.once('did-finish-load', () => runDropsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'breakables') { win.webContents.once('did-finish-load', () => runBreakSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'look') { win.webContents.once('did-finish-load', () => runLookSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'rounds') { win.webContents.once('did-finish-load', () => runRoundsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }

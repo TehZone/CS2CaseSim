@@ -1,8 +1,16 @@
 // Weapons on the ground: dropped by dying players (their best gun) or by you (G). Walking over one picks it up when that
 // slot is free; E swaps it for the gun in your hand. Bots pick them up too. Cleared when a round restarts.
+// A gun keeps its skin wherever it goes, as in CS2: yours dropped is your skin on the floor, in a bot's hands, and yours
+// again picked back up; a bot's is the default. The skin travels as gunSkin's plain JSON (the whole inventory item and
+// whose it is), so a gun dropped by another player online would carry theirs the same way.
 import * as THREE from 'three';
 import { FLAG_PLAYER } from './collision.js';
 import { toGl } from './world.js';
+
+// Whose your own items are (a player online would be their account's id).
+export const LOCAL = 'local';
+// A gun's skin to carry with it: { owner, item } (the item as the owner's inventory has it), or null for the default look.
+export const gunSkin = (item, owner = LOCAL) => (item ? { owner, item: JSON.parse(JSON.stringify(item)) } : null);
 
 export class Drops {
   constructor(game) {
@@ -12,12 +20,12 @@ export class Drops {
     game.scene.add(this.group);
   }
 
-  // gun: { id, clip, reserve } (a gun's state); pos: where it leaves the hand; vel: thrown velocity.
+  // gun: { id, clip, reserve, skin } (a gun's state; skin: see gunSkin); pos: where it leaves the hand; vel: thrown velocity.
   drop(gun, pos, vel = [0, 0, 0], by = null) {
-    const item = { id: gun.id, clip: gun.clip, reserve: gun.reserve, pos: pos.slice(), vel: vel.slice(), by, at: this.game.now, obj: new THREE.Group(), resting: false };
+    const item = { id: gun.id, clip: gun.clip, reserve: gun.reserve, skin: gun.skin || null, pos: pos.slice(), vel: vel.slice(), by, at: this.game.now, obj: new THREE.Group(), resting: false };
     item.obj.rotation.set(0, Math.random() * Math.PI * 2, Math.PI / 2, 'YXZ'); // lying on its side
     this.group.add(item.obj);
-    this.game.botAssets.weapon(gun.id).then((tpl) => {
+    this.game.botAssets.weapon(gun.id, item.skin?.item).then((tpl) => {
       if (!tpl || !item.obj.parent) return;
       // The gun as bots hold it (baked at rest: no skeleton to update and upload every frame while it lies there).
       const m = this.game.botAssets.staticWeapon(tpl).model.clone();

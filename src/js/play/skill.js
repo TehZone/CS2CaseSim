@@ -74,7 +74,14 @@ export function privateSkill(choice, name, rng = Math.random) {
 const lerp = (a, b, t) => a + (b - a) * t;
 // Values at Silver I (s 0) and The Global Elite (s 1), eased in between (ranks don't improve evenly).
 const RANGE = {
-  reactMin: [0.6, 0.12], reactMax: [1.0, 0.21], turn: [200, 900], aimErr: [8.5, 1.5], head: [0.1, 0.72], control: [0.2, 0.93],
+  // Reaction: from an enemy coming into sight to its hand moving (seconds), and how much longer at the edge of its view.
+  reactMin: [0.38, 0.17], reactMax: [0.65, 0.27], periph: [0.22, 0.1],
+  turn: [200, 900], head: [0.1, 0.55], control: [0.2, 0.93],
+  // Its flick (see aim.js): how long one takes (base + k x the square root of how far, degrees), how far off it lands
+  // (a share of the way, plus a floor in degrees, and how much short), how much of the target's movement it allows for,
+  // the moment it takes to see where it landed, how far its hand lags behind a moving target (seconds) and its wobble.
+  flickBase: [0.1, 0.06], flickK: [0.03, 0.017], flickErr: [0.16, 0.05], flickMin: [1.6, 0.25], undershoot: [0.06, 0.02], lead: [0.1, 0.8],
+  dwell: [0.1, 0.05], pursuitLag: [0.22, 0.065], aimNoise: [1.2, 0.35],
   fov: [85, 120], hear: [0.5, 1], burst: [3, 30],
   // Crosshair placement: how far below head height it rests while walking and holding (degrees).
   crosshair: [14, 0.5],
@@ -96,7 +103,9 @@ export function skillParams(s) {
   const e = s * s * (3 - 2 * s) * 0.6 + s * 0.4; // a little slower at the ends
   const v = Object.fromEntries(Object.entries(RANGE).map(([k, [a, b]]) => [k, lerp(a, b, e)]));
   return {
-    skill: s, reaction: [v.reactMin, v.reactMax], turn: v.turn, aimErr: v.aimErr, head: v.head, control: v.control, fov: v.fov, hear: v.hear,
+    skill: s, reaction: [v.reactMin, v.reactMax], periph: v.periph, turn: v.turn, head: v.head, control: v.control, fov: v.fov, hear: v.hear,
+    flickBase: v.flickBase, flickK: v.flickK, flickErr: v.flickErr, flickMin: v.flickMin, undershoot: v.undershoot, lead: v.lead, dwell: v.dwell,
+    pursuitLag: v.pursuitLag, aimNoise: v.aimNoise, flickShot: s > 0.55,
     burst: Math.round(v.burst), crosshair: v.crosshair, strafe: v.strafe, discipline: v.discipline, utility: v.utility, utilityErr: v.utilityErr, patience: v.patience,
     trade: v.trade, popFlash: s > 0.55, executes: s > 0.35,
   };

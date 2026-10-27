@@ -1,6 +1,7 @@
 // Team play for the bots, like players at their ranks. Each round: the economy call (save, force, full buy) and a plan,
 // called by the team's best player in the chat. Terrorists rush a site, execute one with lineups (smokes, then molotovs,
-// then pop flashes as the entry goes in), take mid and split, or play a default for picks and hit a site late; each bot
+// then pop flashes as the entry goes in), take mid and split, or play a default for picks and hit a site late (a rush or
+// a default by any of the site's ways in, not always the shortest from their spawn); each bot
 // has a role (entry, support with the utility, lurker, AWPer). Counter-terrorists split up over the sites (stacking the
 // one that keeps getting hit, at higher ranks), throw their early utility at the chokes, rotate on information and retake
 // together. The brains (ai.js) play their part of it.
@@ -96,12 +97,18 @@ export function teamPlan(game, side, econ = 'full') {
     }
     for (const b of bots) if (!roles.has(b.c)) roles.set(b.c, 'support');
     const throws = strat === 'rush' ? [] : assignThrows(game, bots, 'T', strat === 'split' ? [site, 'mid'] : strat === 'default' ? [site, 'default'] : [site], roles);
+    // The way in: a rush or a default comes in by any of the site's ways (from their spawn, through mid, from the other
+    // site: see spots.js), not always the shortest; an execute by the one its lineups are thrown for.
+    const ways = game.spots?.place('hold:' + site)?.ways.length || 0;
+    const route = (strat === 'rush' || strat === 'default') && ways > 1 ? Math.floor(rnd() * ways) : 0;
+    const via = route ? game.spots.door(site, route) : null, from = route ? game.spots.place('hold:' + site).ways[route].from : null;
     // When it goes (seconds left on the clock): a rush at once; an execute once they've gathered; a default late.
     const execAt = strat === 'rush' ? 999 : strat === 'default' ? 35 + rnd() * 20 : strat === 'split' ? 55 + rnd() * 15 : 70 + rnd() * 15;
-    const call = { rush: `Rush ${site}, don't stop!`, exec: `Execute ${site}: smokes, then flashes, then we go`, default: `Default. Play for picks, we hit ${site} late`,
+    const by = from === 'mid' ? ' through mid' : from ? ` from ${from}` : '';
+    const call = { rush: `Rush ${site}${by}, don't stop!`, exec: `Execute ${site}: smokes, then flashes, then we go`, default: `Default. Play for picks, we hit ${site}${by} late`,
       split: `Split ${site}: two through mid, the rest with me` }[strat] + (econ === 'eco' ? ' (saving: pistols only)' : econ === 'force' ? ' (force buy)' : '');
     return { side, strat, site, roles, igl, throws, execAt, econ, call, stage: strat === 'rush' ? 'execute' : strat === 'default' ? 'setup' : 'gather', execStart: strat === 'rush' ? 0 : null,
-      lurk: [...roles].find(([, r]) => r === 'lurk')?.[0] || null, rush: strat === 'rush' };
+      lurk: [...roles].find(([, r]) => r === 'lurk')?.[0] || null, rush: strat === 'rush', route, via, staging: route ? game.spots.staging(site, route) : null };
   }
   // CT: the split (two, one, two with five), stacking the site the terrorists keep hitting at higher ranks.
   const assign = new Map();
@@ -132,7 +139,7 @@ export function advancePlan(game, plan, t) {
   const left = game.match.time;
   if (plan.stage === 'setup' && (left <= plan.execAt + 18 || plan.pick)) plan.stage = 'gather';
   if (plan.stage !== 'gather') return;
-  const stage = stagingPoint(game, plan.site);
+  const stage = plan.staging || stagingPoint(game, plan.site);
   const bots = game.bots.filter((b) => b.c.team === 'T' && b.c.alive);
   const onSpot = (x) => { const b = game.botOf(x.by); return b && Math.hypot(b.pos[0] - x.lineup.pos[0], b.pos[1] - x.lineup.pos[1]) < 6; };
   const pending = plan.throws.filter((x) => !x.done && x.by.alive);

@@ -95,8 +95,14 @@ What's in a match:
 - Weapon modes: the M4A1-S and USP-S silencer screws off and on (Mouse2), the Glock-18 and FAMAS switch to burst fire
   (Mouse2), the R8 Revolver cocks for an accurate shot (hold Mouse1) or fans (Mouse2), shotguns load shell by shell and
   can fire mid-reload, and the Zeus x27 (Gear, $200) recharges 30 seconds after a shot.
-- Weapons drop when players die (G drops yours); walk over a gun to pick it up into a free slot, E swaps. Dead CTs drop
-  their defuse kit. Bullets go through thin walls (wood easily, metal less, concrete barely) with less damage.
+- Weapons drop when players die (G drops yours); walk over a gun to pick it up into a free slot, E swaps. A gun keeps
+  its skin wherever it goes, as in CS2: yours is your skin on the floor, in the hands of a bot that picks it up (and
+  in first person spectating it) and back in yours, stickers, charm and StatTrak™ counter and all; a bot's is the
+  default, so picking one up gives you the default finish, not your own skin for it. A kill counts on a StatTrak™ gun
+  only in its owner's hands. The skin travels with the gun as plain JSON (the whole item and whose it is: see
+  src/js/play/drops.js), so a gun dropped by another player would carry theirs the same way; Play has no matches with
+  other players yet. Dead CTs drop their defuse kit. Bullets go through thin walls (wood easily, metal less, concrete
+  barely) with less damage.
 - Breakables: glass, shop windows, Nuke's and Mirage's vent covers, Mirage's B window shutter, Train's cabinet doors,
   bottles and pots break when shot (or knifed) with their sound, in pieces, leaving what CS2 leaves (the shutter's
   splintered frame), and are whole again each round. Until then a vent cover blocks the vent.
@@ -114,8 +120,24 @@ What's in a match:
   crouch-jump, up to 66 units) onto it. A jump they can't make (a crate or overhang in the way) is one every bot goes
   round for the rest of the match. Terrorists pick
   a site (see the team play below), take it and plant; counter-terrorists split up to hold the sites, rotate when they see terrorists, retake and defuse; they flee a bomb
-  they can't stop. In fights they react after a human-like delay, aim with an error that shrinks as they track you,
-  stop to shoot, control part of the recoil and fire in bursts. They know their guns' spread like a player at their
+  they can't stop. They hold proper spots (src/js/play/spots.js): somewhere with cover that sees a way the enemy comes
+  in, facing where they'd first show (the doorway, the top of the ramp), from CS2's own hiding spots in the map's nav
+  mesh and points about the site, worked out as the match loads. A team's bots share them out each round, watching
+  different ways in, never on top of each other, and not the spot they held the last two rounds, so they're never in
+  the same five places; the terrorists gather, lurk, hold the site and play the planted bomb the same way. They steer
+  round each other as players do (passing on the right of someone coming the other way, round someone standing in a
+  doorway) instead of walking into each other. They know where enemies are from what they see and, roughly, from what
+  they hear: a gunshot or footsteps give an idea of where (off by more the further it was, more again through a wall),
+  and they look for them where they'd come from, the corner or the doorway, not at them through the wall. In fights
+  they react after a human-like delay (longer when you're at the edge of their view), then aim like a player's hand
+  (src/js/play/aim.js): a flick that lands short, long or to the side (by more at lower ranks), a correction, then
+  following you with a lag, so a change of direction throws them off for a moment; higher ranks shoot as a flick lands.
+  They stop to shoot, control part of the recoil and fire in bursts. (`CS2SIM_SMOKE=bots`, Mirage and Dust II, Silver
+  and Global Elite, before and after: a Global Elite's crosshair on an enemy behind a wall 17% of the time, now 6%, and
+  following one through a wall as they moved 71 times in a Mirage match, now 8; held up by another player 6 to 86
+  seconds a round, now 2 to 11; holding a spot facing a wall 18-28% of the time, now 4-13%, seeing 420-550 units that
+  way, now 720-1,000; the same spot as an earlier round 36-39%, now 10-12%; a Global Elite's first shot 0.2 s after it
+  sees you, its aim already within 1.5° of your head after 0.1 s, now 0.45 s and 10-17° off at 0.1 s.) They know their guns' spread like a player at their
   rank: higher ranks counter-strafe to a stop and only fire once the shot will land (moving, the spray's penalty and
   the recoil they can't pull down all count), so they tap at range, burst nearer and spray up close, and scope in with
   the AWP and Scout; Silvers fire anyway, on the run. Players block each other without pushing (you can stand on a
@@ -162,19 +184,27 @@ What's in a match:
 - The bots are real players: the pros of the game's Major autograph stickers (their autograph as the picture, their
   team), or the players in src/data/bot-players.json when it's there (Liquipedia's data, credited), nobody twice in a
   match. Their skill comes from their rank (matchmaking finds them around yours; a private match's are the ranks you
-  pick, each bot its own rank): reaction time, aim error and spray control, where the crosshair rests (head height or the floor), how quickly
+  pick, each bot its own rank): reaction time, how their flicks land and how closely they follow you, spray control, where the crosshair rests (head height or the floor), how quickly
   they stop to shoot (counter-strafing), how much utility they throw and how well, patience, and how fast they trade.
 - They play as teams. Each round the team makes an economy call (save, force or full buy, a rifle dropped to a teammate
   who couldn't afford one) and a plan its best player calls in the chat. Terrorists rush a site, execute one (gathering
   short of it; smokes, then molotovs, then pop flashes; the entry going in as the flash bursts, the rest close enough to
-  trade), take mid and split, or play a default for picks and hit late, with roles: entry, support, lurker, AWPer.
+  trade), take mid and split, or play a default for picks and hit late (a rush or a default coming in by any of the
+  site's ways in, through mid or from the other site, not always the shortest), with roles: entry, support, lurker, AWPer.
   Counter-terrorists split over the sites (stacking the one that keeps getting hit, at higher ranks), throw early
   utility at the chokes, rotate on information (lower ranks on one sighting, higher on two) and retake together.
   The utility is real lineups (src/data/lineups.json: Dust II, Mirage, Inferno and Nuke), found on each map's own
   geometry by scripts/build-lineups.mjs: asked for by callouts ("the part of CT spawn nearest A site"), searched over
   throw spots, aims, strengths and jump-throws with the game's own grenade physics, the steadiest kept, and checked
   again on each match's collision. A bot stands on the spot, aims (off by its rank's error: Silvers misthrow) and throws.
-  `CS2SIM_SMOKE=bots` watches rounds at chosen ranks and logs the plans and where every lineup landed;
+  `CS2SIM_SMOKE=bots` watches rounds at chosen ranks and logs the plans and where every lineup landed, and measures how
+  the bots behave (userData/bots-<map>-<tier>.json): how often their crosshair is on an enemy behind a wall and why, how
+  long they're held up by another player, where they hold (facing a wall, how far they see, cover, watching a way in,
+  the same spot as before), and their fights (reaction, how far off their aim is 0.1 to 1 s in, first shot, first hit);
+  `CS2SIM_SMOKE_TIMESCALE` plays it faster. `CS2SIM_SMOKE=drops` drops your skinned AK-47, has a bot pick it up and die
+  with it, picks it back up and then a bot's, with screenshots (copy a save.json with skins into the smoke profile
+  first; `CS2SIM_SMOKE_USERDATA` runs in another profile, beside a smoke run in the usual one, with `CS2SIM_CACHE` at its
+  cs2cache);
   `CS2SIM_SMOKE=premier` plays through the pick/ban and a match; `CS2SIM_SMOKE=mm` goes through matchmaking (search,
   accept, Esc's menu, leave, reconnect, abandon and the cooldown); `CS2SIM_SMOKE=sound` goes through a map's
   soundscapes (`CS2SIM_SMOKE_MAP`, Dust II by default: the reverb and ambience in each), walks you into a bot and lists
