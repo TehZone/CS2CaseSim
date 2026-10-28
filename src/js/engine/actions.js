@@ -14,7 +14,8 @@ import * as R from './ranks.js';
 import * as P from './premier.js';
 import * as MM from './matchmaking.js';
 import * as L from './levels.js';
-import { rand, round2, uid as newUid } from './util.js';
+import * as N from './npcs.js';
+import { rand, round2, clamp, pick, pickWeighted, uid as newUid } from './util.js';
 
 export class GameError extends Error {
   constructor(message, code = 'bad') { super(message); this.code = code; }
@@ -185,6 +186,63 @@ export function takeStake(ctx, { money: m = 0, uids = [] } = {}) {
   return { cash, items, value };
 }
 
+// ---- NPC players (engine/npcs.js): their state, trades with them -------------------------------------------------------
+// Their state, copied so a failed action leaves the save as it was (atomically() puts back top-level fields only).
+function social(ctx) {
+  if (ctx.online) fail('NPC players are only in offline mode', 'online');
+  return ctx.st.social ? structuredClone(ctx.st.social) : N.freshSocial(Math.floor(ctx.rng() * 2 ** 31), ctx.now);
+}
+function keepSocial(ctx, so) { ctx.st.social = so; ctx.dirty.add('social'); }
+function openOffer(so, id) {
+  const o = so.offers.find((x) => x.id === id);
+  if (!o || o.status !== 'open') fail('That offer is no longer open', 'missing');
+  return o;
+}
+const tradeText = (items, cash) => [...items.map(I.itemName), cash ? N.dollars(cash) : ''].filter(Boolean).join(' + ') || 'nothing';
+// An NPC keeps at most 60 items (the cheapest go).
+function trimInv(s) {
+  if (s.inv.length <= 60) return;
+  s.inv.sort((a, b) => I.itemValue(b) - I.itemValue(a));
+  s.inv.length = 60;
+}
+// Swaps items and money with an NPC in one go: their side is checked first, yours is taken like any trade's.
+function swapWithNpc(ctx, so, n, { mine, theirs, myMoney, theirMoney }) {
+  const s = N.npcState(so, n.id);
+  const got = theirs.map((u) => s.inv.find((x) => x.uid === u) || fail(`${n.name} no longer has that item`, 'missing'));
+  if (theirMoney > s.money + 1e-9) fail(`${n.name} can't afford that any more`, 'funds');
+  const given = take(ctx, mine);
+  if (myMoney) spend(ctx, myMoney);
+  if (theirMoney) credit(ctx, theirMoney);
+  s.inv = [...s.inv.filter((x) => !theirs.includes(x.uid)), ...given.map(({ lk: _lk, nw: _nw, ...it }) => ({ ...it, at: ctx.now }))];
+  trimInv(s);
+  s.money = round2(s.money - theirMoney + myMoney);
+  s.trades = (s.trades || 0) + 1;
+  s.mood = clamp((s.mood ?? 0.7) + 0.1, 0, 1);
+  const items = got.map((it) => ({ ...it, at: ctx.now, nw: true, src: `Trade with ${n.name}` }));
+  if (items.length) give(ctx, items);
+  // Sometimes they leave you +rep on your profile.
+  if (ctx.rng() < 0.4) {
+    so.comments.unshift({ at: ctx.now, npc: n.id, text: pick(['+rep fast trader', '+rep smooth trade', '+rep legit 👍', '+rep nice inventory!', '+rep good guy, fair prices'], ctx.rng) });
+    so.comments.length = Math.min(so.comments.length, 30);
+  }
+  const st = stats(ctx);
+  st.npcTrades = (st.npcTrades || 0) + 1;
+  return { got: items, given, money: round2(theirMoney - myMoney) };
+}
+// Offline, what you sell on the Market is bought by someone: the better items end up in an NPC's inventory.
+function passToNpcs(ctx, items) {
+  if (ctx.online || !ctx.st.social) return;
+  const worth = items.filter((it) => I.itemValue(it) >= 5);
+  if (!worth.length) return;
+  const so = structuredClone(ctx.st.social);
+  for (const { lk: _lk, nw: _nw, ...it } of worth) {
+    const s = N.npcState(so, pick(N.crowd(so.seed), ctx.rng).id);
+    s.inv.push({ ...it, at: ctx.now, src: 'Market' });
+    trimInv(s);
+  }
+  keepSocial(ctx, so);
+}
+
 // ---- the actions -----------------------------------------------------------------------------------
 export const ACTIONS = {
   // Buying cases (and capsules, packages...): they go to your inventory, like CS2's store. A case that takes a key opens
@@ -242,6 +300,7 @@ export const ACTIONS = {
     const total = round2(items.reduce((s, it) => s + I.itemValue(it), 0));
     credit(ctx, total);
     stats(ctx).sold = round2(ctx.st.stats.sold + total);
+    passToNpcs(ctx, items);
     return { total, n: items.length };
   },
   'item.lock'(ctx, { uid, lk }) {
@@ -649,6 +708,186 @@ export const ACTIONS = {
   'team.cupLeave'(ctx) {
     ctx.st.team = { ...ctx.st.team, cup: null };
     ctx.dirty.add('team');
+  },
+
+  // ---- NPC players (offline only, see engine/npcs.js) ----
+  // Time passing for the NPCs: offers expire, they buy from the market, message you about your rare items, add you as a
+  // friend and chat. Returns the messages they sent { events: [{ npc, text }] }.
+  'npc.tick'(ctx) {
+    const so = social(ctx), r = ctx.rng, now = ctx.now;
+    const dt = clamp(now - (so.at || now), 0, 6 * 3600e3);
+    so.at = now;
+    const events = [];
+    const said = (id) => { const t = so.threads[id]; if (t?.length) events.push({ npc: id, text: t[t.length - 1].text }); };
+    const rolls = (perMin, cap) => { const x = (dt / 60000) * perMin; return Math.min(cap, Math.floor(x) + (r() < x % 1 ? 1 : 0)); };
+    for (const o of so.offers) {
+      if (o.status !== 'open') continue;
+      const gone = o.want.uids.some((u) => !ctx.st.inv.some((it) => it.uid === u));
+      if (gone || now > o.exp) {
+        o.status = 'expired';
+        if (!gone) { N.post(so, o.npc, 'npc', pick(['nvm, found another one', 'offer\'s off, sorry', 'guess not, np'], r), {}, now); said(o.npc); }
+      }
+    }
+    let bought = 0;
+    for (let k = rolls(0.4, 4); k > 0; k--) if (N.marketBuy(so, ctx.st, { r, now })) bought++;
+    if (bought) ctx.dirty.add('market');
+    const open = so.offers.filter((o) => o.status === 'open').length;
+    for (let k = Math.min(rolls(0.3, 2), 6 - open); k > 0; k--) { const o = N.makeOffer(so, ctx.st, { r, now }); if (o) said(o.npc); }
+    for (const [id, s] of Object.entries(so.npcs)) {
+      if (s.friend !== 3 || r() > Math.min(1, dt / (3 * 60e3))) continue;
+      if (r() < s.mood + 0.2) { s.friend = 1; N.post(so, id, 'npc', pick(['thx for the add!', 'hey 👋', 'added, what\'s up'], r), {}, now); said(id); } else s.friend = 0;
+    }
+    if (rolls(1 / 30, 1)) {
+      const people = N.crowd(so.seed).filter((n) => !so.npcs[n.id]?.friend);
+      if (people.length) {
+        const n = pickWeighted(people.map((p) => [p, so.threads[p.id] ? 4 : 1]), r);
+        N.npcState(so, n.id).friend = 2;
+        N.post(so, n.id, 'npc', pick(['hey, added you. you trade?', 'yo add me back', 'saw your inventory, nice stuff. added you'], r), { request: true }, now);
+        said(n.id);
+      }
+    }
+    if (rolls(1 / 25, 1)) {
+      const friends = N.crowd(so.seed).filter((n) => so.npcs[n.id]?.friend === 1);
+      if (friends.length) { const n = pick(friends, r); N.post(so, n.id, 'npc', N.chatLine(n, N.npcState(so, n.id), r), {}, now); said(n.id); }
+    }
+    for (const s of Object.values(so.npcs)) s.money = round2(s.money + (dt / 3600e3) * [2, 10, 40, 120][s.tier]);
+    so.offers = so.offers.filter((o, i) => o.status === 'open' || i >= so.offers.length - 60);
+    keepSocial(ctx, so);
+    return { events };
+  },
+  // You've read their messages (and looked them up: their inventory is ready to see).
+  'npc.read'(ctx, { npc }) {
+    const so = social(ctx);
+    if (!N.npcOf(so.seed, String(npc))) fail('Unknown player');
+    N.npcState(so, String(npc));
+    so.unread[String(npc)] = 0;
+    keepSocial(ctx, so);
+  },
+  // Accepting an NPC's offer: the items and money change hands at once.
+  'npc.accept'(ctx, { offer }) {
+    const so = social(ctx), o = openOffer(so, offer);
+    const n = N.npcOf(so.seed, o.npc);
+    const out = swapWithNpc(ctx, so, n, { mine: o.want.uids, theirs: o.give.uids, myMoney: o.want.money || 0, theirMoney: o.give.money || 0 });
+    o.status = 'accepted';
+    N.post(so, n.id, 'npc', pick(n.type === 'collector' ? ['Thank you! It\'s going straight into the collection.', 'Pleasure doing business 🤝'] : ['ty! 🤝', 'gg ty', 'nice, ty'], ctx.rng), {}, ctx.now);
+    keepSocial(ctx, so);
+    return out;
+  },
+  'npc.decline'(ctx, { offer }) {
+    const so = social(ctx), o = openOffer(so, offer);
+    o.status = 'declined';
+    N.post(so, o.npc, 'me', 'No thanks.', {}, ctx.now);
+    N.post(so, o.npc, 'npc', pick(['ok np', 'your loss lol', 'alright, lmk if you change your mind'], ctx.rng), {}, ctx.now);
+    so.unread[o.npc] = 0;
+    keepSocial(ctx, so);
+  },
+  // Haggling: the net cash you want from their offer (negative: what you'd pay them), with an argument for it.
+  'npc.counter'(ctx, { offer, price, arg = null }) {
+    const so = social(ctx), o = openOffer(so, offer);
+    price = Number(price);
+    if (!Number.isFinite(price) || Math.abs(price) > 1e9) fail('Invalid price');
+    price = round2(price);
+    N.post(so, o.npc, 'me', `${arg && N.ARGUMENTS[arg] ? N.ARGUMENTS[arg].n + '. ' : ''}${price >= 0 ? `How about ${N.dollars(price)}?` : `I'd add ${N.dollars(-price)}.`}`, {}, ctx.now);
+    const h = N.haggle(so, ctx.st, o, { price, arg }, { r: ctx.rng, now: ctx.now });
+    N.post(so, o.npc, 'npc', h.text, h.outcome === 'walk' ? {} : { offer: o.id }, ctx.now);
+    so.unread[o.npc] = 0;
+    keepSocial(ctx, so);
+    return { ...h, offer: o };
+  },
+  // A message you type: read for a haggle when there's an offer open between you (a price, yes or no, an argument),
+  // else small talk.
+  'npc.say'(ctx, { npc, text }) {
+    const so = social(ctx), n = N.npcOf(so.seed, String(npc));
+    if (!n) fail('Unknown player');
+    text = String(text || '').replace(/[<>]/g, '').trim().slice(0, 300);
+    if (!text) fail('Type a message first');
+    N.post(so, n.id, 'me', text, {}, ctx.now);
+    const o = [...so.offers].reverse().find((x) => x.npc === n.id && x.status === 'open');
+    const m = N.readMessage(text);
+    let reply, outcome = null;
+    if (o && m.no) {
+      o.status = 'declined';
+      reply = pick(['ok np', 'alright, no worries', 'your loss 😛'], ctx.rng);
+    } else if (o && m.yes && m.price == null) {
+      reply = o.agreed ? pick(['great, accept it then 👍', 'send it 🤝'], ctx.rng) : pick([`so ${N.dollars(Math.max(0, o.give.money - o.want.money))}? accept the offer then`, 'accept it then 😄'], ctx.rng);
+    } else if (o && (m.price != null || m.arg)) {
+      const cur = (o.give.money || 0) - (o.want.money || 0);
+      const h = N.haggle(so, ctx.st, o, { price: m.price ?? round2(Math.max(cur * 1.15, cur + 1)), arg: m.arg }, { r: ctx.rng, now: ctx.now });
+      reply = h.text;
+      outcome = h.outcome;
+    } else reply = N.smallTalk(n, text, ctx.rng);
+    N.post(so, n.id, 'npc', reply, o && o.status === 'open' && outcome ? { offer: o.id } : {}, ctx.now);
+    so.unread[n.id] = 0;
+    keepSocial(ctx, so);
+    return { reply, outcome };
+  },
+  // An offer you make to an NPC: they take it, ask for a bit more (a counter offer you can accept or haggle over), or
+  // say no.
+  'npc.offer'(ctx, { npc, give: g = {}, get = {}, msg = '' }) {
+    const so = social(ctx), n = N.npcOf(so.seed, String(npc));
+    if (!n) fail('Unknown player');
+    const s = N.npcState(so, n.id);
+    const mine = [...new Set((g.uids || []).map(String))], theirs = [...new Set((get.uids || []).map(String))];
+    const myMoney = money(g.money), theirMoney = money(get.money);
+    if (!mine.length && !theirs.length && !myMoney && !theirMoney) fail('Add something to the offer');
+    const yours = mine.map((u) => findOwned(ctx, u));
+    for (const it of yours) if (it.lk) fail(`${I.itemName(it)} is locked. Unlock it first.`, 'locked');
+    const their = theirs.map((u) => s.inv.find((x) => x.uid === u) || fail('They no longer have that item', 'missing'));
+    if (myMoney > ctx.st.money + 1e-9) fail('Not enough money', 'funds');
+    if (theirMoney > s.money + 1e-9) fail(`${n.name} doesn't have that much money`, 'funds');
+    msg = String(msg || '').replace(/[<>]/g, '').trim().slice(0, 200);
+    N.post(so, n.id, 'me', `${msg ? msg + ' · ' : ''}Sent a trade offer: ${tradeText(yours, myMoney)} for ${tradeText(their, theirMoney)}`, {}, ctx.now);
+    const j = N.judge(so, n, s, { yours, theirs: their, myMoney, theirMoney });
+    let result;
+    if (j.ok) {
+      const out = swapWithNpc(ctx, so, n, { mine, theirs, myMoney, theirMoney });
+      N.post(so, n.id, 'npc', pick(['accepted 🤝', 'deal, accepted', 'ty, accepted!'], ctx.rng), {}, ctx.now);
+      result = { result: 'accepted', ...out };
+    } else if (j.more && j.more <= Math.max(5, (theirMoney + their.reduce((t, x) => t + I.itemValue(x), 0)) * 0.25)) {
+      const o = { id: newUid(), npc: n.id, kind: 'trade', at: ctx.now, exp: ctx.now + N.OFFER_LIFE, status: 'open', want: { uids: mine, money: myMoney }, give: { uids: theirs, money: theirMoney },
+        max: 0, patience: n.patience, annoy: 0, args: [], agreed: true };
+      const netNow = round2(theirMoney - myMoney - j.more);
+      o.give.money = Math.max(0, netNow); o.want.money = Math.max(0, -netNow);
+      o.max = round2(netNow + j.more * 0.4);
+      so.offers.push(o);
+      N.post(so, n.id, 'npc', pick([`close. add ${N.dollars(j.more)} and it's a deal`, `I'd need ${N.dollars(j.more)} more`, `almost — ${N.dollars(j.more)} more and I'll do it`], ctx.rng), { offer: o.id }, ctx.now);
+      result = { result: 'countered', offer: o, more: j.more };
+    } else {
+      N.post(so, n.id, 'npc', pick(n.type === 'collector' ? ['Sorry, that doesn\'t work for me.', 'I\'ll pass, thanks.'] : ['nah', 'lol no', 'that\'s a lowball bro', 'no thx'], ctx.rng), {}, ctx.now);
+      result = { result: 'declined' };
+    }
+    so.unread[n.id] = 0;
+    keepSocial(ctx, so);
+    return result;
+  },
+  // Friends: add (or accept their request), or remove.
+  'npc.friend'(ctx, { npc, on = true }) {
+    const so = social(ctx), n = N.npcOf(so.seed, String(npc));
+    if (!n) fail('Unknown player');
+    const s = N.npcState(so, n.id);
+    if (!on) s.friend = 0;
+    else if (s.friend === 2) { s.friend = 1; N.post(so, n.id, 'npc', pick(['👋', 'ty for accepting!', 'hey!'], ctx.rng), {}, ctx.now); }
+    else if (s.friend !== 1) s.friend = 3;
+    keepSocial(ctx, so);
+    return { friend: s.friend };
+  },
+  // Your profile: name, avatar (an agent), country, bio, a map behind it, and up to 6 items to show off.
+  'persona.set'(ctx, { name, bio, avatar, country, showcase, bg }) {
+    const so = social(ctx);
+    const me = { ...N.freshPersona(), ...so.me };
+    const clean = (x, max) => String(x ?? '').replace(/[<>]/g, '').trim().slice(0, max);
+    if (name !== undefined) me.name = clean(name, 32);
+    if (bio !== undefined) me.bio = clean(bio, 300);
+    if (country !== undefined) me.country = /^[A-Z]{2}$/.test(country) ? country : '';
+    if (avatar !== undefined) me.avatar = avatar && D.agents[avatar] ? avatar : null;
+    if (bg !== undefined) me.bg = bg ? clean(bg, 40) : null;
+    if (showcase !== undefined) {
+      if (!Array.isArray(showcase) || showcase.length > 6) fail('Pick up to 6 items');
+      me.showcase = [...new Set(showcase.map(String))].filter((u) => ctx.st.inv.some((it) => it.uid === u));
+    }
+    so.me = me;
+    keepSocial(ctx, so);
+    return { me };
   },
 
   // ---- gambling against bots (offline, and bot games online) ----

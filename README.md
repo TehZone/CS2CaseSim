@@ -349,6 +349,18 @@ What's in a match:
 - Cases you buy go to your inventory, like CS2's store, and open with their own key (bought apart, $2.49: the Fever Case
   Key for the Fever Case, the CS:GO Case Key for the first ones). Open them on the case's page (it shows how many cases
   and keys you have) or from the inventory; auto open uses yours first, then buys a case and a key for each opening
+- NPC players (offline): 36 made-up CS2 players with their own inventories and money. 24 are normal players who buy on
+  the Market (its stock goes for you too) and trade at about market price; 12 are collectors, each chasing one kind of
+  item (Dopplers, blue gems, fades, low floats, serial numbers, Katowice-era stickers, Souvenirs, StatTrak™ knives, AWPs,
+  gloves, charms, knives) and paying well over market for it (a #1 blue gem might fetch 1.5-2x). When you own something
+  they want, they message you with cash or trade offers: accept, decline or haggle, with a price and an argument (the
+  float, the pattern, the stickers, the serial, the market price, another buyer; a false claim or a bluff they see
+  through annoys them, and too many counters make them walk away), or just type ("would you do $500? it's a 0.01 float").
+  Items you sell sometimes end up in their inventories
+- Friends & Chat like Steam's (the people icon at the top): friends by status (In-Game, Online, Offline), friend requests,
+  chats, and profiles with level, Service Medal, item showcase, comments (+rep after trades) and their whole inventory,
+  to make them an offer from. Your own profile: name, avatar (any agent), country, summary, a CS2 map behind it and up
+  to six items to show off
 - 42 real weapon cases, 150 souvenir packages (each Major's team stickers and gold MVP autographs), packages
   (X-Ray, Anubis, Genesis/Dead Hand Terminals), 229 sticker/autograph capsules, an Agent Locker and a Chicken Coop Crate
 - All 94 weapon collections (e.g. Cobblestone with the Dragon Lore), browsable with odds and prices

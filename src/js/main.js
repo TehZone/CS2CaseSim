@@ -1,4 +1,5 @@
 import { $, $$, money, debounce, esc } from './util.js';
+import { act, online } from './backend.js';
 import { loadData } from './data.js';
 import { S, loadState, on, saveSync, save } from './state.js';
 import { itemValue } from './items.js';
@@ -18,10 +19,12 @@ import * as trade from './pages/trade.js';
 import * as stats from './pages/stats.js';
 import * as database from './pages/database.js';
 import * as play from './pages/play.js';
+import * as community from './pages/community.js';
+import { npcOf } from './engine/npcs.js';
 import { initMatchmaking } from './matchmaking.js';
 import { initProfile } from './profile.js';
 
-const PAGES = { play, cases, inventory, tradeup, armory, market, database, gamble, team, trade, stats };
+const PAGES = { play, cases, inventory, tradeup, armory, market, database, gamble, team, trade, stats, community };
 let current = null, currentName = 'cases';
 
 function go(name) {
@@ -50,6 +53,31 @@ const updateInv = debounce(() => {
   $('#net-worth').textContent = money(S.inv.reduce((s, i) => s + itemValue(i), 0));
 }, 150);
 const updateStars = () => { $('#star-count').textContent = S.stars || 0; };
+// Unread messages and friend requests from the NPC players (offline).
+const updateMessages = () => {
+  const n = online() ? 0 : community.unreadCount(), el = $('#msg-count');
+  el.hidden = !n;
+  el.textContent = n;
+};
+
+// Offline, the NPC players go about their business while the game is open (and catch up a little after time away or a
+// match): they buy from the market, and message you with offers for your rare items. New messages pop up unless you're
+// already reading that chat.
+function startNpcLoop() {
+  const tick = async () => {
+    // (Not during a match: they catch up afterwards, and the match's frames stay smooth.)
+    if (online() || document.querySelector('.play-canvas')) return;
+    let r;
+    try { r = await act('npc.tick'); } catch { return; }
+    for (const e of (r.events || []).slice(0, 2)) {
+      if ((currentName === 'community' && document.querySelector(`.fr-row.on[data-who="${e.npc}"]`))) continue;
+      const name = S.social ? npcOf(S.social.seed, e.npc)?.name : '';
+      toast(`<b>${esc(name || 'Someone')}</b>: ${esc(e.text.length > 120 ? e.text.slice(0, 117) + '…' : e.text)}`, 'msg');
+    }
+  };
+  setTimeout(tick, 4000);
+  setInterval(tick, 30000);
+}
 
 
 // ---- account (offline / online) ------------------------------------------------------------------
@@ -125,7 +153,8 @@ async function boot() {
   on('money', () => { updateBalance(); updateInv(); });
   on('inv', updateInv);
   on('stars', updateStars);
-  on('reset', () => { lastMoney = S.money; updateBalance(); updateInv(); updateStars(); go(currentName); });
+  on('social', updateMessages);
+  on('reset', () => { lastMoney = S.money; updateBalance(); updateInv(); updateStars(); updateMessages(); go(currentName); });
   net.on('status', updateAccount);
   net.on('notice', ({ msg, type }) => toast(msg, type || ''));
   $('#account').addEventListener('click', accountModal);
@@ -143,6 +172,7 @@ async function boot() {
   window.addEventListener('app:refresh', () => go(currentName));
   initMatchmaking();
   initProfile();
+  startNpcLoop();
   go('cases');
   setInterval(() => save(), 15000);
   updateAccount();

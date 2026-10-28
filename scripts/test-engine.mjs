@@ -16,7 +16,7 @@ const G = await E('gamble');
 const M = await E('manager');
 const ACT = await E('actions');
 const { freshState } = await E('economy');
-const { mulberry32 } = await E('util');
+const { mulberry32, round2 } = await E('util');
 
 let failed = 0, passed = 0;
 function check(name, ok, info = '') {
@@ -655,5 +655,80 @@ function tierFreq(box, n) {
   check('reward cases are inventory cases that take their own key', !!keyFor(D.caseById[crate.id]) && I.itemName(crate) === D.caseById[crate.id].n && I.itemValue(crate) === D.caseById[crate.id].price);
 }
 
+
+// ---- NPC players (offline): who they are, what they pay, offers, haggling, trades, the market ------------------------------
+{
+  const N = await E('npcs');
+  const MK = await import(new URL('../src/js/engine/market.js', import.meta.url));
+  const people = N.crowd(4242);
+  check('NPCs: a crowd of 36 with 12 collectors (each a different kind), the same for the same save', people.length === 36 && people.filter((n) => n.type === 'collector').length === 12
+    && new Set(people.filter((n) => n.focus).map((n) => n.focus)).size === 12 && new Set(people.map((n) => n.name)).size === 36 && N.crowd(4242) === people
+    && N.startingState(4242, people[2]).inv.map((it) => it.id + it.fl).join() === N.startingState(4242, people[2]).inv.map((it) => it.id + it.fl).join());
+  const dop = people.find((n) => n.focus === 'doppler'), pl = people.find((n) => n.type === 'player');
+  const ruby = Object.values(D.skins).find((s) => s.ph === 'Ruby'), ak = Object.values(D.skins).find((s) => s.w === 'AK-47' && !s.v && s.p.FT?.[0] > 5);
+  const rubyIt = { uid: 'ruby', t: 'skin', id: ruby.id, fl: 0.02, sd: 10, stk: [], at: 0 }, akIt = { uid: 'ak', t: 'skin', id: ak.id, fl: 0.2, sd: 3, stk: [], at: 0 };
+  check('NPCs: a collector pays over market for their kind of item, a player around market', N.buyValue(dop, rubyIt) > I.itemValue(rubyIt) * 1.25
+    && N.buyValue(pl, akIt) < I.itemValue(akIt) * 1.15 && N.buyValue(dop, akIt) < I.itemValue(akIt));
+  const dopStart = N.startingState(4242, dop);
+  check('NPCs: collectors own items of their kind', dopStart.inv.filter((it) => N.FOCUS.doppler.fit(it) > 0).length >= 3, `${dopStart.inv.length} items, $${Math.round(dopStart.inv.reduce((t, x) => t + I.itemValue(x), 0))}`);
+
+  const st = freshState();
+  st.money = 50;
+  st.inv.push(rubyIt, akIt);
+  let now = Date.now();
+  const run = (name, args, opts = {}) => { const ctx = ACT.makeCtx(st, { rng, now, ...opts }); const r = ACT.runAction(ctx, name, args); return { r, d: ACT.delta(ctx) }; };
+  let online = null; try { run('npc.tick', {}, { online: true }); } catch (e) { online = e; }
+  check('NPCs are offline only', online?.code === 'online');
+  run('npc.tick');
+  check('NPCs: a few friends to start with', N.crowd(st.social.seed).filter((n) => st.social.npcs[n.id]?.friend === 1).length === 3);
+  for (let k = 0; k < 20 && !st.social.offers.some((o) => o.want.uids.includes('ruby')); k++) { now += 10 * 60e3; run('npc.tick'); }
+  const offer = st.social.offers.find((o) => o.want.uids.includes('ruby'));
+  check('NPCs: owning a rare item brings offers, with a message', !!offer && st.social.threads[offer.npc].some((m) => m.offer === offer.id) && st.social.unread[offer.npc] > 0,
+    offer ? `${N.npcOf(st.social.seed, offer.npc).name}: ${st.social.threads[offer.npc].at(-1).text}` : 'none');
+  const bought = Object.values(st.market || {}).flat().length;
+  check('NPCs: they buy listings from the market (gone for you too)', bought > 0 && st.social.feed.length > 0, st.social.feed[0]?.text);
+
+  // Haggling: asking far over walks them away eventually; a true argument raises what they'll pay.
+  const o = offer;
+  const max0 = o.max, net0 = o.give.money - o.want.money;
+  const h1 = run('npc.counter', { offer: o.id, price: round2(net0 * 1.03 + 0.01), arg: 'pattern' }).r; // (a Ruby's pattern is no argument, so they're annoyed or it's a near-ask)
+  check('NPCs: haggling answers with a deal, a counter, a final price or walking away', ['agree', 'counter', 'final', 'walk'].includes(h1.outcome), h1.text);
+  const o2 = st.social.offers.find((x) => x.id === o.id);
+  let walked = o2.status !== 'open';
+  for (let k = 0; k < 8 && !walked; k++) walked = run('npc.counter', { offer: o.id, price: round2((o2.max + 1) * 3) }).r.outcome === 'walk';
+  check('NPCs: asking far too much makes them walk away', walked && st.social.offers.find((x) => x.id === o.id).status === 'withdrawn');
+  void max0;
+
+  // Accepting an offer swaps at once.
+  for (let k = 0; k < 30 && !st.social.offers.some((x) => x.status === 'open'); k++) { now += 10 * 60e3; run('npc.tick'); }
+  const acc = st.social.offers.find((x) => x.status === 'open');
+  if (acc) {
+    const m0 = st.money, npcMoney0 = st.social.npcs[acc.npc].money;
+    const res = run('npc.accept', { offer: acc.id }).r;
+    check('NPCs: accepting their offer swaps the items and money', acc.want.uids.every((u) => !st.inv.some((it) => it.uid === u)) && near(st.money, m0 + res.money, 0.011)
+      && acc.want.uids.every((u) => st.social.npcs[acc.npc].inv.some((it) => it.uid === u)) && near(st.social.npcs[acc.npc].money, npcMoney0 - res.money, 0.011)
+      && st.social.offers.find((x) => x.id === acc.id).status === 'accepted');
+  } else check('NPCs: accepting their offer swaps the items and money', false, 'no open offer to accept');
+
+  // Your offers: an overpay is taken, a lowball refused, a near miss countered.
+  const target = people.find((n) => n.type === 'player' && N.npcState(st.social, n.id).inv.some((it) => I.itemValue(it) > 3));
+  const so = st.social;
+  const theirs = N.npcState(so, target.id).inv.filter((it) => I.itemValue(it) > 3).sort((a, b) => I.itemValue(b) - I.itemValue(a))[0];
+  st.money = 100000;
+  const keep = N.keepValue(target, theirs);
+  const low = run('npc.offer', { npc: target.id, give: { money: round2(keep * 0.3) }, get: { uids: [theirs.uid] } }).r;
+  const near_ = run('npc.offer', { npc: target.id, give: { money: round2(keep * 0.92) }, get: { uids: [theirs.uid] } }).r;
+  const fair = run('npc.offer', { npc: target.id, give: { money: round2(keep * 1.1) }, get: { uids: [theirs.uid] } }).r;
+  check('NPCs: your offers — a lowball is refused, a near miss gets a counter, a fair one is taken', low.result === 'declined' && near_.result === 'countered' && fair.result === 'accepted'
+    && st.inv.some((it) => it.uid === theirs.uid), `${low.result} / ${near_.result} (${near_.more}) / ${fair.result}`);
+  const said = run('npc.say', { npc: target.id, text: 'hey what\'s up' }).r;
+  check('NPCs: they answer messages', typeof said.reply === 'string' && said.reply.length > 0);
+  run('npc.friend', { npc: people[30].id });
+  check('NPCs: adding a friend sends a request', st.social.npcs[people[30].id].friend === 3);
+  const rd = N.readMessage('I have another offer, 1.2k and it is a deal');
+  check('NPCs: reading a message for a price and an argument', rd.price === 1200 && rd.arg === 'other' && rd.yes);
+  const me = run('persona.set', { name: 'dawso', bio: 'hi <b>', showcase: [st.inv[0].uid, 'nope'], country: 'US', avatar: Object.keys(D.agents)[0] }).r.me;
+  check('your profile: name, bio (cleaned), showcase of your own items only', me.name === 'dawso' && me.bio === 'hi b' && me.showcase.length === 1 && me.country === 'US');
+}
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

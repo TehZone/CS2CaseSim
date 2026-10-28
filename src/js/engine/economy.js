@@ -25,6 +25,7 @@ export function freshState() {
     mm: freshMM(), // matchmaking: an abandon's cooldown, the ranked match you're in (see matchmaking.js)
     prof: freshProfile(), // your level, XP, Service Medals and level-up rewards waiting (see levels.js)
     play: null, // the Play match you're in: { run, mode, at } (what its reward is checked against)
+    social: null, // offline: the NPC players, your chats and offers with them, and your profile (see npcs.js)
     stats: {
       opened: 0, spent: 0, sold: 0,
       bestValue: 0, bestName: '', drops: {}, knives: 0, stickersApplied: 0,

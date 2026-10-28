@@ -59,6 +59,7 @@ function announceAll() {
   emit('stars');
   emit('team');
   emit('prof');
+  emit('social');
 }
 
 export async function resetSave() {
@@ -103,6 +104,7 @@ export function applyDelta(d, { local = false } = {}) {
   if ('stars' in set) emit('stars');
   if ('team' in set) emit('team');
   if ('prof' in set) emit('prof');
+  if ('social' in set) emit('social');
   if ('loadout' in set) emit('inv');
   if ('upg' in set) emit('money');
   emit('state', d);
