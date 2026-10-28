@@ -236,7 +236,7 @@ function passToNpcs(ctx, items) {
   if (!worth.length) return;
   const so = structuredClone(ctx.st.social);
   for (const { lk: _lk, nw: _nw, ...it } of worth) {
-    const s = N.npcState(so, pick(N.crowd(so.seed), ctx.rng).id);
+    const s = N.npcState(so, pick(N.activeCrowd(so.seed), ctx.rng).id);
     s.inv.push({ ...it, at: ctx.now, src: 'Market' });
     trimInv(s);
   }
@@ -738,7 +738,7 @@ export const ACTIONS = {
       if (r() < s.mood + 0.2) { s.friend = 1; N.post(so, id, 'npc', pick(['thx for the add!', 'hey 👋', 'added, what\'s up'], r), {}, now); said(id); } else s.friend = 0;
     }
     if (rolls(1 / 30, 1)) {
-      const people = N.crowd(so.seed).filter((n) => !so.npcs[n.id]?.friend);
+      const people = N.activeCrowd(so.seed).filter((n) => !so.npcs[n.id]?.friend);
       if (people.length) {
         const n = pickWeighted(people.map((p) => [p, so.threads[p.id] ? 4 : 1]), r);
         N.npcState(so, n.id).friend = 2;

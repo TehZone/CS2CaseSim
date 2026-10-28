@@ -7,12 +7,15 @@
 // (a price, and arguments for it: its float, pattern, stickers, serial, the market price, another buyer...); they buy
 // from the market's stock; some are your friends and chat. Who they are comes from the save's seed; what they own,
 // their money, your chats and offers are kept in the save (state.social).
+//
+// The first 36 are the active ones, who message you and buy on the market; a few hundred more are the rest of the
+// community: they only own things (the Item Database's owners, offline), and you can visit them, add them and trade.
 import { D, wearOf, WEAR_BY_KEY } from './data.js';
 import * as I from './items.js';
 import * as MK from './market.js';
 import { mulberry32, hashStr, pick, pickWeighted, round2, clamp, uid } from './util.js';
 
-export const CROWD = 36, COLLECTORS = 12;
+export const CROWD = 36, COLLECTORS = 12, WORLD = 420;
 const MIN = 60 * 1000;
 
 // ---- who they are -------------------------------------------------------------------------------------------------------
@@ -77,12 +80,13 @@ export function crowd(seed) {
   const agents = Object.values(D.agents).map((a) => a.id).sort();
   const foci = [...FOCI];
   const list = [];
-  for (let i = 0; i < CROWD; i++) {
-    const collector = i % 3 === 2 && foci.length && list.filter((n) => n.type === 'collector').length < COLLECTORS;
-    const focus = collector ? foci.splice(Math.floor(r() * foci.length), 1)[0] : null;
+  for (let i = 0; i < WORLD; i++) {
+    const active = i < CROWD;
+    const collector = active ? i % 3 === 2 && foci.length && list.filter((n) => n.type === 'collector').length < COLLECTORS : r() < 0.15;
+    const focus = !collector ? null : active ? foci.splice(Math.floor(r() * foci.length), 1)[0] : pick(FOCI, r);
     const name = nameFor();
     list.push({
-      id: 'n' + i, name, type: collector ? 'collector' : 'player', focus,
+      id: 'n' + i, name, type: collector ? 'collector' : 'player', focus, active,
       country: pick(COUNTRIES, r), avatar: agents.length ? pick(agents, r) : null, joined: 2012 + Math.floor(r() * 13),
       level: 1 + Math.floor(r() * 40), medals: Math.floor(r() * (collector ? 30 : 12)),
       bio: collector ? FOCUS[focus].bio : pick(BIOS, r), fav: pick(FAV_GUNS, r),
@@ -93,7 +97,9 @@ export function crowd(seed) {
   crowds.set(seed, list);
   return list;
 }
-export const npcOf = (seed, id) => crowd(seed).find((n) => n.id === id) || null;
+export const npcOf = (seed, id) => (/^n\d+$/.test(id) ? crowd(seed)[+id.slice(1)] || null : null);
+// The 36 who message you, buy on the market and send friend requests.
+export const activeCrowd = (seed) => crowd(seed).slice(0, CROWD);
 
 // Online status, like Steam's: from the hour of the day and who they are (no state: the same for everyone, all day).
 export function presence(npc, now = Date.now()) {
@@ -134,32 +140,37 @@ export function nice(x) {
 
 // ---- their own inventories and money --------------------------------------------------------------------------------------
 const lowest = (s) => (s.v ? s.p.V[0] : Math.min(...Object.values(s.p).map((r) => r[0] ?? Infinity)));
+// Every skin (by its cheapest price, for picking within a budget) and each collector's kind, worked out once.
 let skinIndex = null;
-function skins() {
-  if (skinIndex?.data === D.generatedAt) return skinIndex.list;
-  skinIndex = { data: D.generatedAt, list: Object.values(D.skins).filter((s) => s.cat !== 'equipment' && Number.isFinite(lowest(s))) };
-  return skinIndex.list;
+function index() {
+  if (skinIndex?.data === D.generatedAt) return skinIndex;
+  const list = Object.values(D.skins).filter((s) => s.cat !== 'equipment' && Number.isFinite(lowest(s))).map((s) => ({ s, p: lowest(s) })).sort((a, b) => a.p - b.p);
+  skinIndex = { data: D.generatedAt, list: list.map((x) => x.s), all: list, plain: list.filter((x) => !x.s.star), pools: {},
+    old: Object.values(D.stickers).filter((x) => OLD_MAJOR.test(x.t || '') && x.p > 0), souvenirs: D.cases.filter((c) => c.kind === 'souvenir' && c.pools) };
+  for (const f of FOCI) skinIndex.pools[f] = skinIndex.list.filter(FOCUS[f].pool);
+  return skinIndex;
+}
+const skins = () => index().list;
+// A random skin costing at most cap (from the cheapest listed price): null if none is that cheap.
+function skinUnder(list, cap, r) {
+  let lo = 0, hi = list.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (list[m].p <= cap) lo = m + 1; else hi = m; }
+  return lo ? list[Math.floor(r() * lo)].s : null;
 }
 function focusItem(focus, r) {
-  if (focus === 'souvenir') {
-    const pkgs = D.cases.filter((c) => c.kind === 'souvenir' && c.pools);
-    return pkgs.length ? I.rollFromCase(pick(pkgs, r), r) : null;
-  }
+  const X = index();
+  if (focus === 'souvenir') return X.souvenirs.length ? I.rollFromCase(pick(X.souvenirs, r), r) : null;
   if (focus === 'charms') { const cs = Object.values(D.charms); return cs.length ? I.makeCharmItem(pick(cs, r), { src: 'Collection', r }) : null; }
-  if (focus === 'stickers' && r() < 0.4) {
-    const old = Object.values(D.stickers).filter((s) => OLD_MAJOR.test(s.t || '') && s.p > 0);
-    if (old.length) return I.makeStickerItem(pick(old, r), 'Collection');
-  }
-  const pool = skins().filter(FOCUS[focus].pool);
+  if (focus === 'stickers' && r() < 0.4 && X.old.length) return I.makeStickerItem(pick(X.old, r), 'Collection');
+  const pool = X.pools[focus];
   if (!pool.length) return null;
   const s = pick(pool, r);
   const it = I.makeSkinItem(s, { r, src: 'Collection', ...(focus === 'stattrak' ? { stt: true } : {}) });
   if (focus === 'lowfloat' && it.fl != null) it.fl = Math.fround(s.mn + r() * 0.008);
   if (focus === 'serial') it.sn = r() < 0.2 ? 1 : 1 + Math.floor(Math.pow(r(), 2) * 100);
-  if (focus === 'stickers' && it.t === 'skin') {
-    const old = Object.values(D.stickers).filter((x) => OLD_MAJOR.test(x.t || '') && x.p > 0);
-    const n = 2 + Math.floor(r() * 3), one = r() < 0.4 ? pick(old, r) : null;
-    it.stk = Array.from({ length: n }, (_, i) => ({ id: (one || pick(old, r)).id, x: 0.2 + i * 0.16, y: 0.42, r: 0, wr: 0 }));
+  if (focus === 'stickers' && it.t === 'skin' && X.old.length) {
+    const n = 2 + Math.floor(r() * 3), one = r() < 0.4 ? pick(X.old, r) : null;
+    it.stk = Array.from({ length: n }, (_, i) => ({ id: (one || pick(X.old, r)).id, x: 0.2 + i * 0.16, y: 0.42, r: 0, wr: 0 }));
   }
   return it;
 }
@@ -178,9 +189,8 @@ export function startingState(seed, npc) {
     if (npc.type === 'collector' && r() < 0.65) it = focusItem(npc.focus, r);
     if (!it) {
       const cap = Math.max(1, (target - total) * (r() < 0.2 ? 1 : 0.35));
-      const pool = skins().filter((s) => lowest(s) <= cap && (tier >= 2 || !s.star));
-      if (!pool.length) break;
-      const s = pick(pool, r);
+      const s = skinUnder(tier >= 2 ? index().all : index().plain, cap, r);
+      if (!s) break;
       it = I.makeSkinItem(s, { r, src: 'Trade' });
     }
     it.at = 0;
@@ -197,13 +207,32 @@ export function startingState(seed, npc) {
 export function freshSocial(seed, now = Date.now()) {
   const so = { seed, at: now, npcs: {}, threads: {}, offers: [], unread: {}, feed: [], comments: [], me: freshPersona() };
   // A few friends to start with (players you've played with).
-  for (const n of crowd(seed).filter((x) => x.type === 'player').slice(0, 3)) npcState(so, n.id).friend = 1;
+  for (const n of activeCrowd(seed).filter((x) => x.type === 'player').slice(0, 3)) npcState(so, n.id).friend = 1;
   return so;
 }
 export const freshPersona = () => ({ name: '', avatar: null, bio: '', country: '', showcase: [], bg: null });
 export function npcState(so, id) {
   if (!so.npcs[id]) so.npcs[id] = startingState(so.seed, npcOf(so.seed, id));
   return so.npcs[id];
+}
+
+// Everything everyone owns, for the Item Database offline: [{ npc, owner, item }]. Those you've dealt with as the save
+// has them; the rest as they start (worked out once a session: they don't change until you deal with them).
+const starts = new Map();
+export function worldCopies(so) {
+  if (!so) return [];
+  let gen = starts.get(so.seed);
+  if (!gen || gen.data !== D.generatedAt) starts.set(so.seed, (gen = { data: D.generatedAt, inv: new Map() }));
+  const out = [];
+  for (const n of crowd(so.seed)) {
+    let inv = so.npcs[n.id]?.inv;
+    if (!inv) {
+      if (!gen.inv.has(n.id)) gen.inv.set(n.id, startingState(so.seed, n).inv.map((it, k) => ({ ...it, uid: `${n.id}:${k}` })));
+      inv = gen.inv.get(n.id);
+    }
+    for (const item of inv) out.push({ npc: n.id, owner: n.name, item });
+  }
+  return out;
 }
 
 // ---- messages ---------------------------------------------------------------------------------------------------------------
@@ -248,7 +277,7 @@ export function notable(it) {
 export function makeOffer(so, st, { r, now }) {
   const mine = st.inv.filter((it) => !it.lk && notable(it) && !so.offers.some((o) => o.status === 'open' && o.want.uids.includes(it.uid)));
   if (!mine.length) return null;
-  const people = crowd(so.seed);
+  const people = activeCrowd(so.seed);
   const cands = [];
   for (const it of mine) {
     const v = I.itemValue(it);
@@ -395,12 +424,12 @@ export function judge(so, n, s, { yours, theirs, myMoney, theirMoney }) {
 // ---- the NPCs' own market buying ------------------------------------------------------------------------------------------------
 // One NPC buys a listing from the market's current stock (offline, it's gone for you too). Returns the feed line.
 export function marketBuy(so, st, { r, now }) {
-  const people = crowd(so.seed);
+  const people = activeCrowd(so.seed);
   const n = pickWeighted(people.map((p) => [p, Math.sqrt(Math.max(1, npcState(so, p.id).money))]), r);
   const s = npcState(so, n.id);
   const w = MK.marketWindow(now);
   const sold = MK.localSold(st, w);
-  const pool = n.type === 'collector' ? skins().filter(FOCUS[n.focus].pool) : skins();
+  const pool = n.type === 'collector' ? index().pools[n.focus] : skins();
   for (let k = 0; k < 25; k++) {
     const skin = pick(pool.length ? pool : skins(), r);
     const l = MK.skinListings(skin, w).find((x) => !sold.has(x.lid));

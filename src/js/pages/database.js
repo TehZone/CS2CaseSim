@@ -1,13 +1,16 @@
 // Item Database, like CSFloat's: search every item in the game (skins, knives, gloves, stickers, agents, pro cards) and
 // open one to see every copy that exists: who has it, its float, wear, pattern and stickers, and its float rank (the
 // three lowest and three highest floats of the item, counted apart for StatTrak™ and Souvenir copies). Online that's
-// everyone on the server; offline, your own inventory. A skin's current Market listings show under its copies.
+// everyone on the server; offline, you and the NPC players (engine/npcs.js: click an owner to visit their profile). A
+// skin's current Market listings show under its copies.
 import { esc, money, imgUrl, debounce } from '../util.js';
 import { D, WEARS, wearOf, WEAR_BY_KEY } from '../data.js';
 import * as I from '../items.js';
 import { S, on } from '../state.js';
+import { act, online } from '../backend.js';
+import { worldCopies, crowd } from '../engine/npcs.js';
+import { openPerson } from './community.js';
 import { openInspect, patternTag, toast } from '../ui.js';
-import { online } from '../backend.js';
 import { net } from '../net/online.js';
 import { marketWindow, skinListings, localSold, lowestPrice } from '../engine/market.js';
 import { floatRanks, countCopies, copyCategory, CATEGORY_NAME, itemKey } from '../engine/database.js';
@@ -68,9 +71,17 @@ export function render(r) {
 }
 export function destroy() { offs.forEach((o) => o()); offs = []; root = null; }
 
-// How many copies of each item there are: the server's count online (refreshed every so often), your inventory offline.
+// Offline, everything the NPC players own (and yours): [{ owner, npc | me, item }].
+const offlineCopies = () => [...S.inv.map((item) => ({ owner: S.social?.me?.name || 'You', me: true, item })), ...worldCopies(S.social)];
+
+// How many copies of each item there are: the server's count online (refreshed every so often), offline yours and the
+// NPC players'.
 async function loadIndex() {
-  if (!online()) { index = { counts: countCopies(S.inv), players: 1 }; return; }
+  if (!online()) {
+    if (!S.social) await act('npc.tick').catch(() => {});
+    index = { counts: countCopies(offlineCopies()), players: S.social ? crowd(S.social.seed).length + 1 : 1 };
+    return;
+  }
   if (index && Date.now() - indexAt < 20000) return;
   try { index = await net.social('db.index'); indexAt = Date.now(); } catch (e) { index = { counts: {}, players: 0, err: e.message }; }
 }
@@ -78,8 +89,8 @@ async function loadIndex() {
 // Every copy of one item: [{ owner, me, item }], and for a sticker the guns it's applied to.
 async function loadCopies(e) {
   if (!online()) {
-    const mine = (it) => ({ owner: S.profile?.name || 'You', me: true, item: it });
-    return { copies: S.inv.filter((it) => itemKey(it) === e.key).map(mine), applied: e.t === 'sticker' ? S.inv.filter((it) => it.stk?.some((s) => s.id === e.id)).map(mine) : [] };
+    const all = offlineCopies();
+    return { copies: all.filter((c) => itemKey(c.item) === e.key), applied: e.t === 'sticker' ? all.filter((c) => c.item.stk?.some((s) => s.id === e.id)) : [] };
   }
   return net.social('db.item', { t: e.t, id: e.id });
 }
@@ -106,8 +117,8 @@ function draw() {
   const total = Object.values(counts).reduce((s, n) => s + n, 0), kinds = Object.keys(counts).length;
   root.innerHTML = `<div class="page db">
     <div class="page-head"><h1>Item Database</h1><span class="sub">Every item in the game. Open one to see every copy, who owns it and its float rank.</span>
-      <span class="spacer"></span><span class="chip">${online() ? `${index.players.toLocaleString()} players on the server` : 'Offline: your items only'} · ${total.toLocaleString()} copies of ${kinds.toLocaleString()} items</span></div>
-    ${index.err ? `<div class="db-note">Couldn't reach the server's database: ${esc(index.err)}</div>` : !online() ? '<div class="db-note">Offline, the database shows your own inventory. Log in to a server (top right) to see every player\'s copies.</div>' : ''}
+      <span class="spacer"></span><span class="chip">${index.players.toLocaleString()} players ${online() ? 'on the server' : 'offline (you and the NPC traders)'} · ${total.toLocaleString()} copies of ${kinds.toLocaleString()} items</span></div>
+    ${index.err ? `<div class="db-note">Couldn't reach the server's database: ${esc(index.err)}</div>` : !online() ? '<div class="db-note">Offline, the database shows your items and every NPC player\'s. Open an item and click an owner to visit their profile and inventory.</div>' : ''}
     <div class="toolbar">
       <input class="input db-search" type="search" placeholder="Search ${catalog().length.toLocaleString()} items… (e.g. ak redline, karambit fade, howl)" value="${esc(view.q)}">
       <select class="input" data-type>${TYPES.map(([k, n]) => `<option value="${k}" ${view.type === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
@@ -216,7 +227,7 @@ function drawItem() {
     <div class="db-table-wrap"><table class="price-table db-table"><thead><tr>${skin ? '<th class="db-rank-col">Float rank</th><th>Float</th><th>Seed</th>' : ''}<th>Item</th><th>Owner</th><th>Value</th><th></th></tr></thead><tbody>
       ${shownRows.map((c, i) => copyRow(c, i, skin, ranks)).join('')}</tbody></table></div>
     ${rows.length > shownRows.length ? `<div class="muted" style="margin-top:8px">Showing the first ${shownRows.length} of ${rows.length.toLocaleString()}.</div>` : ''}`
-    : `<div class="empty" style="padding:30px">${online() ? 'Nobody on the server has one yet.' : "You don't have one. Log in to a server to see other players' copies."}</div>`}
+    : `<div class="empty" style="padding:30px">${online() ? 'Nobody on the server has one yet.' : 'Nobody has one yet.'}</div>`}
     ${e.t === 'sticker' && copies.applied?.length ? `<h2 class="db-h2">Applied to guns <span class="muted">(${copies.applied.length.toLocaleString()})</span></h2>
       <div class="db-table-wrap"><table class="price-table db-table"><thead><tr><th>Gun</th><th>Float</th><th>Owner</th><th>Value</th><th></th></tr></thead><tbody>
       ${copies.applied.slice(0, 300).map((c, i) => `<tr><td>${esc(I.itemName(c.item))}</td><td>${c.item.fl != null ? c.item.fl.toFixed(6) : '—'}</td><td>${ownerCell(c)}</td><td>${money(I.itemValue(c.item))}</td><td><button class="btn sm" data-ainsp="${i}">Inspect</button></td></tr>`).join('')}</tbody></table></div>` : ''}
@@ -235,6 +246,7 @@ function drawItem() {
   const own = root.querySelector('[data-owner]');
   own?.addEventListener('input', debounce(() => { view.owner = own.value.toLowerCase().trim(); draw(); const n = root?.querySelector('[data-owner]'); n?.focus(); n?.setSelectionRange(n.value.length, n.value.length); }, 220));
   root.querySelectorAll('[data-cinsp]').forEach((b) => b.addEventListener('click', () => inspectCopy(shownRows[+b.dataset.cinsp].item)));
+  root.querySelectorAll('[data-npc]').forEach((a) => a.addEventListener('click', (ev) => { ev.preventDefault(); openPerson(a.dataset.npc); }));
   root.querySelectorAll('[data-ainsp]').forEach((b) => b.addEventListener('click', () => inspectCopy(copies.applied[+b.dataset.ainsp].item)));
   root.querySelectorAll('[data-linsp]').forEach((b) => b.addEventListener('click', () => inspectCopy(listings[+b.dataset.linsp].item)));
 }
@@ -245,7 +257,8 @@ const itemCell = (it) => {
   return `<span class="db-name ${it.stt ? 'stt' : it.sv ? 'sv' : ''}">${it.stt ? 'StatTrak™' : it.sv ? 'Souvenir' : 'Normal'}</span>${pat.label ? ' ' + patternTag(pat) : ''}${it.sn ? ` <span class="tag sn" title="Serial number">#${it.sn}</span>` : ''}
     ${it.stk?.length ? `<span class="db-stk">${it.stk.map((s) => `<img src="${imgUrl(D.stickers[s.id]?.img, 's')}" title="${esc(D.stickers[s.id]?.n || '')}" alt="">`).join('')}</span>` : ''}`;
 };
-const ownerCell = (c) => `<span class="db-owner ${c.me ? 'me' : ''}">${esc(c.owner)}${c.me ? ' <span class="dim">(you)</span>' : ''}</span>`;
+const ownerCell = (c) => (c.npc ? `<a href="#" class="db-owner npc" data-npc="${esc(c.npc)}" title="Visit ${esc(c.owner)}'s profile">${esc(c.owner)}</a>`
+  : `<span class="db-owner ${c.me ? 'me' : ''}">${esc(c.owner)}${c.me ? ' <span class="dim">(you)</span>' : ''}</span>`);
 function copyRow(c, i, skin, ranks) {
   const it = c.item, r = ranks.get(it.uid);
   return `<tr class="${r ? 'ranked' : ''}">${skin ? `<td class="db-rank-col"><div class="db-ranks">${rankBadges(r, copyCategory(it))}</div></td><td>${floatCell(it)}</td><td>${it.sd ?? '—'}</td>` : ''}

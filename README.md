@@ -356,7 +356,9 @@ What's in a match:
   they want, they message you with cash or trade offers: accept, decline or haggle, with a price and an argument (the
   float, the pattern, the stickers, the serial, the market price, another buyer; a false claim or a bluff they see
   through annoys them, and too many counters make them walk away), or just type ("would you do $500? it's a 0.01 float").
-  Items you sell sometimes end up in their inventories
+  Items you sell sometimes end up in their inventories. Behind them are a few hundred more players (420 in all) who own
+  the rest of the world's items: offline, the Item Database shows every copy they own (about 13,000 of 2,100 items) and
+  yours, with float ranks among all of them; click an owner to visit their profile, add them or make an offer
 - Friends & Chat like Steam's (the people icon at the top): friends by status (In-Game, Online, Offline), friend requests,
   chats, and profiles with level, Service Medal, item showcase, comments (+rep after trades) and their whole inventory,
   to make them an offer from. Your own profile: name, avatar (any agent), country, summary, a CS2 map behind it and up
@@ -379,7 +381,7 @@ What's in a match:
 - Online play (optional): accounts on your own server, trading between players, live lobbies; see DEPLOY.md
 - Item Database (like CSFloat's): search every skin, knife, glove, sticker, charm, agent and pro card in the game; open one to
   see every copy that exists with its owner, float, seed, pattern and stickers (online: everyone on the server;
-  offline: your inventory), its float rank (#1-#3 lowest and highest, StatTrak™ and Souvenir copies ranked apart), the
+  offline: you and the NPC players, each owner a link to their profile), its float rank (#1-#3 lowest and highest, StatTrak™ and Souvenir copies ranked apart), the
   guns a sticker is applied to, and a skin's current Market listings. Your own top floats carry the same #1-#3 badge
   in your inventory and the item details (a lone copy has no rank)
 - Rare Special Items (knives and gloves) show CS:GO's classic gold "?" medallion in case contents and the roulette

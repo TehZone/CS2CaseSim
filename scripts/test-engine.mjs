@@ -660,9 +660,10 @@ function tierFreq(box, n) {
 {
   const N = await E('npcs');
   const MK = await import(new URL('../src/js/engine/market.js', import.meta.url));
-  const people = N.crowd(4242);
-  check('NPCs: a crowd of 36 with 12 collectors (each a different kind), the same for the same save', people.length === 36 && people.filter((n) => n.type === 'collector').length === 12
-    && new Set(people.filter((n) => n.focus).map((n) => n.focus)).size === 12 && new Set(people.map((n) => n.name)).size === 36 && N.crowd(4242) === people
+  const people = N.activeCrowd(4242), world = N.crowd(4242);
+  check('NPCs: 36 active traders with 12 collectors (each a different kind) among 420 players, the same for the same save', people.length === 36 && people.filter((n) => n.type === 'collector').length === 12
+    && new Set(people.filter((n) => n.focus).map((n) => n.focus)).size === 12 && world.length === 420 && new Set(world.map((n) => n.name)).size === 420 && N.crowd(4242) === world
+    && N.npcOf(4242, 'n400') === world[400] && !world[400].active
     && N.startingState(4242, people[2]).inv.map((it) => it.id + it.fl).join() === N.startingState(4242, people[2]).inv.map((it) => it.id + it.fl).join());
   const dop = people.find((n) => n.focus === 'doppler'), pl = people.find((n) => n.type === 'player');
   const ruby = Object.values(D.skins).find((s) => s.ph === 'Ruby'), ak = Object.values(D.skins).find((s) => s.w === 'AK-47' && !s.v && s.p.FT?.[0] > 5);
@@ -727,6 +728,10 @@ function tierFreq(box, n) {
   check('NPCs: adding a friend sends a request', st.social.npcs[people[30].id].friend === 3);
   const rd = N.readMessage('I have another offer, 1.2k and it is a deal');
   check('NPCs: reading a message for a price and an argument', rd.price === 1200 && rd.arg === 'other' && rd.yes);
+  const copies = N.worldCopies(st.social), owners = new Set(copies.map((c) => c.npc));
+  const stored = Object.keys(st.social.npcs)[0];
+  check('NPCs: the Item Database offline has everyone’s items (thousands), as the save has them for those you dealt with', copies.length > 5000 && owners.size > 300
+    && copies.filter((c) => c.npc === stored).length === st.social.npcs[stored].inv.length, `${copies.length} copies, ${owners.size} owners`);
   const me = run('persona.set', { name: 'dawso', bio: 'hi <b>', showcase: [st.inv[0].uid, 'nope'], country: 'US', avatar: Object.keys(D.agents)[0] }).r.me;
   check('your profile: name, bio (cleaned), showcase of your own items only', me.name === 'dawso' && me.bio === 'hi b' && me.showcase.length === 1 && me.country === 'US');
 }

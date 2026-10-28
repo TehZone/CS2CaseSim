@@ -83,7 +83,7 @@ function drawList() {
   el.innerHTML = `<div class="fr-me ${view.who === 'me' ? 'on' : ''}" data-who="me">${avatarHtml('me', 40, 'online')}<div class="fr-txt"><div class="fr-name">${esc(myName())}</div><div class="fr-st">${levelIconHtml(S.prof.level, 16)} Level ${S.prof.level} · View profile</div></div></div>
     <input class="input" type="search" data-q placeholder="Search friends and players" value="${esc(view.q)}">
     ${groups.filter(([, list]) => list.length).map(([t, list, req]) => `<div class="fr-group"><div class="fr-gh">${t} <span>(${list.length})</span></div>${list.map((n) => row(n, req)).join('')}</div>`).join('')}
-    <div class="fr-group"><div class="fr-gh">Everyone</div><button class="btn sm ghost" data-browse style="width:100%">Find players (${people().length})</button></div>`;
+    <div class="fr-group"><div class="fr-gh">Everyone</div><button class="btn sm ghost" data-browse style="width:100%">Find players</button></div>`;
   el.querySelectorAll('[data-who]').forEach((x) => x.addEventListener('click', (e) => {
     if (e.target.closest('[data-acc]')) return;
     view.who = x.dataset.who; view.haggle = null;
@@ -96,10 +96,13 @@ function drawList() {
   el.querySelector('[data-browse]').addEventListener('click', browsePlayers);
 }
 
+// The active players, and anyone else you've dealt with (everyone else is in the Item Database, as the owners).
 function browsePlayers() {
+  const list = people().filter((n) => n.active || stateOf(n.id));
   const m = openModal({
     title: 'Find players', cls: 'wide',
-    body: `<div class="fr-browse">${people().map((n) => { const st = stateOf(n.id); return `<div class="fr-row" data-who="${n.id}">${avatarHtml(n.id, 40, N.presence(n).s)}
+    body: `<p class="muted" style="margin:0 0 10px">The traders around you. Hundreds more own the items in the <b>Item Database</b>: click an owner there to visit them.</p>
+      <div class="fr-browse">${list.map((n) => { const st = stateOf(n.id); return `<div class="fr-row" data-who="${n.id}">${avatarHtml(n.id, 40, N.presence(n).s)}
       <div class="fr-txt"><div class="fr-name">${cc(n.country)}${esc(n.name)}</div><div class="fr-st">${esc(kindLabel(n))} · Level ${n.level}</div></div>
       <span class="muted" style="font-size:11px">${st?.friend === 1 ? 'Friend' : st?.friend === 3 ? 'Request sent' : st?.friend === 2 ? 'Wants to be friends' : ''}</span></div>`; }).join('')}</div>`,
     foot: '<button class="btn ghost" data-close>Close</button>',
@@ -113,7 +116,8 @@ function drawMain() {
   if (!el || !so()) return;
   if (view.who === 'me') return drawProfile(el, 'me');
   if (!npc(view.who)) { el.innerHTML = '<div class="empty">Pick a friend on the left.</div>'; return; }
-  if (!stateOf(view.who)) { act('npc.read', { npc: view.who }).catch(() => {}); el.innerHTML = '<div class="empty">Loading…</div>'; return; }
+  // (Offline the action runs at once and draws this again: the placeholder goes first.)
+  if (!stateOf(view.who)) { el.innerHTML = '<div class="empty">Loading…</div>'; act('npc.read', { npc: view.who }).catch((e) => toast(esc(e.message), 'bad')); return; }
   if (view.pane === 'profile') return drawProfile(el, view.who);
   drawChat(el, view.who);
 }
