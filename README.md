@@ -231,8 +231,13 @@ What's in a match:
 - Settings in the lobby: your crosshair (classic or static, colour, length, gap, thickness, outline, dot; live preview),
   the viewmodel (field of view, offsets, CS2's presets), every key, music and radio volume, the fps counter and a
   performance graph (net_graph: frame time, simulation and drawing time, draws); video: Low / Medium / High (Low: no
-  3D skybox or anti-aliasing), a render scale, the frame rate cap (fps_max; the monitor's refresh rate by default) and
-  unlocking it past the monitor's (after a restart).
+  3D skybox or anti-aliasing), CS2's aspect ratio and resolution (the window's own, Normal 4:3, Widescreen 16:10 or
+  16:9, each with CS2's resolutions such as 1280×960 or 1440×1080; a shape other than the window's stretched to fill it,
+  as a stretched resolution is, or with black bars), a render scale, the frame rate cap (fps_max; the monitor's refresh
+  rate by default) and unlocking it past the monitor's (after a restart). Stretched 4:3 on a 16:9 screen is CS2's: the
+  world drawn at 4:3 (90° across, the same height as at 16:9, so less to the sides) and everything, the HUD and radar
+  too, a third wider; the mouse turns you the same degrees a count as ever. `CS2SIM_SMOKE=aspect` goes through them in a
+  1600×900 window with screenshots.
 - The map is exported from your install the first time (a couple of minutes, cached in `cs2cache/play`): CS2's render
   world lit like CS2 lights it: the baked irradiance lightmap plus the sun (its colour and brightness from the map)
   masked by the baked sun shadows on world surfaces; props, players and your weapon lit by CS2's light probe volumes

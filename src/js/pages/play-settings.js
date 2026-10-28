@@ -1,13 +1,15 @@
 // The Play lobby's settings: your crosshair (with a live preview), the viewmodel's position, key binds, music and
-// radio volume and the fps counter. Saved with the other Play preferences; a match reads them when it starts.
+// radio volume, the fps counter and video (aspect ratio and resolution, render scale, frame rate cap). Saved with the
+// other Play preferences; a match reads them when it starts (and from the match's menu, at once).
 import { esc } from '../util.js';
 import { CROSSHAIR, crosshairHtml } from '../play/hud.js';
 import { ACTIONS, COMMANDS, bindTable, keyName, keyLabel } from '../play/input.js';
 import { tierOf } from '../play/skill.js';
+import { ASPECTS, RESOLUTIONS } from '../play/screen.js';
 
 // keybinds: your binds (CS2 key name -> command), null for the defaults; binds: older saves' per-action keys.
 export const SETTINGS_DEFAULTS = { crosshair: { ...CROSSHAIR }, viewmodel: { fov: 68, x: 1, y: 1, z: -1 }, keybinds: null, binds: {}, musicVolume: 1, voiceVolume: 1, showFps: true,
-  renderScale: 1, fpsMax: 0, netGraph: false };
+  renderScale: 1, fpsMax: 0, netGraph: false, aspect: 'native', scaling: 'stretched', resolution: 'native' };
 // The frame rate caps on offer (0: the monitor's, with vsync; past it needs the unlock below).
 const FPS_CAPS = [[0, 'Monitor refresh rate'], [60, '60'], [120, '120'], [144, '144'], [240, '240'], [300, '300'], [400, '400']];
 let display = null; // the app's display settings (window.native.display): { uncapped, active }
@@ -51,7 +53,7 @@ export function settingsHtml(p, show = {}) {
           .map(([val, n]) => `<option value="${val}" ${String(p.showFps === false ? 0 : p.showFps === 2 ? 2 : 1) === val ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
         ${check('netGraph', 'Performance graph (frame time, draws: net_graph)', !!p.netGraph, 'root')}
         <h4>Video</h4>
-        ${range('renderScale', 'Render scale', 0.5, 1, 0.05, p.renderScale ?? 1, 'root')}
+        ${videoHtml(p)}
         <label>Frame rate cap (fps_max)<select class="input" data-s="root.fpsMax">${FPS_CAPS.map(([v, n]) => `<option value="${v}" ${(p.fpsMax || 0) === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
         ${window.native?.setDisplay ? `<label class="ps-check"><input type="checkbox" data-display="uncapped" ${display?.uncapped ? 'checked' : ''}> Unlock the frame rate past the monitor's</label>
         ${display && !!display.uncapped !== !!display.active ? '<div class="muted">Takes effect when the app restarts. <button class="btn ghost sm" data-relaunch>Restart now</button></div>' : ''}` : ''}
@@ -59,6 +61,20 @@ export function settingsHtml(p, show = {}) {
       <section class="ps-binds"><h4>Keys <button class="btn ghost sm" data-resetbinds>Defaults</button></h4>${binds}
         <div class="muted">+ adds a key: press it (a mouse button or the mouse wheel too; Esc cancels). In a match the console (~) has CS2's bind: bind mwheeldown +jump.</div></section>
     </div></details>`;
+}
+
+// CS2's aspect ratio and resolution (see play/screen.js): 4:3 stretched or with black bars, as on a 16:9 screen.
+function videoHtml(p) {
+  const a = ASPECTS[p.aspect] ? p.aspect : 'native', sel = (v, cur) => (v === cur ? 'selected' : '');
+  const res = a !== 'native' && RESOLUTIONS[a].some(([w, h]) => `${w}x${h}` === p.resolution) ? p.resolution : 'native';
+  return `<label>Aspect ratio<select class="input" data-s="root.aspect">${[['native', "The window's"], ['4:3', 'Normal 4:3'], ['16:10', 'Widescreen 16:10'], ['16:9', 'Widescreen 16:9']]
+      .map(([v, n]) => `<option value="${v}" ${sel(v, a)}>${n}</option>`).join('')}</select></label>
+    ${a === 'native' ? '' : `<label>Scaling<select class="input" data-s="root.scaling"><option value="stretched" ${sel('stretched', p.scaling || 'stretched')}>Stretched to fill the screen</option>
+      <option value="bars" ${sel('bars', p.scaling)}>Black bars</option></select></label>
+    <label>Resolution<select class="input" data-s="root.resolution"><option value="native" ${sel('native', res)}>The window's height</option>${RESOLUTIONS[a]
+      .map(([w, h]) => `<option value="${w}x${h}" ${sel(`${w}x${h}`, res)}>${w} × ${h}</option>`).join('')}</select></label>`}
+    ${a === 'native' || res === 'native' ? `<label class="ps-range">Render scale <b data-out="root.renderScale">${p.renderScale ?? 1}</b>
+      <input type="range" min="0.5" max="1" step="0.05" value="${p.renderScale ?? 1}" data-s="root.renderScale"></label>` : ''}`;
 }
 
 // Wires the panel up: every change is saved at once; key binding listens for the next key press.
@@ -79,6 +95,8 @@ export function bindSettings(el, prefs, savePrefs, rerender) {
     const s = input.dataset.s;
     write(s, input.type === 'checkbox' ? input.checked : s === 'root.showFps' ? (input.value === '0' ? false : input.value === '2' ? 2 : true)
       : input.type === 'range' || s === 'root.fpsMax' ? Number(input.value) : input.value);
+    // (Another aspect ratio has its own resolutions; picking one leaves the render scale out.)
+    if (s === 'root.aspect' || s === 'root.resolution') { if (s === 'root.aspect') write('root.resolution', 'native'); rerender(); }
   }));
   // The unlocked frame rate is the app's (it needs a restart), not the match's.
   el.querySelectorAll('[data-display]').forEach((input) => input.addEventListener('change', async () => {
@@ -130,5 +148,6 @@ export const privateRanks = (p) => { const t = 'tier:' + tierOf(p.difficulty); r
 // What a match gets from the saved preferences.
 export function matchSettings(p) {
   return { crosshair: p.crosshair, viewmodel: p.viewmodel, keybinds: bindTable(p), musicVolume: p.musicVolume ?? 1, voiceVolume: p.voiceVolume ?? 1, showFps: p.showFps === 2 ? 2 : p.showFps !== false,
-    renderScale: Math.min(1, Math.max(0.5, p.renderScale ?? 1)), fpsMax: p.fpsMax || 0, netGraph: p.netGraph === 2 ? 2 : !!p.netGraph };
+    renderScale: Math.min(1, Math.max(0.5, p.renderScale ?? 1)), fpsMax: p.fpsMax || 0, netGraph: p.netGraph === 2 ? 2 : !!p.netGraph,
+    aspect: ASPECTS[p.aspect] ? p.aspect : 'native', scaling: p.scaling === 'bars' ? 'bars' : 'stretched', resolution: p.resolution || 'native' };
 }

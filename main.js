@@ -1293,6 +1293,67 @@ const botMetricsJs = `(() => { const g = window.__playGame, D2R = Math.PI / 180,
   };
   return 1; })()`;
 
+// `CS2SIM_SMOKE=aspect` checks the video settings' aspect ratios: a match on Dust II (CS2SIM_SMOKE_MAP) in a 1600×900
+// window, three bots stopped in front of you, then each of: the window's own shape, 4:3 stretched, 4:3 with black bars,
+// 4:3 stretched at 1280×960, 16:10 with black bars. For each: the resolution drawn at, where the screen is, the camera's
+// aspect, the radar's and the crosshair's shape on screen, whether a click on the buy menu lands on the tile under it,
+// and a screenshot (userData/aspect-<name>.png).
+async function runAspectSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const map = process.env.CS2SIM_SMOKE_MAP || 'de_dust2';
+  win.setContentSize(1600, 900);
+  await wait(3000);
+  await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'competitive', map: '${map}', teamSize: 5, aspect: 'native' })); })(); 1`);
+  await js(`document.querySelector('#topbar [data-page=stats]').click(); setTimeout(() => document.querySelector('#topbar [data-page=play]').click(), 200); 1`);
+  await wait(1500);
+  // The lobby's video settings: 4:3 picked, what it offers then (and back to the window's).
+  console.log('SMOKE aspect settings: ' + await js(`(async () => { const sleep = (ms) => new Promise((r) => setTimeout(r, ms)), q = (s) => document.querySelector(s);
+    const pick = async (s, v) => { const el = q(s); el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); await sleep(300); };
+    const opts = (s) => q(s) ? [...q(s).options].map((o) => o.textContent.trim()).join(' / ') : 'none';
+    const before = opts('[data-s="root.aspect"]');
+    await pick('[data-s="root.aspect"]', '4:3');
+    const out = 'aspect ratios: ' + before + '; at 4:3, scaling: ' + opts('[data-s="root.scaling"]') + '; resolutions: ' + opts('[data-s="root.resolution"]') + '; render scale shown: ' + !!q('[data-s="root.renderScale"]');
+    await pick('[data-s="root.resolution"]', '1280x960');
+    const after = '; at 1280×960, render scale shown: ' + !!q('[data-s="root.renderScale"]') + ', saved ' + JSON.stringify((({ aspect, scaling, resolution }) => ({ aspect, scaling, resolution }))(JSON.parse(localStorage.getItem('cs2sim.play'))));
+    await pick('[data-s="root.aspect"]', 'native');
+    return out + after; })()`));
+  if (!(await smokeStartMap(win, map, 'aspect'))) return app.quit();
+  await js(`(async () => { const g = window.__playGame, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
+    const css = document.createElement('style'); css.textContent = '.play-click, .play-scrim { display: none !important; }'; document.head.appendChild(css);
+    g.console.run('sv_cheats 1'); g.cv.bot_stop = 1; g.god = true;
+    if (g.match.phase === 'freeze') { g.match.time = 0; await sleep(400); } g.match.time = 9999;
+    const o = g.player.origin, yaw = g.input.yaw * Math.PI / 180;
+    g.bots.filter((b) => b.c.alive).slice(0, 3).forEach((b, i) => {
+      const d = 160 + i * 80, side = (i - 1) * 70, p = [o[0] + Math.cos(yaw) * d + Math.sin(yaw) * side, o[1] + Math.sin(yaw) * d - Math.cos(yaw) * side, o[2] + 40];
+      b.pos = [p[0], p[1], g.floorAt(p, 300) ?? o[2]]; b.vel = [0, 0, 0]; b.yaw = b.bodyYaw = g.input.yaw + 180; b.pitch = 0; b.hasPrev = false;
+    });
+    g.input.pitch = 2; return 1; })()`);
+  const configs = [['native', {}], ['4x3-stretched', { aspect: '4:3', scaling: 'stretched' }], ['4x3-bars', { aspect: '4:3', scaling: 'bars' }],
+    ['4x3-stretched-1280x960', { aspect: '4:3', scaling: 'stretched', resolution: '1280x960' }], ['16x10-bars', { aspect: '16:10', scaling: 'bars' }]];
+  for (const [name, set] of configs) {
+    console.log(`SMOKE aspect ${name}: ` + await js(`(async () => { const g = window.__playGame, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      g.applySettings({ ...g.settings, aspect: 'native', scaling: 'stretched', resolution: 'native', ...${JSON.stringify(set)} }, null);
+      await sleep(1200);
+      const r = (el) => { const b = el?.getBoundingClientRect(); return b ? Math.round(b.width) + '×' + Math.round(b.height) + ' at ' + Math.round(b.left) + ',' + Math.round(b.top) : 'none'; };
+      // The buy menu: is the tile under a click the tile?
+      g.buyMenu.open(); await sleep(300);
+      const tile = g.buyMenu.el.querySelector('[data-buy], [data-item], button'), tb = tile?.getBoundingClientRect();
+      const hit = tb && document.elementFromPoint(tb.left + tb.width / 2, tb.top + tb.height / 2);
+      const clickOk = !!tile && (hit === tile || tile.contains(hit));
+      g.buyMenu.close();
+      return 'drawn at ' + g.canvas.width + '×' + g.canvas.height + ', screen ' + r(g.screen) + ', camera aspect ' + g.camera.aspect.toFixed(3)
+        + ', radar ' + r(document.querySelector('.play-radar')) + ', crosshair arm ' + r(document.querySelector('.play-hud .xhair i'))
+        + ', buy menu ' + r(g.buyMenu.el.firstElementChild) + ' (a click on a tile hits it: ' + clickOk + ')'; })()`));
+    await wait(600);
+    win.webContents.invalidate();
+    await js('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
+    fs.writeFileSync(path.join(app.getPath('userData'), `aspect-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  }
+  app.quit();
+}
+
 // `CS2SIM_SMOKE=drops` checks that guns keep their skins (put a save.json with skins equipped in the smoke profile
 // first): on Dust II (CS2SIM_SMOKE_MAP) as a terrorist with the bots stopped, you buy an AK-47 (your skin), drop it, a
 // bot picks it up and holds it, dies and drops it, you pick it up again (yours), then pick up a bot's (the default),
@@ -2520,6 +2581,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'perf') { win.webContents.once('did-finish-load', () => runPerfSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'maps') { win.webContents.once('did-finish-load', () => runMapsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'aspect') { win.webContents.once('did-finish-load', () => runAspectSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'drops') { win.webContents.once('did-finish-load', () => runDropsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'breakables') { win.webContents.once('did-finish-load', () => runBreakSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'look') { win.webContents.once('did-finish-load', () => runLookSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }

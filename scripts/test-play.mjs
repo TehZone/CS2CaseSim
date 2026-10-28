@@ -1059,5 +1059,20 @@ function fakeGame() {
   ok(given[0] === s && given[1] === null, "skins: you pick yours up with your skin, a bot's with the default (not your own skin for it)");
 }
 
+// ---- the screen's shape (screen.js): CS2's 4:3 stretched or with black bars, 16:10, 16:9, its resolutions ----------
+{
+  const { screenLayout } = await import('../src/js/play/screen.js');
+  const n = screenLayout(1920, 1080, {});
+  ok(n.w === 1920 && n.h === 1080 && n.scaleX === 1 && !n.res, "screen: the window's own shape fills it");
+  const st = screenLayout(1920, 1080, { aspect: '4:3', scaling: 'stretched' });
+  ok(st.w === 1440 && st.h === 1080 && Math.abs(st.scaleX - 4 / 3) < 1e-9 && st.x === 0, '4:3 stretched on 16:9: laid out at 1440×1080 and stretched a third wider to fill the screen');
+  const bars = screenLayout(1920, 1080, { aspect: '4:3', scaling: 'bars' });
+  ok(bars.w === 1440 && bars.x === 240 && bars.scaleX === 1, '4:3 with black bars: 1440×1080 in the middle, 240 px of black either side');
+  const wide = screenLayout(1280, 1024, { aspect: '16:9', scaling: 'bars' });
+  ok(wide.w === 1280 && wide.h === 720 && wide.y === 152, '16:9 with black bars on a 5:4 screen: bars top and bottom');
+  ok(screenLayout(1920, 1080, { aspect: '4:3', resolution: '1280x960' }).res?.join() === '1280,960' && !screenLayout(1920, 1080, { aspect: '4:3', resolution: '1920x1080' }).res,
+    "screen: a resolution of the aspect picked is drawn at; another aspect's isn't");
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

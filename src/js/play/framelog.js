@@ -252,7 +252,8 @@ export class FrameLog {
     out.push(`Started ${this.began.toLocaleString()} · saved ${new Date().toLocaleString()} · ${clock(secs)} logged`);
     out.push(`Match: ${g.map?.info?.name || g.mapId || '?'} (${g.mapId || '?'}) · ${g.mode} · ${(g.bots || []).length} bots (${g.botTier}) · round ${g.match?.round ?? '?'}${g.matchOver ? ' · over' : ''}`);
     out.push(`GPU: ${gpuName}`);
-    out.push(`Screen: window ${innerWidth}×${innerHeight} at ${devicePixelRatio}× · drawn at ${buf} · quality ${g.quality} · render scale ${g.settings.renderScale ?? 1} · fps_max ${g.cv.fps_max || 0}`
+    const as = g.settings.aspect && g.settings.aspect !== 'native' ? ` · ${g.settings.aspect} ${g.settings.scaling === 'bars' ? 'with black bars' : 'stretched'}` : '';
+    out.push(`Screen: window ${innerWidth}×${innerHeight} at ${devicePixelRatio}× · drawn at ${buf}${as} · quality ${g.quality} · render scale ${g.settings.renderScale ?? 1} · fps_max ${g.cv.fps_max || 0}`
       + ` · ${navigator.hardwareConcurrency || '?'} CPU threads${navigator.deviceMemory ? ' · ' + navigator.deviceMemory + ' GB+ memory' : ''}`);
     out.push(`Measured: GPU time ${this.tq ? 'yes' : 'no (the browser has no timer queries)'} · the main thread's long frames ${this.longType || 'no'} · ${navigator.userAgent}`);
 

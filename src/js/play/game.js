@@ -47,6 +47,7 @@ import { tierOf, TO_DIFFICULTY, botSkill, groupOfSkill, ratingOfSkill, skillPara
 import { premierInfo, formatRating } from '../engine/premier.js';
 import { loadLineups } from './utility.js';
 import { Spots } from './spots.js';
+import { screenLayout } from './screen.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
 export const TICK = 1 / 64;
@@ -115,9 +116,14 @@ export class Game {
     this.paused = true;
     this.listeners = new Set();
     this.now = 0;
+    // What the game draws (the world, the HUD, the radar, the buy menu, the console) is in a screen of its own: the whole
+    // window, or the aspect ratio picked (CS2's 4:3, 16:10...) with black bars or stretched to fill it (see resize).
+    this.screen = document.createElement('div');
+    this.screen.className = 'play-screen';
+    root.appendChild(this.screen);
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'play-canvas';
-    root.appendChild(this.canvas);
+    this.screen.appendChild(this.canvas);
     // No multisampling on the screen itself: only the full-screen post pass draws there (the world is anti-aliased in its
     // own target, see post.js).
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, powerPreference: 'high-performance' });
@@ -127,7 +133,6 @@ export class Game {
     // Quality: high renders at the screen's full resolution with soft shadows; balanced (Medium) at 1 CSS pixel; performance
     // (Low) lower, without anti-aliasing or the 3D skybox. The render scale (settings) scales any of them.
     this.quality = quality;
-    this.renderer.setPixelRatio((quality === 'high' ? Math.min(window.devicePixelRatio, 2) : quality === 'performance' ? 0.75 : 1) * (settings.renderScale || 1));
     // Tone mapping and colour grading happen in the post pass (post.js), like CS2's.
     this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.shadowMap.enabled = true;
@@ -166,14 +171,14 @@ export class Game {
     this.input.onKey = (code, down) => this.menuKey(code, down);
     this.input.onCommand = (c) => this.command(c);
     this.baseSensitivity = sensitivity;
-    this.hud = new Hud(root);
+    this.hud = new Hud(this.screen);
     this.hud.setCrosshairStyle(settings.crosshair);
-    this.buyMenu = new BuyMenu(root, this);
+    this.buyMenu = new BuyMenu(this.screen, this);
     // The developer console (~) and the console variables the game reads (set there).
     this.cv = { sv_cheats: 0, host_timescale: 1, sv_infinite_ammo: 0, mp_buy_anywhere: 0, bot_stop: 0, bot_dont_shoot: 0, r_drawviewmodel: 1, fps_max: 0, cl_inspect_rare: 0 };
     this.cv.fps_max = settings.fpsMax || 0; // (Play's settings; the console changes it for the match)
     this.god = false; this.noclip = false;
-    this.console = new DevConsole(root, this);
+    this.console = new DevConsole(this.screen, this);
     this.vmCache = new Map();
     this.vmRigs = new Set(); // every weapon viewmodel loaded
     this.resize = this.resize.bind(this);
@@ -297,7 +302,7 @@ export class Game {
     ]);
     if (this.disposed) return;
     this.bombTemplate = buildCS2Model({ t: 'skin', fl: 0, sd: 0 }, { wid: 'weapon_c4', w: 'C4', n: 'C4', cat: 'equipment', v: true }, this.renderer, { quick: true }).catch(() => null);
-    if (map.radar) this.radar = new Radar(this.root, map.radar);
+    if (map.radar) this.radar = new Radar(this.screen, map.radar);
     this.match = this.respawnMode ? new Deathmatch(this, { minutes: this.minutes, ffa: this.ffa, armsRace: this.armsRace }) : new Match(this, this.rules);
     if (this.respawnMode) await Promise.all((this.armsRace ? ARMS_RACE : [this.dmWeapon('primary'), this.dmWeapon('secondary')]).slice(0, 2).map((id) => this.vmData(id).catch(() => {})));
     // Every gun the match will show, now rather than in it (each one loaded mid-round stalled the game a tenth of a second
@@ -1304,8 +1309,7 @@ export class Game {
     if (s.keybinds) this.input.setBinds(s.keybinds);
     this.cv.fps_max = s.fpsMax || 0;
     if (!s.netGraph) { this.hud.netGraph(null); this.renderer.info.autoReset = true; }
-    const q = this.quality, pr = (q === 'high' ? Math.min(window.devicePixelRatio, 2) : q === 'performance' ? 0.75 : 1) * (s.renderScale || 1);
-    if (Math.abs(this.renderer.getPixelRatio() - pr) > 1e-3) { this.renderer.setPixelRatio(pr); this.resize(); }
+    this.resize(); // (the render scale, aspect ratio, scaling or resolution may have changed)
     if (sensitivity) this.setSensitivity(sensitivity);
   }
 
@@ -2423,12 +2427,20 @@ export class Game {
     return best;
   }
 
+  // The screen as your video settings have it (see screenLayout): its size and place in the window, the resolution it's
+  // drawn at, and the cameras' aspect (the field of view is CS2's: 90° across at 4:3, the same height at any aspect, so
+  // 4:3 sees less to the sides, and stretched it's all wider).
   resize() {
-    const w = this.root.clientWidth || window.innerWidth, h = this.root.clientHeight || window.innerHeight;
-    this.renderer.setSize(w, h, false);
-    const pr = this.renderer.getPixelRatio();
-    this.post?.setSize(Math.round(w * pr), Math.round(h * pr));
-    for (const c of [this.camera, this.vmCamera]) { c.aspect = w / h; c.updateProjectionMatrix(); }
+    const rw = this.root.clientWidth || window.innerWidth, rh = this.root.clientHeight || window.innerHeight, s = this.settings;
+    const L = screenLayout(rw, rh, s);
+    const st = this.screen.style;
+    st.width = L.w + 'px'; st.height = L.h + 'px'; st.left = L.x + 'px'; st.top = L.y + 'px';
+    st.transform = L.scaleX !== 1 ? `scaleX(${L.scaleX})` : '';
+    const q = this.quality, pr = L.res ? L.res[1] / L.h : (q === 'high' ? Math.min(window.devicePixelRatio, 2) : q === 'performance' ? 0.75 : 1) * (s.renderScale || 1);
+    if (Math.abs(this.renderer.getPixelRatio() - pr) > 1e-6) this.renderer.setPixelRatio(pr);
+    this.renderer.setSize(L.w, L.h, false);
+    this.post?.setSize(Math.round(L.w * pr), Math.round(L.h * pr));
+    for (const c of [this.camera, this.vmCamera]) { c.aspect = L.w / L.h; c.updateProjectionMatrix(); }
   }
 
   // noclip: fly where you look (Jump up, Crouch down, Walk slow), through everything.
