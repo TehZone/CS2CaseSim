@@ -157,7 +157,9 @@ What's in a match:
 - Radar (CS2's overview of the map), kill feed (with CS2's marks for headshots, wallbangs, kills through smoke, jumping,
   no-scope and blinded kills), scoreboard (Tab), damage direction, death cam and spectating teammates (first person
   with their gun, like CS2; Jump for third person), CS2's announcer, round music and bomb sounds, and an end screen with
-  your K/D/A, ADR, headshots, accuracy, MVPs and multi-kills. You can inspect your weapon during freeze time.
+  your K/D/A, ADR, headshots, accuracy, MVPs and multi-kills, then what the match paid (the result, your kills of
+  enemies and your assists: see Features) and the XP it gave, with your level's bar, and a level up or a Service Medal
+  with CS2's sound; the scoreboard under it. You can inspect your weapon during freeze time.
 - Sound plays the way CS2 plays it, by each sound event's own settings in your install: its volume by distance (a
   gunshot loud up close and gone by 2500 units as its distant version takes over, footsteps gone by 1100), the events it
   plays along with it (a gunshot's distant layer, a landing's thud), random pitch and volume, how much a wall in

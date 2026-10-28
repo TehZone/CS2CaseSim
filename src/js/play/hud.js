@@ -182,6 +182,7 @@ export class Hud {
     clearTimeout(this.msgTimer);
     if (ms) this.msgTimer = setTimeout(() => { m.className = 'msg'; }, ms);
   }
+  hideMessage() { clearTimeout(this.msgTimer); this.q('[data-msg]').className = 'msg'; }
 
   progress(label, frac) {
     const show = frac != null;
@@ -274,9 +275,19 @@ export class Hud {
     const el = this.q('[data-end]');
     el.classList.toggle('hidden', !html);
     if (html) el.innerHTML = html;
+    // The scoreboard goes just under the result, however tall that gets (the reward and your level, a rank, filled in
+    // as they come), not over it.
+    this.endFit ||= new ResizeObserver(() => this.fitEnd());
+    if (html) this.endFit.observe(el); else this.endFit.disconnect();
+    this.fitEnd();
+  }
+  fitEnd() {
+    const end = this.q('[data-end]'), sb = this.q('[data-scores]'), shown = !end.classList.contains('hidden');
+    sb.style.top = shown ? `${end.offsetTop + end.offsetHeight + 14}px` : '';
+    sb.style.transform = shown ? 'translate(-50%, 0)' : '';
   }
 
-  dispose() { this.el.remove(); }
+  dispose() { this.endFit?.disconnect(); this.el.remove(); }
 }
 
 export const CROSSHAIR = { style: 'classic', color: '#32fa32', size: 6, gap: 3, thickness: 2, outline: true, dot: false };

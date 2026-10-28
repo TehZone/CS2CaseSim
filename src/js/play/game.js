@@ -38,7 +38,9 @@ import { quietSorting } from './drawsort.js';
 import { quietKeyframes } from './keyframes.js';
 import { Radio } from './radio.js';
 import { MODES, WINGMAN_RULES, Deathmatch, ARMS_RACE, PROTECT } from './modes.js';
-import { act, online } from '../backend.js';
+import { act } from '../backend.js';
+import { matchRewardHtml } from '../profile.js';
+import { esc } from '../util.js';
 import { S } from '../state.js';
 import { rankInfo, SKILL_GROUPS } from '../engine/ranks.js';
 import { rankPictures, rankArt, emblemHtml, rankKey, ratingHtml } from '../rank.js';
@@ -366,6 +368,9 @@ export class Game {
     for (const t of textures) this.renderer.initTexture(t);
     this.renderer.shadowMap.needsUpdate = true;
     this.match.startRound();
+    // The match's start as the economy sees it: its run, which its reward is paid against (see payReward; online, the
+    // server pays only a match it saw start, and only what it could have earned in the time).
+    this.started = act('play.start', { mode: this.mode }).then((r) => r?.run ?? null).catch((e) => { console.warn('match start', e); return null; });
     // One frame drawn now, behind the loading screen: what's made the first time anything is drawn (render targets, the
     // shadow map, the bots and your weapon) isn't in the match's first frame.
     this.acc = 0;
@@ -463,7 +468,7 @@ export class Game {
       `Music.StartRound.${MUSIC}`, `Music.BombPlanted.${MUSIC}`, `Music.WonRound.${MUSIC}`, `Music.LostRound.${MUSIC}`, `Music.MatchEnd.${MUSIC}`,
       ...NADE_SOUNDS, 'Molotov.Draw', 'HEGrenade.Draw', 'Player.PickupGrenadeAudible', 'Player.PickupWeaponSilent', 'Player.DeathTaser', 'Player.DamageFall',
       'CT_Ladder.StepLeft', 'CT_Wood_Ladder.StepLeft', 'UI.PlayerPing', 'Ball.ImpactSoft', 'Ball.ImpactHard', 'Ball.BulletImpact',
-      'UIPanorama.XP.NewSkillGroup', 'UIPanorama.XP.RankDown'];
+      'UIPanorama.XP.NewSkillGroup', 'UIPanorama.XP.RankDown', 'UIPanorama.XP.NewRank'];
   }
 
   setupViewmodelLighting() {
@@ -727,6 +732,7 @@ export class Game {
   restartMatch() {
     const m = this.match;
     this.restartAt = null;
+    this.enemyKills = 0;
     this.matchOver = false;
     for (const c of this.combatants) {
       Object.assign(c, { kills: 0, deaths: 0, assists: 0, damage: 0, mvps: 0, score: 0, hsKills: 0, points: 0, level: 0, money: this.rules.startMoney, armor: 0, helmet: false, defuser: false, nades: {}, resetWeapons: true, alive: false });
@@ -1048,13 +1054,20 @@ export class Game {
     const multi = [3, 4, 5].map((k) => (me.multi?.[k] ? `${me.multi[k]}× ${k === 5 ? 'ACE' : k + 'K'}` : '')).filter(Boolean).join(' · ');
     const stats = [`${me.kills} / ${me.deaths} / ${me.assists} K/D/A`, this.respawnMode ? `${me.points || 0} points` : `${Math.round(me.damage / rounds)} ADR`, `${hs}% headshots`,
       me.shots ? `${Math.round(((me.hits || 0) / me.shots) * 100)}% accuracy` : '', this.respawnMode ? '' : `${me.mvps} MVPs`, multi].filter(Boolean).join(' · ');
-    this.reward = this.payReward(won);
+    this.reward = this.payReward(won, draw);
+    this.hud.hideMessage(); // (the last round's banner: the match's result takes its place)
     // (Only matchmaking moves a rank: a private match is practice.)
     const ranked = this.ranked;
     this.hud.endScreen(`<h1 class="${draw ? '' : won ? 'win' : 'loss'}">${draw ? 'Draw' : won ? 'Victory' : 'Defeat'}</h1>
-      <div class="final">${final}</div><div class="sub">${stats}</div><div class="reward" data-reward>${online() ? 'Rewards are paid for offline play' : 'Adding up your reward…'}</div>
+      <div class="final">${final}</div><div class="sub">${stats}</div><div class="reward" data-reward>Adding up your reward…</div>
       ${ranked ? '<div class="rank-result" data-rank></div>' : ''}`);
-    this.reward.then((r) => { const el = this.hud.q('[data-reward]'); if (el && r) el.innerHTML = `Reward: <b>+$${r.earned.toFixed(2)}</b> to your wallet`; });
+    // What it paid: the money and its parts, the XP and your level (profile.js), CS2's level-up sound with a level up.
+    this.reward.then((r) => {
+      const el = this.hud.q('[data-reward]');
+      if (!el || this.disposed) return;
+      el.innerHTML = r?.error ? `<span class="muted">${esc(r.error)}</span>` : matchRewardHtml(r);
+      if (r?.levelUps > 0) this.sounds.play('UIPanorama.XP.NewRank', { volume: 0.8 });
+    });
     this.rated = !ranked ? Promise.resolve(null) : this.premier ? this.ratePremier(draw ? 'tie' : won ? 'win' : 'loss') : this.rateMatch(draw ? 'tie' : won ? 'win' : 'loss');
     this.hud.scoreboard(true, this.scoreData());
     this.input.unlock();
@@ -1120,15 +1133,16 @@ export class Game {
     return r;
   }
 
-  // A finished match pays into your case-opening money (offline only): kills, assists, MVPs, rounds won and the win,
-  // more against harder bots.
-  async payReward(won) {
-    if (online()) return null;
+  // A finished match is the only thing that pays (online too): the result (a draw pays as a win), your kills of enemies
+  // (a teamkill isn't one) and assists, and XP for those and the rounds your team won (see engine/levels.js). Paid against
+  // the match's run (see load); an abandoned match never gets here. { error } when it wasn't paid.
+  async payReward(won, draw) {
     const me = this.me, m = this.match;
     try {
-      return await act('play.reward', { won: !!won, kills: Math.max(0, me.kills), assists: me.assists, mvps: Math.min(60, me.mvps),
-        rounds: this.respawnMode ? 0 : Math.min(60, m.score.A), difficulty: this.difficulty });
-    } catch (e) { console.warn('match reward', e); return null; }
+      return await act('play.reward', { run: await this.started, mode: this.mode, result: draw ? 'draw' : won ? 'win' : 'loss',
+        kills: Math.min(400, this.enemyKills || 0), assists: Math.min(400, Math.max(0, me.assists)),
+        roundsWon: this.respawnMode ? 0 : Math.min(60, m.score.A), rounds: this.respawnMode ? 0 : Math.min(60, m.round) });
+    } catch (e) { console.warn('match reward', e); return { error: e.message || 'No reward for this match' }; }
   }
 
   // ---- the bomb ---------------------------------------------------------------------------------------------------
@@ -2005,7 +2019,7 @@ export class Game {
     c.alive = false;
     c.health = 0;
     this.match.onKill(c, attacker, weapon?.stats || weapon, { headshot });
-    if (attacker === this.me && c !== this.me && (this.ffa || c.team !== this.me.team)) this.countStatTrak(weapon);
+    if (attacker === this.me && c !== this.me && (this.ffa || c.team !== this.me.team)) { this.enemyKills = (this.enemyKills || 0) + 1; this.countStatTrak(weapon); }
     if (!this.ffa) this.killChatter(c, attacker);
     if (!this.respawnMode && attacker && attacker !== c && attacker.team !== c.team) {
       const at = this.positionOf(c);

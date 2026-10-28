@@ -671,7 +671,11 @@ async function runRoundsSmoke(win) {
     if (st.phase === 'live' && st.alive && (!play || actedFor === st.round)) await js(`(() => { const g = window.__playGame; if (g.me.alive) g.kill(g.me, null, { name: 'World' }, false); return 1; })()`);
     if (st.round !== last) { last = st.round; console.log('SMOKE rounds round', st.round); }
   }
-  if (process.env.CS2SIM_SMOKE_MAXROUNDS) { await wait(3000); console.log('SMOKE rounds end screen: ' + await js(`document.querySelector('[data-end]')?.innerText`)); }
+  if (process.env.CS2SIM_SMOKE_MAXROUNDS) {
+    await wait(3000);
+    console.log('SMOKE rounds end screen: ' + await js(`[...(document.querySelector('[data-end]')?.children || [])].map((e) => e.textContent.replace(/\\s+/g, ' ').trim()).filter(Boolean).join(' | ')`));
+    fs.writeFileSync(path.join(app.getPath('userData'), 'rounds-end.png'), (await win.webContents.capturePage()).toPNG());
+  }
   const rows = JSON.parse(await js(`JSON.stringify(window.__rd.rows)`));
   const keys = [...new Set(rows.flatMap((r) => Object.keys(r)))];
   console.log('SMOKE rounds per round:\n' + keys.map((k) => k.padEnd(13) + rows.map((r) => String(r[k] ?? '').padStart(7)).join('')).join('\n'));

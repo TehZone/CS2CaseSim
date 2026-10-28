@@ -214,11 +214,8 @@ body.match-menu #menu-bg { visibility: hidden; }
 .play-hud .endscreen .final { font-size: 36px; font-weight: 700; font-family: var(--font-cond); }
 .play-hud .endscreen .sub { opacity: .85; font-size: 15px; letter-spacing: .03em; }
 .play-hud .endscreen .reward { margin-top: 8px; font-size: 16px; }
-.play-hud .endscreen .reward b { color: #8ee06e; }
-/* the scoreboard drops a little to make room for the result */
-.play-hud:has(> .endscreen:not(.hidden)) .scoreboard { top: calc(50% + 40px); }
-/* and further for a competitive rank result under it */
-.play-hud:has(> .endscreen:not(.hidden) .rank-result:not(:empty)) .scoreboard { top: calc(50% + 130px); }
+.play-hud .endscreen .reward .match-pay > div > b { color: #8ee06e; } /* (the money: see profile.js matchRewardHtml) */
+/* (the scoreboard goes under the result: Hud.fitEnd) */
 @media (max-height: 920px) {
   .play-hud .endscreen { top: 50px; }
   .play-hud .endscreen h1 { font-size: 44px; }
