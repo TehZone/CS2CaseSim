@@ -242,15 +242,12 @@ export function simulateMatch(teamA, teamB, r = rand) {
 // Finishing place when knocked out with n teams left (final loss = 2nd, semi-final = 3rd-4th, ...).
 export const placeLabel = (p) => ({ 1: "1st", 2: "2nd", 3: "3rd-4th", 5: "5th-8th", 9: "9th-16th" })[p] || p + "th";
 // ---- rewards and cups ----------------------------------------------------------------------------
+// (No money prizes: money comes from playing matches in Play. The winner of an event gets a pack token.)
 export const CUPS = {
-  cup: { n: 'Online Cup', teams: 4, prize: { 1: 60, 2: 25, 3: 10 }, token: 'standard' },
-  lan: { n: 'LAN Event', teams: 8, prize: { 1: 400, 2: 160, 3: 70, 5: 25 }, token: 'premium' },
-  major: { n: 'Major Championship', teams: 16, prize: { 1: 3000, 2: 1200, 3: 500, 5: 200, 9: 60 }, token: 'legend' },
+  cup: { n: 'Online Cup', teams: 4, token: 'standard' },
+  lan: { n: 'LAN Event', teams: 8, token: 'premium' },
+  major: { n: 'Major Championship', teams: 16, token: 'legend' },
 };
-export function matchReward(myRating, oppRating, won) {
-  const diff = clamp((oppRating - myRating) / 10, -0.6, 1.2);
-  return won ? round2(Math.max(2, 12 * (1 + diff) * (myRating / 75) ** 2)) : 1;
-}
 
 // Seeds a bracket: the player's team plus AI rosters around its rating.
 export function newCup(type, myRating, r = rand) {

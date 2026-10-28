@@ -335,12 +335,24 @@ What's in a match:
   feels the same.
 
 ## Features
+- Money comes from playing matches in Play: a win or a draw pays $250, a loss $100, and every kill $20 and assist $10
+  (online too, for a match the server saw start, once, and only what it could have earned). There's no clicker or
+  passive income, and the team manager's events pay pack tokens, not money
+- Profile levels like CS2's: 5,000 XP a level, from 1 to 40 (a win or draw is 250 XP, a loss 100, each kill 20, each assist
+  10 and each round your team wins 50). Past level 40 you earn the next Service Medal and start again at level 1: every
+  colour of the 2026 medal first, then 2025's, back to the first ever (2015's), 69 in all. Your level, XP bar and medal
+  sit in the top bar (CS2's own level icons and medal art from your install; Steam's pictures without it), and the
+  profile shows every medal. Each level up brings a care package like CS2's: four items from its drop pool (the six
+  newest weapon cases and the timed-drop collections) to keep two of
+- Cases you buy go to your inventory, like CS2's store, and open with their own key (bought apart, $2.49: the Fever Case
+  Key for the Fever Case, the CS:GO Case Key for the first ones). Open them on the case's page (it shows how many cases
+  and keys you have) or from the inventory; auto open uses yours first, then buys a case and a key for each opening
 - 42 real weapon cases, 150 souvenir packages (each Major's team stickers and gold MVP autographs), packages
   (X-Ray, Anubis, Genesis/Dead Hand Terminals), 229 sticker/autograph capsules, an Agent Locker and a Chicken Coop Crate
 - All 94 weapon collections (e.g. Cobblestone with the Dragon Lore), browsable with odds and prices
 - Trade Up Contracts with CS2's rules: 10 skins of one rarity, ticket-based odds per collection, normalised output
   floats, StatTrak contracts, and 5-Covert contracts into a knife or gloves
-- The Armory: Armory Stars (Armory Pass, or earned by opening cases) spent on drops from featured collections that
+- The Armory: Armory Stars (Armory Pass, or earned by buying cases and keys) spent on drops from featured collections that
   rotate every 10-15 minutes, and on the four charm collections (always available)
 - Charms: all 78 of CS2's charms (Missing Link, Missing Link Community, Small Arms and Dr Boom), from the Armory or the
   Market, one per gun (Souvenirs too), hung anywhere on it. Each has a pattern from 1 to 100,000 that sets its colours and how it hangs; low and special ones (#1, the top 10, the
@@ -364,7 +376,7 @@ What's in a match:
 - Floats (CS2 wear distribution), pattern seeds 0-1000 with rare patterns (blue gems, Fire & Ice, full fades, Doppler phases...)
 - StatTrak™, knives and gloves, stickers with free placement, scraping, and craft bonuses
 - Loadout (Inventory → Loadout, or Equip on an item): gloves, knife, a T and a CT agent, and one skin per gun
-- 3D inspect (drag, zoom, F to inspect, B to flip), clicker with upgrades and ranks, passive income, offline earnings
+- 3D inspect (drag, zoom, F to inspect, B to flip)
 - Market prices blended from Skinport, CSFloat, Buff163 and YouPin (Steam as fallback); refresh in Stats & Settings
 
 ## Develop
@@ -372,6 +384,7 @@ What's in a match:
 npm install
 node node_modules/electron/install.js   # npm 11+ blocks Electron's download step
 npm run data      # rebuild src/data/game-data.json (add --refresh via `npm run data:refresh` for fresh downloads)
+node scripts/build-extras.mjs   # rebuild src/data/keys.json (which key opens which case) and medals.json (Service Medal pictures)
 npm run vendor    # copy three.js into src/vendor (with the patch in scripts/copy-vendor.mjs)
 npm start         # run the game
 npm run dev       # browser preview at http://localhost:5178

@@ -1,29 +1,27 @@
 import { $, $$, money, debounce, esc } from './util.js';
 import { loadData } from './data.js';
-import { S, loadState, on, saveSync, save, idleRate, addMoney, isOnlineState } from './state.js';
+import { S, loadState, on, saveSync, save } from './state.js';
 import { itemValue } from './items.js';
 import { toast, topModal, openModal, installTooltips } from './ui.js';
 import { initMenu, initMoreMenu } from './menu.js';
 import { loadGameSounds } from './audio.js';
 import { keepPrepared } from './cs2/content.js';
 import { net, normalizeUrl } from './net/online.js';
-import { offlineEarnings as offlineFor, OFFLINE_CAP_S } from './engine/economy.js';
 import * as cases from './pages/cases.js';
 import * as inventory from './pages/inventory.js';
 import * as tradeup from './pages/tradeup.js';
 import * as armory from './pages/armory.js';
-import * as clicker from './pages/clicker.js';
 import * as market from './pages/market.js';
 import * as gamble from './pages/gamble.js';
 import * as team from './pages/team.js';
 import * as trade from './pages/trade.js';
-import * as coop from './pages/coop.js';
 import * as stats from './pages/stats.js';
 import * as database from './pages/database.js';
 import * as play from './pages/play.js';
 import { initMatchmaking } from './matchmaking.js';
+import { initProfile } from './profile.js';
 
-const PAGES = { play, cases, inventory, tradeup, armory, clicker, market, database, gamble, team, trade, coop, stats };
+const PAGES = { play, cases, inventory, tradeup, armory, market, database, gamble, team, trade, stats };
 let current = null, currentName = 'cases';
 
 function go(name) {
@@ -50,38 +48,9 @@ function updateBalance() {
 const updateInv = debounce(() => {
   $('#inv-count').textContent = S.inv.length;
   $('#net-worth').textContent = money(S.inv.reduce((s, i) => s + itemValue(i), 0));
-  $('#idle-rate').textContent = '+' + money(idleRate()) + '/s';
 }, 150);
 const updateStars = () => { $('#star-count').textContent = S.stars || 0; };
 
-// Passive income. Offline this is the real income; online it is a live estimate the server's total replaces.
-function startIdleLoop() {
-  let acc = 0, last = performance.now();
-  setInterval(() => {
-    const now = performance.now();
-    const dt = (now - last) / 1000;
-    last = now;
-    acc += idleRate() * dt;
-    if (acc >= 0.01) {
-      const v = Math.floor(acc * 100) / 100;
-      acc -= v;
-      if (!isOnlineState()) S.stats.passiveEarned += v;
-      addMoney(v);
-    }
-  }, 250);
-  setInterval(() => save(), 15000);
-}
-
-function offlineEarnings() {
-  const awayS = (Date.now() - (S.lastSeen || Date.now())) / 1000;
-  const earned = offlineFor(S, awayS);
-  if (earned <= 0) return;
-  S.stats.passiveEarned += earned;
-  addMoney(earned);
-  const away = Math.min(OFFLINE_CAP_S, awayS);
-  const h = Math.floor(away / 3600), m = Math.floor((away % 3600) / 60);
-  toast(`Welcome back! Your bots and chickens earned <b class="green">${money(earned)}</b> while you were away (${h ? h + 'h ' : ''}${m}m).`, 'gold');
-}
 
 // ---- account (offline / online) ------------------------------------------------------------------
 function updateAccount({ status, detail } = { status: net.status() }) {
@@ -173,14 +142,14 @@ async function boot() {
   window.addEventListener('app:go', (e) => go(e.detail));
   window.addEventListener('app:refresh', () => go(currentName));
   initMatchmaking();
+  initProfile();
   go('cases');
-  offlineEarnings();
-  startIdleLoop();
+  setInterval(() => save(), 15000);
   updateAccount();
   net.resume();
   setTimeout(keepPrepared, 10000); // after a CS2 update, everything prepared is brought up to date in the background
   if (S.stats.opened === 0 && S.inv.length === 0 && S.money === 10) {
-    toast('Welcome! You start with <b class="green">$10.00</b>. Open a case, or earn more on the <b>Earn</b> tab.', 'gold');
+    toast('Welcome! You start with <b class="green">$10.00</b>. Earn more by playing matches in <b>Play</b>: $250 a win, $100 a loss, $20 a kill.', 'gold');
   }
 }
 

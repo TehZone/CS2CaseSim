@@ -191,7 +191,6 @@ function drawPlay(el, lu, tr) {
       <div style="font-size:16px">${esc(t.name)}</div>
       <div class="rt">${t.rating.toFixed(1)}</div>
       <div class="muted" style="font-size:12px">${M.SLOTS.map((s) => esc(t.lineup[s].n)).join(', ')}</div>
-      <div class="muted" style="font-size:12px">Win reward <b class="green">${money(M.matchReward(tr.rating, t.rating, true))}</b></div>
       <button class="btn primary" data-play="${t.key}">Play</button></div>`).join('')}</div>
     <div class="open-row" style="margin-top:8px"><button class="btn sm" data-reroll>Other opponents</button></div>
     <div class="section-title">Events</div>
@@ -199,7 +198,7 @@ function drawPlay(el, lu, tr) {
       : `${cup?.done ? `<div class="panel" style="margin-bottom:12px">Last event: <b>${esc(M.CUPS[cup.type].n)}</b> · finished <b>${M.placeLabel(cup.place)}</b>${cup.place === 1 ? ' 🏆' : ''}</div>` : ''}
       <div class="opps">${Object.entries(M.CUPS).map(([k, c]) => `<div class="opp">
         <div style="font-size:16px">${esc(c.n)}</div><div class="muted" style="font-size:12px">${c.teams} teams, single elimination. Opponents around your rating${k === 'major' ? ', the best rosters' : ''}.</div>
-        <div class="muted" style="font-size:12px">Prizes: ${Object.entries(c.prize).map(([p, v]) => `${M.placeLabel(+p)} ${money(v)}`).join(' · ')}<br>Winner also gets a ${esc(M.packById(c.token).n)} token</div>
+        <div class="muted" style="font-size:12px">The winner gets a ${esc(M.packById(c.token).n)} token</div>
         <button class="btn gold" data-cup="${k}">Enter</button></div>`).join('')}</div>`}
     ${online() ? '<div class="section-title">Online ladder</div><div data-ladder class="muted">Loading…</div>' : ''}
     ${S.team.history.length ? `<div class="section-title">Recent matches</div><div style="display:flex;flex-direction:column;gap:4px">${S.team.history.map((h) => `<div class="entry"><span class="chip ${h.won ? 'green' : 'red'}">${h.won ? 'W' : 'L'}</span>${esc(h.opp)}<span class="pct">${h.score.join(' - ')}</span></div>`).join('')}</div>` : ''}`;
@@ -209,7 +208,7 @@ function drawPlay(el, lu, tr) {
   el.querySelector('[data-cupplay]')?.addEventListener('click', cupPlay);
   if (online()) drawLadder(el.querySelector('[data-ladder]'));
   el.querySelector('[data-cupleave]')?.addEventListener('click', async () => {
-    if (await confirmDialog('Leave this event? You will not get a prize.', { ok: 'Leave', danger: true })) tryAct('team.cupLeave');
+    if (await confirmDialog('Leave this event? You can’t win its token then.', { ok: 'Leave', danger: true })) tryAct('team.cupLeave');
   });
 }
 
@@ -222,11 +221,11 @@ async function drawLadder(el) {
   el.innerHTML = `<table class="sb-table" style="max-width:760px"><tr><th>#</th><th>Player</th><th>Team</th><th>Elo</th><th>W-L</th><th></th></tr>
     ${list.map((p, i) => `<tr><td>${i + 1}</td><td>${esc(p.name)}</td><td>${esc(p.team)}</td><td>${p.elo}</td><td>${p.w}-${p.l}</td>
       <td>${p.me ? '<span class="chip gold">You</span>' : `<button class="btn sm primary" data-ch="${esc(p.name)}">Challenge</button>`}</td></tr>`).join('')}</table>
-    <div class="muted" style="font-size:12px;margin-top:6px">Your team plays their saved lineup. Both Elo ratings change; you earn a reward for wins.</div>`;
+    <div class="muted" style="font-size:12px;margin-top:6px">Your team plays their saved lineup. Both Elo ratings change.</div>`;
   el.querySelectorAll('[data-ch]').forEach((b) => b.addEventListener('click', async () => {
     let r;
     try { r = await net.social('challenge', { name: b.dataset.ch }); } catch (e) { sfx.error(); return toast(esc(e.message), 'bad'); }
-    await showMatch(r.match, S.team.name, r.opp.name, `${r.match.winner === 'A' ? 'Win' : 'Loss'} · Elo ${r.elo >= 0 ? '+' : ''}${r.elo}${r.reward ? ' · +' + money(r.reward) : ''}`);
+    await showMatch(r.match, S.team.name, r.opp.name, `${r.match.winner === 'A' ? 'Win' : 'Loss'} · Elo ${r.elo >= 0 ? '+' : ''}${r.elo}`);
     draw();
   }));
 }
@@ -251,7 +250,7 @@ function bracketHTML(cup) {
 async function quickMatch(key) {
   const r = await tryAct('team.match', { opp: key });
   if (!r) return;
-  await showMatch(r.match, S.team.name, r.opp.name, r.reward ? `${r.match.winner === 'A' ? 'Win' : 'Loss'} · +${money(r.reward)}` : '');
+  await showMatch(r.match, S.team.name, r.opp.name, r.match.winner === 'A' ? 'Win' : 'Loss');
   view.opps = null;
   draw();
 }
@@ -260,7 +259,7 @@ async function cupPlay() {
   if (!r) return;
   const c = r.cup;
   let note = '';
-  if (c.done) note = c.place === 1 ? `Champions! +${money(r.prize)}${r.token ? ' and a ' + M.packById(r.token).n + ' token' : ''}` : `Knocked out · ${M.placeLabel(c.place)}${r.prize ? ' · +' + money(r.prize) : ''}`;
+  if (c.done) note = c.place === 1 ? `Champions!${r.token ? ' +1 ' + M.packById(r.token).n + ' token' : ''}` : `Knocked out · ${M.placeLabel(c.place)}`;
   await showMatch(r.match, S.team.name, r.oppName, note);
   if (c.done && c.place === 1) sfx.gold();
   draw();

@@ -42,7 +42,7 @@ const PLAY_CALLS = {
   agent: (vmdl) => cs2.playAgent(vmdl), anims: (list) => cs2.playAnims(list), sounds: (events) => cs2.playSounds(events),
   soundInfo: (events) => cs2.playSoundInfo(events), reverbs: () => cs2.playReverbs(),
   agentModel: (id) => cs2.agentModel(id), stats: () => cs2.playStats(), impacts: () => cs2.playImpacts(), voices: () => cs2.playVoices(), icons: () => cs2.playIcons(),
-  ranks: () => cs2.playRanks(), menuIcons: () => cs2.menuIcons(), menuBackdrop: (id) => cs2.menuBackdrop(id),
+  ranks: () => cs2.playRanks(), menuIcons: () => cs2.menuIcons(), menuBackdrop: (id) => cs2.menuBackdrop(id), profileArt: () => cs2.profileArt(),
 };
 function playCall(fn, arg) {
   if (!Object.hasOwn(PLAY_CALLS, fn)) throw new Error('Unknown play call ' + fn);

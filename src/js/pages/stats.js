@@ -1,7 +1,7 @@
 import { esc, money } from '../util.js';
 import { D, RARITY, rarityColor, CASE_ODDS } from '../data.js';
 import * as I from '../items.js';
-import { S, save, resetSave, idleRate, clickValue, rankName } from '../state.js';
+import { S, save, resetSave } from '../state.js';
 import { toast, confirmDialog } from '../ui.js';
 import { online } from '../backend.js';
 import { autoSellLabel, autoSellModal } from '../autosell.js';
@@ -11,6 +11,7 @@ import { backgroundMaps, setMenuBackground } from '../menu.js';
 import { prepareAll, prepareStatus, prepareCancel, cacheSize } from '../cs2/content.js';
 import { rankInfo } from '../engine/ranks.js';
 import { loadRankArt, emblemHtml, rankKey } from '../rank.js';
+import { levelHtml } from '../profile.js';
 
 let root;
 
@@ -38,8 +39,9 @@ function draw() {
     ['Balance', money(S.money)], ['Inventory value', money(invValue)], ['Net worth', money(S.money + invValue)],
     ['Cases opened', st.opened.toLocaleString()], ['Spent on cases', money(st.spent)], ['Sold items for', money(st.sold)],
     ['Knives & gloves unboxed', st.knives], ['Best drop', st.bestName ? `${esc(st.bestName)}<br><span class="green">${money(st.bestValue)}</span>` : '—'],
-    ['Stickers applied', st.stickersApplied], ['Clicks', st.clicks.toLocaleString()], ['Earned by clicking', money(st.clickEarned)],
-    ['Earned passively', money(st.passiveEarned)], ['Rank', rankName()], ['Competitive rank (Play)', competitiveRank()], ['Wingman rank (Play)', competitiveRank(true)], ['Per click / per second', `${money(clickValue())} / ${money(idleRate())}`],
+    ['Stickers applied', st.stickersApplied], ['Profile level', levelHtml(S.prof)],
+    ['Matches played (Play)', (st.playMatches || 0).toLocaleString()], ['Matches won', (st.playWins || 0).toLocaleString()], ['Kills', (st.playKills || 0).toLocaleString()], ['Earned from matches', money(st.playEarned || 0)],
+    ['Competitive rank (Play)', competitiveRank()], ['Wingman rank (Play)', competitiveRank(true)],
     ['Trade-ups signed', st.tradeups || 0], ['Armory redemptions', st.armory || 0], ['Player packs opened', st.packs || 0], ['Team matches', st.matches || 0],
     ['Case battles', st.battles || 0], ['Gambled', money(st.gambleWagered || 0)], ['Gambling result', `<span class="${(st.gambleWon || 0) >= 0 ? 'green' : 'red'}">${money(st.gambleWon || 0)}</span>`],
   ];

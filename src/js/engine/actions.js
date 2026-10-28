@@ -3,9 +3,8 @@
 //
 // An action gets a context (ctx) wrapping the state, the RNG and the clock, and records what it changed:
 // added/removed/updated items and the other top-level fields it touched (money, stars, stats...).
-import { D, casePrice } from './data.js';
+import { D, keyFor } from './data.js';
 import * as I from './items.js';
-import * as E from './economy.js';
 import { tradeupContract, rollTradeup } from './tradeup.js';
 import { PASS_PRICE, PASS_STARS, findLiveOffer, offerBox, starsFromSpend } from './armory.js';
 import * as M from './manager.js';
@@ -14,14 +13,15 @@ import * as MK from './market.js';
 import * as R from './ranks.js';
 import * as P from './premier.js';
 import * as MM from './matchmaking.js';
+import * as L from './levels.js';
 import { rand, round2, uid as newUid } from './util.js';
 
 export class GameError extends Error {
   constructor(message, code = 'bad') { super(message); this.code = code; }
 }
 const fail = (m, code) => { throw new GameError(m, code); };
-const PLAY_DIFFICULTY = { easy: 0.5, normal: 1, hard: 1.6, expert: 2.5 };
 const PLAY_MODES = ['premier', 'competitive', 'wingman', 'deathmatch', 'armsrace'];
+const FFA_MODES = new Set(['deathmatch', 'armsrace']); // (no rounds: everyone for themselves)
 const MODE_NAMES = { premier: 'Premier', competitive: 'Competitive', wingman: 'Wingman' };
 const RANK_KEY = { competitive: 'rank', wingman: 'wingman' }; // (the state's field for each mode's rank)
 
@@ -187,25 +187,56 @@ export function takeStake(ctx, { money: m = 0, uids = [] } = {}) {
 
 // ---- the actions -----------------------------------------------------------------------------------
 export const ACTIONS = {
-  'case.open'(ctx, { id, n = 1, autoSell }) {
-    n = int(n, 1, 10, 'count');
+  // Buying cases (and capsules, packages...): they go to your inventory, like CS2's store. A case that takes a key opens
+  // with one of its keys (key.buy, case.open).
+  'case.buy'(ctx, { id, n = 1 }) {
+    n = int(n, 1, 100, 'count');
     const c = D.caseById[id];
     if (!c || c.price == null) fail('Unknown case');
-    const cost = round2(casePrice(c) * n);
+    const cost = round2(c.price * n);
     spend(ctx, cost);
+    const items = Array.from({ length: n }, () => ({ ...I.makeCrateItem(c, 'Store'), nw: true }));
+    give(ctx, items);
+    const s = stats(ctx);
+    s.spent = round2(s.spent + cost);
+    return { items, cost, stars: earnStars(ctx, cost) };
+  },
+  'key.buy'(ctx, { key, n = 1 }) {
+    n = int(n, 1, 100, 'count');
+    if (!D.keys[key]) fail('Unknown key');
+    const cost = round2(D.keyPrice * n);
+    spend(ctx, cost);
+    const items = Array.from({ length: n }, () => ({ ...I.makeKeyItem(key, 'Store'), nw: true }));
+    give(ctx, items);
+    const s = stats(ctx);
+    s.spent = round2(s.spent + cost);
+    return { items, cost, stars: earnStars(ctx, cost) };
+  },
+  // Opens n of your cases of one kind (uids: which ones, else your oldest), each with one of your keys for it if it takes
+  // one. Locked cases and keys, and ones in a trade offer, stay put.
+  'case.open'(ctx, { id, n = 1, uids = null, autoSell }) {
+    n = int(Array.isArray(uids) ? uids.length : n, 1, 10, 'count');
+    const c = D.caseById[id];
+    if (!c) fail('Unknown case');
+    const free = (it) => !it.lk && !ctx.reserved?.has(it.uid);
+    const oldest = (a, b) => (a.at || 0) - (b.at || 0);
+    const boxes = Array.isArray(uids) ? uids.map((u) => findOwned(ctx, String(u)))
+      : ctx.st.inv.filter((it) => it.t === 'crate' && it.id === c.id && free(it)).sort(oldest).slice(0, n);
+    if (boxes.some((b) => b.t !== 'crate' || b.id !== c.id)) fail(`Those aren't all ${c.n}s`);
+    if (boxes.length < n) fail(n > 1 ? `You have ${boxes.length} ${c.n}${boxes.length === 1 ? '' : 's'}, not ${n}` : `You don't have a ${c.n}. Buy one first.`, 'nocase');
+    const key = keyFor(c);
+    const keys = key ? ctx.st.inv.filter((it) => it.t === 'key' && it.id === key && free(it)).sort(oldest).slice(0, n) : [];
+    if (key && keys.length < n) fail(`You need ${n > 1 ? n + ' ' + D.keys[key].n + 's' : 'a ' + D.keys[key].n} to open ${n > 1 ? 'these' : 'this'}. Buy ${n > 1 ? 'them' : 'one'} first.`, 'nokey');
+    take(ctx, [...boxes, ...keys].map((it) => it.uid));
     const items = Array.from({ length: n }, () => I.rollFromCase(c, ctx.rng));
     serialize(ctx, items);
     for (const it of items) it.nw = true;
     noteDrops(ctx, items);
-    const s = stats(ctx);
-    s.opened += n;
-    s.spent = round2(s.spent + cost);
-    const stars = earnStars(ctx, cost);
+    stats(ctx).opened += n;
     const autoSold = autoSellDrops(ctx, items, autoSell);
     give(ctx, items.filter((it) => !it.as));
-    return { items, cost, stars, autoSold };
+    return { items, autoSold };
   },
-
   'item.sell'(ctx, { uids }) {
     const items = take(ctx, uids);
     const total = round2(items.reduce((s, it) => s + I.itemValue(it), 0));
@@ -272,33 +303,59 @@ export const ACTIONS = {
     return { item, price, lid, window: w };
   },
 
-  click(ctx, { n, crits = 0 }) {
-    n = int(n, 0, 400, 'clicks');
-    crits = int(crits, 0, n, 'headshots');
-    if (ctx.online && n && crits > Math.ceil(n * E.critChance(ctx.st) * 3) + 3) fail('Suspicious headshot rate');
-    const v = E.clickValue(ctx.st);
-    const earned = round2(v * (n - crits) + v * E.CRIT_MULT * crits);
-    credit(ctx, earned);
-    const s = stats(ctx);
-    s.clicks += n;
-    s.clickEarned = round2(s.clickEarned + earned);
-    return { earned };
+  // A Play match starts (any mode, private ones too): its reward is checked against it when it ends. Returns its run id.
+  'play.start'(ctx, { mode }) {
+    if (!PLAY_MODES.includes(mode)) fail('Invalid mode');
+    ctx.st.play = { run: newUid(), mode, at: ctx.now };
+    ctx.dirty.add('play');
+    return { run: ctx.st.play.run };
   },
-  // Play mode: a finished offline match against bots pays out by how you played and how hard the bots were. Offline
-  // only: the server can't see a match played on your PC.
-  'play.reward'(ctx, { won = false, kills = 0, assists = 0, mvps = 0, rounds = 0, difficulty = 'normal' }) {
-    if (ctx.online) fail('Match rewards are for offline play');
-    kills = int(kills, 0, 400, 'kills'); assists = int(assists, 0, 400, 'assists'); mvps = int(mvps, 0, 60, 'MVPs'); rounds = int(rounds, 0, 60, 'rounds');
-    const diff = PLAY_DIFFICULTY[difficulty] ?? 1;
-    const earned = round2((kills * 0.15 + assists * 0.05 + mvps * 0.25 + rounds * 0.1 + (won ? 2 : 0)) * diff);
-    credit(ctx, earned);
+  // A finished Play match pays and gives XP (see levels.js): its result, your kills and assists, and the rounds your team
+  // won. Online the server can't see the match, so it only pays one it saw start (play.start), once, and only what that
+  // match could have earned: long enough for its rounds, and no more kills than there were enemies to kill.
+  'play.reward'(ctx, { run = null, mode = null, result = null, won = false, kills = 0, assists = 0, roundsWon = null, rounds = 0 }) {
+    result ??= won ? 'win' : 'loss'; // (callers from before draws were paid)
+    if (!L.RESULTS.includes(result)) fail('Invalid result');
+    kills = int(kills, 0, 400, 'kills'); assists = int(assists, 0, 400, 'assists'); rounds = int(rounds, 0, 60, 'rounds');
+    roundsWon = roundsWon == null ? rounds : int(roundsWon, 0, 60, 'rounds'); // (older callers sent the rounds won as rounds)
+    const cur = ctx.st.play?.run && ctx.st.play.run === run ? ctx.st.play : null;
+    if (ctx.online && !cur) fail("The server didn't see that match start, so it can't pay for it", 'match');
+    const ffa = FFA_MODES.has(cur?.mode || mode);
+    if (cur) {
+      const secs = (ctx.now - cur.at) / 1000;
+      const played = Math.max(rounds, roundsWon), enemies = cur.mode === 'wingman' ? 2 : 5;
+      const fits = secs <= 6 * 3600 && (ffa ? secs >= 60 && kills <= secs / 1.5 + 5 && assists <= secs / 1.5 + 5
+        : secs >= played * 15 && kills <= played * enemies && assists <= played * enemies);
+      if (!fits) fail("Those match results don't add up", 'match');
+      ctx.st.play = null;
+      ctx.dirty.add('play');
+    }
+    const pay = L.matchPay({ result, kills, assists });
+    const xp = L.matchXp({ result, kills, assists, roundsWon: ffa ? 0 : roundsWon });
+    credit(ctx, pay.total);
+    const lv = L.addXp(ctx.st.prof, xp.total, { r: ctx.rng, now: ctx.now });
+    ctx.st.prof = lv.prof;
+    ctx.dirty.add('prof');
     const s = stats(ctx);
     s.playMatches = (s.playMatches || 0) + 1;
-    s.playWins = (s.playWins || 0) + (won ? 1 : 0);
+    s.playWins = (s.playWins || 0) + (result === 'win' ? 1 : 0);
     s.playKills = (s.playKills || 0) + kills;
-    s.playEarned = round2((s.playEarned || 0) + earned);
-    return { earned };
+    s.playEarned = round2((s.playEarned || 0) + pay.total);
+    return { result, earned: pay.total, pay, xp, before: lv.before, after: lv.after, levelUps: lv.levelUps, medals: lv.medals, waiting: lv.prof.drops.length };
   },
+  // Claiming a level-up reward: two of its four items, like CS2's care package.
+  'drop.claim'(ctx, { id, picks }) {
+    const prof = { ...L.freshProfile(), ...ctx.st.prof };
+    const drop = prof.drops.find((d) => d.id === id);
+    if (!drop) fail('That reward was already claimed', 'missing');
+    if (!Array.isArray(picks) || new Set(picks).size !== L.CARE_PICKS || picks.some((i) => !Number.isInteger(i) || i < 0 || i >= drop.offers.length)) fail(`Pick ${L.CARE_PICKS} items`);
+    const items = picks.map((i) => ({ ...drop.offers[i], at: ctx.now, nw: true }));
+    give(ctx, items);
+    ctx.st.prof = { ...prof, drops: prof.drops.filter((d) => d !== drop) };
+    ctx.dirty.add('prof');
+    return { items };
+  },
+
   // Searching for a match. A ranked match still open from before (the game closed during it) was abandoned: settled
   // first, a loss and the cooldown. Returns { settled, cooldown } (ms left of an abandon's cooldown, for a ranked mode:
   // no searching until it's over).
@@ -354,20 +411,6 @@ export const ACTIONS = {
     touch(ctx, it);
     return { kills: it.kills };
   },
-  'upgrade.buy'(ctx, { id }) {
-    const u = E.UPGRADES.find((x) => x.id === id);
-    if (!u) fail('Unknown upgrade');
-    if (u.max != null && E.lvl(ctx.st, id) >= u.max) fail('Already maxed');
-    spend(ctx, E.upgradeCost(ctx.st, u));
-    ctx.st.upg = { ...ctx.st.upg, [id]: E.lvl(ctx.st, id) + 1 };
-    ctx.dirty.add('upg');
-  },
-  'coop.slot'(ctx) {
-    spend(ctx, E.coopSlotCost(ctx.st));
-    ctx.st.coopSlots++;
-    ctx.dirty.add('coopSlots');
-  },
-
   'stickers.apply'(ctx, { uid, stickers }) {
     const item = findOwned(ctx, uid);
     if (!I.canHaveStickers(item)) fail('Stickers can’t be applied to this item');
@@ -551,8 +594,6 @@ export const ACTIONS = {
     if (!other) fail('Unknown opponent');
     const match = M.simulateMatch({ name: ctx.st.team.name, lineup }, other, ctx.rng);
     const won = match.winner === 'A';
-    const reward = M.matchReward(mine.rating, other.rating, won);
-    credit(ctx, reward);
     const t = ctx.st.team;
     const exp = 1 / (1 + Math.pow(10, (other.rating * 12 + 100 - t.elo) / 400));
     ctx.st.team = {
@@ -561,7 +602,7 @@ export const ACTIONS = {
     };
     ctx.dirty.add('team');
     stats(ctx).matches++;
-    return { match, reward, opp: { key: other.key, name: other.name, rating: other.rating }, mine: mine.rating };
+    return { match, opp: { key: other.key, name: other.name, rating: other.rating }, mine: mine.rating };
   },
   'team.cupStart'(ctx, { type }) {
     if (!M.CUPS[type]) fail('Unknown event');
@@ -592,20 +633,18 @@ export const ACTIONS = {
       if (a === 'me' || b === 'me') { myMatch = a === 'me' ? m : { ...m, score: [m.score[1], m.score[0]], winner: m.winner === 'A' ? 'B' : 'A' }; myOpp = a === 'me' ? b : a; }
     }
     const out = { ...cup, round: cup.round + 1, results: [...cup.results, results], alive: next };
-    let prize = 0, token = null;
+    let token = null;
     const stillIn = next.includes('me');
     if (!stillIn || next.length === 1) {
       out.done = true;
       out.place = stillIn ? 1 : cup.alive.length / 2 + 1;
-      prize = def.prize[out.place] || 0;
       if (out.place === 1) token = def.token;
     }
-    if (prize) credit(ctx, prize);
     const tokens = token ? { ...ctx.st.team.tokens, [token]: (ctx.st.team.tokens[token] || 0) + 1 } : ctx.st.team.tokens;
     ctx.st.team = { ...ctx.st.team, cup: out, tokens };
     ctx.dirty.add('team');
     stats(ctx).matches++;
-    return { match: myMatch, opp: myOpp, oppName: M.teamLabel(myOpp), cup: out, prize, token };
+    return { match: myMatch, opp: myOpp, oppName: M.teamLabel(myOpp), cup: out, token };
   },
   'team.cupLeave'(ctx) {
     ctx.st.team = { ...ctx.st.team, cup: null };

@@ -332,3 +332,53 @@ body:not(.is-online) .online-only { display: none !important; }
   .tu-sum { grid-template-columns: repeat(2, 1fr); }
   .auto-panel { left: 8px; right: 8px; width: auto; }
 }
+
+/* ---------- your level (profile.js): the top bar's chip, the profile with its Service Medals, level-up rewards ---------- */
+.prof-chip {
+  display: flex; align-items: center; gap: 8px; padding: 0 14px; background: none; border: 0; border-left: 1px solid rgba(255, 255, 255, .08);
+  color: var(--text); white-space: nowrap; flex: none; position: relative; transition: background .12s;
+}
+.prof-chip:hover { background: linear-gradient(180deg, transparent, rgba(255, 255, 255, .08)); }
+.prof-chip .pc-txt { display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
+.prof-chip .pc-txt b { font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: #cfd6dd; }
+.prof-chip .xpbar { width: 74px; }
+.prof-chip .pill.gift { position: absolute; top: 6px; right: 6px; background: linear-gradient(180deg, #f5cf6b, #e4ae39); color: #1b1305; }
+.prof-chip.has-drops { animation: dropglow 1.6s ease-in-out infinite; }
+@keyframes dropglow { 50% { background: linear-gradient(180deg, transparent, rgba(228, 174, 57, .22)); } }
+.lvl-ico { display: inline-block; flex: none; object-fit: contain; vertical-align: middle; }
+.lvl-ico.drawn {
+  width: var(--s); height: var(--s); border-radius: 50%; display: inline-grid; place-items: center; font-weight: 700; font-family: var(--font-cond);
+  font-size: calc(var(--s) * .42); color: #e8edf2; background: radial-gradient(circle at 50% 35%, #5b6876, #2a323b); box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .25);
+}
+.medal { flex: none; object-fit: contain; vertical-align: middle; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .6)); }
+.lvl-line { display: inline-flex; align-items: center; gap: 6px; }
+.xpbar { position: relative; height: 5px; background: rgba(0, 0, 0, .55); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1); overflow: hidden; min-width: 60px; }
+.xpbar i { position: absolute; left: 0; top: 0; bottom: 0; }
+.xpbar .now { background: linear-gradient(90deg, #6d93c9, #9cc4ff); }
+.xpbar .was { background: #c9d3de; z-index: 1; opacity: .55; }
+.prof-head { display: flex; align-items: center; gap: 16px; margin-bottom: 8px; }
+.prof-head .grow { flex: 1; display: grid; gap: 6px; }
+.prof-head h3 { margin: 0; font-size: 22px; }
+.prof-head .xpbar { height: 8px; }
+.medal-years { display: grid; gap: 6px; }
+.myear { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.myear > span { width: 44px; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .06em; }
+.mcell { width: 54px; height: 54px; display: grid; place-items: center; background: rgba(0, 0, 0, .3); border: 1px solid rgba(255, 255, 255, .06); }
+.mcell.locked .medal { filter: grayscale(1) brightness(.45); opacity: .55; }
+.mcell.next { border-color: var(--gold); box-shadow: inset 0 0 12px rgba(228, 174, 57, .25); }
+.mcell.next .medal { filter: grayscale(.6) brightness(.8); }
+.mcell.got { border-color: rgba(255, 255, 255, .25); background: rgba(255, 255, 255, .06); }
+.mcell .mph { color: var(--dim); font-size: 12px; }
+.grid.care { grid-template-columns: repeat(4, minmax(150px, 1fr)); }
+/* the end of a match: what it paid, the XP and the level */
+.match-pay { display: grid; gap: 8px; justify-items: center; }
+.match-pay .xp-line { display: flex; align-items: center; gap: 10px; }
+.match-pay .xp-line .xpbar { width: 220px; height: 7px; }
+.match-pay .lvl-up { display: flex; align-items: center; gap: 8px; color: var(--gold2); }
+/* cases and keys you own */
+.case-tile .tag.own { background: rgba(0, 0, 0, .6); color: #fff; }
+.own-line { margin: 8px 0 4px; font-size: 13px; }
+@media (max-width: 760px) {
+  .prof-chip .pc-txt { display: none; }
+  .grid.care { grid-template-columns: repeat(2, 1fr); }
+}

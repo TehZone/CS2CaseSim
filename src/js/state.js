@@ -1,6 +1,6 @@
 // The player's state as the UI sees it. Offline it is the local save; online it mirrors the server account
 // (updated from the changes the server sends back). Changes go through backend.js actions, not direct edits.
-import { debounce, round2 } from './util.js';
+import { debounce } from './util.js';
 import * as E from './engine/economy.js';
 import { backfillSerials } from './engine/items.js';
 
@@ -58,6 +58,7 @@ function announceAll() {
   emit('inv');
   emit('stars');
   emit('team');
+  emit('prof');
 }
 
 export async function resetSave() {
@@ -98,33 +99,13 @@ export function applyDelta(d, { local = false } = {}) {
   }
   const set = d.set || {};
   if ('money' in set) emit('money');
-  if (d.add?.length || d.del?.length || d.upd?.length || 'coopSlots' in set) emit('inv');
+  if (d.add?.length || d.del?.length || d.upd?.length) emit('inv');
   if ('stars' in set) emit('stars');
   if ('team' in set) emit('team');
+  if ('prof' in set) emit('prof');
   if ('loadout' in set) emit('inv');
   if ('upg' in set) emit('money');
   emit('state', d);
 }
 
-// Display-only money change: the offline idle loop (which is the real income offline) and, online, the
-// optimistic counter between server updates.
-export function addMoney(v) {
-  S.money = round2(S.money + v);
-  emit('money');
-  if (!offlineS) save();
-}
-
 export const findItem = (uid) => S.inv.find((i) => i.uid === uid);
-
-// ---- clicker economy (rules in engine/economy.js) -------------------------------------------
-export const { RANKS, UPGRADES } = E;
-export const lvl = (id) => E.lvl(S, id);
-export const upgradeCost = (u) => E.upgradeCost(S, u);
-export const globalMult = () => E.globalMult(S);
-export const clickValue = () => E.clickValue(S);
-export const critChance = () => E.critChance(S);
-export const rankName = () => E.rankName(S);
-export const coopChickens = () => E.coopChickens(S);
-export const chickenRate = () => E.chickenRate(S);
-export const idleRate = () => E.idleRate(S);
-export const coopSlotCost = () => E.coopSlotCost(S);

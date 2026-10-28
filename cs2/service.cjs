@@ -125,6 +125,10 @@ const ICON_DIR = 'panorama/images/icons/equipment';
 const MENU_ICON_DIR = 'panorama/images/icons/ui';
 const RANK_DIR = 'panorama/images/icons/skillgroups';
 const RANKUP_TEXTURES = { flag: 'panorama/images/ui_textures/rankup_flag_png.vtex_c', halo: 'panorama/images/ui_textures/rankup_flare_halo_png.vtex_c' };
+// The profile's art: CS2's level icons (level0..40) and each year's Service Medal in its colours (as engine/levels.js).
+const XP_ICON = (n) => `panorama/images/icons/xp/level${n}_png.vtex_c`;
+const MEDAL_YEARS = [[2026, 6], [2025, 6], [2024, 6], [2023, 6], [2022, 6], [2021, 6], [2020, 6], [2019, 6], [2018, 6], [2017, 7], [2016, 6], [2015, 2]];
+const MEDAL_ICON = (y, l) => `panorama/images/econ/status_icons/service_medal_${y === 2015 ? (l === 1 ? '2015' : '2015_2') : `${y}_lvl${l}`}_png.vtex_c`;
 
 class CS2Service {
   // shrinkImages(files, maxSize): optional, makes backdrop textures smaller after export (Electron passes one).
@@ -1252,6 +1256,18 @@ class CS2Service {
       if (!names.length) throw new Error('No skill group emblems in this CS2 install');
       await cs2.save(file, { names }, inputs);
       return result(names);
+    });
+  }
+
+  // Your profile level's art in this install: CS2's level icons and every Service Medal, { levels: { n: url },
+  // medals: { 'year-colour': url } }.
+  profileArt() {
+    return this.playJob('profileArt', async () => {
+      const levels = Array.from({ length: 41 }, (_, n) => [String(n), XP_ICON(n)]);
+      const medals = MEDAL_YEARS.flatMap(([y, n]) => Array.from({ length: n }, (_, i) => [`${y}-${i + 1}`, MEDAL_ICON(y, i + 1)]));
+      const got = await this.ensureCS2().extract([...levels, ...medals].map(([, f]) => f));
+      const urls = (list) => Object.fromEntries(list.filter(([, f]) => got[f]).map(([k, f]) => [k, this.url(got[f])]));
+      return { levels: urls(levels), medals: urls(medals) };
     });
   }
 

@@ -1,19 +1,19 @@
-// Chickens: collectible pets from the Chicken Coop Crate. Chickens placed in the coop lay eggs (passive income).
+// Chickens: collectible pets from the Chicken Coop Crate.
 import { pickWeighted, rand, round2, uid } from './util.js';
 
 export const BREEDS = [
-  { id: 'farm', n: 'Farm Chicken', r: 2, v: 0.55, inc: 0.02, color: '#f2efe6' },
-  { id: 'brown', n: 'Brown Hen', r: 2, v: 0.65, inc: 0.022, color: '#9a6233' },
-  { id: 'speckled', n: 'Speckled Rooster', r: 2, v: 0.8, inc: 0.025, color: '#e4dccb', pattern: 'speckle' },
-  { id: 'midnight', n: 'Midnight Chicken', r: 3, v: 3.4, inc: 0.08, color: '#202329' },
-  { id: 'zombie', n: 'Zombie Chicken', r: 3, v: 3.9, inc: 0.085, color: '#7f9a5a', pattern: 'rot' },
-  { id: 'camo', n: 'Dust II Camo Chicken', r: 3, v: 4.4, inc: 0.09, color: '#b59b6b', pattern: 'camo' },
-  { id: 'ghost', n: 'Ghost Chicken', r: 4, v: 21, inc: 0.35, color: '#cfe8ff', ghost: true },
-  { id: 'neon', n: 'Neon Rider Chicken', r: 4, v: 26, inc: 0.38, color: '#ff3fa4', neon: true },
-  { id: 'golden', n: 'Golden Chicken', r: 5, v: 140, inc: 1.5, color: '#e6b93a', metal: true },
-  { id: 'holo', n: 'Holo Chicken', r: 5, v: 165, inc: 1.6, color: '#d8e0ff', holo: true },
-  { id: 'diamond', n: '★ Diamond Chicken', r: 6, v: 900, inc: 6, color: '#bdf2ff', crystal: true },
-  { id: 'lore', n: '★ Dragon Lore Chicken', r: 6, v: 1250, inc: 7, color: '#d6b25c', lore: true },
+  { id: 'farm', n: 'Farm Chicken', r: 2, v: 0.55, color: '#f2efe6' },
+  { id: 'brown', n: 'Brown Hen', r: 2, v: 0.65, color: '#9a6233' },
+  { id: 'speckled', n: 'Speckled Rooster', r: 2, v: 0.8, color: '#e4dccb', pattern: 'speckle' },
+  { id: 'midnight', n: 'Midnight Chicken', r: 3, v: 3.4, color: '#202329' },
+  { id: 'zombie', n: 'Zombie Chicken', r: 3, v: 3.9, color: '#7f9a5a', pattern: 'rot' },
+  { id: 'camo', n: 'Dust II Camo Chicken', r: 3, v: 4.4, color: '#b59b6b', pattern: 'camo' },
+  { id: 'ghost', n: 'Ghost Chicken', r: 4, v: 21, color: '#cfe8ff', ghost: true },
+  { id: 'neon', n: 'Neon Rider Chicken', r: 4, v: 26, color: '#ff3fa4', neon: true },
+  { id: 'golden', n: 'Golden Chicken', r: 5, v: 140, color: '#e6b93a', metal: true },
+  { id: 'holo', n: 'Holo Chicken', r: 5, v: 165, color: '#d8e0ff', holo: true },
+  { id: 'diamond', n: '★ Diamond Chicken', r: 6, v: 900, color: '#bdf2ff', crystal: true },
+  { id: 'lore', n: '★ Dragon Lore Chicken', r: 6, v: 1250, color: '#d6b25c', lore: true },
 ];
 export const BREED = Object.fromEntries(BREEDS.map((b) => [b.id, b]));
 
@@ -59,11 +59,6 @@ export function featherMult(fl) {
 export function chickenValue(item) {
   const b = BREED[item.id];
   return round2(b.v * HAT[item.hat].m * featherMult(item.fl));
-}
-
-export function chickenIncome(item) {
-  const b = BREED[item.id];
-  return b.inc * HAT[item.hat].m * (item.fl < 0.01 ? 1.25 : 1);
 }
 
 export function chickenName(item) {

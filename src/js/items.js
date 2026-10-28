@@ -1,5 +1,6 @@
 // Client side of items: the shared engine rules plus item images (chicken thumbnails are rendered in 3D).
 import { itemDef } from './engine/items.js';
+import { D } from './engine/data.js';
 import { renderChickenThumb } from './chicken3d.js';
 import { imgUrl, loadImage } from './util.js';
 
@@ -9,6 +10,7 @@ export function itemImage(item, size = 'm') {
   const d = itemDef(item);
   if (!d) return '';
   if (item.t === 'chicken') return renderChickenThumb(item);
+  if (item.t === 'crate' && d.custom) return crateImage(d, size);
   if (d.slab) return slabImage(d, size);
   return imgUrl(d.img, size);
 }
@@ -38,4 +40,12 @@ function slabImage(d, size) {
     document.querySelectorAll(`img[data-sk="${CSS.escape(d.sk)}"]`).forEach((el) => { el.src = url; });
   }).catch(() => slabPics.set(d.sk, raw)));
   return raw;
+}
+
+// The game's own boxes (the Agent Locker, the Chicken Coop Crate) have no Steam picture: their best item stands in, as on
+// the Cases page.
+function crateImage(c, size) {
+  if (c.kind === 'chickens') return renderChickenThumb({ id: 'golden', hat: 'crown' });
+  const master = Object.values(D.agents).filter((a) => a.r === 5).sort((a, b) => b.p - a.p)[0];
+  return imgUrl(master?.img, size);
 }

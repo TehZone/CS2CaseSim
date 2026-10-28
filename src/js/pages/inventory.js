@@ -11,7 +11,7 @@ import { iconFor } from '../play/icons.js';
 import { refreshRanks } from '../floatranks.js';
 
 const view = { type: 'all', sort: 'new', q: '', select: false, selected: new Set(), limit: 150 };
-const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['pro', 'Players'], ['chicken', 'Chickens']];
+const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['pro', 'Players'], ['chicken', 'Chickens'], ['crate', 'Cases'], ['key', 'Keys']];
 let root, off;
 
 function matches(item) {
@@ -21,7 +21,7 @@ function matches(item) {
     if (view.type === 'gun' && !(item.t === 'skin' && !['knife', 'gloves'].includes(d.cat))) return false;
     if (view.type === 'knife' && !(item.t === 'skin' && d.cat === 'knife')) return false;
     if (view.type === 'gloves' && !(item.t === 'skin' && d.cat === 'gloves')) return false;
-    if (['sticker', 'charm', 'agent', 'chicken', 'pro'].includes(view.type) && item.t !== view.type) return false;
+    if (['sticker', 'charm', 'agent', 'chicken', 'pro', 'crate', 'key'].includes(view.type) && item.t !== view.type) return false;
     if (view.type === 'souvenir' && !item.sv) return false;
   }
   if (view.q && !I.itemName(item).toLowerCase().includes(view.q)) return false;

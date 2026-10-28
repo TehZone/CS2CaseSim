@@ -35,6 +35,9 @@ export function makeSkinItem(skin, { src = '', stt, fl, sd, sv, r = rand } = {})
 }
 export const makeStickerItem = (s, src = '') => ({ uid: uid(), t: 'sticker', id: s.id, at: Date.now(), src });
 export const makeAgentItem = (a, src = '') => ({ uid: uid(), t: 'agent', id: a.id, at: Date.now(), src });
+// A case (or capsule, package...) in your inventory, and a key that opens one.
+export const makeCrateItem = (c, src = '') => ({ uid: uid(), t: 'crate', id: c.id, at: Date.now(), src });
+export const makeKeyItem = (keyId, src = '') => ({ uid: uid(), t: 'key', id: keyId, at: Date.now(), src });
 export const makeProItem = (p, src = '') => ({ uid: uid(), t: 'pro', id: p.id, at: Date.now(), src });
 
 // ---- charms ----------------------------------------------------------------------------------
@@ -167,6 +170,8 @@ export function itemDef(item) {
     case 'chicken': return BREED[item.id];
     case 'pro': return D.pros[item.id];
     case 'charm': return item.id === 'slab' ? slabDef(item.sk) : D.charms[item.id];
+    case 'crate': return D.caseById?.[item.id] || null; // a case in your inventory, opened with its key
+    case 'key': return D.keys[item.id] || null;
   }
   return null;
 }
@@ -201,6 +206,8 @@ export function nameParts(item) {
   if (item.t === 'chicken') return { top: 'Chicken', bottom: chickenName(item) };
   if (item.t === 'charm') return d.slab ? { top: 'Sticker Slab', bottom: d.n.replace(/^Sticker Slab \| /, '') } : { top: 'Charm', bottom: d.n.replace(/^Charm \| /, '') };
   if (item.t === 'pro') return { top: `${d.ovr} ${d.role} · ${proTeamTag(d)} ${eventShort(d.ev)}`, bottom: d.n };
+  if (item.t === 'crate') return { top: 'Container', bottom: d.n };
+  if (item.t === 'key') return { top: 'Key', bottom: d.n };
   return { top: '', bottom: '' };
 }
 
@@ -214,12 +221,13 @@ export function rarityRank(item) {
   if (!d) return 0;
   if (item.t === 'skin' && d.star) return 6;
   if (item.t === 'pro') return 2 + proTier(d.ovr);
+  if (item.t === 'crate' || item.t === 'key') return 0;
   return d.r;
 }
 export function rarityInfo(item) {
   const rank = rarityRank(item);
   if (item.t === 'pro') { const t = PRO_RARITY[rank - 2]; return { rank, n: t.n, c: t.c }; }
-  const fam = item.t === 'sticker' || item.t === 'charm' ? 'sticker' : item.t === 'agent' ? 'agent' : item.t === 'chicken' ? 'chicken' : 'skin';
+  const fam = item.t === 'sticker' || item.t === 'charm' ? 'sticker' : ['agent', 'chicken', 'crate', 'key'].includes(item.t) ? item.t : 'skin';
   let n = RARITY[fam][rank] || '';
   if (item.t === 'skin' && rank === 6) n = itemDef(item).cat === 'gloves' ? 'Extraordinary' : 'Covert ★';
   return { rank, n, c: rarityColor(rank) };
@@ -235,6 +243,8 @@ export function basePrice(item) {
   if (item.t === 'sticker' || item.t === 'agent' || item.t === 'charm') return d.p || 0;
   if (item.t === 'chicken') return chickenValue(item);
   if (item.t === 'pro') return proValue(d);
+  if (item.t === 'crate') return d.price || 0;
+  if (item.t === 'key') return D.keyPrice;
   if (d.v) return (item.stt ? d.p.V[1] : null) ?? d.p.V[0];
   let row = d.p[wearOf(item.fl)];
   if (!row) {

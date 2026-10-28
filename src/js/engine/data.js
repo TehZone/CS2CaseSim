@@ -1,11 +1,12 @@
 // Game data (cases, skins, stickers, agents, collections, Majors, pro players) and the tables built from it.
-// Shared by the client and the multiplayer server: the caller loads game-data.json and passes it to initData().
+// Shared by the client and the multiplayer server: the caller loads game-data.json (and keys.json beside it) and passes
+// them to initData().
 import { round2 } from './util.js';
 import { CHICKEN_COOP } from './chickens.js';
 
 export const D = {
   cases: [], skins: {}, stickers: {}, agents: {}, collections: [], events: {}, proTeams: {}, pros: {},
-  charms: {}, charmCollections: [], slab: null,
+  charms: {}, charmCollections: [], slab: null, keys: {}, keyOf: {},
   keyPrice: 2.49, generatedAt: '', pricedAt: '',
 };
 
@@ -26,6 +27,8 @@ export const RARITY = {
   sticker: ['Default', 'Base Grade', 'High Grade', 'Remarkable', 'Exotic', 'Extraordinary', 'Rare Special', 'Contraband'],
   agent: ['', '', 'Distinguished', 'Exceptional', 'Superior', 'Master', '', ''],
   chicken: ['', '', 'Barnyard', 'Free-Range', 'Prize', 'Legendary', 'Mythic', ''],
+  crate: ['Base Grade Container'],
+  key: ['Base Grade Key'],
 };
 export const rarityColor = (rank) => C[rank] ?? C[2];
 
@@ -43,11 +46,12 @@ export const DOPPLER_PHASE_WEIGHT = {
 };
 export const CASE_KINDS = { case: 'Cases', souvenir: 'Souvenir Packages', package: 'Packages', capsule: 'Capsules', autograph: 'Capsules' };
 
-export function initData(json) {
+export function initData(json, { keys = {} } = {}) {
   Object.assign(D, json);
   for (const c of D.cases) c.custom = false;
   D.cases.push(makeAgentLocker(), CHICKEN_COOP);
   D.caseById = Object.fromEntries(D.cases.map((c) => [c.id, c]));
+  initKeys(keys);
   D.colById = Object.fromEntries(D.collections.map((c) => [c.id, c]));
   D.charmColById = Object.fromEntries((D.charmCollections || []).map((c) => [c.id, c]));
   // Pro player cards grouped into the real rosters they played in (AI opponents in the team manager).
@@ -56,6 +60,23 @@ export function initData(json) {
   D.proList = Object.values(D.pros);
   return D;
 }
+
+// Case keys (keys.json): which key opens each case, like CS2's own ({ caseId: keyId }). A case that takes a key CS2's
+// data has none for gets one of its own, pictured as the original CS:GO Case Key.
+const OLD_KEY = 'key-1203';
+function initKeys(keys) {
+  D.keys = { ...keys };
+  D.keyOf = {};
+  for (const [id, k] of Object.entries(D.keys)) for (const c of k.cases) D.keyOf[c] = id;
+  for (const c of D.cases) {
+    if (!c.key || D.keyOf[c.id]) continue;
+    const id = 'key-' + c.id;
+    D.keys[id] = { n: c.n.replace(/^Sealed /, '') + ' Key', img: D.keys[OLD_KEY]?.img || '', cases: [c.id] };
+    D.keyOf[c.id] = id;
+  }
+}
+// The key a case needs (null: it opens without one).
+export const keyFor = (c) => (c?.key ? D.keys[D.keyOf[c.id]] && D.keyOf[c.id] : null);
 
 function avg(a) { return a.reduce((s, x) => s + x, 0) / (a.length || 1); }
 

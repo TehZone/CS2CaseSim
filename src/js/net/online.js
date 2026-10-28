@@ -9,9 +9,8 @@
 //                     { t: 'delta', d }                      state changes from elsewhere (trades, idle income, wins)
 //                     { t: 'lobbies' | 'players' | 'trades' | 'gamble.result' | 'notice', ... }
 import { D } from '../data.js';
-import { S, applyDelta, enterOnline, leaveOnline, emit as emitState, clickValue } from '../state.js';
+import { S, applyDelta, enterOnline, leaveOnline } from '../state.js';
 import { setRemote } from '../backend.js';
-import { CRIT_MULT } from '../engine/economy.js';
 
 const LS = 'cs2sim-online';
 const PROTOCOL = 1;
@@ -167,7 +166,6 @@ async function onWelcome(msg) {
   emit('players', players);
   emit('trades', trades);
   emit('lobbies', lobbies);
-  if (msg.offline) emit('notice', { msg: msg.offline, type: 'gold' });
 }
 
 // Use the server's market prices so item values match what the server pays.
@@ -227,25 +225,8 @@ function rpc(ns, m, args = {}) {
 }
 
 // ---- remote backend: actions run on the server --------------------------------------------------------
-// Clicks are batched (one request per second) and shown immediately; the server's total replaces the guess.
-let clickBatch = { n: 0, crits: 0 }, clickTimer = null;
-function flushClicks() {
-  clickTimer = null;
-  const b = clickBatch;
-  clickBatch = { n: 0, crits: 0 };
-  if (b.n) rpc('act', 'click', b).catch(() => {});
-}
 const remoteBackend = {
   act(name, args) {
-    if (name === 'click') {
-      const v = clickValue() * (args.crits ? CRIT_MULT : 1);
-      S.money = Math.round((S.money + v) * 100) / 100;
-      emitState('money');
-      clickBatch.n += args.n || 1;
-      clickBatch.crits += args.crits || 0;
-      if (!clickTimer) clickTimer = setTimeout(flushClicks, 1000);
-      return Promise.resolve({ earned: v });
-    }
     return rpc('act', name, args);
   },
 };

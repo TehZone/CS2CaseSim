@@ -2,8 +2,7 @@
 // and written to the database. Single-player changes are written within a couple of seconds; anything that moves
 // value between players (trades, gambling escrow and payouts) is written for everyone involved in one transaction
 // before the request is answered.
-import { upgradeState, idleRate, offlineEarnings } from '../src/js/engine/economy.js';
-import { round2 } from '../src/js/engine/util.js';
+import { upgradeState } from '../src/js/engine/economy.js';
 
 const FLUSH_MS = 2000;
 const IDLE_EVICT_MS = 10 * 60 * 1000;
@@ -89,19 +88,4 @@ export class Store {
     clearInterval(this.timer);
     await this.flush();
   }
-}
-
-// Passive income on the server. Connected players earn the full rate; time away earns the offline rate (half,
-// at most 8 hours), like the offline game. Returns money earned (and marks the change in ctx when given).
-export function tickIdle(st, now, { away = false } = {}) {
-  const last = st.lastTick || now;
-  st.lastTick = now;
-  const dt = Math.max(0, (now - last) / 1000);
-  if (!dt) return 0;
-  const earned = away ? offlineEarnings(st, dt) : Math.floor(idleRate(st) * Math.min(dt, 120) * 100) / 100;
-  if (earned > 0) {
-    st.money = round2(st.money + earned);
-    st.stats.passiveEarned = round2((st.stats.passiveEarned || 0) + earned);
-  }
-  return earned;
 }

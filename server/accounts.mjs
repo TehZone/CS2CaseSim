@@ -44,7 +44,6 @@ export async function register(db, name, pass) {
   const st = freshState();
   delete st.settings;
   const now = Date.now();
-  st.lastTick = now;
   let id;
   try {
     const { rows } = await db.query(

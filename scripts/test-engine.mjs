@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const E = (m) => import(new URL(`../src/js/engine/${m}.js`, import.meta.url));
-const { D, initData, caseTiers, COLLECTION_ODDS, CASE_ODDS } = await E('data');
-initData(JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/game-data.json'), 'utf8')));
+const { D, initData, caseTiers, casePrice, keyFor, COLLECTION_ODDS, CASE_ODDS } = await E('data');
+initData(JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/game-data.json'), 'utf8')), { keys: JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/keys.json'), 'utf8')) });
 const I = await E('items');
 const T = await E('tradeup');
 const A = await E('armory');
@@ -226,8 +226,22 @@ function tierFreq(box, n) {
   st.money = 1000;
   const run = (name, args) => { const ctx = ACT.makeCtx(st, { rng }); const r = ACT.runAction(ctx, name, args); return { r, d: ACT.delta(ctx) }; };
   const box = D.cases.find((x) => x.n === 'Chroma 2 Case');
+  // Cases and their keys are bought into the inventory first, then opened.
+  const stock = (c, n) => { run('case.buy', { id: c.id, n }); if (keyFor(c)) run('key.buy', { key: keyFor(c), n }); };
+  stock(box, 3);
+  check('bought cases and keys go to the inventory', st.inv.filter((i) => i.t === 'crate' && i.id === box.id).length === 3
+    && st.inv.filter((i) => i.t === 'key' && i.id === keyFor(box)).length === 3 && near(st.money, 1000 - casePrice(box) * 3, 1e-9)
+    && I.itemName(st.inv.find((i) => i.t === 'key')) === 'Chroma 2 Case Key' && I.itemValue(st.inv.find((i) => i.t === 'key')) === D.keyPrice);
+  const m3 = st.money;
   const { r, d } = run('case.open', { id: box.id, n: 3 });
-  check('case.open debits and adds items', r.items.length === 3 && near(st.money, 1000 - r.cost, 1e-9) && d.add.length === 3 && d.set.money === st.money);
+  check('case.open uses up your cases and keys and adds what was in them', r.items.length === 3 && st.money === m3 && d.add.length === 3 && d.del.length === 6
+    && !st.inv.some((i) => i.t === 'crate' || i.t === 'key'));
+  let noKey = null;
+  run('case.buy', { id: box.id, n: 1 });
+  try { run('case.open', { id: box.id, n: 1 }); } catch (e) { noKey = e; }
+  check('a case that takes a key won’t open without one', noKey?.code === 'nokey' && st.inv.some((i) => i.t === 'crate'));
+  run('key.buy', { key: keyFor(box), n: 1 });
+  run('case.open', { id: box.id, uids: [st.inv.find((i) => i.t === 'crate').uid] });
   let threw = false;
   try { run('case.open', { id: box.id, n: 3000 }); } catch (e) { threw = e instanceof ACT.GameError; }
   check('invalid counts are rejected', threw);
@@ -239,22 +253,26 @@ function tierFreq(box, n) {
   {
     // Auto-sell: by amount, by rarity, never ★, keeps StatTrak when asked.
     const before = st.money, n0 = st.inv.length;
+    stock(box, 10);
     const all = run('case.open', { id: box.id, n: 10, autoSell: { on: true, below: 1e6, ranks: [], keepStt: false, keepRare: false } });
     const sold = all.r.items.filter((i) => i.as), kept = all.r.items.filter((i) => !i.as);
     const soldValue = sold.reduce((s, i) => s + I.itemValue(i), 0);
     check('auto-sell by amount sells every non-★ drop and pays for it', kept.every((i) => I.rarityRank(i) >= 6) && st.inv.length === n0 + kept.length
-      && Math.abs(st.money - (before - all.r.cost + soldValue)) < 0.011 && Math.abs(all.r.autoSold - soldValue) < 0.011);
+      && Math.abs(st.money - (before - casePrice(box) * 10 + soldValue)) < 0.011 && Math.abs(all.r.autoSold - soldValue) < 0.011);
+    stock(box, 10);
     const byRank = run('case.open', { id: box.id, n: 10, autoSell: { on: true, below: 0, ranks: [2], keepStt: true, keepRare: false } });
     check('auto-sell by rarity only sells that rarity (and keeps StatTrak)', byRank.r.items.every((i) => !!i.as === (I.rarityRank(i) === 2 && !i.stt)));
+    stock(box, 3);
     const off = run('case.open', { id: box.id, n: 3, autoSell: { on: false, below: 1e6, ranks: [2] } });
     check('auto-sell off keeps everything', off.r.items.every((i) => !i.as) && !off.r.autoSold);
     const knife = { uid: 'k', t: 'skin', id: box.rare[0][0], fl: 0.3, sd: 1, stt: false, stk: [] };
     check('knives and gloves are never auto-sold', !I.autoSellMatch(knife, { on: true, below: 1e9, ranks: [0, 1, 2, 3, 4, 5] }));
   }
   {
-    // A failure part-way (inventory full after paying) leaves the state untouched.
+    // A failure part-way (inventory full after using the cases) leaves the state untouched.
+    stock(box, 3);
     const m = st.money, n = st.inv.length, opened = st.stats.opened;
-    const ctx = ACT.makeCtx(st, { rng, invCap: st.inv.length + 1 });
+    const ctx = ACT.makeCtx(st, { rng, invCap: st.inv.length - 4 });
     let e = null; try { ACT.runAction(ctx, 'case.open', { id: box.id, n: 3 }); } catch (x) { e = x; }
     check('failed actions change nothing (all-or-nothing)', e?.code === 'full' && st.money === m && st.inv.length === n && st.stats.opened === opened);
   }
@@ -294,8 +312,9 @@ function tierFreq(box, n) {
   const pick = M.autoLineup([...new Map(owned.map((it) => [D.pros[it.id].pid, D.pros[it.id]])).values()]);
   const slots = Object.fromEntries(M.SLOTS.map((s) => [s, owned.find((it) => it.id === pick[s].id).uid]));
   run('team.set', { slots });
+  const mBefore = st.money;
   const mt = run('team.match', { opp: M.allRosterTeams()[100].key });
-  check('team match plays out and pays a reward', mt.r.match.rounds.length >= 13 && mt.r.reward > 0);
+  check('team match plays out (and pays no money: matches in Play do)', mt.r.match.rounds.length >= 13 && st.money === mBefore);
   run('team.cupStart', { type: 'lan' });
   let cup;
   for (let k = 0; k < 4; k++) { cup = run('team.cupPlay').r.cup; if (cup.done) break; }
@@ -450,6 +469,8 @@ function tierFreq(box, n) {
   const now = (MK.marketWindow() + 0.5) * MK.MARKET_WINDOW_MS;
   const run = (name, args, opts = {}) => { const ctx = ACT.makeCtx(st, { rng, now, ...opts }); const r = ACT.runAction(ctx, name, args); return { r, d: ACT.delta(ctx) }; };
   const c = D.cases.find((x) => x.kind === 'case' && x.price != null);
+  const stock = (n) => { run('case.buy', { id: c.id, n }); if (keyFor(c)) run('key.buy', { key: keyFor(c), n }); };
+  stock(6);
   const o = run('case.open', { id: c.id, n: 5 });
   const keys = o.r.items.map(I.serialKey);
   check('unboxed items are numbered per item, in order', o.r.items.every((it) => it.sn >= 1) && o.r.items.every((it, i) => it.sn === keys.slice(0, i + 1).filter((k) => k === keys[i]).length)
@@ -469,6 +490,7 @@ function tierFreq(box, n) {
   check('a failed opening gives out no numbers', err && JSON.stringify(st.serials) === JSON.stringify(counted));
   const shared = new Map();
   const hook = (k) => { const n = (shared.get(k) || 0) + 1; shared.set(k, n); return n; };
+  stock(3);
   const before = { ...st.serials };
   const ctx = ACT.makeCtx(st, { rng, now, online: true });
   ctx.serial = hook;
@@ -579,6 +601,58 @@ function tierFreq(box, n) {
   const red = run('armory.redeem', { offer: offer.id, n: 5 }).r;
   check('the Armory always offers the charm collections', red.items.length === 5 && red.items.every((it) => it.t === 'charm' && D.charms[it.id].col === offer.col && it.sn >= 1)
     && st.stars === 10 - offer.stars * 5);
+}
+
+
+// ---- profile levels, Service Medals and match money ------------------------------------------------------------------
+{
+  const L = await E('levels');
+  check('levels: 69 Service Medals, newest first: every colour of 2026, then of 2025, back to 2015', L.MEDALS.length === 69 && L.MEDALS[0].y === 2026 && L.MEDALS[0].l === 1
+    && L.MEDALS[5].y === 2026 && L.MEDALS[5].l === 6 && L.MEDALS[6].y === 2025 && L.MEDALS[6].l === 1 && L.MEDALS.at(-1).y === 2015 && L.MEDALS.at(-1).l === 2
+    && L.MEDALS.filter((m) => m.y === 2017).length === 7);
+  check('match money: a win or draw $250, a loss $100, $20 a kill and $10 an assist',
+    L.matchPay({ result: 'win', kills: 3, assists: 2 }).total === 330 && L.matchPay({ result: 'draw' }).total === 250 && L.matchPay({ result: 'loss', kills: 1 }).total === 120);
+  const p = L.freshProfile();
+  const up = L.addXp(p, 12000, { r: rng });
+  check('levels: 5,000 XP a level, and a reward (four to pick two from) for each level up', up.after.level === 3 && up.after.xp === 2000 && up.levelUps === 2 && up.prof.drops.length === 2
+    && up.prof.drops.every((d) => d.offers.length === 4 && d.offers.some((o) => o.t === 'crate') && d.offers.some((o) => o.t === 'skin')) && p.level === 1);
+  const top = L.addXp({ ...L.freshProfile(), level: 40, xp: 4000 }, 1500, { r: rng });
+  check('levels: past level 40 comes the first medal (2026, its first colour) and level 1 again', top.after.level === 1 && top.after.xp === 500 && top.medals[0] === 0
+    && L.medalOf(top.prof).y === 2026 && L.medalOf(top.prof).l === 1);
+  const seventh = L.addXp({ ...L.freshProfile(), level: 40, xp: 4999, medals: 6 }, 1, { r: rng });
+  check('levels: after 2026’s last colour comes 2025’s first', L.medalOf(seventh.prof).y === 2025 && L.medalOf(seventh.prof).l === 1);
+  const all = L.addXp({ ...L.freshProfile(), level: 40, xp: 4999, medals: 69 }, 1, { r: rng });
+  check('levels: with every medal earned you keep the last one (2015’s second)', all.prof.medals === 69 && L.medalOf(all.prof).y === 2015 && all.after.level === 1);
+  const pool = L.dropPool();
+  check('level-up rewards come from CS2’s drop pool: its newest cases and the timed-drop collections', up.prof.drops.every((d) => d.offers.every((o) => (o.t === 'crate'
+    ? pool.cases.some((c) => c.id === o.id) : pool.collections.some((c) => Object.values(c.tiers).some((ids) => ids.includes(o.id)))))), pool.cases.map((c) => c.n).join(', '));
+
+  const st = freshState();
+  const run = (name, args, opts = {}) => { const ctx = ACT.makeCtx(st, { rng, ...opts }); const r = ACT.runAction(ctx, name, args); return { r, d: ACT.delta(ctx) }; };
+  const pay = run('play.reward', { mode: 'competitive', result: 'win', kills: 25, assists: 4, roundsWon: 13, rounds: 24 });
+  check('a finished match pays and gives XP', pay.r.earned === 790 && near(st.money, 10 + 790, 1e-9) && pay.r.xp.total === 250 + 500 + 40 + 650 && st.prof.xp === pay.r.xp.total && 'prof' in pay.d.set);
+  const old = run('play.reward', { won: true, kills: 2, assists: 0, mvps: 1, rounds: 9, difficulty: 'hard' });
+  check('the game’s older reward call (won, rounds won) still pays', old.r.earned === 290);
+  for (let i = 0; i < 4; i++) run('play.reward', { mode: 'competitive', result: 'loss', kills: 20, assists: 5, roundsWon: 10, rounds: 23 });
+  check('levelling up leaves rewards to claim', st.prof.level >= 2 && st.prof.drops.length === st.prof.level - 1);
+  const drop = st.prof.drops[0];
+  let bad = null; try { run('drop.claim', { id: drop.id, picks: [0] }); } catch (e) { bad = e; }
+  const n0 = st.inv.length;
+  const got = run('drop.claim', { id: drop.id, picks: [1, 3] });
+  let again = null; try { run('drop.claim', { id: drop.id, picks: [0, 2] }); } catch (e) { again = e; }
+  check('claiming a reward: exactly two picks, into your inventory, once', bad instanceof ACT.GameError && got.r.items.length === 2 && st.inv.length === n0 + 2
+    && got.r.items[0].uid === drop.offers[1].uid && again?.code === 'missing' && !st.prof.drops.some((d) => d.id === drop.id));
+  const t0 = Date.now();
+  let unseen = null; try { run('play.reward', { result: 'win', kills: 1, roundsWon: 13, rounds: 20 }, { online: true }); } catch (e) { unseen = e; }
+  const { run: id } = run('play.start', { mode: 'wingman' }, { now: t0 }).r;
+  let quick = null; try { run('play.reward', { run: id, result: 'win', kills: 5, roundsWon: 9, rounds: 14 }, { online: true, now: t0 + 60e3 }); } catch (e) { quick = e; }
+  let many = null; try { run('play.reward', { run: id, result: 'win', kills: 40, roundsWon: 9, rounds: 14 }, { online: true, now: t0 + 20 * 60e3 }); } catch (e) { many = e; }
+  const ok = run('play.reward', { run: id, result: 'win', kills: 12, roundsWon: 9, rounds: 14 }, { online: true, now: t0 + 20 * 60e3 });
+  let twice = null; try { run('play.reward', { run: id, result: 'win', kills: 12, roundsWon: 9, rounds: 14 }, { online: true, now: t0 + 21 * 60e3 }); } catch (e) { twice = e; }
+  check('online match money: only for a match the server saw start, once, long enough, with kills a Wingman match could have',
+    unseen?.code === 'match' && quick?.code === 'match' && many?.code === 'match' && ok.r.earned === 490 && twice?.code === 'match');
+  const crate = drop.offers.find((o) => o.t === 'crate');
+  check('reward cases are inventory cases that take their own key', !!keyFor(D.caseById[crate.id]) && I.itemName(crate) === D.caseById[crate.id].n && I.itemValue(crate) === D.caseById[crate.id].price);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

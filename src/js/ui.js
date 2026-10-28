@@ -1,6 +1,6 @@
 // Shared UI: cards, modals, toasts, tooltips, context menus, item detail, 3D inspect overlay, selling.
 import { esc, money, imgUrl } from './util.js';
-import { D, WEARS, wearOf, WEAR_BY_KEY, rarityColor, eventName } from './data.js';
+import { D, WEARS, wearOf, WEAR_BY_KEY, rarityColor, eventName, keyFor } from './data.js';
 import * as I from './items.js';
 import { S, emit, save } from './state.js';
 import { act } from './backend.js';
@@ -9,7 +9,7 @@ import { inspectView } from './inspect.js';
 import { cs2VanityMaps, cs2Status } from './cs2/api.js';
 import { placementFromHit, rehangCharm } from './cs2/charm.js';
 import { composeItem, alphaBox } from './composite.js';
-import { chickenIncome, featherMult, HAT, BREED } from './chickens.js';
+import { featherMult, HAT, BREED } from './chickens.js';
 import { openStickerEditor } from './stickerEditor.js';
 import { TIER_LABEL } from './patterns.js';
 import { isEquipped, slotName } from './loadout.js';
@@ -211,7 +211,6 @@ export function itemCard(item, { selectable = false, selected = false, extra = '
       <div class="n1 ${item.stt ? 'stt' : item.sv ? 'sv' : ''}">${esc(np.top)}</div>
       <div class="n2">${esc(np.bottom)}</div>
       <div class="row"><span class="wear">${wear}</span><span class="val">${money(I.itemValue(item))}</span></div>
-      ${item.t === 'chicken' ? `<div class="income">🥚 ${money(chickenIncome(item))}/s egg rate</div>` : ''}
     </div>
   </div>`;
 }
@@ -234,6 +233,16 @@ export async function sellItems(items, { ask = true } = {}) {
 }
 
 // ---- item actions --------------------------------------------------------------------------
+// Cases and keys in your inventory have no 3D model to inspect; a case opens instead (with one of your keys for it).
+const canInspect = (item) => item.t !== 'crate' && item.t !== 'key';
+async function openCrateItem(item) {
+  const { openCrate } = await import('./pages/cases.js');
+  return openCrate(item);
+}
+function crateKeyHint(item) {
+  const c = I.itemDef(item), key = keyFor(c);
+  return key ? D.keys[key].n : 'No key needed';
+}
 async function equipItem(item) {
   if (!(await tryAct('loadout.equip', { uid: item.uid }))) return false;
   toast(`Equipped ${esc(I.itemName(item))}${I.loadoutSlot(item) === 'gloves' ? ' — you’ll see them in the first-person inspect' : ''}`, 'good');
@@ -247,10 +256,11 @@ export function itemContextMenu(e, item, { onChange } = {}) {
   const done = (ok) => { if (ok) onChange?.(); };
   const slot = I.loadoutSlot(item);
   const items = [
-    { label: 'Inspect', icon: 'zoom_in', hint: '3D', action: () => openInspect(item) },
+    item.t === 'crate' ? { label: 'Open', icon: 'crate', hint: crateKeyHint(item), disabled: !!item.lk, action: () => openCrateItem(item) }
+      : canInspect(item) ? { label: 'Inspect', icon: 'zoom_in', hint: '3D', action: () => openInspect(item) } : null,
     { label: 'Details', icon: 'info', action: () => showItemDetail(item, { onChange }) },
     '-',
-  ];
+  ].filter(Boolean);
   if (slot) {
     items.push(isEquipped(item)
       ? { label: 'Unequip', icon: 'loadout', hint: slotName(slot), action: async () => done(await tryAct('loadout.unequip', { uid: item.uid })) }
@@ -372,7 +382,11 @@ function detailBody(item) {
     kv.push(['Breed', BREED[item.id].n.replace('★ ', '')]);
     kv.push(['Hat', HAT[item.hat].n]);
     kv.push(['Feather float', `<span class="money">${I.floatString(item.fl)}</span>`]);
-    kv.push(['Egg income', `${money(chickenIncome(item))}/s (when in coop)`]);
+  } else if (item.t === 'crate') {
+    const key = keyFor(d);
+    kv.push(['Opens with', key ? `${esc(D.keys[key].n)} <span class="muted">· ${S.inv.filter((it) => it.t === 'key' && it.id === key && !it.lk).length} in your inventory</span>` : 'No key needed']);
+  } else if (item.t === 'key') {
+    kv.push(['Opens', d.cases.map((id) => esc(D.caseById[id]?.n || '?')).join(', ')]);
   }
   if (item.sn) kv.push(['Serial number', `#${item.sn.toLocaleString()}${I.serialLabel(item.sn) ? ` <span class="muted">· ${I.serialLabel(item.sn)}</span>` : ''}`]);
   else if (['skin', 'sticker', 'agent', 'chicken', 'charm'].includes(item.t)) kv.push(['Serial number', '<span class="muted">None (only unboxed items are numbered)</span>']);
@@ -414,7 +428,7 @@ function detailBody(item) {
         ${lines.map(([k, v]) => `<div class="line"><span>${k}</span><span>${v}</span></div>`).join('')}
       </div>
       <div class="actions">
-        <button class="btn gold" data-a="inspect">Inspect in 3D</button>
+        ${item.t === 'crate' ? `<button class="btn gold" data-a="open" ${item.lk ? 'disabled' : ''}>Open${keyFor(d) ? ` (uses a ${esc(D.keys[keyFor(d)].n)})` : ''}</button>` : canInspect(item) ? '<button class="btn gold" data-a="inspect">Inspect in 3D</button>' : ''}
         ${I.canHaveStickers(item) ? `<button class="btn" data-a="stickers">Stickers (${item.stk?.length || 0}/${I.MAX_STICKERS})</button>` : ''}
         ${I.canHaveCharm(item) ? (item.kc ? '<button class="btn" data-a="charm-move">Move charm</button><button class="btn" data-a="charm-off">Remove charm</button>' : '<button class="btn" data-a="charm-on">Attach charm</button>') : ''}
         ${item.t === 'charm' ? '<button class="btn" data-a="charm-hang">Attach to a gun</button>' : ''}
@@ -467,6 +481,7 @@ export function showItemDetail(item, { onChange } = {}) {
     m.el.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', async () => {
       const a = b.dataset.a;
       if (a === 'inspect') openInspect(item);
+      if (a === 'open') { m.close(); openCrateItem(item); }
       if (a === 'lock') { if (await tryAct('item.lock', { uid: item.uid, lk: !item.lk })) refresh(); }
       if (a === 'equip' && await equipItem(item)) refresh();
       if (a === 'unequip' && await tryAct('loadout.unequip', { uid: item.uid })) refresh();

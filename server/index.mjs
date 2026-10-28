@@ -11,12 +11,12 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { openDb } from './db.mjs';
-import { Store, tickIdle } from './store.mjs';
+import { Store } from './store.mjs';
 import { Trades } from './trade.mjs';
 import { Live } from './live.mjs';
 import * as A from './accounts.mjs';
 import { D, initData } from '../src/js/engine/data.js';
-import { makeCtx, runAction, delta, credit, GameError } from '../src/js/engine/actions.js';
+import { makeCtx, runAction, delta, GameError } from '../src/js/engine/actions.js';
 import * as M from '../src/js/engine/manager.js';
 import { marketWindow } from '../src/js/engine/market.js';
 import { itemValue } from '../src/js/engine/items.js';
@@ -30,7 +30,7 @@ const MAX_MSG = 64 * 1024;
 
 export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts = {}, log = console.log, priceRefresh = process.env.PRICE_REFRESH !== '0' } = {}) {
   const data = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/game-data.json'), 'utf8'));
-  initData(data);
+  initData(data, { keys: JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/keys.json'), 'utf8')) });
   const db = await openDb(dbOpts);
   log(`[server] database: ${db.kind}`);
   const store = new Store(db, { log });
@@ -274,8 +274,6 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
         const exp = 1 / (1 + 10 ** ((eb - ea) / 400));
         const dA = Math.round(32 * ((won ? 1 : 0) - exp));
         const ctx = makeCtx(me.st, { online: true });
-        const reward = M.matchReward(rm.rating, rt.rating, won);
-        credit(ctx, reward);
         const hist = (t, opp, score, w) => [{ opp, score, won: w, at: Date.now() }, ...t.history].slice(0, 20);
         me.st.team = { ...me.st.team, elo: ea + dA, w: me.st.team.w + (won ? 1 : 0), l: me.st.team.l + (won ? 0 : 1), history: hist(me.st.team, `${them.st.team.name} (${other.name})`, match.score, won) };
         them.st.team = { ...them.st.team, elo: eb - dA, w: them.st.team.w + (won ? 0 : 1), l: them.st.team.l + (won ? 1 : 0), history: hist(them.st.team, `${me.st.team.name} (${user.name})`, [match.score[1], match.score[0]], !won) };
@@ -283,7 +281,7 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
         await store.commit([me, them]);
         challenged.set(key, Date.now());
         srv.deltaTo(other.id, { set: { team: them.st.team }, add: [], del: [], upd: [] }, `<b>${user.name}</b> challenged your team: ${won ? 'you lost' : 'you won'} ${match.score[1]}-${match.score[0]}`);
-        return { r: { match, reward, elo: dA, opp: { name: `${them.st.team.name} (${other.name})`, rating: rt.rating } }, d: delta(ctx) };
+        return { r: { match, elo: dA, opp: { name: `${them.st.team.name} (${other.name})`, rating: rt.rating } }, d: delta(ctx) };
       });
     }
     throw new GameError('Unknown request');
@@ -299,7 +297,7 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
 
   wss.on('connection', (ws, req) => {
     let user = null;
-    let tokens = 60, lastRefill = Date.now(), lastClick = Date.now();
+    let tokens = 60, lastRefill = Date.now();
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
     const send = (m) => ws.readyState === 1 && ws.send(JSON.stringify(m));
@@ -325,16 +323,9 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
         if (!sockets.has(u.id)) sockets.set(u.id, new Set());
         sockets.get(u.id).add(ws);
         store.online.add(u.id);
-        let offline = '';
-        const state = await store.withUser(u.id, async (e) => {
-          const away = (Date.now() - (e.st.lastTick || Date.now())) / 1000;
-          const earned = sockets.get(u.id).size === 1 ? tickIdle(e.st, Date.now(), { away: away > 60 }) : 0;
-          if (earned >= 0.01 && away > 60) offline = `Welcome back! You earned <b class="green">$${earned.toFixed(2)}</b> while you were away.`;
-          store.markDirty(e);
-          return e.st;
-        });
+        const state = await store.withUser(u.id, async (e) => e.st);
         send({
-          t: 'welcome', user: { id: u.id, name: u.name }, state, offline, pricedAt: D.pricedAt, serverTime: Date.now(),
+          t: 'welcome', user: { id: u.id, name: u.name }, state, pricedAt: D.pricedAt, serverTime: Date.now(),
           players: playersList(), trades: await trades.list(u.id), lobbies: live.snapshot(u.id), market: marketSnapshot(),
         });
         broadcastPlayers();
@@ -344,17 +335,9 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
       const reply = (ok, body) => send({ t: 'res', id: msg.id, ok, ...body });
       try {
         if (msg.ns === 'act') {
-          let args = msg.args || {};
-          if (msg.m === 'click') {
-            // At most 12 clicks per second since the last batch (plus a small burst allowance).
-            const allowed = Math.floor(((Date.now() - lastClick) / 1000) * 12 + 12);
-            lastClick = Date.now();
-            const n = Math.min(Number(args.n) || 0, allowed, 400);
-            args = { n, crits: Math.min(Number(args.crits) || 0, n) };
-          }
+          const args = msg.args || {};
           const boughtNow = [];
           const out = await store.withUser(user.id, async (e) => {
-            tickIdle(e.st, Date.now());
             const ctx = makeCtx(e.st, { online: true, invCap: INV_CAP, reserved: trades.reserved(user.id) });
             // The market's stock is shared by everyone on the server.
             ctx.market = (w) => ({ has: (lid) => soldSet(w).has(lid), add: (lid) => { soldSet(w).add(lid); marketDirty = true; boughtNow.push([w, lid]); } });
@@ -391,8 +374,6 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
       if (set && !set.size) {
         sockets.delete(user.id);
         store.online.delete(user.id);
-        // Bank passive income up to now; time away is paid at the offline rate when they come back.
-        store.withUser(user.id, async (e) => { tickIdle(e.st, Date.now()); store.markDirty(e); }).catch(() => {});
         broadcastPlayers();
       }
     });
@@ -406,22 +387,13 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
       ws.ping();
     }
   }, 30000);
-  // Passive income for connected players, pushed every 10 seconds.
-  const idle = setInterval(async () => {
-    for (const id of [...sockets.keys()]) {
-      await store.withUser(id, async (e) => {
-        const earned = tickIdle(e.st, Date.now());
-        if (earned > 0) { store.markDirty(e); srv.deltaTo(id, { set: { money: e.st.money }, add: [], del: [], upd: [] }); }
-      }).catch(() => {});
-    }
-  }, 10000);
 
   await new Promise((r) => server.listen(port, r));
   const actualPort = server.address().port;
   log(`[server] listening on :${actualPort}`);
 
   async function close() {
-    clearInterval(ping); clearInterval(idle); clearInterval(priceTimer); clearInterval(saveMarket); clearInterval(serialTimer);
+    clearInterval(ping); clearInterval(priceTimer); clearInterval(saveMarket); clearInterval(serialTimer);
     await saveSerials();
     if (marketDirty) await db.query("INSERT INTO kv (k, v) VALUES ('market', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(marketSnapshot())]).catch(() => {});
     live.close();

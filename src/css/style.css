@@ -128,12 +128,11 @@ body:has(.play-root) #menu-bg { display: none; }
 .more-panel button.active { color: #fff; background: rgba(255, 255, 255, .08); box-shadow: inset 3px 0 0 #fff; }
 .more-panel .pill { margin-left: auto; }
 .more-panel .pill.star { background: linear-gradient(180deg, #f5cf6b, #e4ae39); color: #1b1305; }
-/* your inventory's value and passive income, at the top of the dropdown */
-.more-wallet { display: grid; grid-template-columns: 1fr 1fr; margin-bottom: 6px; background: rgba(0, 0, 0, .3); border-bottom: 1px solid rgba(255, 255, 255, .08); }
+/* your inventory's value, at the top of the dropdown */
+.more-wallet { display: grid; grid-template-columns: 1fr; margin-bottom: 6px; background: rgba(0, 0, 0, .3); border-bottom: 1px solid rgba(255, 255, 255, .08); }
 .more-wallet div { padding: 10px 18px 9px; font-size: 10px; font-weight: 600; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
 .more-wallet div + div { border-left: 1px solid rgba(255, 255, 255, .06); }
 .more-wallet b { display: block; margin-top: 2px; font-size: 17px; color: var(--hi); letter-spacing: .01em; font-family: var(--font-cond); font-variant-numeric: tabular-nums; }
-#idle-rate { color: #a7dd8a; }
 .top-right { display: flex; align-items: stretch; flex: none; margin-left: auto; }
 .balance { font-size: 21px; color: var(--green); font-weight: 700; letter-spacing: .02em; font-variant-numeric: tabular-nums; font-family: var(--font-cond); line-height: 1; }
 .balance.bump { animation: bump .35s ease; }
@@ -504,30 +503,6 @@ input[type=range]:focus { outline: none; }
 @keyframes slidein { from { transform: translateX(30px); opacity: 0; } }
 @keyframes slideout { to { transform: translateX(30px); opacity: 0; } }
 
-/* ---------- clicker ---------- */
-.clicker { display: grid; grid-template-columns: 1fr 440px; gap: 22px; }
-.click-zone {
-  position: relative; border-radius: var(--radius); border: 1px solid var(--line); min-height: 560px; overflow: hidden; user-select: none;
-  background: radial-gradient(circle at 50% 46%, rgba(255, 255, 255, .08), transparent 50%), repeating-linear-gradient(0deg, transparent 0 39px, rgba(255, 255, 255, .025) 39px 40px), repeating-linear-gradient(90deg, transparent 0 39px, rgba(255, 255, 255, .025) 39px 40px), linear-gradient(180deg, rgba(31, 38, 46, .82), rgba(14, 17, 21, .88));
-  backdrop-filter: var(--glass);
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
-}
-.target { width: 280px; height: 280px; border-radius: 50%; border: 0; padding: 0; background: none; position: relative; transition: transform .06s; }
-.target:active { transform: scale(.95); }
-.target svg { width: 100%; height: 100%; filter: drop-shadow(0 12px 30px rgba(0, 0, 0, .6)); }
-.click-stats { display: flex; gap: 30px; color: var(--muted); text-align: center; text-transform: uppercase; font-size: 11px; letter-spacing: .1em; }
-.click-stats b { display: block; font-size: 24px; color: var(--hi); font-weight: 700; letter-spacing: .01em; font-family: var(--font-cond); }
-.floater { position: absolute; pointer-events: none; font-weight: 700; color: var(--green); font-size: 18px; text-shadow: 0 2px 4px #000; animation: floatup .9s ease-out forwards; }
-.floater.hs { color: var(--gold2); font-size: 26px; }
-@keyframes floatup { to { transform: translateY(-80px); opacity: 0; } }
-.upgrades { display: flex; flex-direction: column; gap: 6px; }
-.upg { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; background: var(--panel-grad); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; }
-.upg .nm { font-size: 15px; font-weight: 600; }
-.upg .lv { color: var(--gold2); font-size: 12px; margin-left: 6px; }
-.upg .ds { color: var(--muted); font-size: 12px; }
-.upg .btn { grid-row: span 2; min-width: 112px; }
-.rank-badge { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: var(--radius); background: rgba(0, 0, 0, .45); border: 1px solid var(--line2); color: var(--gold2); letter-spacing: .12em; text-transform: uppercase; font-size: 12px; font-weight: 600; }
-
 /* ---------- market / inventory toolbars ---------- */
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
 .toolbar .input[type=search] { width: 280px; }
@@ -554,16 +529,6 @@ input[type=range]:focus { outline: none; }
 .slots .sl img { width: 90%; height: 90%; object-fit: contain; }
 .slots .sl button { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; border: 0; background: var(--red); color: #fff; font-size: 11px; line-height: 18px; padding: 0; }
 .slots .sl.pending { border-style: solid; border-color: var(--gold); }
-
-/* ---------- coop ---------- */
-.coop-hero { display: grid; grid-template-columns: 1fr 340px; gap: 20px; margin-bottom: 20px; }
-.coop-scene { border: 1px solid var(--line); border-radius: var(--radius); height: 340px; overflow: hidden; position: relative; background: linear-gradient(180deg, #2c4a6b 0%, #6f9fc4 55%, #4f7d3a 55.5%, #3b6a2c 100%); }
-.coop-scene canvas { width: 100%; height: 100%; display: block; }
-.coop-panel { background: var(--panel-grad); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
-.coop-panel .big { font-size: 30px; color: var(--green); font-weight: 700; font-family: var(--font-cond); }
-.card .income { color: #ffe38a; font-size: 11px; }
-.card.in-coop { border-color: #8a7224; }
-.card.in-coop::after { content: "IN COOP"; position: absolute; top: 6px; right: 6px; z-index: 3; font-size: 10px; letter-spacing: .06em; padding: 1px 5px; border-radius: 1px; background: #ffe38a; color: #1a1306; font-weight: 600; }
 
 /* stats */
 .statgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-bottom: 26px; }
@@ -623,7 +588,7 @@ input[type=range]:focus { outline: none; }
   .case-hero h2 { font-size: 26px; }
   .case-hero .stats > div { padding: 0 12px; }
   .detail { grid-template-columns: 1fr; }
-  .clicker, .coop-hero, .stk-editor { grid-template-columns: 1fr; }
+  .stk-editor { grid-template-columns: 1fr; }
   .summary div { padding: 4px 12px; }
   .setting { flex-wrap: wrap; gap: 8px 16px; }
   .setting > div:first-child { flex: 1 1 100%; }

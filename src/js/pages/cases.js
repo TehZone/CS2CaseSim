@@ -1,5 +1,5 @@
 import { esc, money, imgUrl, round2 } from '../util.js';
-import { D, WEARS, casePrice, caseTiers, rarityColor, DOPPLER_PHASE_WEIGHT, collectionBox, eventShort, CASE_KINDS } from '../data.js';
+import { D, WEARS, casePrice, caseTiers, rarityColor, DOPPLER_PHASE_WEIGHT, collectionBox, eventShort, CASE_KINDS, keyFor } from '../data.js';
 import * as I from '../items.js';
 import { S, save, emit } from '../state.js';
 import { autoSellLabel, autoSellModal, autoSellRules } from '../autosell.js';
@@ -34,12 +34,7 @@ export function render(root) {
 
 // ---- helpers -------------------------------------------------------------------------------
 export function caseImage(c) {
-  if (c.kind === 'chickens') return renderChickenThumb({ id: 'golden', hat: 'crown' });
-  if (c.kind === 'agents') {
-    const master = Object.values(D.agents).filter((a) => a.r === 5).sort((a, b) => b.p - a.p)[0];
-    return imgUrl(master?.img, 'm');
-  }
-  return imgUrl(c.img, 'm');
+  return c.custom ? I.itemImage({ t: 'crate', id: c.id }, 'm') : imgUrl(c.img, 'm');
 }
 
 function wearProbs(skin) {
@@ -155,7 +150,9 @@ function renderList(root) {
 function caseTile(c) {
   const price = casePrice(c);
   const ret = caseEV(c) / price;
+  const own = ownedCases(c).length;
   return `<div class="card case-tile" data-id="${c.id}" style="--rc:#f2b21b">
+    ${own ? `<div class="tags"><span class="tag own" title="In your inventory">×${own}</span></div>` : ''}
     <div class="img"><img loading="lazy" src="${caseImage(c)}" alt=""></div>
     <div class="meta">
       <div class="n2">${esc(c.n)}</div>
@@ -268,6 +265,8 @@ function defTile(kind, id, oddsEach) {
 
 function renderCase(root, c) {
   const price = casePrice(c);
+  const key = keyFor(c), own = { cases: ownedCases(c), keys: ownedKeys(c) };
+  const missing = shortfall(c, view.qty).list;
   const ev = caseEV(c);
   const tiers = c.kind === 'chickens' ? [['2', 0.7992], ['3', 0.1598], ['4', 0.032], ['5', 0.0064], ['6', 0.0026]] : caseTiers(c);
   const tw = tiers.reduce((s, t) => s + t[1], 0);
@@ -305,11 +304,14 @@ function renderCase(root, c) {
         </div>
         <div class="open-row">
           <div class="seg" data-k="qty">${[1, 2, 3, 4, 5].map((n) => `<button data-v="${n}" class="${view.qty === n ? 'active' : ''}">×${n}</button>`).join('')}</div>
-          <button class="btn gold big" data-open>Open for ${money(price * view.qty)}</button>
+          <button class="btn gold big" data-open ${missing.length ? `disabled title="You need ${esc(missing.join(' and '))}"` : ''}>Open ×${view.qty}</button>
+          <button class="btn big" data-buy title="Goes to your inventory">Buy ×${view.qty} · ${money(c.price * view.qty)}</button>
+          ${key ? `<button class="btn big" data-buykey title="Goes to your inventory">Buy ×${view.qty} ${esc(D.keys[key].n)} · ${money(D.keyPrice * view.qty)}</button>` : ''}
           <button class="btn big" data-autoopen title="Keep opening this case automatically">Auto open…</button>
           <label class="check"><input type="checkbox" data-fast ${S.settings.fast ? 'checked' : ''}> Fast open</label>
           <button class="btn sm ${autoSellRules().on ? 'primary' : ''}" data-autosell title="Sell new drops automatically by amount or rarity">${esc(autoSellLabel())}</button>
         </div>
+        <div class="own-line muted">In your inventory: <b>${own.cases.length}</b> ${esc(c.n)}${own.cases.length === 1 ? '' : 's'}${key ? ` · <b>${own.keys.length}</b> ${esc(D.keys[key].n)}${own.keys.length === 1 ? '' : 's'}` : ' · no key needed'}${missing.length ? ` · <span class="red">to open ×${view.qty} you need ${esc(missing.join(' and '))}</span>` : ''}</div>
         <div class="odds">${c.kind === 'chickens'
           ? tiers.map(([k, w]) => `<span style="--rc:${rarityColor(+k)}">${['', '', 'Barnyard', 'Free-Range', 'Prize', 'Legendary', '★ Mythic'][k]}: ${(w * 100).toFixed(2)}%</span>`).join('')
           : rarityOddsHTML(c, tiers)}</div>
@@ -327,6 +329,8 @@ function renderCase(root, c) {
   root.querySelector('[data-fast]').addEventListener('change', (e) => { S.settings.fast = e.target.checked; save(); });
   root.querySelector('[data-autosell]').addEventListener('click', () => autoSellModal(() => renderCase(root, c)));
   root.querySelector('[data-open]').addEventListener('click', () => openCase(c, view.qty));
+  root.querySelector('[data-buy]').addEventListener('click', () => buy(c, 'case', view.qty));
+  root.querySelector('[data-buykey]')?.addEventListener('click', () => buy(c, 'key', view.qty));
   root.querySelector('[data-autoopen]').addEventListener('click', () => autoOpenModal(c));
   root.querySelector('[data-scroll-rare]')?.addEventListener('click', () => root.querySelector('#rare-list').scrollIntoView({ behavior: 'smooth' }));
   root.querySelectorAll('[data-prev]').forEach((t) => t.addEventListener('click', () => {
@@ -440,6 +444,43 @@ function skinPreview(c, ids, odds) {
   draw();
 }
 
+// ---- your cases and keys ----------------------------------------------------------------------
+// Cases you buy go to your inventory, and one that takes a key opens with one of its keys (bought apart), like CS2.
+const usable = (it) => !it.lk;
+export const ownedCases = (c) => S.inv.filter((it) => it.t === 'crate' && it.id === c.id && usable(it));
+export function ownedKeys(c) {
+  const key = keyFor(c);
+  return key ? S.inv.filter((it) => it.t === 'key' && it.id === key && usable(it)) : [];
+}
+// What you're short of to open n: { cases, keys, cost, list } (list: what to buy, in words).
+function shortfall(c, n) {
+  const key = keyFor(c);
+  const cases = Math.max(0, n - ownedCases(c).length), keys = key ? Math.max(0, n - ownedKeys(c).length) : 0;
+  const list = [cases && `${cases} more ${c.n}${cases === 1 ? '' : 's'}`, keys && `${keys} more ${D.keys[key].n}${keys === 1 ? '' : 's'}`].filter(Boolean);
+  return { cases, keys, cost: round2(cases * c.price + keys * D.keyPrice), list };
+}
+async function buy(c, what, n) {
+  const key = keyFor(c);
+  try {
+    const r = await act(what === 'key' ? 'key.buy' : 'case.buy', what === 'key' ? { key, n } : { id: c.id, n });
+    sfx.buy();
+    const name = what === 'key' ? D.keys[key].n : c.n;
+    toast(`Bought ${n > 1 ? n + ' × ' : ''}<b>${esc(name)}</b> for <b>${money(r.cost)}</b>. It's in your inventory.`, 'good');
+    if (r.stars) toast(`+${r.stars} Armory Star${r.stars > 1 ? 's' : ''} for buying cases`, 'gold');
+  } catch (e) {
+    sfx.error();
+    toast(esc(e.message) + (e.code === 'funds' ? '. Win matches in <b>Play</b> or sell items.' : ''), 'bad');
+  }
+  if (view.mode === 'case' && view.caseId === c.id && rootEl?.isConnected) renderCase(rootEl, c);
+}
+// Buys what's missing to open n (auto open, "Buy & open again"). Returns what it cost; throws if you can't afford it.
+async function buyMissing(c, n) {
+  const need = shortfall(c, n);
+  if (need.cases) await act('case.buy', { id: c.id, n: need.cases });
+  if (need.keys) await act('key.buy', { key: keyFor(c), n: need.keys });
+  return need.cost;
+}
+
 // ---- opening -------------------------------------------------------------------------------
 let opening = false;
 
@@ -452,6 +493,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 function autoOpenModal(c) {
   if (autoRun) return toast('Auto open is already running.', 'bad');
   const n = view.qty, each = round2(casePrice(c) * n);
+  const own = Math.min(ownedCases(c).length, keyFor(c) ? ownedKeys(c).length : Infinity);
   const m = openModal({
     title: 'Auto open',
     body: `<div style="display:grid;gap:12px;max-width:560px">
@@ -466,7 +508,7 @@ function autoOpenModal(c) {
       </div>
       <label class="check"><input type="checkbox" data-anim ${autoPrefs.anim ? 'checked' : ''}> Show the case animation (fast)</label>
       <div class="open-row"><span class="muted">${esc(autoSellLabel())}</span><button class="btn sm" data-as>Auto-sell settings…</button></div>
-      <div class="muted" style="font-size:12px">You can keep playing on other pages while it runs. Drops that aren't auto-sold go to your inventory.</div>
+      <div class="muted" style="font-size:12px">It uses the cases and keys in your inventory first${own ? ` (enough for ${own})` : ''}, then buys a case${keyFor(c) ? ' and a key' : ''} for each opening. You can keep playing on other pages while it runs. Drops that aren't auto-sold go to your inventory.</div>
     </div>`,
     foot: '<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-start>Start</button>',
   });
@@ -499,15 +541,15 @@ async function runAutoOpen(c, n, p) {
   };
   draw();
   let reason = p.count ? `Finished ${p.count} openings` : 'Stopped';
-  const cost = round2(casePrice(c) * n);
   try {
     while (!run.stop && (!p.count || run.done < p.count)) {
+      const cost = shortfall(c, n).cost;
       if (S.money + 1e-9 < cost) { reason = 'Not enough money for the next opening'; break; }
-      if (S.money - cost < p.minBalance) { reason = `Your balance would drop below ${money(p.minBalance)}`; break; }
+      if (cost && S.money - cost < p.minBalance) { reason = `Your balance would drop below ${money(p.minBalance)}`; break; }
       let r;
-      try { r = await act('case.open', { id: c.id, n, autoSell: autoSellRules() }); } catch (e) { reason = e.message; break; }
+      try { await buyMissing(c, n); r = await act('case.open', { id: c.id, n, autoSell: autoSellRules() }); } catch (e) { reason = e.message; break; }
       run.done++;
-      run.spent = round2(run.spent + r.cost);
+      run.spent = round2(run.spent + cost);
       run.sold = round2(run.sold + (r.autoSold || 0));
       for (const it of r.items) {
         if (!it.as) run.kept.push(it);
@@ -539,19 +581,14 @@ async function runAutoOpen(c, n, p) {
   });
 }
 
-export async function openCase(c, n) {
+// Opens n of your cases (uids: the ones picked in the inventory), each with one of your keys for it.
+export async function openCase(c, n, { uids = null } = {}) {
   if (opening) return;
-  const cost = round2(casePrice(c) * n);
-  if (S.money + 1e-9 < cost) {
-    sfx.error();
-    toast(`You need <b>${money(cost)}</b> to open ${n > 1 ? n + ' of these' : 'this'}. Earn money on the <b>Earn</b> tab or sell items.`, 'bad');
-    return;
-  }
   opening = true;
   let r;
   try {
     // Rolled and saved (or rolled on the server) before the animation, so nothing is lost if the app closes.
-    r = await act('case.open', { id: c.id, n, autoSell: autoSellRules() });
+    r = await act('case.open', { id: c.id, n, ...(uids ? { uids } : {}), autoSell: autoSellRules() });
   } catch (e) {
     opening = false;
     sfx.error();
@@ -561,14 +598,26 @@ export async function openCase(c, n) {
   const intro = S.settings.caseIntro !== false && c.kind !== 'chickens' && c.kind !== 'agents'
     ? (stage) => playCaseIntro(stage, c, caseImage(c)) : null;
   if (!intro) sfx.open();
-  if (r.stars) toast(`+${r.stars} Armory Star${r.stars > 1 ? 's' : ''} for opening cases`, 'gold');
   try {
     await playRoulette(c, r.items, undefined, { intro });
   } finally {
     opening = false;
   }
   if (r.autoSold) toast(`Auto-sold ${r.items.filter((i) => i.as).length} item${r.items.filter((i) => i.as).length === 1 ? '' : 's'} for <b class="green">${money(r.autoSold)}</b>`, 'good');
-  showResults(c, r.items, n);
+  if (view.mode === 'case' && view.caseId === c.id && rootEl?.isConnected) renderCase(rootEl, c);
+  const need = shortfall(c, n);
+  showResults(c, r.items, n, {
+    againLabel: need.cost ? `Buy & open again (${money(need.cost)})` : `Open again (${ownedCases(c).length} left)`,
+    again: async () => {
+      try { await buyMissing(c, n); } catch (e) { sfx.error(); toast(esc(e.message), 'bad'); return; }
+      openCase(c, n);
+    },
+  });
+}
+// A case from your inventory (its details or right-click menu).
+export function openCrate(item) {
+  const c = D.caseById[item.id];
+  if (c) return openCase(c, 1, { uids: [item.uid] });
 }
 
 function slotHTML(entry, showAll = false) {

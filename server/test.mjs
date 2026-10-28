@@ -7,7 +7,7 @@ import WebSocket from 'ws';
 
 process.env.JACKPOT_MS = '1500';
 const { startServer } = await import('./index.mjs');
-const { D, casePrice } = await import('../src/js/engine/data.js');
+const { D, casePrice, keyFor } = await import('../src/js/engine/data.js');
 const { serialKey } = await import('../src/js/engine/items.js');
 
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'cs2sim-test-db-'));
@@ -76,19 +76,30 @@ try {
   await give(A.user.id, 1000); await give(B.user.id, 1000);
   const box = D.cases.find((c) => c.n === 'Chroma 2 Case');
   const before = (await serverState(A.user.id)).money;
+  // Cases and their keys are bought into the inventory, then opened.
+  await A.act('case.buy', { id: box.id, n: 5 });
+  await A.act('key.buy', { key: keyFor(box), n: 5 });
   const op = await A.act('case.open', { id: box.id, n: 5 });
   const after = (await serverState(A.user.id)).money;
-  check('opening cases debits the right amount (server side)', Math.abs(before - casePrice(box) * 5 - after) < 0.011 && op.items.length === 5, `${before} -> ${after}`);
+  check('buying 5 cases and 5 keys and opening them debits the right amount (server side)', Math.abs(before - casePrice(box) * 5 - after) < 0.011 && op.items.length === 5, `${before} -> ${after}`);
   check('client mirror matches the server', Math.abs(A.st.money - after) < 0.011 && A.st.inv.length === 5);
   let err = null; try { await A.act('case.open', { id: box.id, n: 9999 }); } catch (e) { err = e; }
   check('invalid requests rejected', err?.code === 'bad');
   const sellUid = op.items[0].uid;
   const both = await Promise.allSettled([A.act('item.sell', { uids: [sellUid] }), A.act('item.sell', { uids: [sellUid] })]);
   check('double spend: selling one item twice at once pays once', both.filter((r) => r.status === 'fulfilled').length === 1);
+  // Match money online: only for a match the server saw start, once, and only what it could have earned.
+  let unseen = null; try { await A.act('play.reward', { result: 'win', kills: 20, assists: 3, roundsWon: 13, rounds: 22 }); } catch (e) { unseen = e; }
+  const { run } = await A.act('play.start', { mode: 'competitive' });
+  let tooFast = null; try { await A.act('play.reward', { run, mode: 'competitive', result: 'win', kills: 20, assists: 3, roundsWon: 13, rounds: 22 }); } catch (e) { tooFast = e; }
+  await server.store.withUser(A.user.id, async (e) => { e.st.play = { ...e.st.play, at: Date.now() - 30 * 60 * 1000 }; server.store.markDirty(e); });
   const m0 = (await serverState(A.user.id)).money;
-  await A.act('click', { n: 400, crits: 0 });
+  const paid = await A.act('play.reward', { run, mode: 'competitive', result: 'win', kills: 20, assists: 3, roundsWon: 13, rounds: 22 });
   const m1 = (await serverState(A.user.id)).money;
-  check('click spam is capped by the server', m1 - m0 < 0.1 * 400 * 0.5, `earned ${(m1 - m0).toFixed(2)}`);
+  let twice = null; try { await A.act('play.reward', { run, mode: 'competitive', result: 'win', kills: 20, assists: 3, roundsWon: 13, rounds: 22 }); } catch (e) { twice = e; }
+  check('online match money: refused for an unseen or too-quick match, paid once for a real one ($250 + 20 kills + 3 assists)',
+    unseen?.code === 'match' && tooFast?.code === 'match' && twice?.code === 'match' && Math.abs(m1 - m0 - 680) < 0.011 && paid.earned === 680 && paid.xp.total > 0,
+    `${m0} -> ${m1}`);
 
   // ---- market: one shared stock ------------------------------------------------------------------------
   {
@@ -124,6 +135,8 @@ try {
   }
 
   // ---- trading --------------------------------------------------------------------------------------
+  await B.act('case.buy', { id: box.id, n: 2 });
+  await B.act('key.buy', { key: keyFor(box), n: 2 });
   const bOpen = await B.act('case.open', { id: box.id, n: 2 });
   // Serial numbers are counted across the server: Bob's continue after Alice's of the same item.
   const last = {};
