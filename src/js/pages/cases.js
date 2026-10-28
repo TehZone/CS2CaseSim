@@ -305,13 +305,16 @@ function renderCase(root, c) {
         <div class="open-row">
           <div class="seg" data-k="qty">${[1, 2, 3, 4, 5].map((n) => `<button data-v="${n}" class="${view.qty === n ? 'active' : ''}">×${n}</button>`).join('')}</div>
           <button class="btn gold big" data-open ${missing.length ? `disabled title="You need ${esc(missing.join(' and '))}"` : ''}>Open ×${view.qty}</button>
-          <button class="btn big" data-buy title="Goes to your inventory">Buy ×${view.qty} · ${money(c.price * view.qty)}</button>
-          ${key ? `<button class="btn big" data-buykey title="Goes to your inventory">Buy ×${view.qty} ${esc(D.keys[key].n)} · ${money(D.keyPrice * view.qty)}</button>` : ''}
           <button class="btn big" data-autoopen title="Keep opening this case automatically">Auto open…</button>
           <label class="check"><input type="checkbox" data-fast ${S.settings.fast ? 'checked' : ''}> Fast open</label>
           <button class="btn sm ${autoSellRules().on ? 'primary' : ''}" data-autosell title="Sell new drops automatically by amount or rarity">${esc(autoSellLabel())}</button>
         </div>
-        <div class="own-line muted">In your inventory: <b>${own.cases.length}</b> ${esc(c.n)}${own.cases.length === 1 ? '' : 's'}${key ? ` · <b>${own.keys.length}</b> ${esc(D.keys[key].n)}${own.keys.length === 1 ? '' : 's'}` : ' · no key needed'}${missing.length ? ` · <span class="red">to open ×${view.qty} you need ${esc(missing.join(' and '))}</span>` : ''}</div>
+        <div class="buy-row">
+          <button class="buy-card" data-buy title="The case itself, to your inventory"><img src="${caseImage(c)}" alt=""><span><small>Buy case</small><b>×${view.qty} · ${money(c.price * view.qty)}</b><i>You have ${own.cases.length}</i></span></button>
+          ${key ? `<button class="buy-card" data-buykey title="${esc(D.keys[key].n)}: opens this case"><img src="${imgUrl(D.keys[key].img, 's')}" alt=""><span><small>Buy key</small><b>×${view.qty} · ${money(D.keyPrice * view.qty)}</b><i>You have ${own.keys.length}</i></span></button>
+            <button class="buy-card both" data-buyboth title="A case and its key, both to your inventory"><span><small>Case + key</small><b>×${view.qty} · ${money((c.price + D.keyPrice) * view.qty)}</b><i>ready to open</i></span></button>` : ''}
+        </div>
+        <div class="own-line muted">${key ? `Cases go to your inventory and open with a <b>${esc(D.keys[key].n)}</b> (one key per case).` : 'Cases go to your inventory. This one needs no key.'}${missing.length ? ` <span class="red">To open ×${view.qty} you need ${esc(missing.join(' and '))}.</span>` : ''}</div>
         <div class="odds">${c.kind === 'chickens'
           ? tiers.map(([k, w]) => `<span style="--rc:${rarityColor(+k)}">${['', '', 'Barnyard', 'Free-Range', 'Prize', 'Legendary', '★ Mythic'][k]}: ${(w * 100).toFixed(2)}%</span>`).join('')
           : rarityOddsHTML(c, tiers)}</div>
@@ -331,6 +334,7 @@ function renderCase(root, c) {
   root.querySelector('[data-open]').addEventListener('click', () => openCase(c, view.qty));
   root.querySelector('[data-buy]').addEventListener('click', () => buy(c, 'case', view.qty));
   root.querySelector('[data-buykey]')?.addEventListener('click', () => buy(c, 'key', view.qty));
+  root.querySelector('[data-buyboth]')?.addEventListener('click', () => buy(c, 'both', view.qty));
   root.querySelector('[data-autoopen]').addEventListener('click', () => autoOpenModal(c));
   root.querySelector('[data-scroll-rare]')?.addEventListener('click', () => root.querySelector('#rare-list').scrollIntoView({ behavior: 'smooth' }));
   root.querySelectorAll('[data-prev]').forEach((t) => t.addEventListener('click', () => {
@@ -459,14 +463,20 @@ function shortfall(c, n) {
   const list = [cases && `${cases} more ${c.n}${cases === 1 ? '' : 's'}`, keys && `${keys} more ${D.keys[key].n}${keys === 1 ? '' : 's'}`].filter(Boolean);
   return { cases, keys, cost: round2(cases * c.price + keys * D.keyPrice), list };
 }
+// Buys n cases, n keys, or both (what: 'case' | 'key' | 'both'), into your inventory.
 async function buy(c, what, n) {
   const key = keyFor(c);
   try {
-    const r = await act(what === 'key' ? 'key.buy' : 'case.buy', what === 'key' ? { key, n } : { id: c.id, n });
+    const cost = round2((what !== 'key' ? c.price : 0) * n + (what !== 'case' ? D.keyPrice : 0) * n);
+    if (S.money + 1e-9 < cost) throw Object.assign(new Error(`You need ${money(cost)}`), { code: 'funds' });
+    let stars = 0;
+    if (what !== 'key') stars += (await act('case.buy', { id: c.id, n })).stars || 0;
+    if (what !== 'case') stars += (await act('key.buy', { key, n })).stars || 0;
     sfx.buy();
-    const name = what === 'key' ? D.keys[key].n : c.n;
-    toast(`Bought ${n > 1 ? n + ' × ' : ''}<b>${esc(name)}</b> for <b>${money(r.cost)}</b>. It's in your inventory.`, 'good');
-    if (r.stars) toast(`+${r.stars} Armory Star${r.stars > 1 ? 's' : ''} for buying cases`, 'gold');
+    const name = what === 'key' ? D.keys[key].n : what === 'both' ? `${c.n} and its key` : c.n;
+    const noCase = what === 'key' && ownedCases(c).length < ownedKeys(c).length;
+    toast(`Bought ${n > 1 ? n + ' × ' : ''}<b>${esc(name)}</b> for <b>${money(cost)}</b>. It's in your inventory.${noCase ? ' You also need the case itself to open it: <b>Buy case</b>.' : ''}`, noCase ? 'gold' : 'good');
+    if (stars) toast(`+${stars} Armory Star${stars > 1 ? 's' : ''} for buying cases`, 'gold');
   } catch (e) {
     sfx.error();
     toast(esc(e.message) + (e.code === 'funds' ? '. Win matches in <b>Play</b> or sell items.' : ''), 'bad');
