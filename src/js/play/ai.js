@@ -56,9 +56,15 @@ export function hitOdds(size, inacc, { spread = 0, bullets = 1, recoil = 0 } = {
 
 // A bot's gun (same data and recoil tables as yours, without a viewmodel).
 export function botGun(id, stats, sounds) {
-  const g = new Gun({ slot: id === 'weapon_knife' || /knife/.test(id) ? 'knife' : 'x', id, name: id, stats: stats || {}, sounds, vm: null });
+  const g = new Gun({ slot: /knife|bayonet/.test(id) ? 'knife' : 'x', id, name: id, stats: stats || {}, sounds, vm: null });
   g.punch = [0, 0]; g.punchVel = [0, 0];
   return g;
+}
+// One of guns a bot would as soon have as each other: one its owner has a skin for if there's one (offline the bots are
+// the NPC players, with what they own: see identity.js), so more of their skins show; else any. (has: which count.)
+export function preferOwned(c, ids, has = (id) => c.identity?.loadout?.guns[id]) {
+  const own = ids.filter(has), from = own.length ? own : ids;
+  return from[Math.floor(Math.random() * from.length)];
 }
 
 export class Brain {
@@ -147,7 +153,7 @@ export class Brain {
     const take = (id) => { if (m.canBuy(c, id, st)) { m.pay(c, id, st); if (id.startsWith('weapon_')) g.giveBot(this.bot, id); return true; } return false; };
     if (econ === 'pistol') {
       if (T || Math.random() < 0.5) take('vest'); else if (Math.random() < 0.6) take('defuser');
-      if (Math.random() < 0.25) take(Math.random() < 0.5 ? 'weapon_p250' : T ? 'weapon_tec9' : 'weapon_fiveseven');
+      if (Math.random() < 0.25) take(preferOwned(c, ['weapon_p250', T ? 'weapon_tec9' : 'weapon_fiveseven']));
       if (skill > 0.5 && Math.random() < 0.5) take('weapon_flashbang');
       return;
     }
@@ -157,11 +163,11 @@ export class Brain {
       return;
     }
     const has = this.bot.weapons.primary;
-    const rifle = T ? 'weapon_ak47' : Math.random() < 0.5 ? 'weapon_m4a1' : 'weapon_m4a1_silencer';
+    const rifle = T ? 'weapon_ak47' : preferOwned(c, ['weapon_m4a1', 'weapon_m4a1_silencer']);
     const full = (st[rifle]?.price || 2900) + 1000;
     if (!has) {
       if (econ === 'force') take(c.money >= 2850 ? (T ? 'weapon_galilar' : 'weapon_famas') : T ? 'weapon_mac10' : 'weapon_mp9');
-      else if (c.money >= 4750 + 1000 && Math.random() < 0.18) take('weapon_awp');
+      else if (c.money >= 4750 + 1000 && Math.random() < (c.identity?.loadout?.guns.weapon_awp ? 0.3 : 0.18)) take('weapon_awp'); // (more often with a skin for it)
       else if (c.money >= full) take(rifle);
       else if (c.money >= 2600) take(T ? 'weapon_galilar' : 'weapon_famas') || take(T ? 'weapon_mac10' : 'weapon_mp9');
       else if (c.money >= 1300 && Math.random() < 0.35) take('weapon_deagle') || take('weapon_p250');

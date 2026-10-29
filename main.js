@@ -1421,6 +1421,113 @@ async function runWinSmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=npcskins` checks that the bots play with what the NPC players own (offline: see game.js botSkin): a
+// match on Dust II (CS2SIM_SMOKE_MAP) as a CT, logging loading's steps (how long each took, how many of the bots' skins
+// it built and how long they and their exports from CS2 took); then a live round, in which none may be built, and a
+// round's end held till the rest are (frame times in both); then a full buy: each bot's name, what it owns and what it
+// holds, and whether anything was built for it. Screenshots (userData/npcskins-*.png): a bot holding its skin, one
+// holding its knife, and a teammate spectated (its skin and its owner's gloves on its arms; a teammate borrows another's
+// gloves when none has any). CS2SIM_SMOKE_BASELINE=1: the same with the bots' skins off, to compare loading against;
+// CS2SIM_SMOKE_MODE=deathmatch (or another mode): just the loading.
+async function runNpcSkinsSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => { win.webContents.invalidate(); await js('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
+    fs.writeFileSync(path.join(app.getPath('userData'), `npcskins-${name}${process.env.CS2SIM_SMOKE_BASELINE ? '-baseline' : ''}.png`), (await win.webContents.capturePage()).toPNG()); };
+  const map = process.env.CS2SIM_SMOKE_MAP || 'de_dust2', mode = process.env.CS2SIM_SMOKE_MODE || 'competitive';
+  win.setContentSize(1600, 900);
+  await wait(3000);
+  await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: '${mode}', map: '${map}', teamSize: 5, team: 'CT', aspect: 'native' })); })(); 1`);
+  await js(`console.error = ((f) => (...a) => f(...a.map((x) => x?.stack || x)))(console.error); 1`); // (errors with where they came from)
+  if (process.env.CS2SIM_SMOKE_BASELINE) await js(`import(new URL('js/play/game.js', location.href).href).then(({ Game }) => { Game.prototype.ownedSkin = () => null; return 1; })`);
+  // (Loading's steps timed from its status line, and each gun model the bots hold, how long it took to build.)
+  await js(`window.__steps = []; window.__wt = setInterval(() => { const s = (document.querySelector('.play-root [data-status]')?.textContent || '').replace(/ \\d+ of \\d+$/, '');
+    const m = /of (\\d+)/.exec(document.querySelector('.play-root [data-status]')?.textContent || ''); if (m) window.__wn = Math.max(window.__wn || 0, +m[1]);
+    if (s && s !== window.__steps.at(-1)?.[0]) window.__steps.push([s, performance.now()]); }, 25);
+    import(new URL('js/play/bots.js', location.href).href).then(({ BotAssets }) => { const f = BotAssets.prototype.weapon; window.__built = [];
+      BotAssets.prototype.weapon = function (id, item) { const had = this.weapons.has(item && item.uid ? id + '#' + item.uid : id), t0 = performance.now(), p = f.call(this, id, item);
+        const phase = window.__playGame?.raf ? window.__playGame.match.phase : 'loading';
+        if (!had) p.then(() => window.__built.push([id + (item ? ' ' + item.uid + ' (' + (item.stk?.filter(Boolean).length || 0) + ' stickers)' : ''), performance.now() - t0, phase]));
+        return p; }; }); 1`);
+  // (And how long the CS2 side of each took: exporting its finish from the game files, the first time.)
+  const prepared = [], prepare = cs2.prepare.bind(cs2);
+  cs2.prepare = async (req) => { const t0 = Date.now(); try { return await prepare(req); } finally { prepared.push([req.weapon + (req.paint ? ' ' + req.paint : ''), Date.now() - t0]); } };
+  if (!(await smokeStartMap(win, map, 'npcskins'))) return app.quit();
+  const kits = prepared.filter(([k]) => k.includes(' ')), slow = kits.filter(([, t]) => t > 500);
+  console.log(`SMOKE npcskins exports: ${kits.length} finishes prepared, ${(kits.reduce((s, [, t]) => s + t, 0) / 1000).toFixed(1)} s in all; ${slow.length} took over half a second (exported now): ${slow.slice(0, 8).map(([k, t]) => k + ' ' + (t / 1000).toFixed(1) + ' s').join(', ')}`);
+  const step = async (label, code) => { const r = await js(`(async () => { const g = window.__playGame, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const { itemDef } = await import(new URL('js/items.js', location.href).href);
+    const nm = (it) => { const d = it && itemDef(it); return d ? (d.v ? d.w : d.w + ' | ' + (d.n?.split(' | ')[1] || d.n)) : 'default'; };
+    const sk = (s) => (s ? s.owner + ' ' + nm(s.item) : 'default');
+    ${code} })()`); console.log('SMOKE npcskins ' + label + ': ' + r); return r; };
+  await step('loading', `clearInterval(window.__wt);
+    const ids = g.bots.map((b) => b.c.identity), st = window.__steps, end = performance.now();
+    const skinned = [...g.botAssets.weapons.keys()].filter((k) => k.includes('#'));
+    const b = window.__built.filter((x) => x[2] === 'loading'), plain = b.filter(([k]) => !k.includes(' ')), own = b.filter(([k]) => / n\\d+:/.test(k)), sum = (l) => (l.reduce((s, [, t]) => s + t, 0) / 1000).toFixed(1);
+    return st.map(([s, t], i) => s + ' ' + (((st[i + 1]?.[1] ?? end) - t) / 1000).toFixed(1) + ' s').join(' · ') + ' (' + window.__wn + ' weapon jobs)'
+      + '\\n  bots ' + ids.map((x) => x?.source || 'none').join(',') + '; skinned world models ' + skinned.length + ' (' + skinned.filter((k) => /#n\\d+:/.test(k)).length + " of them the bots')"
+      + '\\n  built: ' + plain.length + ' default ' + sum(plain) + ' s in all, ' + own.length + " bots' skins " + sum(own) + ' s in all (4 at a time), ' + g.skinsReady.size + ' ready; slowest: '
+      + own.sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, t]) => k + ' ' + (t / 1000).toFixed(1) + ' s').join(', ');`);
+  if (mode !== 'competitive') return app.quit(); // (CS2SIM_SMOKE_MODE: deathmatch... just its loading, where it builds them all)
+  await step('the rest', `document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
+    const css = document.createElement('style'); css.textContent = '.play-click, .play-scrim { display: none !important; }'; document.head.appendChild(css);
+    g.console.run('sv_cheats 1'); g.cv.bot_stop = 1; g.god = true;
+    const m = g.match, at = window.__built.length, ready0 = g.skinsReady.size;
+    // A live round for 20 s (the bots stopped: nobody dies), then a round's end held until they're all built.
+    // (Frame times: the live round's, with nothing built, then while they're built.)
+    let ft = [], last = performance.now(), on = true; const frame = (t) => { ft.push(t - last); last = t; if (on) requestAnimationFrame(frame); }; requestAnimationFrame(frame);
+    const hitch = (l) => l.length + ' frames, ' + l.filter((x) => x > 50).length + ' over 50 ms, longest ' + Math.round(Math.max(...l)) + ' ms';
+    m.phase = 'live'; m.time = 100; const live = m.phase; await sleep(20000);
+    const quiet = hitch(ft.splice(0));
+    const inLive = window.__built.slice(at).filter((x) => x[2] === 'live' || x[2] === 'planted').length, readyLive = g.skinsReady.size;
+    m.endRound('CT', 'time');
+    const want = g.skinsReady.size + g.botSkinsLeft, t1 = performance.now();
+    for (let i = 0; i < 600 && g.botSkinsLeft > 0; i++) { if (m.phase === 'end') m.time = Math.max(m.time, 10); await sleep(500); }
+    on = false; const building = hitch(ft);
+    const after = window.__built.slice(at), took = after.reduce((s, x) => s + x[1], 0);
+    return 'frames ' + quiet + ' live, ' + building + ' building; phase ' + live + ' for 20 s: ' + inLive + ' built in it, ready ' + ready0 + ' -> ' + readyLive + '; then between rounds: ' + g.skinsReady.size + ' of ' + want + ' ready after '
+      + ((performance.now() - t1) / 1000).toFixed(0) + ' s (' + after.length + ' built, ' + (took / 1000).toFixed(1) + ' s their builds in all, phases ' + [...new Set(after.map((x) => x[2]))].join(',') + ')';`);
+  await step('setup', `window.__built0 = g.botAssets.weapons.size;
+    // A full buy: everyone rich, the next round.
+    for (const c of g.combatants) c.money = 16000;
+    g.match.startRound(); await sleep(3000);
+    return 'round ' + g.match.round + ' ' + g.match.phase;`);
+  await step('bots', `return '\\n' + g.bots.map((b) => { const c = b.c, lo = c.identity?.loadout, w = b.weapons;
+    return '  ' + c.team + ' ' + c.name + ' (' + (c.identity?.source || '-') + '): owns ' + Object.keys(lo?.guns || {}).length + ' gun skins, knife ' + nm(lo?.knife) + ', gloves ' + nm(lo?.gloves)
+      + ' | primary ' + (w.primary ? w.primary.id + ' ' + sk(w.primary.skin) : '-') + ' | secondary ' + (w.secondary ? w.secondary.id + ' ' + sk(w.secondary.skin) : '-')
+      + ' | knife ' + w.knife?.id + ' ' + sk(w.knife?.skin) + ' | in hand ' + b.holding + ' ' + sk(b.holdingSkin) + (b.weaponModel ? '' : ' (no model)'); }).join('\\n')
+      + '\\n  owned rifle bought: ' + g.bots.filter((b) => b.weapons.primary?.skin).length + ' of ' + g.bots.filter((b) => b.weapons.primary).length + ' primaries skinned'
+      + '; built since: ' + (g.botAssets.weapons.size - window.__built0) + ' ' + [...g.botAssets.weapons.keys()].slice(window.__built0).join(' ');`);
+  // A bot holding its skin, close up.
+  await step('bot close up', `g.match.time = 9999; g.console.run('cl_drawhud 0');
+    const b = g.bots.find((x) => x.c.alive && x.holdingSkin && x.weapons.primary?.skin) || g.bots.find((x) => x.c.alive && x.holdingSkin);
+    if (!b) return 'no bot holds a skin';
+    g.player.teleport([b.pos[0] - 70, b.pos[1] - 30, b.pos[2]]); g.input.yaw = Math.atan2(30, 70) * 180 / Math.PI; g.input.pitch = 8; b.yaw = 180 + g.input.yaw; await sleep(1500);
+    window.__shotBot = b; return b.c.name + ' holds ' + b.holding + ' ' + sk(b.holdingSkin);`);
+  await shot('bot');
+  await step('knife', `const b = g.bots.find((x) => x.c.alive && x.weapons.knife?.skin);
+    if (!b) return 'no bot owns a knife';
+    g.botSwitch(b, 'knife', g.now); await sleep(300);
+    g.player.teleport([b.pos[0] - 60, b.pos[1] - 25, b.pos[2]]); g.input.yaw = Math.atan2(25, 60) * 180 / Math.PI; g.input.pitch = 10; b.yaw = 180 + g.input.yaw; await sleep(1500);
+    return b.c.name + ' holds ' + b.holding + ' ' + sk(b.holdingSkin) + (b.weaponModel ? ' (model in hand)' : ' (no model)');`);
+  await shot('knife');
+  // Spectating a teammate with gloves (one borrowed if none of them has any).
+  await step('spectate', `g.console.run('cl_drawhud 1');
+    const mates = g.bots.filter((b) => b.c.alive && b.c.team === g.me.team);
+    let mate = mates.find((b) => b.c.identity?.loadout?.gloves && b.holdingSkin) || mates.find((b) => b.c.identity?.loadout?.gloves), note = '';
+    if (!mate) { const from = g.bots.find((b) => b.c.identity?.loadout?.gloves); mate = mates.find((b) => b.holdingSkin) || mates[0];
+      if (from) { mate.c.identity.loadout.gloves = from.c.identity.loadout.gloves; note = ' (gloves borrowed from ' + from.c.name + ')'; } }
+    if (mate.weapons.primary) g.botSwitch(mate, 'primary', g.now);
+    const built = g.vmCache.size;
+    g.kill(g.me, null, { name: 'World' }, false); g.deathCam = null; g.spectating = mate; g.specThird = false;
+    for (let i = 0; i < 100 && !g.specVm; i++) await sleep(100);
+    await sleep(1200);
+    const lo = mate.c.identity?.loadout, keys = [...g.vmCache.keys()].slice(built);
+    return mate.c.name + note + ' holds ' + mate.holding + ' ' + sk(mate.holdingSkin) + ', gloves ' + nm(lo?.gloves) + '; viewmodel ' + (g.specVm ? 'shown' : 'missing') + ', built for it: ' + keys.join(' ');`);
+  await shot('spectate');
+  app.quit();
+}
+
 // `CS2SIM_SMOKE=drops` checks that guns keep their skins (put a save.json with skins equipped in the smoke profile
 // first): on Dust II (CS2SIM_SMOKE_MAP) as a terrorist with the bots stopped, you buy an AK-47 (your skin), drop it, a
 // bot picks it up and holds it, dies and drops it, you pick it up again (yours), then pick up a bot's (the default),
@@ -2650,6 +2757,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'aspect') { win.webContents.once('did-finish-load', () => runAspectSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'winbanner') { win.webContents.once('did-finish-load', () => runWinSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'npcskins') { win.webContents.once('did-finish-load', () => runNpcSkinsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'drops') { win.webContents.once('did-finish-load', () => runDropsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'breakables') { win.webContents.once('did-finish-load', () => runBreakSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'look') { win.webContents.once('did-finish-load', () => runLookSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
