@@ -1,4 +1,6 @@
-// Who the bots are: real Counter-Strike players. The source is swappable; each gives [{ id, name, country, team, avatar }]:
+// Who the bots are. The source is swappable; each gives [{ id, name, country, team, avatar }]:
+//  - offline, the NPC players (engine/npcs.js: the people in Friends, trading and the Item Database), each with the
+//    skins they own: loadout { guns: { weapon_ak47: item, ... }, knife, gloves } (npcs.js loadoutOf), npc: their id.
 //  - src/data/bot-players.json when it's there (scripts/build-bot-players.mjs, from Liquipedia): gamer tags, countries,
 //    teams and photos, credited as Liquipedia's (CC-BY-SA), see CREDIT.
 //  - else the pros in the game data (from the Majors' autograph stickers): name, country, team, and their autograph
@@ -7,6 +9,9 @@
 // comes from its skill (a skill group in Competitive, a CS Rating in Premier).
 import { D } from '../data.js';
 import { imgUrl } from '../util.js';
+import { S } from '../state.js';
+import { act, online } from '../backend.js';
+import { crowd, inventoryOf, loadoutOf } from '../engine/npcs.js';
 
 export const CREDIT = 'Player data: Liquipedia (CC-BY-SA)';
 
@@ -33,8 +38,23 @@ function fromPros() {
   return pros;
 }
 
-// Everyone the bots can be (Liquipedia's players if they're there, else the game data's pros).
-export async function botIdentities() { return (await fromLiquipedia()) || fromPros(); }
+// The NPC players, offline (null online, where they aren't). Their loadout is what they own as the match starts (worked
+// out when it's first asked for: only those picked are).
+async function fromNpcs() {
+  if (online()) return null;
+  if (!S.social) await act('npc.tick').catch(() => {});
+  const so = S.social;
+  if (!so) return null;
+  return crowd(so.seed).map((n) => {
+    let loadout = null;
+    return { id: 'npc-' + n.id, npc: n.id, name: n.name, country: n.country || null, team: null, level: n.level,
+      avatar: D.agents[n.avatar]?.img ? imgUrl(D.agents[n.avatar].img, 's') : null, source: 'npc',
+      get loadout() { return (loadout ||= loadoutOf(inventoryOf(so, n))); } };
+  });
+}
+
+// Everyone the bots can be: offline the NPC players, else Liquipedia's players if they're there, else the game data's pros.
+export async function botIdentities() { return (await fromNpcs()) || (await fromLiquipedia()) || fromPros(); }
 
 // n identities at random, none twice (fewer if there aren't enough); rng: () => 0..1.
 export function pickIdentities(list, n, rng = Math.random) {

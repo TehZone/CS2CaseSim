@@ -732,6 +732,13 @@ function tierFreq(box, n) {
   const stored = Object.keys(st.social.npcs)[0];
   check('NPCs: the Item Database offline has everyone’s items (thousands), as the save has them for those you dealt with', copies.length > 5000 && owners.size > 300
     && copies.filter((c) => c.npc === stored).length === st.social.npcs[stored].inv.length, `${copies.length} copies, ${owners.size} owners`);
+  const loads = N.crowd(st.social.seed).map((n) => [n, N.loadoutOf(N.inventoryOf(st.social, n))]);
+  const own = (n, it) => N.inventoryOf(st.social, n).includes(it);
+  const fits = loads.every(([n, l]) => Object.entries(l.guns).every(([wid, it]) => own(n, it) && I.itemDef(it).wid === wid
+    && N.inventoryOf(st.social, n).every((x) => x.t !== 'skin' || I.itemDef(x)?.wid !== wid || I.itemValue(x) <= I.itemValue(it)))
+    && (!l.knife || (own(n, l.knife) && I.itemDef(l.knife).cat === 'knife')) && (!l.gloves || (own(n, l.gloves) && I.itemDef(l.gloves).cat === 'gloves')));
+  const withAk = loads.filter(([, l]) => l.guns.weapon_ak47).length, withKnife = loads.filter(([, l]) => l.knife).length;
+  check('NPCs: their Play loadout is their best skin for each gun, knife and gloves (from what they own)', fits && withAk > 100 && withKnife > 50, `${withAk} with an AK skin, ${withKnife} with a knife`);
   const me = run('persona.set', { name: 'dawso', bio: 'hi <b>', showcase: [st.inv[0].uid, 'nope'], country: 'US', avatar: Object.keys(D.agents)[0] }).r.me;
   check('your profile: name, bio (cleaned), showcase of your own items only', me.name === 'dawso' && me.bio === 'hi b' && me.showcase.length === 1 && me.country === 'US');
 }

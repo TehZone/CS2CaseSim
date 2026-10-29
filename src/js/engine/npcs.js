@@ -216,21 +216,39 @@ export function npcState(so, id) {
   return so.npcs[id];
 }
 
-// Everything everyone owns, for the Item Database offline: [{ npc, owner, item }]. Those you've dealt with as the save
-// has them; the rest as they start (worked out once a session: they don't change until you deal with them).
+// What someone owns: as the save has it once you've dealt with them, else as they start (worked out once a session:
+// it doesn't change until you deal with them). worldCopies: everything everyone owns, for the Item Database offline:
+// [{ npc, owner, item }].
 const starts = new Map();
-export function worldCopies(so) {
-  if (!so) return [];
+export function inventoryOf(so, n) {
+  if (so.npcs[n.id]) return so.npcs[n.id].inv;
   let gen = starts.get(so.seed);
   if (!gen || gen.data !== D.generatedAt) starts.set(so.seed, (gen = { data: D.generatedAt, inv: new Map() }));
+  if (!gen.inv.has(n.id)) gen.inv.set(n.id, startingState(so.seed, n).inv.map((it, k) => ({ ...it, uid: `${n.id}:${k}` })));
+  return gen.inv.get(n.id);
+}
+export function worldCopies(so) {
+  if (!so) return [];
   const out = [];
-  for (const n of crowd(so.seed)) {
-    let inv = so.npcs[n.id]?.inv;
-    if (!inv) {
-      if (!gen.inv.has(n.id)) gen.inv.set(n.id, startingState(so.seed, n).inv.map((it, k) => ({ ...it, uid: `${n.id}:${k}` })));
-      inv = gen.inv.get(n.id);
-    }
-    for (const item of inv) out.push({ npc: n.id, owner: n.name, item });
+  for (const n of crowd(so.seed)) for (const item of inventoryOf(so, n)) out.push({ npc: n.id, owner: n.name, item });
+  return out;
+}
+
+// What they play with in Play (they're the bots offline, see play/identity.js): for each gun the best skin they own
+// for it, and their best knife and gloves, as if they'd equipped them. { guns: { weapon_ak47: item, ... }, knife, gloves }
+// (null when they own none).
+export function loadoutOf(inv) {
+  const out = { guns: {}, knife: null, gloves: null }, worth = new Map();
+  const better = (cur, it) => {
+    if (!worth.has(it)) worth.set(it, I.itemValue(it));
+    return !cur || worth.get(it) > worth.get(cur) ? it : cur;
+  };
+  for (const it of inv) {
+    const def = it.t === 'skin' ? I.itemDef(it) : null;
+    if (!def?.wid) continue;
+    if (def.cat === 'knife') out.knife = better(out.knife, it);
+    else if (def.cat === 'gloves') out.gloves = better(out.gloves, it);
+    else if (def.wid.startsWith('weapon_')) out.guns[def.wid] = better(out.guns[def.wid], it);
   }
   return out;
 }
