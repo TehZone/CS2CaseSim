@@ -364,7 +364,7 @@ What's in a match:
   make them walk away), or just type ("would you do $500? it's a 0.01 float"). Items you sell sometimes end up in their
   inventories. Everyone owns part of the world's items: offline, the Item Database shows every copy they own (about
   63,000 of 2,100 items) and yours, with float ranks among all of them; click an owner to visit their profile, add them
-  or make an offer. They are also the bots in Play (offline), with their skins
+  or make an offer. They are also the bots in Play (offline): names, countries and avatars
 - Friends & Chat like Steam's (the people icon at the top): friends by status (In-Game, Online, Offline), friend requests,
   chats, and profiles with level, Service Medal, item showcase, comments (+rep after trades) and their whole inventory,
   to make them an offer from. Your own profile: name, avatar (any agent), country, summary, a CS2 map behind it and up
