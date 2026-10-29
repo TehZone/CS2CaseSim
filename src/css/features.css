@@ -433,13 +433,13 @@ body.is-online .offline-only { display: none !important; }
 .ch-head .grow { flex: 1; min-width: 160px; }
 .ch-name { font-size: 17px; font-weight: 700; color: #fff; }
 .msgs { flex: 1; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 290px); min-height: 360px; }
-.msg { display: flex; gap: 8px; align-items: flex-end; max-width: 82%; }
-.msg.me { align-self: flex-end; flex-direction: row-reverse; }
-.msg .bub { background: #2b3540; padding: 8px 11px; border-radius: 3px; min-width: 0; }
-.msg.me .bub { background: #2a4d63; }
-.msg .txt { white-space: pre-wrap; word-break: break-word; font-size: 14px; color: #e8edf1; }
-.msg .when { font-size: 10px; color: var(--dim); margin-top: 3px; }
-.msg.typing .txt { color: var(--muted); font-style: italic; }
+.msgs .msg { display: flex; gap: 8px; align-items: flex-end; max-width: 82%; }
+.msgs .msg.me { align-self: flex-end; flex-direction: row-reverse; }
+.msgs .msg .bub { background: #2b3540; padding: 8px 11px; border-radius: 3px; min-width: 0; }
+.msgs .msg.me .bub { background: #2a4d63; }
+.msgs .msg .txt { white-space: pre-wrap; word-break: break-word; font-size: 14px; color: #e8edf1; }
+.msgs .msg .when { font-size: 10px; color: var(--dim); margin-top: 3px; }
+.msgs .msg.typing .txt { color: var(--muted); font-style: italic; }
 .composer { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); }
 .composer .input { flex: 1; }
 .npc-offer { margin-top: 8px; padding: 10px; background: rgba(0, 0, 0, .35); border: 1px solid rgba(255, 255, 255, .1); display: grid; gap: 8px; min-width: 420px; }
