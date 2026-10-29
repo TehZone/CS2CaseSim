@@ -169,18 +169,66 @@ body.match-menu #menu-bg { visibility: hidden; }
 .play-hud .feed .wpn.icon { flex: none; height: 20px; width: auto; }
 .play-hud .feed .km { width: 18px; height: 18px; flex: none; color: #fff; }
 
-/* round messages; round-end banners span the screen in the winning team's colour */
+/* round messages (display and max-width: not the friends chat's .msg) */
 .play-hud .msg {
-  position: absolute; left: 50%; top: 20%; transform: translateX(-50%); text-align: center; white-space: nowrap; opacity: 0; transition: opacity .25s;
+  position: absolute; left: 50%; top: 20%; transform: translateX(-50%); display: block; max-width: none; text-align: center; white-space: nowrap; opacity: 0; transition: opacity .25s;
   font-size: 19px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; padding: 8px 60px;
   background: linear-gradient(90deg, transparent, rgba(0, 0, 0, .55) 20%, rgba(0, 0, 0, .55) 80%, transparent);
 }
 .play-hud .msg.show { opacity: 1; }
 .play-hud .msg small { display: block; font-size: 15px; font-weight: 500; letter-spacing: .06em; text-transform: none; opacity: .92; margin-top: 2px; }
-.play-hud .msg.banner { left: 0; right: 0; transform: none; padding: 14px 0 12px; background: linear-gradient(90deg, transparent 6%, rgba(0, 0, 0, .62) 30%, rgba(0, 0, 0, .62) 70%, transparent 94%); }
-.play-hud .msg.banner:has(b.ct) { background: linear-gradient(90deg, transparent 6%, rgba(54, 94, 154, .82) 30%, rgba(54, 94, 154, .82) 70%, transparent 94%); }
-.play-hud .msg.banner:has(b.t) { background: linear-gradient(90deg, transparent 6%, rgba(164, 118, 30, .84) 30%, rgba(164, 118, 30, .84) 70%, transparent 94%); }
-.play-hud .msg.banner b { display: block; font-size: 42px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; font-family: var(--font-cond); color: #fff; line-height: 1.1; }
+/* The round's result: CS2's win panel (hudwinpanel.vcss), sized in its 1080-high units (u) of the screen. A 400 x 80 box
+   190 down in the winning side's dark tint with its colour down each side, the title in that colour (shrunk to fit its
+   340) between two double arrows that slide in, how the round ended under it; then the MVP's strip, faded at its ends,
+   flashing white as it opens. */
+.play-hud .winpanel {
+  --u: calc(100cqh / 1080); --c: rgb(150, 200, 250); --bg: rgba(9, 40, 61, .85);
+  position: absolute; left: 0; right: 0; top: calc(var(--u) * 190); display: flex; flex-direction: column; align-items: center; gap: calc(var(--u) * 16);
+  pointer-events: none; opacity: 0; transition: opacity .3s ease-out;
+}
+.play-hud .winpanel.t { --c: #eabe54; --bg: rgba(66, 46, 8, .85); }
+.play-hud .winpanel.show { opacity: 1; }
+.play-hud .wp-result {
+  position: relative; box-sizing: border-box; width: calc(var(--u) * 400); height: calc(var(--u) * 80); display: flex; align-items: center; justify-content: center;
+  border: solid var(--c); border-width: 0 calc(var(--u) * 4); border-radius: calc(var(--u) * 3); background: var(--bg); backdrop-filter: blur(2px);
+  opacity: 0; transform: scaleX(0); transition: transform .25s ease-in, opacity .25s ease-in;
+}
+.play-hud .winpanel.show .wp-result { opacity: 1; transform: none; }
+.play-hud .wp-result b {
+  flex: none; width: calc(var(--u) * 340); margin-bottom: calc(var(--u) * 14); text-align: center; white-space: nowrap; line-height: 1;
+  font-family: var(--font-cond); font-weight: 700; text-transform: uppercase; color: var(--c); text-shadow: 0 0 8px rgba(53, 53, 53, .73);
+  font-size: calc(var(--u) * 64 * var(--fit, 1)); letter-spacing: calc(var(--u) * 8 * var(--fit, 1));
+}
+.play-hud .wp-result b span { display: inline-block; margin-right: calc(var(--u) * -8 * var(--fit, 1)); } /* (no spacing after the last letter) */
+.play-hud .wp-arrows {
+  position: absolute; left: calc(var(--u) * 12); top: calc(var(--u) * 25); width: calc(var(--u) * 15); height: calc(var(--u) * 16); background: #fff;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 16'%3E%3Cpath d='M6 8L14.667 0v3.333L9.333 8l5.334 4.667V16zM0 8L8.667 0v3.333L3.333 8l5.334 4.667V16z'/%3E%3C/svg%3E") center / contain no-repeat;
+  transform: translateX(calc(var(--u) * -25)) scaleX(-1); transition: transform .25s ease-in .5s, background-color .25s ease-in .5s;
+}
+.play-hud .wp-arrows.r { left: auto; right: calc(var(--u) * 12); transform: translateX(calc(var(--u) * 25)); }
+.play-hud .winpanel.show .wp-arrows { transform: scaleX(-1); background: var(--c); }
+.play-hud .winpanel.show .wp-arrows.r { transform: none; }
+.play-hud .wp-result small {
+  position: absolute; left: 0; right: 0; bottom: calc(var(--u) * 3); text-align: center; white-space: nowrap; line-height: calc(var(--u) * 16);
+  font-size: calc(var(--u) * 12); color: #fff; text-shadow: 0 0 8px rgba(20, 20, 20, .78); opacity: 0; transition: opacity .25s ease-in;
+}
+.play-hud .winpanel.show .wp-result small { opacity: 1; }
+.play-hud .wp-mvp {
+  position: relative; width: calc(var(--u) * 640); height: calc(var(--u) * 90); display: flex; align-items: center; justify-content: center; gap: calc(var(--u) * 8);
+  background: var(--bg); border-radius: calc(var(--u) * 3); -webkit-mask-image: linear-gradient(90deg, transparent, #000 13%, #000 87%, transparent);
+  opacity: 0; transform: scaleX(0); transition: transform .25s ease-in-out, opacity .25s ease-in-out;
+}
+.play-hud .wp-mvp::after { content: ''; position: absolute; inset: 0; background: #fff; transition: opacity .2s ease-in; }
+.play-hud .winpanel.show.mvp .wp-mvp { opacity: 1; transform: none; transition-delay: .25s; }
+.play-hud .winpanel.show.mvp .wp-mvp::after { opacity: 0; transition-delay: .5s; }
+.play-hud .wp-avatar { flex: none; width: calc(var(--u) * 72); height: calc(var(--u) * 72); background: linear-gradient(#6d6d6d, #464646); overflow: hidden; }
+.play-hud .wp-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.play-hud .wp-who { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; font-family: var(--font-cond); }
+.play-hud .wp-who em { font-style: normal; font-weight: 500; text-shadow: none; font-size: calc(var(--u) * 18); line-height: calc(var(--u) * 21); padding: 0 calc(var(--u) * 6); color: #000; background: var(--c); white-space: nowrap; }
+.play-hud .wp-who b {
+  max-width: calc(var(--u) * 250); font-size: calc(var(--u) * 28); line-height: calc(var(--u) * 38); font-weight: 700; color: var(--c); filter: brightness(1.5);
+  text-shadow: 0 2px 4px rgba(20, 20, 20, .86); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .play-hud .msg.bomb { background: linear-gradient(90deg, transparent, rgba(150, 18, 14, .75) 20%, rgba(150, 18, 14, .75) 80%, transparent); font-size: 24px; }
 /* plant / defuse / respawn progress */
 .play-hud .progress { position: absolute; left: 50%; top: 63%; transform: translateX(-50%); width: 300px; height: auto; overflow: visible; box-shadow: none; text-align: center; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; padding: 8px 12px 10px; background: rgba(0, 0, 0, .5); }

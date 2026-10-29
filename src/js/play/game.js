@@ -832,6 +832,7 @@ export class Game {
     this.plans = { T: teamPlan(this, 'T', econ.T), CT: teamPlan(this, 'CT', econ.CT) };
     for (const b of this.bots) b.brain.plan = this.plans[b.c.team];
     this.liveAt = Infinity;
+    this.hud.winPanel(null);
     this.hud.message(overtime ? `Overtime ${overtime} · $12,500 each` : halftime ? 'Switching sides' : round === 1 ? 'Match start · Round 1' : `Round ${round}`, 2500);
     this.sounds.stop('voice', 0.2);
     this.sounds.channel('music', `Music.StartRound.${MUSIC}`, { volume: 0.35 * this.musicVolume }, 0.8);
@@ -1032,9 +1033,16 @@ export class Game {
   onRoundEnd(winner, reason, mvp) {
     const site = this.match.bomb?.site || (this.plans?.T?.site && this.match.bomb?.state !== 'carried' ? this.plans.T.site : null);
     if (site) (this.tSiteHistory ||= []).push(site);
-    const sideName = winner === 'CT' ? 'Counter-Terrorists' : 'Terrorists';
-    const why = { elimination: '', bomb: 'The bomb has exploded', defuse: 'The bomb has been defused', time: 'Time ran out' }[reason];
-    this.hud.message(`<b class="${winner === 'CT' ? 'ct' : 't'}">${sideName} win</b>${why ? `<small>${why}</small>` : ''}${mvp ? `<small>MVP: ${mvp.name}</small>` : ''}`, 6500, 'banner');
+    // CS2's win panel, in its words: the title, how the round ended (its round history's), the MVP and what for. It stays
+    // up until the next round starts.
+    const why = reason === 'elimination' ? (winner === 'CT' ? 'Terrorists eliminated' : 'CTs eliminated')
+      : { bomb: 'Bomb detonated', defuse: 'Bomb defused', time: 'Bombing failed' }[reason];
+    const k = mvp?.roundKills || 0;
+    const award = reason === 'defuse' ? 'MVP for defusing the bomb' : reason === 'bomb' ? 'MVP for planting the bomb'
+      : k >= 5 ? 'MVP for an Ace Round' : k === 4 ? 'MVP for most kills (4k)' : k === 3 ? 'MVP for most kills (3k)' : 'MVP';
+    this.hud.hideMessage();
+    this.hud.winPanel({ team: winner, title: winner === 'CT' ? 'Counter-Terrorists Win' : 'Terrorists Win', why,
+      mvp: mvp && { name: mvp.name, avatar: mvp.identity?.avatar || null, reason: award } });
     this.sounds.play(winner === 'CT' ? 'Event.CTWin' : 'Event.TERWin', { volume: 0.9 });
     this.sounds.channel('music', winner === this.me.team ? `Music.WonRound.${MUSIC}` : `Music.LostRound.${MUSIC}`, { volume: 0.4 * this.musicVolume }, 0.4);
     this.planting = null;
@@ -1055,7 +1063,7 @@ export class Game {
     const stats = [`${me.kills} / ${me.deaths} / ${me.assists} K/D/A`, this.respawnMode ? `${me.points || 0} points` : `${Math.round(me.damage / rounds)} ADR`, `${hs}% headshots`,
       me.shots ? `${Math.round(((me.hits || 0) / me.shots) * 100)}% accuracy` : '', this.respawnMode ? '' : `${me.mvps} MVPs`, multi].filter(Boolean).join(' · ');
     this.reward = this.payReward(won, draw);
-    this.hud.hideMessage(); // (the last round's banner: the match's result takes its place)
+    this.hud.winPanel(null); // (the last round's result: the match's takes its place, as in CS2)
     // (Only matchmaking moves a rank: a private match is practice.)
     const ranked = this.ranked;
     this.hud.endScreen(`<h1 class="${draw ? '' : won ? 'win' : 'loss'}">${draw ? 'Draw' : won ? 'Victory' : 'Defeat'}</h1>

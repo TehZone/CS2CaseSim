@@ -33,6 +33,10 @@ export class Hud {
       <div class="chat" data-chat><div class="chat-lines" data-chat-lines></div><form class="chat-say hidden" data-chat-say><span data-chat-label>Say :</span><input maxlength="127" spellcheck="false" autocomplete="off"></form></div>
       <div class="radio hidden" data-radio></div>
       <div class="msg" data-msg></div>
+      <div class="winpanel" data-win>
+        <div class="wp-result"><i class="wp-arrows"></i><b><span data-win-title></span></b><i class="wp-arrows r"></i><small data-win-why></small></div>
+        <div class="wp-mvp"><span class="wp-avatar" data-win-avatar></span><span class="wp-who"><em data-win-reason></em><b data-win-name></b></span></div>
+      </div>
       <div class="progress hidden" data-progress><span data-progress-label></span><i><b data-progress-bar></b></i></div>
       <div class="spec hidden" data-spec></div>
       <div class="bottom">
@@ -183,6 +187,29 @@ export class Hud {
     if (ms) this.msgTimer = setTimeout(() => { m.className = 'msg'; }, ms);
   }
   hideMessage() { clearTimeout(this.msgTimer); this.q('[data-msg]').className = 'msg'; }
+
+  // The round's result as CS2 shows it (its HudWinPanel): the winning side's title in a box of its colour, how the round
+  // was won under it, and the MVP and what for (CS2's words) in a strip below. { team, title, why, mvp: { name, avatar,
+  // reason } }; null hides it.
+  winPanel(r) {
+    const el = this.q('[data-win]');
+    if (!r) { el.className = 'winpanel ' + (el.classList.contains('t') ? 't' : 'ct'); return; }
+    el.className = 'winpanel ' + (r.team === 'T' ? 't' : 'ct');
+    this.q('[data-win-title]').textContent = r.title;
+    this.q('[data-win-why]').textContent = r.why || '';
+    const m = r.mvp;
+    this.q('[data-win-reason]').textContent = m?.reason || '';
+    this.q('[data-win-name]').textContent = m?.name || '';
+    this.q('[data-win-avatar]').innerHTML = m?.avatar ? `<img src="${esc(m.avatar)}" alt="" draggable="false">` : '';
+    // A title too wide for its box shrinks to fit (CS2's text-overflow: shrink). (CS2 also starts it half as big again and
+    // lets it settle over 5 s, but both sides' titles fill the box, so that ran them under the arrows: left out.)
+    const t = this.q('[data-win-title]'), box = t.parentElement;
+    box.style.setProperty('--fit', 1);
+    box.style.setProperty('--fit', Math.min(1, box.clientWidth / Math.max(1, t.offsetWidth)).toFixed(3));
+    void el.offsetWidth; // (from where it was hidden, so it opens out again)
+    el.classList.add('show');
+    el.classList.toggle('mvp', !!m);
+  }
 
   progress(label, frac) {
     const show = frac != null;

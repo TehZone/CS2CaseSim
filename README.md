@@ -156,7 +156,9 @@ What's in a match:
   long as you hold the button and keep the crosshair; tracers come out of the gun's barrel (yours and the bots').
 - Radar (CS2's overview of the map), kill feed (with CS2's marks for headshots, wallbangs, kills through smoke, jumping,
   no-scope and blinded kills), scoreboard (Tab), damage direction, death cam and spectating teammates (first person
-  with their gun, like CS2; Jump for third person), CS2's announcer, round music and bomb sounds, and an end screen with
+  with their gun, like CS2; Jump for third person), CS2's win panel at the end of each round (the side's title in its
+  colours, how the round ended, the MVP and what for, in CS2's words, until the next round starts; `CS2SIM_SMOKE=winbanner`
+  plays out each way a round ends and screenshots it), CS2's announcer, round music and bomb sounds, and an end screen with
   your K/D/A, ADR, headshots, accuracy, MVPs and multi-kills, then what the match paid (the result, your kills of
   enemies and your assists: see Features) and the XP it gave, with your level's bar, and a level up or a Service Medal
   with CS2's sound; the scoreboard under it. You can inspect your weapon during freeze time.

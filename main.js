@@ -281,6 +281,8 @@ app.commandLine.appendSwitch('enable-precise-memory-info');
 // e.g. --log-deopt --logfile=C:/temp/v8.log --no-logfile-per-isolate: every function deoptimized, where and why.)
 app.commandLine.appendSwitch('js-flags', ['--expose-gc', '--no-memory-reducer', process.env.CS2SIM_SMOKE_JSFLAGS].filter(Boolean).join(' '));
 if (process.env.CS2SIM_SMOKE_NOSANDBOX) app.commandLine.appendSwitch('no-sandbox');
+// (A smoke's window keeps drawing, its game and its CSS animations running, when other windows cover it.)
+if (SMOKE) { app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion'); app.commandLine.appendSwitch('disable-backgrounding-occluded-windows'); }
 if (process.env.CS2SIM_SMOKE === 'perf' || readDisplay().uncapped) { app.commandLine.appendSwitch('disable-frame-rate-limit'); app.commandLine.appendSwitch('disable-gpu-vsync'); }
 
 // `CS2SIM_SMOKE=features`: opens a souvenir package and a player pack, plays a bot battle and a team match, signs
@@ -1354,6 +1356,67 @@ async function runAspectSmoke(win) {
     win.webContents.invalidate();
     await js('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
     fs.writeFileSync(path.join(app.getPath('userData'), `aspect-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  }
+  app.quit();
+}
+
+// `CS2SIM_SMOKE=winbanner` plays out each way a round ends on Dust II (CS2SIM_SMOKE_MAP), the real way, with the bots
+// stopped: the CTs win by eliminating the terrorists, by defusing the bomb and by the time running out, the terrorists
+// by eliminating the CTs and by the bomb exploding. For each it logs the win panel (where it is, its colours and text,
+// the MVP) a second in, how long it stays and the next round's message, with a screenshot (userData/winbanner-*.png;
+// CS2SIM_SMOKE_ASPECT=4:3 plays them stretched to 4:3).
+async function runWinSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const map = process.env.CS2SIM_SMOKE_MAP || 'de_dust2';
+  win.setContentSize(1600, 900);
+  await wait(3000);
+  await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'competitive', map: '${map}', teamSize: 5, aspect: 'native' })); })(); 1`);
+  if (!(await smokeStartMap(win, map, 'winbanner'))) return app.quit();
+  await js(`(() => { const g = window.__playGame;
+    document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
+    const css = document.createElement('style'); css.textContent = '.play-click, .play-scrim { display: none !important; }'; document.head.appendChild(css);
+    g.console.run('sv_cheats 1'); g.cv.bot_stop = 1;
+    if (${JSON.stringify(process.env.CS2SIM_SMOKE_ASPECT || '')}) g.applySettings({ ...g.settings, aspect: ${JSON.stringify(process.env.CS2SIM_SMOKE_ASPECT || '')}, scaling: 'stretched', resolution: 'native' }, null);
+    return 1; })()`);
+  const cases = [['ct-elimination', 'CT'], ['ct-defuse', 'CT'], ['ct-time', 'CT'], ['t-elimination', 'T'], ['t-bomb', 'T']];
+  for (const [name] of cases) {
+    // To the next round's live phase, then end it this way.
+    console.log(`SMOKE winbanner ${name}: ` + await js(`(async () => { const g = window.__playGame, m = g.match, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      for (let i = 0; i < 200 && m.phase !== 'freeze' && m.phase !== 'live'; i++) await sleep(100);
+      if (m.phase === 'freeze') { m.time = 0; await sleep(300); }
+      const killSide = (side) => { g.console.run('bot_kill ' + side.toLowerCase()); if (g.me.team === side && g.me.alive) g.kill(g.me, null, { name: 'World' }, false); };
+      const site = (g.map.info.bombsites || [])[0], sitePos = site && [(site.min[0] + site.max[0]) / 2, (site.min[1] + site.max[1]) / 2, site.min[2] + 2];
+      const plant = () => { const t = g.combatants.find((c) => c.team === 'T' && c.alive); t.hasC4 = true; m.planted(t, g.onFloor(sitePos)); };
+      const name = '${name}';
+      if (name === 'ct-elimination') killSide('T');
+      else if (name === 'ct-defuse') { plant(); await sleep(500); m.bomb.defuser = g.combatants.find((c) => c.team === 'CT' && c.alive); m.defused(); }
+      else if (name === 'ct-time') m.time = 0.01;
+      else if (name === 't-elimination') killSide('CT');
+      else if (name === 't-bomb') { plant(); await sleep(500); m.bomb.plantedAt = g.now - m.rules.bombTime; }
+      const t0 = performance.now();
+      for (let i = 0; i < 100 && m.phase !== 'end'; i++) await sleep(20);
+      await sleep(1000);
+      const el = g.hud.q('[data-win]'), q = (s) => el.querySelector(s), r = (e) => { const b = e?.getBoundingClientRect(); return b ? Math.round(b.width) + '×' + Math.round(b.height) + ' at ' + Math.round(b.left) + ',' + Math.round(b.top) : 'none'; };
+      const title = q('[data-win-title]'), tcs = getComputedStyle(title.parentElement), box = getComputedStyle(q('.wp-result'));
+      window.__winShown = t0;
+      return JSON.stringify({ phase: m.phase, last: m.history.at(-1), cls: el.className, opacity: getComputedStyle(el).opacity, screen: r(g.screen),
+        box: r(q('.wp-result')) + ' ' + box.backgroundColor + ' border ' + box.borderLeftColor + ' ' + box.borderLeftWidth,
+        title: '"' + title.textContent + '" ' + r(title) + ' ' + tcs.fontSize + ' ' + tcs.color + ' fit ' + (tcs.getPropertyValue('--fit') || '1'),
+        why: '"' + q('[data-win-why]').textContent + '" ' + r(q('[data-win-why]')),
+        mvp: '"' + q('[data-win-reason]').textContent + '" / "' + q('[data-win-name]').textContent + '" ' + r(q('.wp-mvp')) + (q('[data-win-avatar] img') ? ' with avatar' : ' no avatar'),
+        announcer: (m.history.at(-1)?.winner === 'CT' ? 'Event.CTWin ' : 'Event.TERWin ') + (g.sounds.has(m.history.at(-1)?.winner === 'CT' ? 'Event.CTWin' : 'Event.TERWin') ? 'loaded' : 'missing'),
+        oldBanner: g.hud.q('[data-msg]').className, score: m.score });
+    })()`));
+    win.webContents.invalidate();
+    await js('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
+    fs.writeFileSync(path.join(app.getPath('userData'), `winbanner-${name}${process.env.CS2SIM_SMOKE_ASPECT ? '-' + process.env.CS2SIM_SMOKE_ASPECT.replace(':', 'x') : ''}.png`), (await win.webContents.capturePage()).toPNG());
+    // How long it stays (until the next round starts), and that round's message.
+    console.log(`SMOKE winbanner ${name} shown for: ` + await js(`(async () => { const g = window.__playGame, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      for (let i = 0; i < 120 && g.hud.q('[data-win]').classList.contains('show'); i++) await sleep(100);
+      await sleep(400);
+      const msg = g.hud.q('[data-msg]'), b = msg.getBoundingClientRect();
+      return ((performance.now() - window.__winShown) / 1000).toFixed(1) + ' s, until the phase is ' + g.match.phase + '; then "' + (msg.classList.contains('show') ? msg.textContent : '') + '" ' + getComputedStyle(msg).display + ' ' + Math.round(b.width) + ' wide, centred at ' + Math.round(b.left + b.width / 2); })()`));
   }
   app.quit();
 }
@@ -2586,6 +2649,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'maps') { win.webContents.once('did-finish-load', () => runMapsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'aspect') { win.webContents.once('did-finish-load', () => runAspectSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'winbanner') { win.webContents.once('did-finish-load', () => runWinSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'drops') { win.webContents.once('did-finish-load', () => runDropsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'breakables') { win.webContents.once('did-finish-load', () => runBreakSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'look') { win.webContents.once('did-finish-load', () => runLookSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
