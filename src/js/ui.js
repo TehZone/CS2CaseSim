@@ -243,6 +243,21 @@ function crateKeyHint(item) {
   const c = I.itemDef(item), key = keyFor(c);
   return key ? D.keys[key].n : 'No key needed';
 }
+// Buying a key for a case you own (cases.js buyCrateKey): whether it did.
+async function buyCrateKey(item) {
+  const { buyCrateKey: buy } = await import('./pages/cases.js');
+  return buy(item);
+}
+const keysFor = (key) => S.inv.filter((it) => it.t === 'key' && it.id === key && !it.lk).length;
+// A case's buttons in its details: Open (with one of your keys, or Buy key & open when you have none) and Buy key.
+function crateButtons(item, d) {
+  const key = keyFor(d);
+  if (!key) return `<button class="btn gold" data-a="open" ${item.lk ? 'disabled' : ''}>Open</button>`;
+  const k = D.keys[key], have = keysFor(key);
+  return (have ? `<button class="btn gold" data-a="open" ${item.lk ? 'disabled' : ''}>Open (uses a ${esc(k.n)})</button>`
+    : `<button class="btn gold" data-a="buyopen" ${item.lk ? 'disabled' : ''} title="Buys a ${esc(k.n)} and opens this case with it">Buy key &amp; open · ${money(D.keyPrice)}</button>`)
+    + `<button class="btn" data-a="buykey" title="A ${esc(k.n)}, to your inventory (you have ${have})"><img src="${imgUrl(k.img, 's')}" alt="" style="height:18px;vertical-align:middle;margin:-3px 6px 0 0">Buy key · ${money(D.keyPrice)}</button>`;
+}
 async function equipItem(item) {
   if (!(await tryAct('loadout.equip', { uid: item.uid }))) return false;
   toast(`Equipped ${esc(I.itemName(item))}${I.loadoutSlot(item) === 'gloves' ? ' — you’ll see them in the first-person inspect' : ''}`, 'good');
@@ -258,6 +273,7 @@ export function itemContextMenu(e, item, { onChange } = {}) {
   const items = [
     item.t === 'crate' ? { label: 'Open', icon: 'crate', hint: crateKeyHint(item), disabled: !!item.lk, action: () => openCrateItem(item) }
       : canInspect(item) ? { label: 'Inspect', icon: 'zoom_in', hint: '3D', action: () => openInspect(item) } : null,
+    item.t === 'crate' && keyFor(I.itemDef(item)) ? { label: 'Buy key', icon: 'key', hint: `${money(D.keyPrice)} · you have ${keysFor(keyFor(I.itemDef(item)))}`, action: () => buyCrateKey(item).then(done) } : null,
     { label: 'Details', icon: 'info', action: () => showItemDetail(item, { onChange }) },
     '-',
   ].filter(Boolean);
@@ -428,7 +444,7 @@ function detailBody(item) {
         ${lines.map(([k, v]) => `<div class="line"><span>${k}</span><span>${v}</span></div>`).join('')}
       </div>
       <div class="actions">
-        ${item.t === 'crate' ? `<button class="btn gold" data-a="open" ${item.lk ? 'disabled' : ''}>Open${keyFor(d) ? ` (uses a ${esc(D.keys[keyFor(d)].n)})` : ''}</button>` : canInspect(item) ? '<button class="btn gold" data-a="inspect">Inspect in 3D</button>' : ''}
+        ${item.t === 'crate' ? crateButtons(item, d) : canInspect(item) ? '<button class="btn gold" data-a="inspect">Inspect in 3D</button>' : ''}
         ${I.canHaveStickers(item) ? `<button class="btn" data-a="stickers">Stickers (${item.stk?.length || 0}/${I.MAX_STICKERS})</button>` : ''}
         ${I.canHaveCharm(item) ? (item.kc ? '<button class="btn" data-a="charm-move">Move charm</button><button class="btn" data-a="charm-off">Remove charm</button>' : '<button class="btn" data-a="charm-on">Attach charm</button>') : ''}
         ${item.t === 'charm' ? '<button class="btn" data-a="charm-hang">Attach to a gun</button>' : ''}
@@ -482,6 +498,8 @@ export function showItemDetail(item, { onChange } = {}) {
       const a = b.dataset.a;
       if (a === 'inspect') openInspect(item);
       if (a === 'open') { m.close(); openCrateItem(item); }
+      if (a === 'buykey' && await buyCrateKey(item)) refresh();
+      if (a === 'buyopen' && await buyCrateKey(item)) { m.close(); openCrateItem(item); }
       if (a === 'lock') { if (await tryAct('item.lock', { uid: item.uid, lk: !item.lk })) refresh(); }
       if (a === 'equip' && await equipItem(item)) refresh();
       if (a === 'unequip' && await tryAct('loadout.unequip', { uid: item.uid })) refresh();

@@ -463,9 +463,10 @@ function shortfall(c, n) {
   const list = [cases && `${cases} more ${c.n}${cases === 1 ? '' : 's'}`, keys && `${keys} more ${D.keys[key].n}${keys === 1 ? '' : 's'}`].filter(Boolean);
   return { cases, keys, cost: round2(cases * c.price + keys * D.keyPrice), list };
 }
-// Buys n cases, n keys, or both (what: 'case' | 'key' | 'both'), into your inventory.
+// Buys n cases, n keys, or both (what: 'case' | 'key' | 'both'), into your inventory. Returns whether it did.
 async function buy(c, what, n) {
   const key = keyFor(c);
+  let ok = false;
   try {
     const cost = round2((what !== 'key' ? c.price : 0) * n + (what !== 'case' ? D.keyPrice : 0) * n);
     if (S.money + 1e-9 < cost) throw Object.assign(new Error(`You need ${money(cost)}`), { code: 'funds' });
@@ -477,11 +478,18 @@ async function buy(c, what, n) {
     const noCase = what === 'key' && ownedCases(c).length < ownedKeys(c).length;
     toast(`Bought ${n > 1 ? n + ' × ' : ''}<b>${esc(name)}</b> for <b>${money(cost)}</b>. It's in your inventory.${noCase ? ' You also need the case itself to open it: <b>Buy case</b>.' : ''}`, noCase ? 'gold' : 'good');
     if (stars) toast(`+${stars} Armory Star${stars > 1 ? 's' : ''} for buying cases`, 'gold');
+    ok = true;
   } catch (e) {
     sfx.error();
     toast(esc(e.message) + (e.code === 'funds' ? '. Win matches in <b>Play</b> or sell items.' : ''), 'bad');
   }
   if (view.mode === 'case' && view.caseId === c.id && rootEl?.isConnected) renderCase(rootEl, c);
+  return ok;
+}
+// A key for a case in your inventory (its details or right-click menu). Returns whether it bought one.
+export function buyCrateKey(item) {
+  const c = D.caseById[item.id];
+  return c && keyFor(c) ? buy(c, 'key', 1) : Promise.resolve(false);
 }
 // Buys what's missing to open n (auto open, "Buy & open again"). Returns what it cost; throws if you can't afford it.
 async function buyMissing(c, n) {
