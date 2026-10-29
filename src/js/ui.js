@@ -530,7 +530,7 @@ export function openInspect(item, { placeCharm = false } = {}) {
     item.t === 'charm' && item.pat ? 'Pattern #' + item.pat.toLocaleString() : ''].filter(Boolean).join('  ·  ');
   wrap.innerHTML = `
     <div class="stage"></div>
-    <div class="loading">Loading model…</div>
+    <div class="loading">Loading…</div>
     <div class="insp-bar">
       <button class="insp-back" data-a="close" data-tip="Back (Esc)">${iconHtml('back', '<svg viewBox="0 0 32 32"><path d="M13 7l2.1 2.1-5.4 5.4H27v3H9.7l5.4 5.4L13 25 4 16z"/></svg>')}<span>Back</span></button>
       <span class="spacer"></span>
@@ -555,15 +555,11 @@ export function openInspect(item, { placeCharm = false } = {}) {
   document.body.appendChild(wrap);
   const stage = wrap.querySelector('.stage');
   inspectView.mount(stage);
-  const slow = setTimeout(() => {
-    const l = wrap.querySelector('.loading');
-    if (l) l.textContent = 'Extracting the model from your CS2 install (first time only)…';
-  }, 1500);
   // Backdrops: CS2's own menu/inspect scenes (Dust II, Mirage...) when the game is installed.
   const bgSel = wrap.querySelector('[data-bg]');
   const setBg = async (id) => {
     const l = wrap.querySelector('.loading') || wrap.appendChild(Object.assign(document.createElement('div'), { className: 'loading' }));
-    if (id !== 'studio') l.textContent = 'Loading the backdrop (the first time it is extracted from CS2, about 15 seconds)…';
+    if (id !== 'studio') l.textContent = 'Loading…';
     try {
       await inspectView.setBackdrop(id);
       wrap.classList.toggle('has-bg', id !== 'studio');
@@ -587,7 +583,6 @@ export function openInspect(item, { placeCharm = false } = {}) {
   wrap.querySelector('.loading').classList.add('model');
   inspectView.show(item)
     .then(() => {
-      clearTimeout(slow);
       wrap.querySelector('.loading.model')?.remove();
       // First person is available for real CS2 guns and knives.
       if (inspectView.model?.userData.weapon || inspectView.model?.userData.gloveItem) wrap.querySelector('[data-a=fp]').style.display = '';
