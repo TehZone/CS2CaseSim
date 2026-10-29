@@ -55,7 +55,8 @@ function avatarHtml(id, size = 32, status = '') {
 const myName = () => so()?.me?.name || 'You';
 // A country, as a small tag (Windows draws flag emoji as two letters anyway).
 const cc = (c) => (c ? `<span class="cc">${esc(c)}</span>` : '');
-const kindLabel = (n) => (n.type === 'collector' ? N.FOCUS[n.focus].n : 'Player');
+const kindLabel = (n) => (n.type === 'collector' ? N.FOCUS[n.focus].n : n.type === 'beginner' ? 'New to trading' : 'Player');
+const kindTag = (n) => (n.type === 'collector' ? ' <span class="fr-tag">Collector</span>' : n.type === 'beginner' ? ' <span class="fr-tag new">New</span>' : '');
 
 // ---- the friends list -----------------------------------------------------------------------------------------------------------
 function drawList() {
@@ -77,7 +78,7 @@ function drawList() {
   const row = (n, req) => {
     const p = pres(n), un = so().unread[n.id] || 0, on_ = view.who === n.id;
     return `<div class="fr-row ${on_ ? 'on' : ''} st-${p.s}" data-who="${n.id}">${avatarHtml(n.id, 34, p.s)}
-      <div class="fr-txt"><div class="fr-name">${esc(n.name)}${n.type === 'collector' ? ' <span class="fr-tag">Collector</span>' : ''}</div><div class="fr-st">${esc(p.label)}</div></div>
+      <div class="fr-txt"><div class="fr-name">${esc(n.name)}${kindTag(n)}</div><div class="fr-st">${esc(p.label)}</div></div>
       ${req ? `<button class="btn sm primary" data-acc="${n.id}">Accept</button>` : un ? `<span class="pill">${un}</span>` : ''}</div>`;
   };
   el.innerHTML = `<div class="fr-me ${view.who === 'me' ? 'on' : ''}" data-who="me">${avatarHtml('me', 40, 'online')}<div class="fr-txt"><div class="fr-name">${esc(myName())}</div><div class="fr-st">${levelIconHtml(S.prof.level, 16)} Level ${S.prof.level} · View profile</div></div></div>
@@ -96,18 +97,29 @@ function drawList() {
   el.querySelector('[data-browse]').addEventListener('click', browsePlayers);
 }
 
-// The active players, and anyone else you've dealt with (everyone else is in the Item Database, as the owners).
+// The active players and anyone else you've dealt with; a search finds anyone (everyone else is in the Item Database too,
+// as the owners).
 function browsePlayers() {
-  const list = people().filter((n) => n.active || stateOf(n.id));
+  const all = people();
   const m = openModal({
     title: 'Find players', cls: 'wide',
-    body: `<p class="muted" style="margin:0 0 10px">The traders around you. Hundreds more own the items in the <b>Item Database</b>: click an owner there to visit them.</p>
-      <div class="fr-browse">${list.map((n) => { const st = stateOf(n.id); return `<div class="fr-row" data-who="${n.id}">${avatarHtml(n.id, 40, N.presence(n).s)}
-      <div class="fr-txt"><div class="fr-name">${cc(n.country)}${esc(n.name)}</div><div class="fr-st">${esc(kindLabel(n))} · Level ${n.level}</div></div>
-      <span class="muted" style="font-size:11px">${st?.friend === 1 ? 'Friend' : st?.friend === 3 ? 'Request sent' : st?.friend === 2 ? 'Wants to be friends' : ''}</span></div>`; }).join('')}</div>`,
+    body: `<p class="muted" style="margin:0 0 10px">The traders around you. ${(all.length - all.filter((n) => n.active).length).toLocaleString()} more own the items in the <b>Item Database</b>: search for them by name, or click an owner there to visit them.</p>
+      <input class="input" type="search" data-find placeholder="Search everyone by name" style="width:100%;margin-bottom:10px">
+      <div class="fr-browse" data-found></div>`,
     foot: '<button class="btn ghost" data-close>Close</button>',
   });
-  m.el.querySelectorAll('[data-who]').forEach((x) => x.addEventListener('click', () => { m.close(); view.who = x.dataset.who; view.pane = 'profile'; view.tab = 'showcase'; drawAll(); }));
+  const found = m.el.querySelector('[data-found]'), input = m.el.querySelector('[data-find]');
+  const draw = () => {
+    const q = input.value.trim().toLowerCase();
+    const list = q ? all.filter((n) => n.name.toLowerCase().includes(q)).slice(0, 60) : all.filter((n) => n.active || stateOf(n.id));
+    found.innerHTML = list.length ? list.map((n) => { const st = stateOf(n.id); return `<div class="fr-row" data-who="${n.id}">${avatarHtml(n.id, 40, N.presence(n).s)}
+      <div class="fr-txt"><div class="fr-name">${cc(n.country)}${esc(n.name)}${kindTag(n)}</div><div class="fr-st">${esc(kindLabel(n))} · Level ${n.level}</div></div>
+      <span class="muted" style="font-size:11px">${st?.friend === 1 ? 'Friend' : st?.friend === 3 ? 'Request sent' : st?.friend === 2 ? 'Wants to be friends' : ''}</span></div>`; }).join('')
+      : '<div class="empty" style="padding:20px">Nobody by that name.</div>';
+    found.querySelectorAll('[data-who]').forEach((x) => x.addEventListener('click', () => { m.close(); view.who = x.dataset.who; view.pane = 'profile'; view.tab = 'showcase'; drawAll(); }));
+  };
+  input.addEventListener('input', draw);
+  draw();
 }
 
 // ---- the right side ---------------------------------------------------------------------------------------------------------------
@@ -234,7 +246,9 @@ export function offerModal(id) {
       <div class="offer-side"><h4>You give · <span class="green" data-give>$0.00</span></h4><label class="check" style="margin-bottom:8px">Money <input class="input" type="number" min="0" step="0.01" data-mym value="0" style="width:110px"></label><div data-mine></div></div>
       <div class="offer-side"><h4>You get · <span class="green" data-get>$0.00</span></h4><label class="check" style="margin-bottom:8px">Money <input class="input" type="number" min="0" step="0.01" data-thm value="0" style="width:110px"> <span class="muted">(they have ${money(s?.money || 0)})</span></label><div data-theirs></div></div>
     </div><input class="input" data-msg maxlength="200" placeholder="Message (optional)" style="width:100%;margin-top:10px">`,
-    foot: `<span class="muted" style="font-size:12px">${n.type === 'collector' ? `${esc(n.name)} collects ${esc(N.FOCUS[n.focus].n.toLowerCase())} items: they pay more for those, and want a lot for theirs.` : `${esc(n.name)} trades at about market price.`}</span><span class="spacer"></span><button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-send>Send offer</button>`,
+    foot: `<span class="muted" style="font-size:12px">${n.type === 'collector' ? `${esc(n.name)} collects ${esc(N.FOCUS[n.focus].n.toLowerCase())} items: they pay more for those, and want a lot for theirs.`
+      : n.type === 'beginner' ? `${esc(n.name)} is new to trading: they go by an item's plain price for its name and wear (floats, patterns, stickers and serials don't register) and misjudge some skins.`
+      : `${esc(n.name)} trades at about market price.`}</span><span class="spacer"></span><button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-send>Send offer</button>`,
   });
   const totals = () => {
     const sum = (list, set) => list.filter((it) => set.has(it.uid)).reduce((t, it) => t + I.itemValue(it), 0);

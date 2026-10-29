@@ -20,7 +20,7 @@ import * as stats from './pages/stats.js';
 import * as database from './pages/database.js';
 import * as play from './pages/play.js';
 import * as community from './pages/community.js';
-import { npcOf } from './engine/npcs.js';
+import { npcOf, crowd, inventoryOf } from './engine/npcs.js';
 import { initMatchmaking } from './matchmaking.js';
 import { initProfile } from './profile.js';
 
@@ -77,6 +77,22 @@ function startNpcLoop() {
   };
   setTimeout(tick, 4000);
   setInterval(tick, 30000);
+  setTimeout(warmNpcs, 6000);
+}
+// What the 2,000 NPC players own (tens of thousands of items), worked out a few at a time while the app is idle rather
+// than all at once when the Item Database or your float ranks first ask (engine/npcs.js keeps it for the session).
+function warmNpcs() {
+  const so = S.social;
+  if (online() || !so) return;
+  const people = crowd(so.seed);
+  let i = 0;
+  const step = (deadline) => {
+    if (online()) return;
+    if (document.querySelector('.play-canvas')) { setTimeout(() => requestIdleCallback(step), 10000); return; } // (not during a match)
+    while (i < people.length && deadline.timeRemaining() > 3) inventoryOf(so, people[i++]);
+    if (i < people.length) requestIdleCallback(step);
+  };
+  requestIdleCallback(step);
 }
 
 

@@ -2,20 +2,30 @@
 // inventory, a wallet and a way of trading:
 //   players     buy on the market, swap skins at about market price and lowball a little;
 //   collectors  chase one kind of item (Dopplers, blue gems, low floats, #1 serials, old Major stickers...) and pay well
-//               over market for the right one (the better it fits, the more), but part with their collection dearly.
+//               over market for the right one (the better it fits, the more), but part with their collection dearly;
+//   beginners   new to trading: they go by the plain price of an item's name and wear (a float, a pattern, stickers or a
+//               serial mean nothing to them, theirs or yours), misjudge some skins, believe most of what you tell them and
+//               ask a lot of questions. Some own something special without knowing it.
 // They message you when you own something they want, with cash or trade offers you can accept, decline or haggle over
 // (a price, and arguments for it: its float, pattern, stickers, serial, the market price, another buyer...); they buy
 // from the market's stock; some are your friends and chat. Who they are comes from the save's seed; what they own,
 // their money, your chats and offers are kept in the save (state.social).
 //
-// The first 36 are the active ones, who message you and buy on the market; a few hundred more are the rest of the
-// community: they only own things (the Item Database's owners, offline), and you can visit them, add them and trade.
+// 66 are the active ones, who message you and buy on the market; the rest of the 2,000 are the community: they only own
+// things (the Item Database's owners, offline, and the bots in Play), and you can visit them, add them and trade. The
+// first 420 are as the game first made them (a save knows its people by their place in the list): the 36 active ones
+// among them, then 30 more active (8 more collectors, 10 beginners, 12 players), then the rest, a quarter of them
+// beginners.
 import { D, wearOf, WEAR_BY_KEY } from './data.js';
 import * as I from './items.js';
 import * as MK from './market.js';
 import { mulberry32, hashStr, pick, pickWeighted, round2, clamp, uid } from './util.js';
 
-export const CROWD = 36, COLLECTORS = 12, WORLD = 420;
+export const WORLD = 2000;
+const FIRST = 420, FIRST_ACTIVE = 36; // (the crowd as it first was)
+const MORE_ACTIVE = { collector: 8, beginner: 10, player: 12 }; // (the active ones after it)
+// The 8 more collectors: a second one for the kinds most traded (they bid against each other).
+const SECOND_FOCI = ['doppler', 'bluegem', 'fade', 'knives', 'gloves', 'awp', 'lowfloat', 'stickers'];
 const MIN = 60 * 1000;
 
 // ---- who they are -------------------------------------------------------------------------------------------------------
@@ -27,6 +37,16 @@ const HANDLES = ['kryptic', 'zyphr', 'N1ghtm4re', 'v0id', 'sp1ke', 'mirage_enjoy
   'lurk3r', 'oneTap', 'peekaboo', 'rushB', 'nadeking', 'jumpthrow', 'deagle_diff', 'karambit_kid', 'ecoFrag', 'tapTapBoom', 'flashbang_victim', 'ctspawn',
   'pistol_round', 'boost_me', 'anubis_hater', 'vertigo_main', 'molly_lineup', 'sh0ckwave', 'xanthos', 'mellow', 'Ruby_hunter', 'gemfinder', 'floatking'];
 const COUNTRIES = ['US', 'DE', 'SE', 'DK', 'FR', 'PL', 'BR', 'UA', 'GB', 'CA', 'AU', 'FI', 'NO', 'NL', 'ES', 'CZ', 'TR', 'KZ', 'PT', 'RO', 'HU', 'AR', 'LV', 'IL'];
+// (Those who came after the first 420 draw from more.)
+const MORE_A = [...WORD_A, 'Toasty', 'Spicy', 'Chill', 'Angry', 'Fuzzy', 'Royal', 'Rusty', 'Golden', 'Mystic', 'Atomic', 'Cosmic', 'Feral', 'Grumpy',
+  'Jolly', 'Noisy', 'Quiet', 'Shy', 'Brave', 'Wired', 'Lunar', 'Solar', 'Crispy', 'Soggy', 'Stealthy', 'Wobbly', 'Zesty', 'Velvet', 'Arctic', 'Rogue', 'Hasty'];
+const MORE_B = [...WORD_B, 'Badger', 'Falcon', 'Kraken', 'Otter', 'Walrus', 'Hamster', 'Phoenix', 'Mantis', 'Hornet', 'Jackal', 'Lynx', 'Bison', 'Toad',
+  'Squid', 'Noodle', 'Waffle', 'Pretzel', 'Muffin', 'Golem', 'Wizard', 'Pirate', 'Knight', 'Samurai', 'Viking', 'Sheriff', 'Cactus', 'Comet', 'Pickle', 'Gecko', 'Crab'];
+const MORE_HANDLES = [...HANDLES, 'prefire_pro', 'wallbang', 'ct_main', 't_side_tilt', 'ninja_defuse', 'clutchminister', 'stack_b', 'halfbuy', 'forcebuy',
+  'anti_eco', 'retake', 'b_site_anchor', 'popflash', 'counterstrafe', 'spinbot_jk', 'inferno_banana', 'nuke_ramp', 'overpass_fan', 'ancient_main', 'zeus_ace'];
+const NEWBIE_HANDLES = ['newbie_trader', 'first_knife_pls', 'silver_noob', 'nooblet', 'justStarted', 'casegambler', 'pls_trade', 'learning_cs', 'freeSkinsPls',
+  'help_me_trade', 'noob_master', 'bronze_hero', 'what_is_float', 'trade_me_pls', 'cs2_newbie', 'mom_bought_cs', 'lucky_unboxer', 'skinz4dayz', 'rookie_ak'];
+const MORE_COUNTRIES = [...COUNTRIES, 'IT', 'BE', 'AT', 'CH', 'SK', 'RS', 'BG', 'LT', 'EE', 'HR', 'IE', 'GR', 'IS', 'MN', 'CN', 'JP', 'KR', 'IN', 'ZA', 'MX', 'CL', 'NZ', 'SG', 'PH'];
 export const flagOf = (cc) => (cc ? String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 0x1f1a5 + c.charCodeAt(0))) : '');
 const FAV_GUNS = ['AK-47', 'M4A4', 'M4A1-S', 'AWP', 'USP-S', 'Glock-18', 'Desert Eagle', 'MP9', 'Galil AR', 'FAMAS', 'P250', 'MAC-10'];
 
@@ -59,47 +79,73 @@ export const FOCUS = {
 };
 const FOCI = Object.keys(FOCUS);
 
+const NEWBIE_BIOS = ['new to trading pls be nice 😅', 'just started cs2!!', 'how do i get a knife', 'learning the market', 'pls dont scam me',
+  'opened my first case this year', 'my friend got me into this', 'is this where u trade?', 'silver 1 but trying', 'trying to get my first knife'];
 const BIOS = ['just here for the skins', 'premier grinder | no scams pls', 'add me for trades, no lowballs', 'silver forever', 'eco round enjoyer',
   'trading daily, fair offers only', 'I peek with my ears', 'rifler. sometimes awper.', 'collecting slowly', 'gl hf', 'faceit lvl 10 (trust)', 'don\'t ask about my k/d'];
 
 const crowds = new Map();
-// The save's crowd: [{ id, name, type: 'player' | 'collector', focus, country, avatar, joined, level, medals, bio, g (how
-// close to market they pay), premium (a collector's extra for their focus), patience (counters before they walk away) }].
+// The save's crowd: [{ id, name, type: 'player' | 'collector' | 'beginner', focus, active, country, avatar, joined, level,
+// medals, bio, fav, g (how close to market they pay), premium (a collector's extra for their focus), patience (counters
+// before they walk away), sharp (how likely they see through a bluff) }]. (The first 420 come out exactly as they did
+// before there were more: the same draws in the same order.)
 export function crowd(seed) {
   if (crowds.has(seed)) return crowds.get(seed);
   const r = mulberry32(seed >>> 0);
   const names = new Set();
-  const nameFor = () => {
+  const nameFor = (A, B, H, newbie) => {
     for (;;) {
-      const a = pick(WORD_A, r), b = pick(WORD_B, r), k = r();
-      let n = k < 0.3 ? pick(HANDLES, r) : k < 0.5 ? `${a}${b}` : k < 0.65 ? `${a.toLowerCase()}_${b.toLowerCase()}` : k < 0.8 ? `${a}${b}${1 + Math.floor(r() * 99)}` : `x${a}${b}x`;
+      const a = pick(A, r), b = pick(B, r), k = r();
+      let n = k < 0.3 ? pick(H, r) : k < 0.5 ? `${a}${b}` : k < 0.65 ? `${a.toLowerCase()}_${b.toLowerCase()}` : k < 0.8 ? `${a}${b}${1 + Math.floor(r() * 99)}` : `x${a}${b}x`;
+      if (newbie && r() < 0.35) n = pick(['xX_', 'its', 'im', '', ''], r) + n + pick(['_noob', '2011', '_new', 'XD', '_Xx', '1', 'TTV'], r);
       if (r() < 0.15) n = n.replace(/o/g, '0').replace(/e/g, '3');
       if (!names.has(n)) { names.add(n); return n; }
     }
   };
   const agents = Object.values(D.agents).map((a) => a.id).sort();
   const foci = [...FOCI];
+  let more = null; // (the 30 active ones after the first 420: their kinds, shuffled)
   const list = [];
   for (let i = 0; i < WORLD; i++) {
-    const active = i < CROWD;
-    const collector = active ? i % 3 === 2 && foci.length && list.filter((n) => n.type === 'collector').length < COLLECTORS : r() < 0.15;
-    const focus = !collector ? null : active ? foci.splice(Math.floor(r() * foci.length), 1)[0] : pick(FOCI, r);
-    const name = nameFor();
+    const first = i < FIRST;
+    let active, collector, focus, type;
+    if (first) {
+      active = i < FIRST_ACTIVE;
+      collector = active ? i % 3 === 2 && foci.length && list.filter((n) => n.type === 'collector').length < 12 : r() < 0.15;
+      focus = !collector ? null : active ? foci.splice(Math.floor(r() * foci.length), 1)[0] : pick(FOCI, r);
+      type = collector ? 'collector' : 'player';
+    } else {
+      if (!more) {
+        more = Object.entries(MORE_ACTIVE).flatMap(([t, n]) => Array(n).fill(t));
+        for (let j = more.length - 1; j > 0; j--) { const k = Math.floor(r() * (j + 1)); [more[j], more[k]] = [more[k], more[j]]; }
+        foci.push(...SECOND_FOCI);
+      }
+      active = i - FIRST < more.length;
+      type = active ? more[i - FIRST] : pickWeighted([['player', 0.62], ['beginner', 0.25], ['collector', 0.13]], r);
+      collector = type === 'collector';
+      focus = !collector ? null : active ? foci.splice(Math.floor(r() * foci.length), 1)[0] : pick(FOCI, r);
+    }
+    const newbie = type === 'beginner';
+    const name = first ? nameFor(WORD_A, WORD_B, HANDLES, false) : nameFor(MORE_A, MORE_B, newbie ? NEWBIE_HANDLES : MORE_HANDLES, newbie);
     list.push({
-      id: 'n' + i, name, type: collector ? 'collector' : 'player', focus, active,
-      country: pick(COUNTRIES, r), avatar: agents.length ? pick(agents, r) : null, joined: 2012 + Math.floor(r() * 13),
-      level: 1 + Math.floor(r() * 40), medals: Math.floor(r() * (collector ? 30 : 12)),
-      bio: collector ? FOCUS[focus].bio : pick(BIOS, r), fav: pick(FAV_GUNS, r),
-      g: collector ? 0.9 + r() * 0.1 : 0.82 + r() * 0.2, premium: collector ? 0.25 + r() * 0.5 : 0.1 + r() * 0.15,
-      patience: 2 + Math.floor(r() * 3), sharp: collector ? 0.7 : 0.35 + r() * 0.2, // how likely they see through a bluff
+      id: 'n' + i, name, type, focus, active,
+      country: pick(first ? COUNTRIES : MORE_COUNTRIES, r), avatar: agents.length ? pick(agents, r) : null, joined: newbie ? 2025 + Math.floor(r() * 2) : 2012 + Math.floor(r() * 13),
+      level: 1 + Math.floor(r() * (newbie ? 8 : 40)), medals: newbie ? 0 : Math.floor(r() * (collector ? 30 : 12)),
+      bio: collector ? FOCUS[focus].bio : pick(newbie ? NEWBIE_BIOS : BIOS, r), fav: pick(FAV_GUNS, r),
+      g: collector ? 0.9 + r() * 0.1 : newbie ? 0.8 + r() * 0.4 : 0.82 + r() * 0.2, premium: collector ? 0.25 + r() * 0.5 : 0.1 + r() * 0.15,
+      patience: (newbie ? 3 : 2) + Math.floor(r() * 3), sharp: collector ? 0.7 : newbie ? 0.05 + r() * 0.12 : 0.35 + r() * 0.2,
     });
   }
   crowds.set(seed, list);
   return list;
 }
 export const npcOf = (seed, id) => (/^n\d+$/.test(id) ? crowd(seed)[+id.slice(1)] || null : null);
-// The 36 who message you, buy on the market and send friend requests.
-export const activeCrowd = (seed) => crowd(seed).slice(0, CROWD);
+// The 66 who message you, buy on the market and send friend requests.
+const actives = new Map();
+export function activeCrowd(seed) {
+  if (!actives.has(seed)) actives.set(seed, crowd(seed).filter((n) => n.active));
+  return actives.get(seed);
+}
 
 // Online status, like Steam's: from the hour of the day and who they are (no state: the same for everyone, all day).
 export function presence(npc, now = Date.now()) {
@@ -112,21 +158,33 @@ export function presence(npc, now = Date.now()) {
 }
 
 // ---- what things are worth to them --------------------------------------------------------------------------------------
-// How much an NPC wants an item (0 = not interested at that price).
+// How much an NPC wants an item (0 = not interested at that price). Beginners want what looks cool.
+const FLASHY = new Set(['AK-47', 'AWP', 'M4A4', 'M4A1-S', 'Desert Eagle', 'USP-S', 'Glock-18']);
 export function interest(npc, it) {
   if (npc.type === 'collector') return FOCUS[npc.focus].fit(it);
   const d = skinOf(it);
   if (!d) return it.t === 'charm' || it.t === 'agent' ? 0.05 : 0;
+  if (npc.type === 'beginner') return (d.star ? 0.35 : FLASHY.has(d.w) ? 0.22 : 0.12) + (d.w === npc.fav ? 0.08 : 0);
   return (d.w === npc.fav ? 0.25 : 0.1) + (d.star ? 0.1 : 0);
 }
-// The most they'd pay for an item: market value, more for a collector's kind of item.
+// What a beginner thinks something's worth: its plain price (its name and wear: a float, a pattern, stickers and a serial
+// don't register), off by a hunch of their own about that skin (0.7-1.4x, the same for every copy of it).
+export function guess(npc, it) {
+  const hunch = 0.7 + 0.7 * mulberry32(hashStr(npc.id + ':' + it.id))();
+  return round2((it.t === 'skin' ? I.basePrice(it) : I.itemValue(it)) * hunch);
+}
+// The most they'd pay for an item: market value, more for a collector's kind of item, a beginner's guess.
 export function buyValue(npc, it) {
-  const v = I.itemValue(it), k = interest(npc, it);
+  const k = interest(npc, it);
+  if (npc.type === 'beginner') return round2(guess(npc, it) * (k ? npc.g + 0.2 * k : 0.8));
+  const v = I.itemValue(it);
   if (npc.type === 'collector') return round2(v * (k ? 1 + npc.premium * k : 0.85));
   return round2(v * (k ? npc.g + 0.25 * k : 0.75));
 }
-// What one of their own items is worth to them when they trade it away (a collector's focus items, a lot more).
+// What one of their own items is worth to them when they trade it away (a collector's focus items, a lot more; a
+// beginner's, what they guess).
 export function keepValue(npc, it) {
+  if (npc.type === 'beginner') return guess(npc, it);
   const v = I.itemValue(it), k = npc.type === 'collector' ? FOCUS[npc.focus].fit(it) : 0;
   return round2(v * (k ? 1.1 + npc.premium * k : npc.type === 'collector' ? 1 : 1.04));
 }
@@ -177,7 +235,7 @@ function focusItem(focus, r) {
 // An NPC's starting money and inventory (seeded: the same NPC in the same save starts the same).
 export function startingState(seed, npc) {
   const r = mulberry32(hashStr(seed + ':' + npc.id));
-  const tier = npc.type === 'collector' ? 3 : pickWeighted([[0, 0.45], [1, 0.38], [2, 0.17]], r);
+  const tier = npc.type === 'collector' ? 3 : npc.type === 'beginner' ? pickWeighted([[0, 0.7], [1, 0.3]], r) : pickWeighted([[0, 0.45], [1, 0.38], [2, 0.17]], r);
   // Players from a few dollars to a few thousand; collectors are the whales (spread evenly in orders of magnitude).
   const [worth, cash] = [[[40, 400], [20, 200]], [[400, 3000], [100, 1200]], [[3000, 30000], [800, 8000]], [[10000, 250000], [10000, 400000]]][tier];
   const span = ([a, b]) => (tier === 3 ? Math.exp(Math.log(a) + r() * (Math.log(b) - Math.log(a))) : a + r() * (b - a));
@@ -197,7 +255,11 @@ export function startingState(seed, npc) {
     inv.push(it);
     total += I.itemValue(it);
   }
-  return { money: round2(span(cash)), inv, friend: 0, mood: 0.7, trades: 0, tier };
+  if (npc.type === 'beginner' && r() < 0.4) {
+    const gem = focusItem(pickWeighted([['lowfloat', 3], ['serial', 3], ['bluegem', 2], ['fade', 2], ['stickers', 1.5], ['doppler', 0.5], ['knives', 0.5]], r), r);
+    if (gem) { gem.at = 0; gem.src = 'Unboxed'; inv.push(gem); }
+  }
+  return { money: round2(span(cash)), inv, friend: 0, mood: npc.type === 'beginner' ? 0.9 : 0.7, trades: 0, tier };
 }
 
 // ---- the save's NPC state ---------------------------------------------------------------------------------------------------
@@ -255,6 +317,20 @@ export function loadoutOf(inv) {
 
 // ---- messages ---------------------------------------------------------------------------------------------------------------
 const say = (r, lines) => pick(lines, r);
+// The same moments in each kind's own words: thanks (you took their offer), declined (you said no to theirs), accepted
+// (they took yours), refused (they didn't), more (they want x more for yours).
+const VOICE = {
+  collector: { thanks: ['Thank you! It\'s going straight into the collection.', 'Pleasure doing business 🤝'], declined: ['Understood, thanks anyway.', 'No problem. Let me know if you change your mind.'],
+    accepted: ['Accepted, thank you 🤝', 'Deal, accepted.'], refused: ['Sorry, that doesn\'t work for me.', 'I\'ll pass, thanks.'],
+    more: ['Close. Add {x} and it\'s a deal.', 'I\'d need {x} more.'] },
+  player: { thanks: ['ty! 🤝', 'gg ty', 'nice, ty'], declined: ['ok np', 'your loss lol', 'alright, lmk if you change your mind'],
+    accepted: ['accepted 🤝', 'deal, accepted', 'ty, accepted!'], refused: ['nah', 'lol no', 'that\'s a lowball bro', 'no thx'],
+    more: ['close. add {x} and it\'s a deal', 'I\'d need {x} more', 'almost — {x} more and I\'ll do it'] },
+  beginner: { thanks: ['yay ty!! 😊', 'tysm!!', 'omg ty, my first real trade!', 'ty!! did i do it right? lol'], declined: ['oh ok sorry', 'ok np! sorry if it was a bad offer', 'aw ok 😅'],
+    accepted: ['ok!! accepted', 'sure! ty 😊', 'accepted, i hope thats fair lol', 'ok deal!! (i think?)'], refused: ['sorry i dont think thats fair? 😅', 'um no ty', 'my friend said thats a bad deal sorry'],
+    more: ['um could u add {x}? sorry', 'i think i need like {x} more? 😅', 'can u do {x} more? then ok!'] },
+};
+export const voice = (n, moment, r, x = '') => pick(VOICE[n.type]?.[moment] || VOICE.player[moment], r).replace('{x}', x);
 export function post(so, id, from, text, extra = {}, now = Date.now()) {
   const t = (so.threads[id] ||= []);
   t.push({ id: uid(), at: now, from, text, ...extra });
@@ -301,10 +377,10 @@ export function makeOffer(so, st, { r, now }) {
     const v = I.itemValue(it);
     for (const n of people) {
       const k = interest(n, it);
-      if (!k || (n.type === 'player' && v < 5)) continue;
+      if (!k || (n.type === 'player' && v < 5) || (n.type === 'beginner' && v < 2)) continue;
       const s = npcState(so, n.id);
       const max = Math.min(buyValue(n, it), s.money + s.inv.reduce((t, x) => t + I.itemValue(x), 0) * 0.6);
-      if (max < v * 0.6) continue;
+      if (max < v * (n.type === 'beginner' ? 0.3 : 0.6)) continue; // (a beginner may not see what it's worth)
       cands.push([[it, n, max], (n.type === 'collector' ? 4 : 1) * k * Math.sqrt(v)]);
     }
   }
@@ -313,7 +389,7 @@ export function makeOffer(so, st, { r, now }) {
   const s = npcState(so, n.id);
   const o = { id: uid(), npc: n.id, at: now, exp: now + OFFER_LIFE * (0.7 + r() * 0.6), status: 'open', want: { uids: [it.uid], money: 0 }, give: { uids: [], money: 0 },
     max: 0, patience: n.patience, annoy: 0, args: [], agreed: false };
-  const open = max * (n.type === 'collector' ? 0.8 + r() * 0.12 : 0.72 + r() * 0.16);
+  const open = max * (n.type === 'collector' ? 0.8 + r() * 0.12 : n.type === 'beginner' ? 0.85 + r() * 0.15 : 0.72 + r() * 0.16);
   // A trade when they have something close in value they'd part with (players more often than collectors).
   const swap = r() < (n.type === 'collector' ? 0.25 : 0.5) ? tradeItems(n, s, open, r) : null;
   const hl = highlights(it);
@@ -327,6 +403,9 @@ export function makeOffer(so, st, { r, now }) {
     post(so, n.id, 'npc', n.type === 'collector'
       ? say(r, [`Hi! Your ${short(it)}${hl.length ? ` (${hl.join(', ')})` : ''} would complete my collection. Would you trade it for my ${what}?`,
         `Hey, I collect these. Trade my ${what} for your ${short(it)}?`])
+      : n.type === 'beginner'
+      ? say(r, [`hi! would u trade ur ${short(it)} for my ${what}?? i think its fair`, `can we trade? my ${what} for ur ${short(it)} 🙏 (sorry if its a bad offer im new)`,
+        `hii i really like ur ${short(it)}! would u take my ${what} for it?`])
       : say(r, [`yo trade? my ${what} for ur ${short(it)}`, `hey wanna swap? ${what} for your ${short(it)}`, `trade my ${what} for ur ${short(it)}? sent u an offer`]),
     { offer: o.id }, now);
   } else {
@@ -338,6 +417,9 @@ export function makeOffer(so, st, { r, now }) {
       ? say(r, [`Hi! I collect ${FOCUS[n.focus].n.replace(/ collector| hunter/i, '').toLowerCase()} items and your ${short(it)}${hl.length ? ` (${hl.join(', ')})` : ''} caught my eye. Would you sell it for ${dollars(net(o))}?`,
         `Hello! Is your ${short(it)} for sale? I can pay ${dollars(net(o))} right now.`,
         `Saw your ${short(it)}${hl.length ? ` — ${hl.join(', ')}` : ''}. Cash offer: ${dollars(net(o))}. Interested?`])
+      : n.type === 'beginner'
+      ? say(r, [`hii is ur ${short(it)} for sale?? i have ${dollars(net(o))}`, `um would u sell ur ${short(it)} for ${dollars(net(o))}? 😅`,
+        `hey!! i really like ur ${short(it)}, can i buy it for ${dollars(net(o))}? im kinda new to trading`])
       : say(r, [`yo u selling ur ${short(it)}? i can do ${dollars(net(o))}`, `hey would u take ${dollars(net(o))} for the ${short(it)}?`, `${dollars(net(o))} for ur ${short(it)}? cash rn`]),
     { offer: o.id }, now);
   }
@@ -379,50 +461,59 @@ function floatRank(it) {
 // You counter an NPC's offer: `price` is the net cash you want toward you (what they pay, or minus what you'd pay), `arg`
 // an argument for it. Returns { outcome: 'agree' | 'counter' | 'final' | 'walk', text }; the offer is updated.
 export function haggle(so, st, o, { price, arg = null }, { r, now }) {
-  const n = npcOf(so.seed, o.npc), s = npcState(so, o.npc);
+  const n = npcOf(so.seed, o.npc), s = npcState(so, o.npc), newbie = n.type === 'beginner';
   const items = o.want.uids.map((u) => st.inv.find((it) => it.uid === u)).filter(Boolean);
   const value = items.reduce((t, it) => t + I.itemValue(it), 0) + (o.want.money || 0);
   const lines = [];
+  const B = (beginner, other) => (newbie ? beginner : other); // (a beginner's words, else the usual)
   // The argument first: a true one moves them, a false one or a bluff they see through annoys them.
   if (arg && ARGUMENTS[arg] && !o.args.includes(arg)) {
     o.args.push(arg);
     const A = ARGUMENTS[arg];
     if (arg === 'market') {
-      if (price <= value * 1.03 + 0.01) { o.max = Math.max(o.max, Math.min(value, s.money)); lines.push(say(r, ['fair, market is market', 'ok true that\'s what it goes for'])); }
-      else { o.annoy += 0.25; lines.push(say(r, [`market's ${dollars(value)} tho`, `nah it goes for about ${dollars(value)}`])); }
+      // (A beginner takes your word for a price up to a fifth over, unless they happen to check.)
+      if (price <= value * 1.03 + 0.01 || (newbie && price <= value * 1.2 && r() > n.sharp)) {
+        o.max = Math.max(o.max, Math.min(newbie ? price : value, s.money));
+        lines.push(say(r, B(['oh i didnt check the market, ok', 'oh really? ok then', 'oh ok i didnt know'], ['fair, market is market', 'ok true that\'s what it goes for'])));
+      } else { o.annoy += newbie ? 0.12 : 0.25; lines.push(say(r, B([`hmm i looked and it says like ${dollars(value)}?`, `my friend said its ${dollars(value)}...`], [`market's ${dollars(value)} tho`, `nah it goes for about ${dollars(value)}`]))); }
     } else if (arg === 'other') {
       const rival = so.offers.filter((x) => x !== o && x.status === 'open' && x.want.uids.some((u) => o.want.uids.includes(u))).reduce((m, x) => Math.max(m, net(x)), 0);
       if (rival > net(o)) { o.max = Math.max(o.max, Math.min(s.money, rival * 1.03, items.length ? buyValue(n, items[0]) * 1.15 : rival)); lines.push(say(r, ['hm ok I can beat that', 'alright, I don\'t want to lose it'])); }
-      else if (r() < n.sharp) { o.annoy += 0.4; o.patience--; lines.push(say(r, ['lol sure they did', 'no they didn\'t 😂', 'I doubt that tbh'])); }
-      else { o.max = Math.min(s.money, o.max * 1.06); lines.push(say(r, ['hmm ok', 'really? ok let me think'])); }
+      else if (r() < n.sharp) { o.annoy += 0.4; o.patience--; lines.push(say(r, B(['wait is that true? idk...', 'hmm i dont think so?'], ['lol sure they did', 'no they didn\'t 😂', 'I doubt that tbh']))); }
+      else { o.max = Math.min(s.money, o.max * (newbie ? 1.12 : 1.06)); lines.push(say(r, B(['oh no ok, i can do a bit more', 'oh! ok dont sell it to them pls'], ['hmm ok', 'really? ok let me think']))); }
     } else if (A.ok(items)) {
-      o.max = round2(Math.min(s.money, o.max * (1 + A.bump * (n.type === 'collector' ? 1.4 : 1))));
-      lines.push(say(r, n.type === 'collector' ? ['True, that does matter to me.', 'Fair point, I noticed that too.'] : ['ye true', 'fair', 'ok ok']));
+      o.max = round2(Math.min(s.money, o.max * (1 + A.bump * (n.type === 'collector' ? 1.4 : newbie ? 2 : 1))));
+      lines.push(say(r, n.type === 'collector' ? ['True, that does matter to me.', 'Fair point, I noticed that too.'] : B(['oh wow i didnt know that!', 'oh thats a thing? ok cool'], ['ye true', 'fair', 'ok ok'])));
+    } else if (newbie && r() > n.sharp) {
+      // (Most beginners can't tell when it isn't true.)
+      o.max = round2(Math.min(s.money, o.max * (1 + A.bump)));
+      lines.push(say(r, ['oh really? ok', 'wait fr? ok then', 'oh i didnt know that']));
     } else {
-      o.annoy += n.type === 'collector' ? 0.45 : 0.3; o.patience--;
-      lines.push(say(r, n.type === 'collector' ? ['That\'s not really true though.', 'I checked, it isn\'t.'] : ['lol no it\'s not', 'bro what', 'thats cap']));
+      o.annoy += n.type === 'collector' ? 0.45 : newbie ? 0.15 : 0.3; o.patience--;
+      lines.push(say(r, n.type === 'collector' ? ['That\'s not really true though.', 'I checked, it isn\'t.'] : B(['hmm my friend said thats not true', 'i looked it up and i dont think so?'], ['lol no it\'s not', 'bro what', 'thats cap'])));
     }
   }
   const cur = net(o);
   let outcome;
   if (price <= cur) {
     o.agreed = true; outcome = 'agree';
-    lines.push(say(r, ['deal 🤝', 'sure, deal', 'works for me']));
-  } else if (price <= o.max && (price - cur <= Math.max(1, value * 0.04) || r() < 0.55)) {
+    lines.push(say(r, B(['ok deal!! 😊', 'yay ok deal'], ['deal 🤝', 'sure, deal', 'works for me'])));
+  } else if (price <= o.max && (price - cur <= Math.max(1, value * 0.04) || r() < (newbie ? 0.8 : 0.55))) {
     setNet(o, price); o.agreed = true; outcome = 'agree';
-    lines.push(say(r, n.type === 'collector' ? ['Alright, deal.', 'Okay, you have a deal.', 'Fine, let\'s do it.'] : ['ok fine deal', 'ugh ok deal', 'aight deal']));
+    lines.push(say(r, n.type === 'collector' ? ['Alright, deal.', 'Okay, you have a deal.', 'Fine, let\'s do it.'] : B(['ok sure! deal', 'ok thats fine i think', 'ok deal!'], ['ok fine deal', 'ugh ok deal', 'aight deal'])));
   } else if (o.patience <= 1 || o.annoy >= 1) {
     o.status = 'withdrawn'; outcome = 'walk';
-    lines.push(say(r, n.type === 'collector' ? ['I don\'t think we\'ll agree. Good luck with the sale.', 'Let\'s leave it, thanks anyway.'] : ['nah forget it', 'ok nvm gl', 'too much, im out']));
+    lines.push(say(r, n.type === 'collector' ? ['I don\'t think we\'ll agree. Good luck with the sale.', 'Let\'s leave it, thanks anyway.'] : B(['sorry i cant afford that 😅', 'thats too much for me sorry, gl!'], ['nah forget it', 'ok nvm gl', 'too much, im out'])));
   } else if (cur >= o.max - 0.01) {
     o.patience--; outcome = 'final';
-    lines.push(say(r, [`${dollars(cur)} is my max`, `can't go above ${dollars(cur)}`, `${dollars(cur)}, final offer`]));
+    lines.push(say(r, B([`${dollars(cur)} is all i have sorry`, `i only have ${dollars(cur)} 😅`], [`${dollars(cur)} is my max`, `can't go above ${dollars(cur)}`, `${dollars(cur)}, final offer`])));
   } else {
     o.patience -= price > o.max * 1.4 ? 2 : 1;
-    const step = price > o.max * 1.4 ? 0.2 + r() * 0.15 : 0.35 + r() * 0.35;
-    setNet(o, nice(Math.min(o.max, cur + (Math.min(price, o.max) - cur) * step)));
+    const step = (price > o.max * 1.4 ? 0.2 + r() * 0.15 : 0.35 + r() * 0.35) * (newbie ? 1.4 : 1);
+    setNet(o, nice(Math.min(o.max, cur + (Math.min(price, o.max) - cur) * Math.min(1, step))));
     o.agreed = false; outcome = 'counter';
-    lines.push(price > o.max * 1.4 ? say(r, [`lol no. ${dollars(net(o))}`, `way too much. ${dollars(net(o))}?`]) : say(r, [`meet me at ${dollars(net(o))}?`, `${dollars(net(o))}?`, `I can do ${dollars(net(o))}`]));
+    lines.push(newbie ? say(r, [`um could u do ${dollars(net(o))}?`, `is ${dollars(net(o))} ok?`, `${dollars(net(o))}? sorry idk how this works lol`])
+      : price > o.max * 1.4 ? say(r, [`lol no. ${dollars(net(o))}`, `way too much. ${dollars(net(o))}?`]) : say(r, [`meet me at ${dollars(net(o))}?`, `${dollars(net(o))}?`, `I can do ${dollars(net(o))}`]));
   }
   if (o.status === 'open') o.exp = Math.max(o.exp, now + 15 * MIN);
   return { outcome, text: lines.join(' ') };
@@ -433,7 +524,7 @@ export function haggle(so, st, o, { price, arg = null }, { r, now }) {
 export function judge(so, n, s, { yours, theirs, myMoney, theirMoney }) {
   const get = yours.reduce((t, it) => t + buyValue(n, it), 0) + myMoney;
   const give = theirs.reduce((t, it) => t + keepValue(n, it), 0) + theirMoney;
-  const margin = n.type === 'collector' ? 0.0 : 0.03;
+  const margin = n.type === 'collector' ? 0.0 : n.type === 'beginner' ? -0.03 : 0.03;
   if (get >= give * (1 + margin)) return { ok: true };
   if (get >= give * 0.8 && give > 0) return { ok: false, more: nice(give * (1 + margin) - get + 0.5) };
   return { ok: false };
@@ -452,7 +543,7 @@ export function marketBuy(so, st, { r, now }) {
     const skin = pick(pool.length ? pool : skins(), r);
     const l = MK.skinListings(skin, w).find((x) => !sold.has(x.lid));
     if (!l || l.p > s.money * 0.7 || l.p < 0.5) continue;
-    if (n.type === 'player' && l.p > s.money * 0.4) continue;
+    if (n.type !== 'collector' && l.p > s.money * (n.type === 'beginner' ? 0.6 : 0.4)) continue;
     sold.add(l.lid);
     const it = MK.fromListing(l);
     it.at = now;
@@ -469,6 +560,15 @@ export function marketBuy(so, st, { r, now }) {
 // ---- small talk -------------------------------------------------------------------------------------------------------------------
 export function chatLine(n, s, r) {
   const best = [...s.inv].sort((a, b) => I.itemValue(b) - I.itemValue(a))[0];
+  if (n.type === 'beginner') {
+    const gem = s.inv.find((it) => highlights(it).length);
+    return pick([
+      'how do u get a knife? 😭', 'is it worth opening cases?', 'what does FT mean lol', 'someone said floats matter?? whats a float',
+      'just opened my first case!!', 'how do trades work lol', 'is $20 a lot for a skin?', 'i got scammed last week 😭 be nice pls',
+      'what skins should i buy with $50?', 'whats ur best skin?', 'can u teach me how to trade', 'why are stickers so expensive??',
+      gem ? `hey is my ${short(gem)} worth anything? someone said its rare??` : best ? `is my ${short(best)} good? 🤔` : 'still no skins lol',
+    ], r);
+  }
   return pick([
     'anyone up for premier later?', 'gg last night', 'these new cases are a scam lol', 'what\'s the best thing you ever unboxed?',
     best ? `look what I got: ${short(best)} 😎` : 'still no knife 😭', 'can you +rep my profile?', 'mirage again? 💀', 'I swear the AWP is broken',
@@ -477,6 +577,14 @@ export function chatLine(n, s, r) {
 }
 // A reply to something you typed that isn't about an offer.
 export function smallTalk(n, text, r) {
+  if (n.type === 'beginner') {
+    if (/\b(hi|hey|yo|hello|sup)\b/i.test(text)) return pick(['hii!', 'hello!! 😊', 'hey!'], r);
+    if (/\b(wts|wtb|sell|buy|trade|price|how much)\b/i.test(text)) return pick(['um idk how much things are worth, what do u think?', 'sure! what do u want for it?', 'ok! send me an offer? i think thats how it works'], r);
+    if (/\b(play|premier|game|queue)\b/i.test(text)) return pick(['yes!! im still silver tho lol', 'ok but dont flame me 😅', 'sure! i only know dust2'], r);
+    if (/\b(float|pattern|sticker|serial)\b/i.test(text)) return pick(['whats that? 😅', 'idk what that means lol', 'is that good??'], r);
+    if (/\?$/.test(text.trim())) return pick(['idk im new lol', 'wdym?', 'idk sorry 😅'], r);
+    return pick(['lol', 'oh ok', 'cool!', 'haha', 'ok!'], r);
+  }
   if (/\b(hi|hey|yo|hello|sup)\b/i.test(text)) return pick(['hey', 'yo', 'sup', 'hi!'], r);
   if (/\b(wts|wtb|sell|buy|trade|price|how much)\b/i.test(text)) return pick(['send me an offer and I\'ll take a look', 'make me an offer', 'whatcha got?'], r);
   if (/\b(play|premier|game|queue)\b/i.test(text)) return pick(['maybe later', 'ye I\'m down', 'not tonight, tilted'], r);

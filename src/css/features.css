@@ -420,6 +420,7 @@ body.is-online .offline-only { display: none !important; }
 .st-away .fr-name { opacity: .75; }
 .st-offline .fr-name { color: #8f98a0; }
 .fr-tag { font-size: 9px; letter-spacing: .08em; text-transform: uppercase; padding: 1px 5px; background: rgba(228, 174, 57, .18); color: var(--gold2); font-weight: 700; vertical-align: middle; }
+.fr-tag.new { background: rgba(94, 200, 120, .16); color: var(--green); }
 .fr-row .pill { background: #57cbde; color: #04141a; }
 .fr-browse { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px; }
 .av { width: var(--s); height: var(--s); flex: none; display: grid; place-items: center; overflow: hidden; background: linear-gradient(180deg, #3d4650, #232a31); border: 2px solid #535b63; }

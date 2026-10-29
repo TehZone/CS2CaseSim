@@ -769,7 +769,7 @@ export const ACTIONS = {
     const n = N.npcOf(so.seed, o.npc);
     const out = swapWithNpc(ctx, so, n, { mine: o.want.uids, theirs: o.give.uids, myMoney: o.want.money || 0, theirMoney: o.give.money || 0 });
     o.status = 'accepted';
-    N.post(so, n.id, 'npc', pick(n.type === 'collector' ? ['Thank you! It\'s going straight into the collection.', 'Pleasure doing business 🤝'] : ['ty! 🤝', 'gg ty', 'nice, ty'], ctx.rng), {}, ctx.now);
+    N.post(so, n.id, 'npc', N.voice(n, 'thanks', ctx.rng), {}, ctx.now);
     keepSocial(ctx, so);
     return out;
   },
@@ -777,7 +777,7 @@ export const ACTIONS = {
     const so = social(ctx), o = openOffer(so, offer);
     o.status = 'declined';
     N.post(so, o.npc, 'me', 'No thanks.', {}, ctx.now);
-    N.post(so, o.npc, 'npc', pick(['ok np', 'your loss lol', 'alright, lmk if you change your mind'], ctx.rng), {}, ctx.now);
+    N.post(so, o.npc, 'npc', N.voice(N.npcOf(so.seed, o.npc), 'declined', ctx.rng), {}, ctx.now);
     so.unread[o.npc] = 0;
     keepSocial(ctx, so);
   },
@@ -807,7 +807,7 @@ export const ACTIONS = {
     let reply, outcome = null;
     if (o && m.no) {
       o.status = 'declined';
-      reply = pick(['ok np', 'alright, no worries', 'your loss 😛'], ctx.rng);
+      reply = N.voice(n, 'declined', ctx.rng);
     } else if (o && m.yes && m.price == null) {
       reply = o.agreed ? pick(['great, accept it then 👍', 'send it 🤝'], ctx.rng) : pick([`so ${N.dollars(Math.max(0, o.give.money - o.want.money))}? accept the offer then`, 'accept it then 😄'], ctx.rng);
     } else if (o && (m.price != null || m.arg)) {
@@ -841,7 +841,7 @@ export const ACTIONS = {
     let result;
     if (j.ok) {
       const out = swapWithNpc(ctx, so, n, { mine, theirs, myMoney, theirMoney });
-      N.post(so, n.id, 'npc', pick(['accepted 🤝', 'deal, accepted', 'ty, accepted!'], ctx.rng), {}, ctx.now);
+      N.post(so, n.id, 'npc', N.voice(n, 'accepted', ctx.rng), {}, ctx.now);
       result = { result: 'accepted', ...out };
     } else if (j.more && j.more <= Math.max(5, (theirMoney + their.reduce((t, x) => t + I.itemValue(x), 0)) * 0.25)) {
       const o = { id: newUid(), npc: n.id, kind: 'trade', at: ctx.now, exp: ctx.now + N.OFFER_LIFE, status: 'open', want: { uids: mine, money: myMoney }, give: { uids: theirs, money: theirMoney },
@@ -850,10 +850,10 @@ export const ACTIONS = {
       o.give.money = Math.max(0, netNow); o.want.money = Math.max(0, -netNow);
       o.max = round2(netNow + j.more * 0.4);
       so.offers.push(o);
-      N.post(so, n.id, 'npc', pick([`close. add ${N.dollars(j.more)} and it's a deal`, `I'd need ${N.dollars(j.more)} more`, `almost — ${N.dollars(j.more)} more and I'll do it`], ctx.rng), { offer: o.id }, ctx.now);
+      N.post(so, n.id, 'npc', N.voice(n, 'more', ctx.rng, N.dollars(j.more)), { offer: o.id }, ctx.now);
       result = { result: 'countered', offer: o, more: j.more };
     } else {
-      N.post(so, n.id, 'npc', pick(n.type === 'collector' ? ['Sorry, that doesn\'t work for me.', 'I\'ll pass, thanks.'] : ['nah', 'lol no', 'that\'s a lowball bro', 'no thx'], ctx.rng), {}, ctx.now);
+      N.post(so, n.id, 'npc', N.voice(n, 'refused', ctx.rng), {}, ctx.now);
       result = { result: 'declined' };
     }
     so.unread[n.id] = 0;

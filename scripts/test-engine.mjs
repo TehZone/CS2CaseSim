@@ -661,10 +661,43 @@ function tierFreq(box, n) {
   const N = await E('npcs');
   const MK = await import(new URL('../src/js/engine/market.js', import.meta.url));
   const people = N.activeCrowd(4242), world = N.crowd(4242);
-  check('NPCs: 36 active traders with 12 collectors (each a different kind) among 420 players, the same for the same save', people.length === 36 && people.filter((n) => n.type === 'collector').length === 12
-    && new Set(people.filter((n) => n.focus).map((n) => n.focus)).size === 12 && world.length === 420 && new Set(world.map((n) => n.name)).size === 420 && N.crowd(4242) === world
-    && N.npcOf(4242, 'n400') === world[400] && !world[400].active
+  check('NPCs: 66 active traders (20 collectors of all 12 kinds, 10 beginners) among 2,000 players, the same for the same save', people.length === 66
+    && people.filter((n) => n.type === 'collector').length === 20 && people.filter((n) => n.type === 'beginner').length === 10
+    && new Set(people.filter((n) => n.focus).map((n) => n.focus)).size === 12 && world.length === 2000 && new Set(world.map((n) => n.name)).size === 2000 && N.crowd(4242) === world
+    && N.npcOf(4242, 'n400') === world[400] && !world[400].active && N.npcOf(4242, 'n1999') === world[1999]
     && N.startingState(4242, people[2]).inv.map((it) => it.id + it.fl).join() === N.startingState(4242, people[2]).inv.map((it) => it.id + it.fl).join());
+  // (Saves know their NPCs by their place in the list: the first 420 and what they start with stay as they first were.)
+  const { hashStr, mulberry32 } = await E('util');
+  const first = world.slice(0, 420);
+  const fp = hashStr(JSON.stringify(first.map((n) => [n.id, n.name, n.type, n.focus, n.country, n.avatar, n.joined, n.level, n.medals, n.bio, n.fav, n.g, n.premium, n.patience, n.sharp, n.active]))) >>> 0;
+  const fpInv = hashStr(first.slice(0, 60).map((n) => N.startingState(4242, n).inv.map((it) => it.id + ':' + it.fl + ':' + (it.sn || '')).join()).join('|')) >>> 0;
+  check('NPCs: the first 420 (and what they own) are who they were before there were more', fp === 717510250 && fpInv === 976647370, `${fp} ${fpInv}`);
+
+  // Beginners: new, gullible, and blind to what makes an item special (theirs and yours).
+  const newbies = world.filter((n) => n.type === 'beginner');
+  check('NPCs: beginner traders, about a quarter of the newer players, low level and easy to bluff', newbies.length > 350 && newbies.every((n) => n.level <= 8 && n.sharp < 0.2 && n.medals === 0)
+    && world.slice(0, 420).every((n) => n.type !== 'beginner'), `${newbies.length} beginners`);
+  const lowSkin = Object.values(D.skins).find((s) => !s.v && !s.star && s.mn === 0 && s.p.FN?.[0] > 2);
+  const lowIt = { uid: 'low', t: 'skin', id: lowSkin.id, fl: 0.0003, sd: 5, stk: [], at: 0 }, twin = { uid: 'twin', t: 'skin', id: lowSkin.id, fl: 0.06, sd: 5, stk: [], at: 0 };
+  const nb = people.find((n) => n.type === 'beginner'), plr = people.find((n) => n.type === 'player');
+  const akB = { uid: 'ak', t: 'skin', id: Object.values(D.skins).find((x) => x.w === 'AK-47' && !x.v && x.p.FT?.[0] > 5).id, fl: 0.2, sd: 3, stk: [], at: 0 };
+  check('NPCs: a beginner values a 0.0003 float like any Factory New (a player doesn’t)', I.itemValue(lowIt) > I.itemValue(twin) * 1.2 && N.keepValue(nb, lowIt) === N.keepValue(nb, twin)
+    && N.buyValue(nb, lowIt) === N.buyValue(nb, twin) && N.keepValue(plr, lowIt) > N.keepValue(plr, twin), `${lowSkin.n}: $${I.itemValue(lowIt)} vs $${I.itemValue(twin)}`);
+  const gems = newbies.filter((n) => N.startingState(4242, n).inv.some((it) => it.src === 'Unboxed' && N.highlights(it).length)).length;
+  check('NPCs: some beginners own something special without knowing it (a lucky unbox)', gems > newbies.length * 0.2 && gems < newbies.length * 0.5, `${gems} of ${newbies.length}`);
+  const believes = (n) => {
+    const so2 = N.freshSocial(4242);
+    N.npcState(so2, n.id).money = 1e6;
+    let k = 0;
+    for (let t = 0; t < 200; t++) {
+      const o = { npc: n.id, want: { uids: ['ak'], money: 0 }, give: { uids: [], money: 10 }, max: 12, patience: 5, annoy: 0, args: [], agreed: false, status: 'open', exp: 0 };
+      N.haggle(so2, { inv: [akB] }, o, { price: 11, arg: 'serial' }, { r: mulberry32(t + 1), now: 0 });
+      if (o.max > 12) k++;
+    }
+    return k / 200;
+  };
+  const bNb = believes(nb), bPl = believes(plr);
+  check('NPCs: a beginner mostly believes a false argument (no serial on it), a player never does', bNb > 0.7 && bPl === 0, `beginner ${bNb}, player ${bPl}`);
   const dop = people.find((n) => n.focus === 'doppler'), pl = people.find((n) => n.type === 'player');
   const ruby = Object.values(D.skins).find((s) => s.ph === 'Ruby'), ak = Object.values(D.skins).find((s) => s.w === 'AK-47' && !s.v && s.p.FT?.[0] > 5);
   const rubyIt = { uid: 'ruby', t: 'skin', id: ruby.id, fl: 0.02, sd: 10, stk: [], at: 0 }, akIt = { uid: 'ak', t: 'skin', id: ak.id, fl: 0.2, sd: 3, stk: [], at: 0 };
