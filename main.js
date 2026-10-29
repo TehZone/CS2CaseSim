@@ -1421,6 +1421,48 @@ async function runWinSmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=lineups` throws every lineup of each map (CS2SIM_SMOKE_MAPS, else Mirage, Dust II and Inferno) in the
+// game itself: a bot on its spot exactly (its brain off), its aim exact, and logs where each went off against where
+// it's meant to (and where flight.js says it goes on this match's collision), the bad ones (over 110 units off; a flash
+// 180) last.
+async function runLineupsSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const maps = (process.env.CS2SIM_SMOKE_MAPS || 'de_mirage,de_dust2,de_inferno').split(',');
+  await wait(3000);
+  for (const map of maps) {
+    await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'competitive', map: '${map}', teamSize: 5 })); })(); 1`);
+    if (!(await smokeStartMap(win, map, 'lineups'))) continue;
+    const r = await js(`(async () => { const g = window.__playGame, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const { landing, nadeFor } = await import(new URL('js/play/utility.js', location.href).href);
+      document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
+      g.console.run('sv_cheats 1'); g.console.run('host_timescale 4'); g.god = true;
+      if (g.match.phase === 'freeze') { g.match.time = 0; await sleep(300); }
+      g.match.time = 9999;
+      for (const b of g.bots) { b.brain.tick = () => { b.vel = [0, 0, 0]; }; b.brain.scan = () => {}; }
+      const b = g.bots[0], out = [];
+      for (const l of g.lineups) {
+        const nade = nadeFor(l.kind, l.side), at = [];
+        g.onLineupLanded = (c, ln, pos) => { if (ln === l) at.push(pos.slice()); };
+        b.c.alive = true; b.pendingThrow = null; b.c.nades[nade] = 1; b.ducked = false;
+        b.pos = l.pos.slice(); b.vel = [0, 0, 0];
+        const t0 = g.now;
+        g.botThrowAim(b, nade, { pitch: l.pitch, yaw: l.yaw, strength: l.strength, jump: l.jump, lineup: l });
+        while (!at.length && g.now - t0 < 25) await sleep(50);
+        const sim = landing(g.collision, l), off = (p) => p ? Math.round(Math.hypot(p[0] - l.goal[0], p[1] - l.goal[1], l.kind === 'flash' ? p[2] - l.goal[2] - 110 : p[2] - l.goal[2])) : null;
+        out.push({ id: l.id, kind: l.kind, side: l.side, off: off(at[0]), sim: off(sim?.pos), built: l.err, time: +(g.now - t0).toFixed(1), simTime: sim?.time != null ? +sim.time.toFixed(1) : null });
+        await sleep(200);
+      }
+      return JSON.stringify(out); })()`);
+    const list = JSON.parse(r), bad = list.filter((x) => x.off == null || x.off > (x.kind === 'flash' ? 180 : 110));
+    console.log(`SMOKE lineups ${map}: ${list.length - bad.length} of ${list.length} land on their spot in the game`);
+    for (const x of [...list.filter((y) => !bad.includes(y)), ...bad]) console.log(`  ${bad.includes(x) ? 'BAD ' : ''}${x.side} ${x.id} (${x.kind}): ${x.off ?? 'never'} off in the game in ${x.time} s; flight.js ${x.sim ?? 'never'} off in ${x.simTime} s (${x.built} when built)`);
+    await js(`import(new URL('js/matchmaking.js', location.href).href).then((mm) => mm.leave()).then(() => 1)`); // (a private match: left at once)
+    await wait(2500);
+  }
+  app.quit();
+}
+
 // `CS2SIM_SMOKE=drops` checks that guns keep their skins (put a save.json with skins equipped in the smoke profile
 // first): on Dust II (CS2SIM_SMOKE_MAP) as a terrorist with the bots stopped, you buy an AK-47 (your skin), drop it, a
 // bot picks it up and holds it, dies and drops it, you pick it up again (yours), then pick up a bot's (the default),
@@ -1496,7 +1538,11 @@ async function runBotsSmoke(win) {
         const fmt = (p) => p ? Math.round(p) : '';
         const planLine = () => { const t = g.plans?.T, ct = g.plans?.CT; if (!t) return;
           B.log.push('round ' + g.match.round + ': T ' + t.strat + ' ' + t.site + ' (' + t.econ + ', stage ' + t.stage + ') throws [' + t.throws.map((x) => x.by.name + ':' + x.lineup.id).join(', ') + '] roles ' + [...t.roles].map(([c, r]) => c.name + '=' + r).join(' ')
-            + ' | CT ' + ct.econ + (ct.stack ? ' stack ' + ct.stack : '') + ' throws [' + ct.throws.map((x) => x.by.name + ':' + x.lineup.id).join(', ') + ']'); };
+            + ' | CT ' + ct.econ + (ct.stack ? ' stack ' + ct.stack : '') + ' throws [' + ct.throws.map((x) => x.by.name + ':' + x.lineup.id).join(', ') + ']');
+          // (Positions, setups.js: the CTs' on their sites as called, a default's spread.)
+          if (ct.pos?.size) B.log.push('  CT setup: ' + (ct.call || '') + ' [' + [...ct.pos].map(([c, p]) => c.name + '=' + ct.assign.get(c) + ' ' + p.name).join(', ') + ']');
+          if (t.positions?.size) B.log.push('  T default: ' + [...t.positions].map(([c, p]) => c.name + '=' + p.name).join(', '));
+          B.snapped = false; };
         const start = g.onRoundStart.bind(g); g.onRoundStart = function (...a) { start(...a); planLine(); };
         planLine();
         g.onLineupLanded = (c, l, pos) => { const off = Math.hypot(pos[0] - l.goal[0], pos[1] - l.goal[1], l.kind === 'flash' ? 0 : pos[2] - l.goal[2]); B.landed.push({ by: c.name, id: l.id, kind: l.kind, off: Math.round(l.kind === 'flash' ? Math.hypot(pos[0] - l.goal[0], pos[1] - l.goal[1], pos[2] - l.goal[2] - 110) : off) }); };
@@ -1516,6 +1562,9 @@ async function runBotsSmoke(win) {
         const end = g.onRoundEnd.bind(g); g.onRoundEnd = function (w, reason, mvp) {
           const t = g.plans?.T;
           if (t?.throws?.length) B.log.push('  throws: ' + t.throws.map((x) => { const b = g.botOf(x.by); return x.lineup.id + (x.thrownAt != null ? ' thrown' : ' not thrown (' + (x.by.alive ? Math.round(Math.hypot(b.pos[0] - x.lineup.pos[0], b.pos[1] - x.lineup.pos[1])) + 'u from its spot' : 'thrower dead') + ')'); }).join(', ') + ' · stage ' + t.stage);
+          const ct = g.plans?.CT, fell = g.bots.filter((b) => b.brain.fellBack).map((b) => b.c.name + ' (' + b.brain.fellBack.site + ')');
+          const cts = (ct?.throws || []).filter((x) => x.thrownAt != null).map((x) => x.lineup.id), retake = (ct?.retakes || []).filter((x) => x.thrownAt != null).map((x) => x.lineup.id);
+          if (fell.length || cts.length || retake.length) B.log.push('  CT utility: ' + (cts.join(', ') || 'none') + (retake.length ? '; retake: ' + retake.join(', ') : '') + (fell.length ? '; fell back: ' + fell.join(', ') : ''));
           B.wins[w]++; B.log.push('  round ' + g.match.round + ' won by ' + w + ' (' + reason + ')' + (g.match.bomb?.site ? ' bomb ' + g.match.bomb.site : '')); return end(w, reason, mvp); };
         const planted = g.match.planted.bind(g.match); g.match.planted = function (...a) { B.plants++; return planted(...a); };
         return 1; })()`);
@@ -1525,7 +1574,14 @@ async function runBotsSmoke(win) {
       const t0 = Date.now();
       let shot = false;
       while (Date.now() - t0 < secs * 1000) {
-        await js(`(() => { const g = window.__playGame; if (g.me.alive && g.match.phase === 'live') g.console.run('kill'); return 1; })()`);
+        await js(`(() => { const g = window.__playGame; if (g.me.alive && g.match.phase === 'live') g.console.run('kill');
+          // Where everyone is 20 s into the round (by callout), and what each is doing.
+          const B = window.__bots;
+          if (B && !B.snapped && g.match.phase === 'live' && g.now - g.liveAt > 20) {
+            B.snapped = true;
+            B.log.push('  20 s in: ' + g.bots.filter((b) => b.c.alive).map((b) => b.c.team + ' ' + b.c.name + ' ' + (g.placeOf(b.c) || '?') + ' ' + b.brain.task).join(', '));
+          }
+          return 1; })()`);
         if (!shot && Date.now() - t0 > 20000) {
           shot = true;
           await js(`window.__playGame.hud.scoreboard(true, window.__playGame.scoreData()); 1`);
@@ -1544,7 +1600,7 @@ async function runBotsSmoke(win) {
       console.log(`SMOKE bots ${map} ${tier} behaviour: ` + JSON.stringify(metrics, null, 1));
       fs.writeFileSync(path.join(app.getPath('userData'), `bots-${map}-${tier}.json`), JSON.stringify(metrics, null, 1));
       summary.push({ map, tier, kills: r.kills, plants: r.plants, wins: r.wins, thrown: land.length, landed: good.length, ...metrics.summary });
-      await js(`document.querySelector('.play-root [data-leave]')?.click(); 1`);
+      await js(`import(new URL('js/matchmaking.js', location.href).href).then((mm) => mm.leave()).then(() => 1)`); // (a private match: left at once)
       await wait(2500);
     }
   }
@@ -2650,6 +2706,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'aspect') { win.webContents.once('did-finish-load', () => runAspectSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'winbanner') { win.webContents.once('did-finish-load', () => runWinSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'lineups') { win.webContents.once('did-finish-load', () => runLineupsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'drops') { win.webContents.once('did-finish-load', () => runDropsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'breakables') { win.webContents.once('did-finish-load', () => runBreakSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'look') { win.webContents.once('did-finish-load', () => runLookSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }

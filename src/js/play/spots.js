@@ -10,8 +10,11 @@
 //   or for an AWP, one way in rather than several at once, not out in the corridor the enemy walks through).
 // Each round a team's bots share them out (see pick): different ways in where there are several, a spot no teammate has
 // taken, and not the spot it held the last two times, chosen at random among the good ones: never the same five spots.
+// On the maps setups.js knows, the positions players really take ('pos:CT:jungle'): the spots near each one's own (as
+// above), watching the enemy come in through its callouts.
 import { FLAG_BULLET } from './collision.js';
 import { stagingPoint } from './strats.js';
+import { SETUPS, setupPosition } from './setups.js';
 
 const EYE = 64, STEP = 96, NEAR = 220, FAR = 2600;
 const dist2 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -31,7 +34,7 @@ export class Spots {
 
   // What a side holds: 'hold:A' (CTs on a site), 'push:A' (terrorists on it, facing the CTs' ways in), 'mid:CT' or
   // 'mid:T', 'gather:A' (terrorists short of a site, watching the way out of it; 'gather:A/1' short of it on its second
-  // way in, and so on).
+  // way in, and so on), 'pos:CT:jungle' (a position of setups.js).
   place(key) {
     if (!this.places.has(key)) this.places.set(key, this.build(key));
     return this.places.get(key);
@@ -47,6 +50,8 @@ export class Spots {
       for (let r = 1; r < (this.place('hold:' + s.site)?.ways.length || 0); r++) out.push('gather:' + s.site + '/' + r);
     }
     if (this.midBox()) out.push('mid:CT', 'mid:T');
+    const s = SETUPS[g.map.info.id];
+    if (s) out.push(...Object.values(s.CT).flat().map((p) => 'pos:CT:' + p.id), ...s.T.map((p) => 'pos:T:' + p.id));
     return out;
   }
 
@@ -73,6 +78,15 @@ export class Spots {
   // The region a place covers, where the enemy comes from, and where they're headed.
   setup(key) {
     const g = this.game, [kind, place] = key.split(':'), id = place.split('/')[0], sites = g.map.info.bombsites || [];
+    if (kind === 'pos') {
+      // Near the position's own spot (on its floor), the enemy coming from their spawn through its callouts.
+      const p = setupPosition(g.map.info.id, key.slice(4)), places = g.map.info.places || [];
+      const via = (p?.watch || []).map((n) => places.find((x) => x.name === n)).filter(Boolean).map(centerOf);
+      if (!p || !via.length) return null;
+      const r = p.r || 220, enemy = this.spawnOf(place === 'CT' ? 'T' : 'CT');
+      return { box: { min: [p.at[0] - r, p.at[1] - r, p.at[2] - 100], max: [p.at[0] + r, p.at[1] + r, p.at[2] + 100] }, margin: 0, to: p.at,
+        from: via.map(() => enemy), via, near: p.at, r, watchBoxes: places.filter((x) => p.watch.includes(x.name)) };
+    }
     const site = sites.find((s) => s.site === id), other = sites.find((s) => s.site !== id), mid = this.midBox();
     const at = (box) => box && centerOf(box);
     if (kind === 'hold' && site) return { box: site, margin: 500, to: centerOf(site), from: [this.spawnOf('T'), at(mid), at(other)], names: ['spawn', 'mid', other && other.site] };
@@ -94,7 +108,7 @@ export class Spots {
     for (let o = 0; o < def.from.length; o++) {
       const from = def.from[o];
       if (!from) continue;
-      const path = nav.path(from, def.to)?.points;
+      const path = def.via ? [...(nav.path(from, def.via[o])?.points || []), ...(nav.path(def.via[o], def.to)?.points || []).slice(1)] : nav.path(from, def.to)?.points;
       if (!path || path.length < 2) continue;
       const pts = [];
       for (let i = 1; i < path.length; i++) {
@@ -112,6 +126,8 @@ export class Spots {
     const cand = [];
     for (const a of nav.areas) for (const h of a.hiding || []) if (inBox(h, def.box, def.margin)) cand.push({ pos: [h[0], h[1], h[2]], hiding: true });
     for (let i = 0; i < 45; i++) { const r = nav.randomPointIn(def.box.min, def.box.max, () => true, 20); if (r) cand.push({ pos: r.point, hiding: false }); }
+    // (A position: on its own floor, within its reach.)
+    if (def.near) for (let i = cand.length - 1; i >= 0; i--) if (Math.abs(cand[i].pos[2] - def.near[2]) > 100 || dist2(cand[i].pos, def.near) > def.r) cand.splice(i, 1);
     const spots = [];
     for (const c of cand) {
       const eye = [c.pos[0], c.pos[1], c.pos[2] + EYE];
@@ -135,8 +151,12 @@ export class Spots {
         const a = (k / 16) * Math.PI * 2;
         if (col.raycast([c.pos[0], c.pos[1], c.pos[2] + 40], [Math.cos(a), Math.sin(a), 0], 80, FLAG_BULLET)) cover++;
       }
-      const d = watch.d, base = 1 + cover * 0.06 + (c.hiding ? 0.35 : 0) - (seen - 1) * 0.25 - (inPath ? 0.6 : 0);
-      const band = (lo, hi) => (d >= lo && d <= hi ? 0.5 : -Math.min(0.5, (d < lo ? lo - d : d - hi) / 1000));
+      const d = watch.d;
+      let base = 1 + cover * 0.06 + (c.hiding ? 0.35 : 0) - (seen - 1) * 0.25 - (inPath ? 0.6 : 0);
+      // A position's: near its own spot, and above all seeing them first in (or as they come out of) its callouts, how
+      // far off it is (a long sightline is what some positions are for), as long as it isn't on top of them.
+      if (def.near) base += 0.4 * (1 - dist2(c.pos, def.near) / def.r) + (def.watchBoxes.some((b) => inBox(watch.at, b, 250)) ? 1 : 0);
+      const band = def.near ? () => (d < 300 ? -0.3 : 0.3) : (lo, hi) => (d >= lo && d <= hi ? 0.5 : -Math.min(0.5, (d < lo ? lo - d : d - hi) / 1000));
       const look = [-(Math.atan2(watch.at[2] - eye[2], Math.hypot(watch.at[0] - eye[0], watch.at[1] - eye[1])) * 180) / Math.PI, (Math.atan2(watch.at[1] - eye[1], watch.at[0] - eye[0]) * 180) / Math.PI];
       spots.push({ pos: c.pos, way: watch.way, at: watch.at, look, cover, d: Math.round(d), score: base + band(350, 1400), awp: base + band(700, 2600) });
     }

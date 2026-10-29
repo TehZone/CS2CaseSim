@@ -1,6 +1,8 @@
 // The bots' utility lineups (src/data/lineups.json), found on each map's own geometry. Every lineup below is asked for by
 // its callouts: thrown from somewhere in one place to land in another (the part of it nearest a third, say: "the part
-// of CT spawn nearest A site" is the CT smoke). For each, it tries throw spots in the first place that the side can walk
+// of CT spawn nearest A site" is the CT smoke), or on a spot of its own (at: where the real one lands, Mirage's stairs
+// smoke or Inferno's new box molotov, read off the map's overview). For each, it tries throw spots in the first place
+// that the side can walk
 // to, and aims (pitch, yaw, Mouse1 / both / Mouse2, standing or jump-throw), simulating every throw with the game's own
 // grenade physics (src/js/play/flight.js) on the map's collision mesh, and keeps the throw that lands nearest the spot,
 // if one lands close enough: smokes and molotovs on it, flashbangs bursting in the air over it (a pop flash).
@@ -19,60 +21,78 @@ const CACHE = process.env.CS2SIM_CACHE || path.join(process.env.APPDATA || '', '
 const OUT = path.join(ROOT, 'src', 'data', 'lineups.json');
 const EYE = 64, JUMP = 301.993;
 
-// purpose: when the bots use it. T: 'A' / 'B' (executes on a site), 'mid' (taking mid), 'default' (map control);
-// CT: 'holdA' / 'holdB' (slowing a push at the start of a round), 'retakeA' / 'retakeB'.
+// purpose: when the bots use it. T: 'A' / 'B' (executes on a site), 'mid' (taking mid), 'default' (map control, thrown
+// as a default starts); CT: 'holdA' / 'holdB' (a smoke at the start of a round, a molotov as they come), 'retakeA' /
+// 'retakeB' (smokes, then flashes, before going in).
 const SPECS = {
   de_dust2: [
-    ['xbox', 'Xbox smoke', 'T', 'smoke', ['mid', 'A'], ['TSpawn', 'OutsideTunnel', 'TopofMid'], { place: 'Catwalk', toward: 'TopofMid' }],
-    ['ctA', 'CT smoke (A)', 'T', 'smoke', ['A'], ['LongDoors', 'OutsideLong', 'LongA', 'TopofMid', 'Catwalk'], { place: 'CTSpawn', toward: 'BombsiteA' }],
+    ['xbox', 'Xbox smoke', 'T', 'smoke', ['mid', 'A', 'default'], ['TSpawn', 'OutsideTunnel', 'TopofMid'], { place: 'Catwalk', toward: 'TopofMid' }],
+    ['ctA', 'CT smoke (A)', 'T', 'smoke', ['A'], ['LongDoors', 'OutsideLong', 'LongA', 'TopofMid', 'Catwalk'], { at: [628, 2461, 100] }],
     ['crossA', 'Long cross smoke', 'T', 'smoke', ['A'], ['LongDoors', 'OutsideLong', 'LongA'], { place: 'BombsiteA', toward: 'LongA' }],
     ['shortA', 'Short smoke (from long)', 'T', 'smoke', ['A'], ['LongA', 'LongDoors'], { place: 'ShortStairs', toward: 'BombsiteA' }],
     ['plantA', 'A site molotov', 'T', 'fire', ['A'], ['LongA', 'ARamp', 'Catwalk'], { place: 'BombsiteA' }],
+    ['longCorner', 'Long corner molotov', 'T', 'fire', ['default', 'A'], ['LongDoors', 'OutsideLong'], { at: [1257, 1148, 2] }],
     ['popLong', 'Long pop flash', 'T', 'flash', ['A'], ['LongDoors', 'OutsideLong'], { place: 'LongA', toward: 'ARamp' }],
     ['popShort', 'Short pop flash', 'T', 'flash', ['A'], ['Catwalk', 'TopofMid'], { place: 'ShortStairs', toward: 'BombsiteA' }],
-    ['bDoors', 'B doors smoke', 'T', 'smoke', ['B'], ['UpperTunnel', 'LowerTunnel', 'TunnelStairs', 'OutsideTunnel'], { place: 'BDoors' }],
-    ['bPlat', 'B platform smoke', 'T', 'smoke', ['B'], ['UpperTunnel', 'TunnelStairs', 'OutsideTunnel'], { place: 'BombsiteB', toward: 'BDoors' }],
+    ['bDoors', 'B doors smoke', 'T', 'smoke', ['B'], ['UpperTunnel', 'LowerTunnel', 'TunnelStairs', 'OutsideTunnel'], { at: [-1168, 2400, 22] }],
+    ['bPlat', 'B window smoke', 'T', 'smoke', ['B'], ['UpperTunnel', 'TunnelStairs', 'OutsideTunnel'], { place: 'BombsiteB', toward: 'BDoors' }],
     ['popB', 'B tunnels pop flash', 'T', 'flash', ['B'], ['UpperTunnel', 'TunnelStairs'], { place: 'BombsiteB', toward: 'UpperTunnel' }],
-    ['backB', 'B back molotov', 'T', 'fire', ['B'], ['UpperTunnel', 'TunnelStairs', 'LowerTunnel'], { place: 'BombsiteB', toward: 'BDoors' }],
+    ['backB', 'B back plat molotov', 'T', 'fire', ['B'], ['UpperTunnel', 'TunnelStairs', 'LowerTunnel'], { at: [-1640, 2880, 5] }],
+    ['carB', 'B car molotov', 'T', 'fire', ['B'], ['UpperTunnel', 'TunnelStairs'], { at: [-1816, 2200, -8] }],
     ['midDoors', 'Mid doors smoke', 'T', 'smoke', ['mid', 'B', 'default'], ['TopofMid', 'OutsideTunnel', 'TSpawn', 'Middle'], { place: 'MidDoors' }],
     ['longCT', 'Long doors smoke', 'CT', 'smoke', ['holdA'], ['LongA', 'ARamp', 'BombsiteA', 'CTSpawn'], { place: 'LongDoors' }],
     ['longMolly', 'Long doors molotov', 'CT', 'fire', ['holdA'], ['LongA', 'ARamp', 'BombsiteA'], { place: 'LongDoors' }],
     ['tunnelsCT', 'B tunnels smoke', 'CT', 'smoke', ['holdB'], ['BombsiteB', 'BDoors', 'Side'], { place: 'UpperTunnel', toward: 'BombsiteB' }],
+    ['tunnelsMolly', 'B tunnels molotov', 'CT', 'fire', ['holdB'], ['BombsiteB', 'BDoors'], { at: [-1990, 1560, 33] }],
     ['tunnelsFlash', 'B tunnels flash', 'CT', 'flash', ['holdB'], ['BombsiteB', 'BDoors'], { place: 'UpperTunnel', toward: 'BombsiteB' }],
+    ['retakeLong', 'A retake long smoke', 'CT', 'smoke', ['retakeA'], ['CTSpawn', 'ExtendedA', 'ShortStairs', 'UnderA'], { place: 'LongA', toward: 'LongDoors' }],
     ['retakeA', 'A retake flash', 'CT', 'flash', ['retakeA'], ['CTSpawn', 'ShortStairs'], { place: 'BombsiteA' }],
+    ['retakeTunnels', 'B retake tunnels smoke', 'CT', 'smoke', ['retakeB'], ['BDoors', 'MidDoors', 'CTSpawn'], { at: [-1964, 1700, 33] }],
     ['retakeB', 'B retake flash', 'CT', 'flash', ['retakeB'], ['BDoors', 'MidDoors', 'CTSpawn'], { place: 'BombsiteB' }],
   ],
   de_mirage: [
-    ['window', 'Window smoke', 'T', 'smoke', ['mid', 'default', 'B'], ['TSpawn', 'TopofMid', 'TRamp'], { place: 'SnipersNest' }],
+    ['window', 'Window smoke', 'T', 'smoke', ['mid', 'default', 'B'], ['TSpawn', 'TopofMid', 'TRamp'], { at: [-1160, -690, -164] }],
+    ['topcon', 'Top connector smoke', 'T', 'smoke', ['mid', 'A'], ['TopofMid', 'TSpawn', 'TRamp'], { place: 'Connector', toward: 'Middle' }],
     ['jungle', 'Jungle smoke', 'T', 'smoke', ['A'], ['TRamp', 'TSpawn', 'PalaceAlley'], { place: 'Jungle' }],
     ['ctA', 'CT smoke (A)', 'T', 'smoke', ['A'], ['TRamp', 'TSpawn', 'PalaceAlley', 'PalaceInterior'], { place: 'CTSpawn', toward: 'BombsiteA' }],
-    ['stairs', 'Stairs smoke', 'T', 'smoke', ['A'], ['TRamp', 'TSpawn', 'PalaceAlley'], { place: 'Stairs' }],
-    ['aMolly', 'A site molotov', 'T', 'fire', ['A'], ['TRamp', 'PalaceInterior', 'PalaceAlley'], { place: 'BombsiteA', toward: 'Jungle' }],
+    ['stairs', 'Stairs smoke', 'T', 'smoke', ['A'], ['TRamp', 'TSpawn', 'PalaceAlley'], { at: [-340, -1559, -164] }],
+    ['triple', 'Triple molotov', 'T', 'fire', ['A'], ['TRamp', 'PalaceInterior', 'PalaceAlley'], { at: [-150, -1620, -164] }],
+    ['firebox', 'Firebox molotov', 'T', 'fire', ['A'], ['TRamp', 'PalaceInterior', 'PalaceAlley'], { at: [-23, -2164, -164] }],
     ['popA', 'A ramp pop flash', 'T', 'flash', ['A'], ['TRamp', 'PalaceAlley'], { place: 'BombsiteA', toward: 'TRamp' }],
-    ['marketB', 'Market smoke', 'T', 'smoke', ['B'], ['Apartments', 'BackAlley', 'TSpawn', 'Underpass'], { place: 'Shop', toward: 'BombsiteB' }],
+    ['market', 'Market window smoke', 'T', 'smoke', ['B'], ['Apartments', 'BackAlley', 'TSpawn', 'Underpass'], { at: [-1710, -300, -164] }],
     ['shortB', 'Short smoke (B)', 'T', 'smoke', ['B', 'mid'], ['TopofMid', 'Middle', 'Apartments', 'Underpass'], { place: 'Catwalk' }],
     ['popB', 'Apartments pop flash', 'T', 'flash', ['B'], ['Apartments'], { place: 'BombsiteB', toward: 'Apartments' }],
-    ['bMolly', 'B site molotov', 'T', 'fire', ['B'], ['Apartments'], { place: 'BombsiteB', toward: 'Shop' }],
+    ['bench', 'Bench molotov', 'T', 'fire', ['B'], ['Apartments'], { at: [-1996, 188, -156] }],
+    ['van', 'Van molotov', 'T', 'fire', ['B'], ['Apartments'], { at: [-1520, 110, -164] }],
     ['topMid', 'Top mid smoke', 'CT', 'smoke', ['holdA', 'holdB'], ['Connector', 'Catwalk', 'Middle'], { place: 'TopofMid' }],
     ['palace', 'Palace molotov', 'CT', 'fire', ['holdA'], ['BombsiteA', 'Stairs', 'CTSpawn'], { place: 'PalaceInterior', toward: 'BombsiteA' }],
     ['ramp', 'A ramp smoke', 'CT', 'smoke', ['holdA'], ['BombsiteA', 'Stairs', 'Jungle'], { place: 'TRamp', toward: 'BombsiteA' }],
     ['apps', 'Apartments molotov', 'CT', 'fire', ['holdB'], ['BombsiteB', 'Shop'], { place: 'Apartments', toward: 'BombsiteB' }],
+    ['underpass', 'Underpass molotov', 'CT', 'fire', ['holdB'], ['Catwalk', 'Ladder', 'Connector'], { at: [-1007, -420, -360] }],
+    ['retakePalace', 'A retake palace smoke', 'CT', 'smoke', ['retakeA'], ['CTSpawn', 'Jungle', 'Connector'], { place: 'PalaceInterior', toward: 'BombsiteA' }],
+    ['retakeRamp', 'A retake ramp smoke', 'CT', 'smoke', ['retakeA'], ['CTSpawn', 'Jungle', 'Connector'], { place: 'TRamp', toward: 'BombsiteA' }],
     ['retakeA', 'A retake flash', 'CT', 'flash', ['retakeA'], ['CTSpawn', 'Jungle', 'Connector'], { place: 'BombsiteA' }],
+    ['retakeApps', 'B retake apps smoke', 'CT', 'smoke', ['retakeB'], ['Shop', 'CTSpawn', 'Catwalk'], { place: 'Apartments', toward: 'BombsiteB' }],
     ['retakeB', 'B retake flash', 'CT', 'flash', ['retakeB'], ['Shop', 'CTSpawn'], { place: 'BombsiteB' }],
   ],
   de_inferno: [
     ['arch', 'Arch smoke', 'T', 'smoke', ['A'], ['SecondMid', 'Apartments', 'Middle', 'LowerMid'], { place: 'Arch' }],
-    ['library', 'Library smoke', 'T', 'smoke', ['A'], ['SecondMid', 'Apartments', 'Middle'], { place: 'Library' }],
+    ['library', 'Library smoke', 'T', 'smoke', ['A'], ['SecondMid', 'Apartments', 'Middle'], { at: [2366, 1419, 163] }],
     ['pit', 'Pit molotov', 'T', 'fire', ['A'], ['Apartments', 'SecondMid', 'Balcony'], { place: 'Pit' }],
+    ['siteA', 'A site molotov', 'T', 'fire', ['A'], ['Apartments', 'Balcony', 'SecondMid'], { at: [2050, 430, 164] }],
     ['popA', 'A pop flash', 'T', 'flash', ['A'], ['Apartments', 'Balcony', 'SecondMid'], { place: 'BombsiteA', toward: 'Apartments' }],
     ['ctB', 'CT smoke (B)', 'T', 'smoke', ['B'], ['Banana', 'TRamp', 'Underpass'], { place: 'CTSpawn', toward: 'BombsiteB' }],
     ['coffins', 'Coffins smoke', 'T', 'smoke', ['B'], ['Banana', 'TRamp'], { place: 'BombsiteB', toward: 'CTSpawn' }],
-    ['firstB', 'B first spot molotov', 'T', 'fire', ['B'], ['Banana'], { place: 'BombsiteB', toward: 'Banana' }],
+    ['newbox', 'New box molotov', 'T', 'fire', ['B'], ['Banana'], { at: [460, 2760, 164] }],
+    ['dark', 'Dark molotov', 'T', 'fire', ['B'], ['Banana'], { at: [58, 2451, 164] }],
     ['popB', 'Banana pop flash', 'T', 'flash', ['B'], ['Banana'], { place: 'BombsiteB', toward: 'Banana' }],
+    ['carT', 'Banana car molotov', 'T', 'fire', ['default', 'B'], ['Banana', 'TRamp', 'LowerMid'], { at: [400, 2080, 140] }],
     ['bananaCT', 'Banana molotov', 'CT', 'fire', ['holdB'], ['BombsiteB', 'Ruins', 'CTSpawn'], { place: 'Banana', toward: 'BombsiteB' }],
     ['bananaSmoke', 'Banana smoke', 'CT', 'smoke', ['holdB'], ['BombsiteB', 'Ruins', 'CTSpawn'], { place: 'Banana' }],
     ['apps', 'Apartments molotov', 'CT', 'fire', ['holdA'], ['BombsiteA', 'Library', 'Pit'], { place: 'Apartments', toward: 'BombsiteA' }],
+    ['retakeApps', 'A retake apartments smoke', 'CT', 'smoke', ['retakeA'], ['Arch', 'Library', 'CTSpawn'], { place: 'Apartments', toward: 'BombsiteA' }],
     ['retakeA', 'A retake flash', 'CT', 'flash', ['retakeA'], ['Arch', 'Library', 'CTSpawn'], { place: 'BombsiteA' }],
+    ['retakeBanana', 'B retake banana smoke', 'CT', 'smoke', ['retakeB'], ['CTSpawn', 'Ruins'], { place: 'Banana', toward: 'BombsiteB' }],
     ['retakeB', 'B retake flash', 'CT', 'flash', ['retakeB'], ['CTSpawn', 'Ruins'], { place: 'BombsiteB' }],
   ],
   de_nuke: [
@@ -114,6 +134,7 @@ function areasIn(map, place) {
 }
 
 function target(map, to) {
+  if (to.at) return to.at; // (a spot of its own: where the real lineup lands)
   const areas = areasIn(map, to.place);
   if (!areas.length) return null;
   const toward = to.toward ? areasIn(map, to.toward) : [];
@@ -187,17 +208,21 @@ function findLineup(map, spec, side) {
     }
   }
   if (!found.length) return { id, error: `nothing lands within ${TOLERANCE[kind]} (${tried} spots tried of ${spots.length})` };
-  // The steadiest of the closest: how far it drifts if the aim is half a degree off (the bots' aim isn't perfect), and
-  // a standing throw over a jump-throw.
+  // The steadiest of the closest: how far it lands if the aim is a tenth of a degree off any way (the best bots' aim is
+  // about that, see skill.js: one that only works on the exact pixel missed by hundreds of units in a match, a bounce
+  // off a step or a ledge), and a standing throw over a jump-throw. Too fragile even so: none.
   const drift = (x) => {
     let worst = 0;
-    for (const [dp, dy] of [[0.5, 0], [-0.5, 0], [0, 0.5], [0, -0.5]]) worst = Math.max(worst, miss(map, kind, landing(map.col, [x.pos[0], x.pos[1], x.pos[2] + EYE], x.pitch + dp, x.yaw + dy, x.strength, x.jump, kind, 1 / 64), goal));
+    for (const [dp, dy] of [[0.1, 0], [-0.1, 0], [0, 0.1], [0, -0.1], [0.07, 0.07], [-0.07, 0.07], [0.07, -0.07], [-0.07, -0.07]]) {
+      worst = Math.max(worst, miss(map, kind, landing(map.col, [x.pos[0], x.pos[1], x.pos[2] + EYE], x.pitch + dp, x.yaw + dy, x.strength, x.jump, kind, 1 / 64), goal));
+    }
     return worst;
   };
-  const pickFrom = found.sort((x, y) => x.err - y.err).filter((x, i, a) => a.findIndex((z) => z.pos.join() === x.pos.join() && Math.abs(z.pitch - x.pitch) < 0.6 && Math.abs(z.yaw - x.yaw) < 0.6) === i).slice(0, 16);
-  for (const x of pickFrom) { x.spread = drift(x); x.score = x.err + 0.6 * Math.min(x.spread, 1000) + (x.jump ? 15 : 0); }
+  const pickFrom = found.sort((x, y) => x.err - y.err).filter((x, i, a) => a.findIndex((z) => z.pos.join() === x.pos.join() && Math.abs(z.pitch - x.pitch) < 0.6 && Math.abs(z.yaw - x.yaw) < 0.6) === i).slice(0, 24);
+  for (const x of pickFrom) { x.spread = drift(x); x.score = x.err + 0.8 * Math.min(x.spread, 1000) + (x.jump ? 15 : 0); }
   const best = pickFrom.sort((x, y) => x.score - y.score)[0];
-  best.spread = Number.isFinite(best.spread) ? Math.round(best.spread) : null;
+  if (!(best.spread <= 4 * TOLERANCE[kind])) return { id, error: `too fragile: a tenth of a degree off, the steadiest lands ${Number.isFinite(best.spread) ? Math.round(best.spread) : 'nowhere near'} off` };
+  best.spread = Math.round(best.spread);
   delete best.score;
   return best;
 }

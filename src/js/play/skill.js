@@ -90,8 +90,8 @@ const RANGE = {
   // Knowing its gun: how far it waits for a shot that will land (stopped, the spray's penalty and recoil worn off) rather
   // than firing anyway, walking and spraying at range.
   discipline: [0.05, 1],
-  // Utility: the chance it throws the lineup its plan gives it, and how far off its aim is (degrees).
-  utility: [0.12, 0.97], utilityErr: [6, 0.08],
+  // Utility: the chance it throws the lineup its plan gives it, and how far off its aim is (degrees: see skillParams).
+  utility: [0.12, 0.97], utilityErr: [6, 0.05],
   // Patience: holding an angle and waiting for the team rather than peeking alone; trading: going for a teammate's
   // killer at once.
   patience: [0.15, 0.92], trade: [0.15, 0.95],
@@ -106,7 +106,10 @@ export function skillParams(s) {
     skill: s, reaction: [v.reactMin, v.reactMax], periph: v.periph, turn: v.turn, head: v.head, control: v.control, fov: v.fov, hear: v.hear,
     flickBase: v.flickBase, flickK: v.flickK, flickErr: v.flickErr, flickMin: v.flickMin, undershoot: v.undershoot, lead: v.lead, dwell: v.dwell,
     pursuitLag: v.pursuitLag, aimNoise: v.aimNoise, flickShot: s > 0.55,
-    burst: Math.round(v.burst), crosshair: v.crosshair, strafe: v.strafe, discipline: v.discipline, utility: v.utility, utilityErr: v.utilityErr, patience: v.patience,
+    // (A lineup's aim comes good only near the top, as players' do: lined up on the pixel at the highest ranks, a
+    // Gold Nova's a few tenths of a degree out, a Silver's by degrees.)
+    burst: Math.round(v.burst), crosshair: v.crosshair, strafe: v.strafe, discipline: v.discipline, utility: v.utility,
+    utilityErr: RANGE.utilityErr[1] + (RANGE.utilityErr[0] - RANGE.utilityErr[1]) * (1 - e) ** 2, patience: v.patience,
     trade: v.trade, popFlash: s > 0.55, executes: s > 0.35,
   };
 }

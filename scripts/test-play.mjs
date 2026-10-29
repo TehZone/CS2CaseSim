@@ -1031,6 +1031,75 @@ function fakeGame() {
   let changed = 0, prev = picks[0].pos;
   for (let r = 0; r < 8; r++) { sp.roundStart(); const s = sp.pick(bots[0], 'hold:A'); if (Math.hypot(s.pos[0] - prev[0], s.pos[1] - prev[1]) > 100) changed++; prev = s.pos; }
   ok(changed >= 6, `spots: round to round a bot holds somewhere else (${changed} of 8 rounds)`);
+
+  // A real position (setups.js): near its own spot, watching the enemy come out of its callout.
+  const { SETUPS } = await import('../src/js/play/setups.js');
+  info.id = 'test_rooms';
+  info.places = [{ name: 'Door', min: [-420, -80, 0], max: [-340, 80, 100] }, { name: 'Site', min: [200, -200, 0], max: [600, 200, 100] }];
+  SETUPS.test_rooms = { CT: { A: [{ id: 'corner', name: 'corner', at: [700, 300, 0], watch: ['Door'] }] }, T: [] };
+  const sp2 = new Spots(game);
+  ok(sp2.keys().includes('pos:CT:corner'), 'positions: a map\'s positions are worked out with its other spots, as the match loads');
+  sp2.roundStart();
+  const pos = sp2.pick(bots[0], 'pos:CT:corner');
+  ok(pos && Math.hypot(pos.pos[0] - 700, pos.pos[1] - 300) <= 220 && Math.hypot(pos.at[0] - door[0], pos.at[1] - door[1]) < 330 && !Wr.occluded([pos.pos[0], pos.pos[1], pos.pos[2] + 64], pos.at, FLAG_BULLET, 2),
+    `positions: a CT on "corner" holds near it (${pos && Math.round(Math.hypot(pos.pos[0] - 700, pos.pos[1] - 300))} units off) watching the doorway its callout names`);
+  delete SETUPS.test_rooms;
+}
+
+// ---- a round's setup (strats.js): CTs on real positions, called; a terrorists' default spread over the map --------------
+{
+  const { teamPlan } = await import('../src/js/play/strats.js');
+  const { SETUPS } = await import('../src/js/play/setups.js');
+  const P = (id, extra = {}) => ({ id, name: id, at: [0, 0, 0], watch: [], ...extra });
+  SETUPS.test_plan = {
+    CT: { A: [P('a1'), P('a2'), P('a3', { awp: true })], B: [P('b1'), P('b2'), P('b3')], mid: [P('m1'), P('m2', { awp: true })] },
+    T: [P('tmid', { site: 'mid' }), P('ta1', { site: 'A' }), P('ta2', { site: 'A' }), P('tb1', { site: 'B' }), P('tb2', { site: 'B' })],
+  };
+  const mk = (team, i, gun) => ({ c: { team, name: team + i, skill: 0.6, nades: {}, hasC4: team === 'T' && i === 0, alive: true }, weapons: { primary: { id: gun } }, pos: [0, 0, 0], brain: { d: { utility: 0 } } });
+  const game = { map: { info: { id: 'test_plan', bombsites: [{ site: 'A' }, { site: 'B' }] } }, midSpot: [0, 0, 0], lineups: [], tSiteHistory: [],
+    bots: [...[0, 1, 2, 3, 4].map((i) => mk('CT', i, i === 2 ? 'weapon_awp' : 'weapon_m4a1')), ...[0, 1, 2, 3, 4].map((i) => mk('T', i, 'weapon_ak47'))] };
+  let ok1 = true, awpOk = true, called = true;
+  for (let r = 0; r < 30; r++) {
+    const ct = teamPlan(game, 'CT', 'full');
+    const bySite = {};
+    for (const [c, s] of ct.assign) { const p = ct.pos.get(c); if (!p || !SETUPS.test_plan.CT[s].includes(p)) ok1 = false; (bySite[s] ||= []).push(p?.id); }
+    if (Object.values(bySite).some((l) => new Set(l).size !== l.length)) ok1 = false;
+    const awper = game.bots[2].c, ap = ct.pos.get(awper);
+    if (ap && SETUPS.test_plan.CT[ct.assign.get(awper)].some((p) => p.awp) && !ap.awp) awpOk = false;
+    if (!ct.call || ![...ct.pos.values()].every((p) => ct.call.includes(p.name))) called = false;
+  }
+  ok(ok1, 'setups: each CT plays a position of its own site, never two on one');
+  ok(awpOk, "setups: the AWPer takes its site's AWP position");
+  ok(called, 'setups: the setup is called ("A a1 and a3, mid m1, B b1 and b2")');
+  game.forceStrat = 'default';
+  let spread = true, lurkOk = true;
+  for (let r = 0; r < 30; r++) {
+    const t = teamPlan(game, 'T', 'full');
+    const ps = [...t.positions.values()];
+    if (ps.length !== 5 || new Set(ps).size !== 5 || new Set(ps.slice(0, 3).map((p) => p.site)).size < 2) spread = false;
+    const lp = t.lurk && t.positions.get(t.lurk);
+    if (lp && (lp.site === t.site || lp.site === 'mid')) lurkOk = false;
+  }
+  ok(spread, "setups: a default spreads the terrorists over the map's positions, one each");
+  ok(lurkOk, "setups: the default's lurker plays the other site's side");
+  delete SETUPS.test_plan;
+}
+
+// ---- outnumbered (ai.js fallBack): a CT falls back to retake, a Silver stays --------------------------------------------
+{
+  const { Brain } = await import('../src/js/play/ai.js');
+  const site = { site: 'A', min: [0, 0, 0], max: [200, 200, 40] }, said = [];
+  const mkc = (team, p) => ({ team, alive: true, p });
+  const me = mkc('CT', [100, 100, 0]), mate = mkc('CT', [3000, 3000, 0]), ts = [1, 2, 3].map(() => mkc('T', [150, 150, 0]));
+  const g = { combatants: [me, mate, ...ts], positionOf: (c) => c.p, radio: { say: (c, k, text) => said.push(text) } };
+  const mkBrain = (skill) => Object.assign(Object.create(Brain.prototype), { game: g, bot: { c: me }, d: { skill }, plan: { sightings: new Map(ts.map((e) => [e, { site: 'A', t: 10 }])) }, retakeSpot: () => [-900, -900, 0] });
+  const b = mkBrain(0.6), back = b.fallBack('A', 11, () => site);
+  ok(back && back.spot[0] === -900 && /falling back/.test(said[0] || ''), `fall back: a CT alone on A seeing three terrorists there falls back to retake ("${said[0]}")`);
+  ok(!mkBrain(0.2).fallBack('A', 11, () => site), 'fall back: a Silver stays where it is');
+  const two = mkBrain(0.6);
+  two.plan.sightings = new Map(ts.slice(0, 2).map((e) => [e, { site: 'A', t: 10 }]));
+  ok(!two.fallBack('A', 11, () => site), "fall back: two terrorists aren't enough to fall back from");
+  ok(b.fallBack('A', 40, () => site) === null, "fall back: back to its spot once they're gone from the site (nothing seen there for a while)");
 }
 
 // ---- guns keep their skins: dropped, picked up by a bot or by you; a bot's is the default -------------------------------

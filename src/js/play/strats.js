@@ -4,13 +4,23 @@
 // a default by any of the site's ways in, not always the shortest from their spawn); each bot
 // has a role (entry, support with the utility, lurker, AWPer). Counter-terrorists split up over the sites (stacking the
 // one that keeps getting hit, at higher ranks), throw their early utility at the chokes, rotate on information and retake
-// together. The brains (ai.js) play their part of it.
+// together. On the maps setups.js knows, each CT plays a real position on its site (jungle, stairs, ticket booth...), and
+// a terrorists' default spreads over the real map control (top mid, palace, ramp, apps...). The brains (ai.js) play
+// their part of it.
 import { lineupsFor, nadeFor } from './utility.js';
+import { SETUPS } from './setups.js';
 
 const rnd = () => Math.random();
 const pick = (a) => a[Math.floor(rnd() * a.length)];
 const avg = (xs) => xs.reduce((s, x) => s + x, 0) / Math.max(1, xs.length);
 const PHASE = { smoke: 0, fire: 1, he: 1, flash: 2 };
+// One of a list, the first ones the more often (the usual positions, then the alternatives).
+const pickUsual = (list) => {
+  let r = rnd() * list.reduce((s, _, i) => s + 1 / (i + 1), 0);
+  for (let i = 0; i < list.length; i++) if ((r -= 1 / (i + 1)) <= 0) return list[i];
+  return list[list.length - 1];
+};
+const isAwp = (b) => /awp|ssg08|scar20|g3sg1/.test(b.weapons.primary?.id || '');
 
 export const teamSkill = (bots) => avg(bots.map((b) => b.c.skill ?? 0.42));
 // Your own side's spawn (the game's enemySpawnCenter is named for who it's the enemy of).
@@ -97,6 +107,21 @@ export function teamPlan(game, side, econ = 'full') {
     }
     for (const b of bots) if (!roles.has(b.c)) roles.set(b.c, 'support');
     const throws = strat === 'rush' ? [] : assignThrows(game, bots, 'T', strat === 'split' ? [site, 'mid'] : strat === 'default' ? [site, 'default'] : [site], roles);
+    // A default's map control utility (a smoke for mid, say) goes out at the start, not with the hit.
+    if (strat === 'default') for (const x of throws) x.early = x.lineup.purpose.includes('default') && !x.lineup.purpose.includes(site);
+    // A default's spread: each on a real position (setups.js): the lurker on the other site's side, the entry in mid,
+    // the rest over the others, one a part of the map before two.
+    const positions = new Map(), spread = strat === 'default' && SETUPS[game.map.info.id]?.T;
+    if (spread) {
+      const left = spread.slice().sort(() => rnd() - 0.5), take = (ok) => { const i = left.findIndex(ok); return i < 0 ? null : left.splice(i, 1)[0]; };
+      const order = bots.slice().sort((a, b) => (roles.get(b.c) === 'lurk') - (roles.get(a.c) === 'lurk') || (roles.get(b.c) === 'entry') - (roles.get(a.c) === 'entry'));
+      for (const b of order) {
+        const role = roles.get(b.c), used = new Set([...positions.values()].map((p) => p.site));
+        const p = (role === 'lurk' && take((x) => x.site !== site && x.site !== 'mid')) || (role === 'entry' && take((x) => x.site === 'mid'))
+          || take((x) => !used.has(x.site)) || take(() => true);
+        if (p) positions.set(b.c, p);
+      }
+    }
     // The way in: a rush or a default comes in by any of the site's ways (from their spawn, through mid, from the other
     // site: see spots.js), not always the shortest; an execute by the one its lineups are thrown for.
     const ways = game.spots?.place('hold:' + site)?.ways.length || 0;
@@ -107,7 +132,7 @@ export function teamPlan(game, side, econ = 'full') {
     const by = from === 'mid' ? ' through mid' : from ? ` from ${from}` : '';
     const call = { rush: `Rush ${site}${by}, don't stop!`, exec: `Execute ${site}: smokes, then flashes, then we go`, default: `Default. Play for picks, we hit ${site}${by} late`,
       split: `Split ${site}: two through mid, the rest with me` }[strat] + (econ === 'eco' ? ' (saving: pistols only)' : econ === 'force' ? ' (force buy)' : '');
-    return { side, strat, site, roles, igl, throws, execAt, econ, call, stage: strat === 'rush' ? 'execute' : strat === 'default' ? 'setup' : 'gather', execStart: strat === 'rush' ? 0 : null,
+    return { side, strat, site, roles, igl, throws, execAt, econ, call, positions, stage: strat === 'rush' ? 'execute' : strat === 'default' ? 'setup' : 'gather', execStart: strat === 'rush' ? 0 : null,
       lurk: [...roles].find(([, r]) => r === 'lurk')?.[0] || null, rush: strat === 'rush', route, via, staging: route ? game.spots.staging(site, route) : null };
   }
   // CT: the split (two, one, two with five), stacking the site the terrorists keep hitting at higher ranks.
@@ -121,15 +146,33 @@ export function teamPlan(game, side, econ = 'full') {
   const stack = hit.length >= 2 && hit[hit.length - 1] === hit[hit.length - 2] && n >= 4 && rnd() < skill ? hit[hit.length - 1] : null;
   if (stack) layout = layout.map((s, i) => (i < Math.ceil(n * 0.6) ? stack : s === stack ? (stack === 'A' ? two : 'A') : s));
   order.forEach((c, i) => assign.set(c, layout[i % layout.length]));
-  // Early utility at the chokes of the site each bot holds.
+  // Each one's position on its site (setups.js): the usual ones the more often, an AWPer's for an AWPer, never two on
+  // one (more than there are: spots.js's own spots for the rest).
+  const setup = SETUPS[game.map.info.id]?.CT, pos = new Map();
+  if (setup) {
+    for (const s of new Set(layout)) {
+      const left = (setup[s] || []).slice();
+      for (const b of bots.filter((x) => assign.get(x.c) === s).sort((x, y) => isAwp(y) - isAwp(x))) {
+        const pool = isAwp(b) && left.some((p) => p.awp) ? left.filter((p) => p.awp) : left;
+        if (!pool.length) break;
+        const p = pickUsual(pool);
+        left.splice(left.indexOf(p), 1);
+        pos.set(b.c, p);
+      }
+    }
+  }
+  // Its utility at the chokes of each site (a smoke early, a molotov as they come: see ai.js).
   const throws = [];
   for (const s of new Set(layout)) {
     if (s === 'mid') continue;
     const mates = bots.filter((b) => assign.get(b.c) === s);
-    throws.push(...assignThrows(game, mates, 'CT', ['hold' + s], null).slice(0, 1));
+    throws.push(...assignThrows(game, mates, 'CT', ['hold' + s], null).slice(0, 2)); // (a smoke, and a molotov for when they come)
   }
-  const call = stack ? `Stack ${stack}, they keep coming there` : econ === 'eco' ? 'Saving this round, play safe' : econ === 'force' ? 'Force buy, play for picks' : null;
-  return { side, assign, igl, throws, econ, call, stack, stage: 'hold', rotate: null };
+  // (The setup, called as players do: "A jungle and ticket booth, mid window, B bench".)
+  const where = [...new Set(layout)].map((s) => [s, bots.filter((b) => assign.get(b.c) === s && pos.has(b.c)).map((b) => pos.get(b.c).name)]).filter(([, n]) => n.length);
+  const setupCall = where.length ? where.map(([s, n]) => (s === 'mid' ? 'mid ' : s + ' ') + n.join(' and ')).join(', ') : null;
+  const call = stack ? `Stack ${stack}, they keep coming there` : econ === 'eco' ? 'Saving this round, play safe' : econ === 'force' ? 'Force buy, play for picks' : setupCall;
+  return { side, assign, pos, igl, throws, econ, call, stack, stage: 'hold', rotate: null, sightings: new Map() };
 }
 
 // A terrorist plan moves on: from the default's setup to gathering by the site late in the round (or after a pick), and

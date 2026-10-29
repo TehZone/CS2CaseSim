@@ -7,7 +7,8 @@
    "kind": "smoke",
    "purpose": [
     "mid",
-    "A"
+    "A",
+    "default"
    ],
    "from": [
     "TSpawn",
@@ -16,17 +17,17 @@
    ],
    "to": "Catwalk",
    "pos": [
-    -166,
-    -529,
-    0.628
+    -1116,
+    -245,
+    129.129
    ],
-   "yaw": 90.86,
-   "pitch": -62.5,
+   "yaw": 53.2,
+   "pitch": -58.5,
    "strength": 0.5,
    "jump": true,
    "land": [
-    -208,
-    948,
+    -223,
+    960,
     3
    ],
    "goal": [
@@ -34,9 +35,9 @@
     975,
     30
    ],
-   "err": 33,
-   "time": 8.84,
-   "spread": 243
+   "err": 16,
+   "time": 9,
+   "spread": 24
   },
   {
    "id": "ctA",
@@ -53,29 +54,28 @@
     "TopofMid",
     "Catwalk"
    ],
-   "to": "CTSpawn",
    "pos": [
-    1424,
-    1248,
-    -11.083
+    715,
+    947,
+    -0.228
    ],
-   "yaw": 132.7,
-   "pitch": -71,
+   "yaw": 91.79,
+   "pitch": -51.5,
    "strength": 1,
    "jump": true,
    "land": [
-    367,
-    2413,
-    -118
+    623,
+    2464,
+    99
    ],
    "goal": [
-    396,
-    2432,
-    -117
+    628,
+    2461,
+    100
    ],
-   "err": 35,
-   "time": 9.53,
-   "spread": 487
+   "err": 5,
+   "time": 10.72,
+   "spread": 11
   },
   {
    "id": "crossA",
@@ -92,17 +92,17 @@
    ],
    "to": "BombsiteA",
    "pos": [
-    1596,
-    995,
-    1.031
+    1306,
+    918,
+    0.281
    ],
-   "yaw": 106.54,
-   "pitch": -49,
+   "yaw": 94.88,
+   "pitch": -44.5,
    "strength": 0.5,
    "jump": true,
    "land": [
-    1167,
-    2440,
+    1183,
+    2416,
     98
    ],
    "goal": [
@@ -110,9 +110,9 @@
     2423,
     124
    ],
-   "err": 34,
-   "time": 7.78,
-   "spread": 132
+   "err": 45,
+   "time": 7.59,
+   "spread": 48
   },
   {
    "id": "shortA",
@@ -148,7 +148,7 @@
    ],
    "err": 6,
    "time": 8.59,
-   "spread": 134
+   "spread": 66
   },
   {
    "id": "plantA",
@@ -185,7 +185,43 @@
    ],
    "err": 4,
    "time": 1.92,
-   "spread": 142
+   "spread": 10
+  },
+  {
+   "id": "longCorner",
+   "name": "Long corner molotov",
+   "side": "T",
+   "kind": "fire",
+   "purpose": [
+    "default",
+    "A"
+   ],
+   "from": [
+    "LongDoors",
+    "OutsideLong"
+   ],
+   "pos": [
+    1140,
+    305,
+    9.028
+   ],
+   "yaw": 82.1,
+   "pitch": -2.75,
+   "strength": 1,
+   "jump": false,
+   "land": [
+    1257,
+    1146,
+    3
+   ],
+   "goal": [
+    1257,
+    1148,
+    2
+   ],
+   "err": 3,
+   "time": 1.25,
+   "spread": 11
   },
   {
    "id": "popLong",
@@ -221,7 +257,7 @@
    ],
    "err": 33,
    "time": 1.66,
-   "spread": 36
+   "spread": 34
   },
   {
    "id": "popShort",
@@ -257,7 +293,7 @@
    ],
    "err": 9,
    "time": 1.66,
-   "spread": 11
+   "spread": 9
   },
   {
    "id": "bDoors",
@@ -273,33 +309,32 @@
     "TunnelStairs",
     "OutsideTunnel"
    ],
-   "to": "BDoors",
    "pos": [
-    -1956,
-    1224,
-    31.301
+    -1927,
+    1114,
+    33.235
    ],
-   "yaw": 49.55,
-   "pitch": -49,
+   "yaw": 61.2,
+   "pitch": -45,
    "strength": 0.5,
    "jump": true,
    "land": [
-    -1071,
-    2263,
-    -18
+    -1176,
+    2438,
+    32
    ],
    "goal": [
-    -1088,
-    2307,
-    -1
+    -1168,
+    2400,
+    22
    ],
-   "err": 48,
-   "time": 9.2,
-   "spread": null
+   "err": 39,
+   "time": 8.78,
+   "spread": 225
   },
   {
    "id": "bPlat",
-   "name": "B platform smoke",
+   "name": "B window smoke",
    "side": "T",
    "kind": "smoke",
    "purpose": [
@@ -332,11 +367,11 @@
    ],
    "err": 3,
    "time": 9.08,
-   "spread": 73
+   "spread": 11
   },
   {
    "id": "backB",
-   "name": "B back molotov",
+   "name": "B back plat molotov",
    "side": "T",
    "kind": "fire",
    "purpose": [
@@ -347,29 +382,63 @@
     "TunnelStairs",
     "LowerTunnel"
    ],
-   "to": "BombsiteB",
    "pos": [
-    -2003,
-    1788,
+    -1971,
+    1786,
     33.031
    ],
-   "yaw": 40.03,
-   "pitch": 2.25,
+   "yaw": 73.17,
+   "pitch": -14.25,
    "strength": 1,
    "jump": false,
    "land": [
-    -1423,
-    2275,
-    2
+    -1640,
+    2877,
+    47
    ],
    "goal": [
-    -1422,
-    2276,
-    4
+    -1640,
+    2880,
+    5
    ],
-   "err": 2,
-   "time": 1.09,
-   "spread": 17
+   "err": 3,
+   "time": 1.8,
+   "spread": 4
+  },
+  {
+   "id": "carB",
+   "name": "B car molotov",
+   "side": "T",
+   "kind": "fire",
+   "purpose": [
+    "B"
+   ],
+   "from": [
+    "UpperTunnel",
+    "TunnelStairs"
+   ],
+   "pos": [
+    -2003,
+    1563,
+    31.875
+   ],
+   "yaw": 73.64,
+   "pitch": -21,
+   "strength": 0.5,
+   "jump": false,
+   "land": [
+    -1816,
+    2200,
+    1
+   ],
+   "goal": [
+    -1816,
+    2200,
+    -8
+   ],
+   "err": 0,
+   "time": 1.67,
+   "spread": 1
   },
   {
    "id": "midDoors",
@@ -393,23 +462,23 @@
     558,
     0.174
    ],
-   "yaw": 102.64,
-   "pitch": -64.25,
-   "strength": 0.5,
-   "jump": true,
+   "yaw": 103.39,
+   "pitch": -68.75,
+   "strength": 1,
+   "jump": false,
    "land": [
-    -445,
-    1959,
-    -124
+    -495,
+    1993,
+    -121
    ],
    "goal": [
     -494,
     1992,
     -119
    ],
-   "err": 59,
-   "time": 10.23,
-   "spread": 91
+   "err": 2,
+   "time": 7.8,
+   "spread": 41
   },
   {
    "id": "longCT",
@@ -447,7 +516,7 @@
    ],
    "err": 12,
    "time": 10.58,
-   "spread": 276
+   "spread": 15
   },
   {
    "id": "longMolly",
@@ -484,7 +553,7 @@
    ],
    "err": 2,
    "time": 1.25,
-   "spread": 12
+   "spread": 5
   },
   {
    "id": "tunnelsCT",
@@ -505,13 +574,13 @@
     3101,
     34.566
    ],
-   "yaw": -87.88,
-   "pitch": 19.25,
-   "strength": 0.5,
-   "jump": true,
+   "yaw": -88.13,
+   "pitch": 8.25,
+   "strength": 1,
+   "jump": false,
    "land": [
-    -1982,
-    1690,
+    -1986,
+    1689,
     33
    ],
    "goal": [
@@ -519,9 +588,44 @@
     1697,
     33
    ],
-   "err": 7,
+   "err": 8,
    "time": 3.59,
-   "spread": 23
+   "spread": 10
+  },
+  {
+   "id": "tunnelsMolly",
+   "name": "B tunnels molotov",
+   "side": "CT",
+   "kind": "fire",
+   "purpose": [
+    "holdB"
+   ],
+   "from": [
+    "BombsiteB",
+    "BDoors"
+   ],
+   "pos": [
+    -2115,
+    2386,
+    18.107
+   ],
+   "yaw": -81.39,
+   "pitch": -4.25,
+   "strength": 1,
+   "jump": false,
+   "land": [
+    -1990,
+    1561,
+    34
+   ],
+   "goal": [
+    -1990,
+    1560,
+    33
+   ],
+   "err": 1,
+   "time": 1.23,
+   "spread": 2
   },
   {
    "id": "tunnelsFlash",
@@ -557,7 +661,45 @@
    ],
    "err": 64,
    "time": 1.66,
-   "spread": 65
+   "spread": 64
+  },
+  {
+   "id": "retakeLong",
+   "name": "A retake long smoke",
+   "side": "CT",
+   "kind": "smoke",
+   "purpose": [
+    "retakeA"
+   ],
+   "from": [
+    "CTSpawn",
+    "ExtendedA",
+    "ShortStairs",
+    "UnderA"
+   ],
+   "to": "LongA",
+   "pos": [
+    932,
+    2353,
+    1.138
+   ],
+   "yaw": -75.91,
+   "pitch": -68,
+   "strength": 1,
+   "jump": false,
+   "land": [
+    1317,
+    900,
+    -6
+   ],
+   "goal": [
+    1317,
+    900,
+    -2
+   ],
+   "err": 0,
+   "time": 9.39,
+   "spread": 35
   },
   {
    "id": "retakeA",
@@ -594,6 +736,42 @@
    "err": 43,
    "time": 1.66,
    "spread": 44
+  },
+  {
+   "id": "retakeTunnels",
+   "name": "B retake tunnels smoke",
+   "side": "CT",
+   "kind": "smoke",
+   "purpose": [
+    "retakeB"
+   ],
+   "from": [
+    "BDoors",
+    "MidDoors",
+    "CTSpawn"
+   ],
+   "pos": [
+    -688,
+    2522,
+    -79.933
+   ],
+   "yaw": -146.21,
+   "pitch": -53,
+   "strength": 0.5,
+   "jump": true,
+   "land": [
+    -1986,
+    1745,
+    33
+   ],
+   "goal": [
+    -1964,
+    1700,
+    33
+   ],
+   "err": 50,
+   "time": 7.98,
+   "spread": 54
   },
   {
    "id": "retakeB",
@@ -649,29 +827,66 @@
     "TopofMid",
     "TRamp"
    ],
-   "to": "SnipersNest",
    "pos": [
-    120,
-    -522,
-    -170.084
+    339,
+    -743,
+    -87.969
    ],
-   "yaw": -162,
-   "pitch": -8.25,
+   "yaw": 178.23,
+   "pitch": -60,
    "strength": 1,
-   "jump": true,
+   "jump": false,
    "land": [
-    -1203,
-    -941,
+    -1163,
+    -687,
     -166
    ],
    "goal": [
-    -1196,
-    -943,
-    -158
+    -1160,
+    -690,
+    -164
    ],
-   "err": 8,
-   "time": 7.92,
-   "spread": null
+   "err": 4,
+   "time": 6.7,
+   "spread": 7
+  },
+  {
+   "id": "topcon",
+   "name": "Top connector smoke",
+   "side": "T",
+   "kind": "smoke",
+   "purpose": [
+    "mid",
+    "A"
+   ],
+   "from": [
+    "TopofMid",
+    "TSpawn",
+    "TRamp"
+   ],
+   "to": "Connector",
+   "pos": [
+    464,
+    -124,
+    -159.969
+   ],
+   "yaw": -145.25,
+   "pitch": -60.75,
+   "strength": 0.5,
+   "jump": true,
+   "land": [
+    -649,
+    -940,
+    -222
+   ],
+   "goal": [
+    -644,
+    -944,
+    -212
+   ],
+   "err": 6,
+   "time": 7.8,
+   "spread": 121
   },
   {
    "id": "jungle",
@@ -708,7 +923,7 @@
    ],
    "err": 5,
    "time": 9.2,
-   "spread": 23
+   "spread": 9
   },
   {
    "id": "ctA",
@@ -746,7 +961,79 @@
    ],
    "err": 28,
    "time": 7.06,
-   "spread": null
+   "spread": 30
+  },
+  {
+   "id": "stairs",
+   "name": "Stairs smoke",
+   "side": "T",
+   "kind": "smoke",
+   "purpose": [
+    "A"
+   ],
+   "from": [
+    "TRamp",
+    "TSpawn",
+    "PalaceAlley"
+   ],
+   "pos": [
+    1153,
+    -1076,
+    -263.015
+   ],
+   "yaw": -161.32,
+   "pitch": -52.75,
+   "strength": 0.5,
+   "jump": true,
+   "land": [
+    -348,
+    -1628,
+    -166
+   ],
+   "goal": [
+    -340,
+    -1559,
+    -164
+   ],
+   "err": 69,
+   "time": 8.58,
+   "spread": 73
+  },
+  {
+   "id": "triple",
+   "name": "Triple molotov",
+   "side": "T",
+   "kind": "fire",
+   "purpose": [
+    "A"
+   ],
+   "from": [
+    "TRamp",
+    "PalaceInterior",
+    "PalaceAlley"
+   ],
+   "pos": [
+    76,
+    -2371,
+    -39.969
+   ],
+   "yaw": 106.75,
+   "pitch": 9.5,
+   "strength": 1,
+   "jump": false,
+   "land": [
+    -150,
+    -1620,
+    -165
+   ],
+   "goal": [
+    -150,
+    -1620,
+    -164
+   ],
+   "err": 0,
+   "time": 1.13,
+   "spread": 1
   },
   {
    "id": "popA",
@@ -782,7 +1069,44 @@
    ],
    "err": 57,
    "time": 1.66,
-   "spread": 108
+   "spread": 101
+  },
+  {
+   "id": "market",
+   "name": "Market window smoke",
+   "side": "T",
+   "kind": "smoke",
+   "purpose": [
+    "B"
+   ],
+   "from": [
+    "Apartments",
+    "BackAlley",
+    "TSpawn",
+    "Underpass"
+   ],
+   "pos": [
+    -318,
+    747,
+    -101.969
+   ],
+   "yaw": -142.8,
+   "pitch": -52.5,
+   "strength": 0.5,
+   "jump": true,
+   "land": [
+    -1703,
+    -273,
+    -162
+   ],
+   "goal": [
+    -1710,
+    -300,
+    -164
+   ],
+   "err": 28,
+   "time": 11.53,
+   "spread": 63
   },
   {
    "id": "shortB",
@@ -821,7 +1145,7 @@
    ],
    "err": 28,
    "time": 3.53,
-   "spread": 123
+   "spread": 36
   },
   {
    "id": "popB",
@@ -856,11 +1180,11 @@
    ],
    "err": 37,
    "time": 1.66,
-   "spread": 100
+   "spread": 99
   },
   {
-   "id": "bMolly",
-   "name": "B site molotov",
+   "id": "van",
+   "name": "Van molotov",
    "side": "T",
    "kind": "fire",
    "purpose": [
@@ -869,29 +1193,28 @@
    "from": [
     "Apartments"
    ],
-   "to": "BombsiteB",
    "pos": [
-    -1623,
-    687,
+    -2048,
+    750,
     -47.969
    ],
-   "yaw": -107.09,
-   "pitch": 6,
+   "yaw": -50.48,
+   "pitch": 7,
    "strength": 1,
    "jump": false,
    "land": [
-    -1874,
-    -131,
-    -167
+    -1522,
+    113,
+    -166
    ],
    "goal": [
-    -1875,
-    -131,
+    -1520,
+    110,
     -164
    ],
-   "err": 0,
-   "time": 1.23,
-   "spread": 11
+   "err": 4,
+   "time": 1.19,
+   "spread": 6
   },
   {
    "id": "topMid",
@@ -913,23 +1236,23 @@
     185,
     -172.666
    ],
-   "yaw": -28.59,
+   "yaw": -29.34,
    "pitch": -58.75,
    "strength": 0.5,
    "jump": true,
    "land": [
-    308,
-    -564,
-    -160
+    335,
+    -561,
+    -86
    ],
    "goal": [
     307,
     -553,
     -148
    ],
-   "err": 11,
-   "time": 9.3,
-   "spread": 148
+   "err": 30,
+   "time": 8.59,
+   "spread": 31
   },
   {
    "id": "palace",
@@ -966,7 +1289,7 @@
    ],
    "err": 3,
    "time": 1.34,
-   "spread": 29
+   "spread": 5
   },
   {
    "id": "ramp",
@@ -988,22 +1311,22 @@
     -167.808
    ],
    "yaw": -6.93,
-   "pitch": -36.5,
+   "pitch": -40,
    "strength": 0.5,
    "jump": true,
    "land": [
-    324,
-    -1582,
-    -182
+    348,
+    -1579,
+    -198
    ],
    "goal": [
     343,
     -1578,
     -189
    ],
-   "err": 20,
-   "time": 7.06,
-   "spread": 29
+   "err": 5,
+   "time": 7.14,
+   "spread": 8
   },
   {
    "id": "apps",
@@ -1039,7 +1362,117 @@
    ],
    "err": 1,
    "time": 1.91,
-   "spread": 12
+   "spread": 2
+  },
+  {
+   "id": "underpass",
+   "name": "Underpass molotov",
+   "side": "CT",
+   "kind": "fire",
+   "purpose": [
+    "holdB"
+   ],
+   "from": [
+    "Catwalk",
+    "Ladder",
+    "Connector"
+   ],
+   "pos": [
+    -169,
+    -398,
+    -167.839
+   ],
+   "yaw": -179,
+   "pitch": -8.5,
+   "strength": 1,
+   "jump": false,
+   "land": [
+    -975,
+    -420,
+    -333
+   ],
+   "goal": [
+    -1007,
+    -420,
+    -360
+   ],
+   "err": 32,
+   "time": 2,
+   "spread": 33
+  },
+  {
+   "id": "retakePalace",
+   "name": "A retake palace smoke",
+   "side": "CT",
+   "kind": "smoke",
+   "purpose": [
+    "retakeA"
+   ],
+   "from": [
+    "CTSpawn",
+    "Jungle",
+    "Connector"
+   ],
+   "to": "PalaceInterior",
+   "pos": [
+    -1404,
+    -2276,
+    -229.569
+   ],
+   "yaw": 6.98,
+   "pitch": -50.5,
+   "strength": 0.5,
+   "jump": true,
+   "land": [
+    78,
+    -2085,
+    -36
+   ],
+   "goal": [
+    82,
+    -2048,
+    -82
+   ],
+   "err": 38,
+   "time": 6.75,
+   "spread": 41
+  },
+  {
+   "id": "retakeRamp",
+   "name": "A retake ramp smoke",
+   "side": "CT",
+   "kind": "smoke",
+   "purpose": [
+    "retakeA"
+   ],
+   "from": [
+    "CTSpawn",
+    "Jungle",
+    "Connector"
+   ],
+   "to": "TRamp",
+   "pos": [
+    -1163,
+    -1341,
+    -167.808
+   ],
+   "yaw": -6.93,
+   "pitch": -40,
+   "strength": 0.5,
+   "jump": true,
+   "land": [
+    348,
+    -1579,
+    -198
+   ],
+   "goal": [
+    343,
+    -1578,
+    -189
+   ],
+   "err": 5,
+   "time": 7.14,
+   "spread": 8
   },
   {
    "id": "retakeA",
@@ -1079,6 +1512,43 @@
    "spread": 51
   },
   {
+   "id": "retakeApps",
+   "name": "B retake apps smoke",
+   "side": "CT",
+   "kind": "smoke",
+   "purpose": [
+    "retakeB"
+   ],
+   "from": [
+    "Shop",
+    "CTSpawn",
+    "Catwalk"
+   ],
+   "to": "Apartments",
+   "pos": [
+    -750,
+    -218,
+    -159.969
+   ],
+   "yaw": 140.77,
+   "pitch": -63,
+   "strength": 1,
+   "jump": true,
+   "land": [
+    -1924,
+    747,
+    -46
+   ],
+   "goal": [
+    -1919,
+    745,
+    -40
+   ],
+   "err": 6,
+   "time": 9,
+   "spread": 10
+  },
+  {
    "id": "retakeB",
    "name": "B retake flash",
    "side": "CT",
@@ -1097,22 +1567,22 @@
     -167.969
    ],
    "yaw": 101.93,
-   "pitch": -25.25,
-   "strength": 0.5,
-   "jump": false,
+   "pitch": -38.75,
+   "strength": 1,
+   "jump": true,
    "land": [
-    -2011,
-    140,
-    -75
+    -2017,
+    169,
+    -84
    ],
    "goal": [
     -2022,
     176,
     -154
    ],
-   "err": 49,
+   "err": 41,
    "time": 1.66,
-   "spread": 193
+   "spread": 41
   }
  ],
  "de_inferno": [
@@ -1152,7 +1622,7 @@
    ],
    "err": 32,
    "time": 11.11,
-   "spread": 205
+   "spread": 167
   },
   {
    "id": "pit",
@@ -1189,7 +1659,43 @@
    ],
    "err": 39,
    "time": 1.28,
-   "spread": 424
+   "spread": 40
+  },
+  {
+   "id": "siteA",
+   "name": "A site molotov",
+   "side": "T",
+   "kind": "fire",
+   "purpose": [
+    "A"
+   ],
+   "from": [
+    "Apartments",
+    "Balcony",
+    "SecondMid"
+   ],
+   "pos": [
+    2084,
+    -296,
+    256.031
+   ],
+   "yaw": 92.68,
+   "pitch": -20.5,
+   "strength": 0.5,
+   "jump": false,
+   "land": [
+    2050,
+    430,
+    163
+   ],
+   "goal": [
+    2050,
+    430,
+    164
+   ],
+   "err": 0,
+   "time": 1.83,
+   "spread": 1
   },
   {
    "id": "popA",
@@ -1210,23 +1716,23 @@
     -296,
     256.031
    ],
-   "yaw": 133.21,
-   "pitch": -68.5,
+   "yaw": 132.46,
+   "pitch": -70.5,
    "strength": 0.5,
    "jump": true,
    "land": [
-    1760,
-    13,
-    215
+    1797,
+    141,
+    169
    ],
    "goal": [
     1742,
     64,
     135
    ],
-   "err": 62,
+   "err": 121,
    "time": 1.66,
-   "spread": 320
+   "spread": 136
   },
   {
    "id": "ctB",
@@ -1243,17 +1749,17 @@
    ],
    "to": "CTSpawn",
    "pos": [
-    451,
-    1918,
+    560,
+    1914,
     136.031
    ],
-   "yaw": 29.07,
-   "pitch": -55.5,
+   "yaw": 33.72,
+   "pitch": -58.25,
    "strength": 1,
    "jump": true,
    "land": [
-    1793,
-    2717,
+    1745,
+    2724,
     126
    ],
    "goal": [
@@ -1261,9 +1767,9 @@
     2698,
     142
    ],
-   "err": 50,
-   "time": 10.72,
-   "spread": 538
+   "err": 26,
+   "time": 8.44,
+   "spread": 228
   },
   {
    "id": "coffins",
@@ -1279,27 +1785,61 @@
    ],
    "to": "BombsiteB",
    "pos": [
-    65,
-    1460,
-    180.031
+    195,
+    1410,
+    105.221
    ],
-   "yaw": 60.41,
-   "pitch": -56.5,
-   "strength": 0.5,
+   "yaw": 65.72,
+   "pitch": 5.5,
+   "strength": 1,
    "jump": true,
    "land": [
-    799,
-    2831,
-    143
+    834,
+    2782,
+    137
    ],
    "goal": [
     812,
     2763,
     142
    ],
-   "err": 70,
-   "time": 9.38,
-   "spread": 138
+   "err": 29,
+   "time": 4.77,
+   "spread": 32
+  },
+  {
+   "id": "newbox",
+   "name": "New box molotov",
+   "side": "T",
+   "kind": "fire",
+   "purpose": [
+    "B"
+   ],
+   "from": [
+    "Banana"
+   ],
+   "pos": [
+    905,
+    2177,
+    136.366
+   ],
+   "yaw": 127.35,
+   "pitch": 27.5,
+   "strength": 0.5,
+   "jump": true,
+   "land": [
+    458,
+    2763,
+    186
+   ],
+   "goal": [
+    460,
+    2760,
+    164
+   ],
+   "err": 3,
+   "time": 1.69,
+   "spread": 4
   },
   {
    "id": "popB",
@@ -1314,27 +1854,64 @@
    ],
    "to": "BombsiteB",
    "pos": [
-    400,
-    1955,
+    543,
+    1980,
     136.031
    ],
-   "yaw": 99.62,
-   "pitch": 0.5,
+   "yaw": 113.08,
+   "pitch": -0.5,
    "strength": 0.5,
    "jump": true,
    "land": [
-    279,
-    2669,
-    347
+    260,
+    2643,
+    327
    ],
    "goal": [
     279,
     2584,
     175
    ],
-   "err": 104,
+   "err": 74,
    "time": 1.66,
-   "spread": 113
+   "spread": 76
+  },
+  {
+   "id": "carT",
+   "name": "Banana car molotov",
+   "side": "T",
+   "kind": "fire",
+   "purpose": [
+    "default",
+    "B"
+   ],
+   "from": [
+    "Banana",
+    "TRamp",
+    "LowerMid"
+   ],
+   "pos": [
+    83,
+    1302,
+    97.473
+   ],
+   "yaw": 69.83,
+   "pitch": -11.5,
+   "strength": 1,
+   "jump": false,
+   "land": [
+    424,
+    2094,
+    142
+   ],
+   "goal": [
+    400,
+    2080,
+    140
+   ],
+   "err": 28,
+   "time": 1.53,
+   "spread": 29
   },
   {
    "id": "bananaCT",
@@ -1351,27 +1928,27 @@
    ],
    "to": "Banana",
    "pos": [
-    478,
-    2805,
+    225,
+    2823,
     193.031
    ],
-   "yaw": -87.92,
-   "pitch": 3.25,
+   "yaw": -73.05,
+   "pitch": 5.5,
    "strength": 1,
    "jump": true,
    "land": [
-    520,
-    1949,
-    139
+    482,
+    1994,
+    141
    ],
    "goal": [
     479,
     1976,
     145
    ],
-   "err": 49,
-   "time": 1.77,
-   "spread": 169
+   "err": 18,
+   "time": 1.89,
+   "spread": 93
   },
   {
    "id": "bananaSmoke",
@@ -1408,7 +1985,7 @@
    ],
    "err": 18,
    "time": 9.23,
-   "spread": 79
+   "spread": 36
   },
   {
    "id": "apps",
@@ -1445,7 +2022,7 @@
    ],
    "err": 7,
    "time": 1.89,
-   "spread": 204
+   "spread": 9
   },
   {
    "id": "retakeA",
@@ -1482,7 +2059,43 @@
    ],
    "err": 117,
    "time": 1.66,
-   "spread": 118
+   "spread": 117
+  },
+  {
+   "id": "retakeBanana",
+   "name": "B retake banana smoke",
+   "side": "CT",
+   "kind": "smoke",
+   "purpose": [
+    "retakeB"
+   ],
+   "from": [
+    "CTSpawn",
+    "Ruins"
+   ],
+   "to": "Banana",
+   "pos": [
+    1907,
+    2440,
+    124.032
+   ],
+   "yaw": -160.74,
+   "pitch": -70.5,
+   "strength": 1,
+   "jump": true,
+   "land": [
+    483,
+    1964,
+    138
+   ],
+   "goal": [
+    479,
+    1976,
+    145
+   ],
+   "err": 12,
+   "time": 11.42,
+   "spread": 150
   },
   {
    "id": "retakeB",
@@ -1518,7 +2131,7 @@
    ],
    "err": 76,
    "time": 1.66,
-   "spread": 78
+   "spread": 76
   }
  ],
  "de_nuke": [

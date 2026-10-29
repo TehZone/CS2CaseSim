@@ -124,7 +124,17 @@ What's in a match:
   in, facing where they'd first show (the doorway, the top of the ramp), from CS2's own hiding spots in the map's nav
   mesh and points about the site, worked out as the match loads. A team's bots share them out each round, watching
   different ways in, never on top of each other, and not the spot they held the last two rounds, so they're never in
-  the same five places; the terrorists gather, lurk, hold the site and play the planted bomb the same way. They steer
+  the same five places; the terrorists gather, lurk, hold the site and play the planted bomb the same way. On Mirage,
+  Dust II and Inferno they play the positions real players take (src/js/play/setups.js): a CT setup per site and mid
+  (Mirage's jungle, stairs, ticket booth, firebox, triple, window, connector, short, bench, van, market window; Dust II's
+  long, A short, mid doors, B doors, back plat, car; Inferno's pit, library, arch, coffins, new box, dark, banana car),
+  the usual ones the most often and the AWPer on an AWP spot, called in the chat ("A jungle and ticket booth, mid
+  window, B bench and van"); and the terrorists' default spread for map control (top mid, palace, A ramp, B apps,
+  underpass...), the lurker on the far side. Each is a rough spot read off the map's overview and the callouts the
+  enemy comes in through: the spot used is the covered one near it that sees them first in those callouts (window
+  watching top mid from across the map, the B positions crossing on the apps exit). A CT outnumbered on its site (three
+  terrorists seen there, two more than the CTs left) falls back out of their way to retake with the others, and says
+  so; a Silver stays. They steer
   round each other as players do (passing on the right of someone coming the other way, round someone standing in a
   doorway) instead of walking into each other. They know where enemies are from what they see and, roughly, from what
   they hear: a gunshot or footsteps give an idea of where (off by more the further it was, more again through a wall),
@@ -195,13 +205,23 @@ What's in a match:
   short of it; smokes, then molotovs, then pop flashes; the entry going in as the flash bursts, the rest close enough to
   trade), take mid and split, or play a default for picks and hit late (a rush or a default coming in by any of the
   site's ways in, through mid or from the other site, not always the shortest), with roles: entry, support, lurker, AWPer.
-  Counter-terrorists split over the sites (stacking the one that keeps getting hit, at higher ranks), throw early
-  utility at the chokes, rotate on information (lower ranks on one sighting, higher on two) and retake together.
-  The utility is real lineups (src/data/lineups.json: Dust II, Mirage, Inferno and Nuke), found on each map's own
-  geometry by scripts/build-lineups.mjs: asked for by callouts ("the part of CT spawn nearest A site"), searched over
-  throw spots, aims, strengths and jump-throws with the game's own grenade physics, the steadiest kept, and checked
-  again on each match's collision. A bot stands on the spot, aims (off by its rank's error: Silvers misthrow) and throws.
-  `CS2SIM_SMOKE=bots` watches rounds at chosen ranks and logs the plans and where every lineup landed, and measures how
+  Counter-terrorists split over the sites (stacking the one that keeps getting hit, at higher ranks), smoke a choke
+  early and save the molotov for when the terrorists show there, rotate on information (lower ranks on one sighting,
+  higher on two) and retake together, smoking off where the terrorists hold the bomb from and flashing before going
+  in. A default's map control utility (Mirage's window smoke) goes out as the round starts.
+  The utility is real lineups (src/data/lineups.json: Dust II, Mirage, Inferno and Nuke: Mirage's window, top
+  connector, jungle, CT, stairs and market smokes, triple and van molotovs; Dust II's xbox, CT, long cross, B doors and
+  B window smokes, long corner, back plat and car molotovs; Inferno's arch, CT and coffins smokes, pit, new box and
+  banana car molotovs; each side's holds and retakes), found on each map's own geometry by scripts/build-lineups.mjs:
+  asked for by callouts ("the part of CT spawn nearest A site") or the spot the real one lands on, searched over throw
+  spots, aims, strengths and jump-throws with the game's own grenade physics, the steadiest kept (one that misses by
+  more than a few hundred units a tenth of a degree off isn't: the best bots' aim is about that), and checked again on
+  each match's collision. A bot stands on the spot, still till it's thrown, aims (off by its rank's error: a Global
+  Elite's lined up on the pixel, a Gold Nova's a few tenths of a degree out, Silvers misthrow) and throws.
+  `CS2SIM_SMOKE=lineups` throws every lineup of each map in the game itself (a bot on its spot, its aim exact) and logs
+  where each went off against where it should.
+  `CS2SIM_SMOKE=bots` watches rounds at chosen ranks and logs the plans (the CT setup called, a default's spread, where
+  everyone is 20 s in, the CTs' utility and who fell back) and where every lineup landed, and measures how
   the bots behave (userData/bots-<map>-<tier>.json): how often their crosshair is on an enemy behind a wall and why, how
   long they're held up by another player, where they hold (facing a wall, how far they see, cover, watching a way in,
   the same spot as before), and their fights (reaction, how far off their aim is 0.1 to 1 s in, first shot, first hit);
