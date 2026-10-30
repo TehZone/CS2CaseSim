@@ -1186,6 +1186,15 @@ function fakeGame() {
   ok(given[0] === s && given[1] === null, "skins: you pick yours up with your skin, a bot's with the default (not your own skin for it)");
 }
 
+// ---- a map's sky (cs2/play.cjs mapInfo): as bright as CS2 draws it, env_sky's brightness scale ----------------------
+{
+  const play = (await import('node:module')).createRequire(import.meta.url)('../cs2/play.cjs');
+  const sky = (e) => play.mapInfo([{ classname: 'env_sky', skyname: 'resource_name:"materials/x/sky.vmat"', ...e }]).skyBrightness;
+  ok(sky({ brightnessscale: '4.0' }) === 4 && sky({ brightnessscale: '0.5' }) === 0.5 && sky({}) === 1 && play.mapInfo([]).skyBrightness === 1,
+    "map info: the sky's brightness (Cache's 4), 1 when the map doesn't say");
+  ok(play.PLAY_VERSION >= 12, 'map exports: version 12 brings the windows\' and glass\'s textures and the sky\'s brightness');
+}
+
 // ---- the screen's shape (screen.js): CS2's 4:3 stretched or with black bars, 16:10, 16:9, its resolutions ----------
 {
   const { screenLayout } = await import('../src/js/play/screen.js');

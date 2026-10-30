@@ -29,7 +29,7 @@ const HIDDEN_SHADERS = /csgo_effects|sky\.vfx|spritecard/i;
 const BALL = /soccer_?ball/i;
 // Lightmapped shaders (world geometry and overlays). Their lightmap UV is the second UV set (TEXCOORD_1), except
 // CS2's newer csgo_environment(_blend), whose second set is a second texture UV and the lightmap UV the third.
-const LIGHTMAPPED = /lightmappedgeneric|static_overlay|environment_blend|csgo_environment\.vfx/i;
+const LIGHTMAPPED = /lightmappedgeneric|static_overlay|environment_blend|csgo_environment\.vfx|3layer_parallax|csgo_glass/i;
 const lightmapUv = (shader) => (/csgo_environment/i.test(shader || '') ? 'uv2' : 'uv1');
 // Merge cell size (game units) for see-through surfaces, drawn back to front cell by cell. The rest is merged map-wide,
 // a draw per material: a cell rarely leaves the view on a CS2 map, so splitting them only multiplied the draws.
@@ -233,6 +233,96 @@ diffuseColor.a *= cs2C1.a;`)
 	mapN = mapN * 2.0 - 1.0;`));
 }
 
+// CS2's csgo_simple_3layer_parallax: Cache's windows and glass blocks (the exporter gives them only one layer's colour, so
+// they came out flat panels). Three layers, as CS2's shader has them: the dirty glass (its colour, where its mask says),
+// the window's frames behind it (the first layer's colour, where its alpha says) and the room or sky behind those (the
+// second's), each further back shifted with the view and blurred where the glass is rough. Layers glow at their emissive
+// level; the second, with F_SECOND_LAYER_CUBEMAP, is lit by the sky (CS2's exterior cubemap; the map's sky here): the
+// windows that shine. The model's tint applies where its tint mask says. Returns the material's layers or null.
+function parallaxOf(vm, textures, load, sky, skyBrightness) {
+  if (!/3layer_parallax/.test(vm.ShaderName || '')) return null;
+  const T = vm.TextureParams || {}, F = vm.FloatParams || {}, V = vm.VectorParams || {}, I = vm.IntParams || {};
+  const tex = (k, srgb) => (T[k] && textures[T[k]] ? load(textures[T[k]], srgb) : null);
+  const P = { kind: 'parallax', color0: tex('g_tColor', true), mask: tex('g_tLayer0Mask', false), color1: tex('g_tLayer1Color', true), color2: tex('g_tLayer2Color', true),
+    tintMask: tex('g_tTintMask', false) };
+  if (!P.color0 || !P.mask || !P.color1 || !P.color2) return null;
+  P.sky = I.F_SECOND_LAYER_CUBEMAP && sky ? sky : null;
+  P.skyBrightness = skyBrightness;
+  const f = (k, d = 0) => F[k] ?? d, tint = (k) => new THREE.Color().setRGB(...(V[k] || [1, 1, 1]).slice(0, 3), THREE.SRGBColorSpace);
+  // Per layer: [offset, refraction, blur min, blur max] (CS2's g_flLayerNOffset...: the blur is a mip bias), and its glow.
+  P.l1 = new THREE.Vector4(f('g_flLayer1Offset'), f('g_flLayer1RefractionAmount'), f('g_flLayer1RoughnessBlurMin'), f('g_flLayer1RoughnessBlurMax'));
+  P.l2 = new THREE.Vector4(f('g_flLayer2Offset'), f('g_flLayer2RefractionAmount'), f('g_flLayer2RoughnessBlurMin'), f('g_flLayer2RoughnessBlurMax'));
+  P.glow1 = tint('g_vLayer1EmissiveTint').multiplyScalar(f('g_flLayer1EmissiveLevel'));
+  P.glow2 = tint('g_vLayer2EmissiveTint').multiplyScalar(f('g_flLayer2EmissiveLevel'));
+  P.fresnel = f('g_flLayer2EmissiveFresnel');
+  P.key = 'P' + (P.sky ? 'c' : '') + (P.tintMask ? 't' : '');
+  return P;
+}
+
+function addParallax(sh, P) {
+  Object.assign(sh.uniforms, {
+    cs2Layer0: { value: P.color0 }, cs2Mask: { value: P.mask }, cs2Layer1: { value: P.color1 }, cs2Layer2: { value: P.color2 }, cs2TintMask: { value: P.tintMask }, cs2SkyMap: { value: P.sky },
+    cs2SkyBrightness: { value: P.skyBrightness }, cs2L1: { value: P.l1 }, cs2L2: { value: P.l2 }, cs2Glow1: { value: P.glow1 }, cs2Glow2: { value: P.glow2 },
+    cs2Fresnel: { value: P.fresnel },
+  });
+  const defs = (P.sky ? '#define CS2_SKY\n' : '') + (P.tintMask ? '#define CS2_TINT_MASK\n' : '') + '#define CS2_FACTOR_MASK cs2Tint\n';
+  sh.fragmentShader = defs + `uniform sampler2D cs2Layer0;\nuniform sampler2D cs2Mask;\nuniform sampler2D cs2Layer1;\nuniform sampler2D cs2Layer2;\nuniform sampler2D cs2TintMask;\nuniform sampler2D cs2SkyMap;
+uniform float cs2SkyBrightness;\nuniform vec4 cs2L1;\nuniform vec4 cs2L2;\nuniform vec3 cs2Glow1;\nuniform vec3 cs2Glow2;\nuniform float cs2Fresnel;
+` + sh.fragmentShader
+    .replace('#include <map_fragment>', `// The view (camera to here) and the surface's +u and +v directions (from how the position and texture coordinates
+// change across the pixel), as CS2's tangent frame.
+vec3 cs2P = - vViewPosition, cs2V = normalize( cs2P );
+vec3 cs2N = normalize( vNormal ) * ( gl_FrontFacing ? 1.0 : - 1.0 );
+vec3 cs2Dp1 = dFdx( cs2P ), cs2Dp2 = dFdy( cs2P );
+vec2 cs2Du1 = dFdx( vMapUv ), cs2Du2 = dFdy( vMapUv );
+vec3 cs2C1 = cross( cs2Dp2, cs2N ), cs2C2 = cross( cs2N, cs2Dp1 );
+float cs2Side = dot( cs2Dp1, cs2C1 ) < 0.0 ? - 1.0 : 1.0;
+vec3 cs2Tu = cs2C1 * cs2Du1.x + cs2C2 * cs2Du2.x, cs2Tv = cs2C1 * cs2Du1.y + cs2C2 * cs2Du2.y;
+vec2 cs2Vts = vec2( dot( cs2V, cs2Tu ) * inversesqrt( max( dot( cs2Tu, cs2Tu ), 1e-20 ) ), dot( cs2V, cs2Tv ) * inversesqrt( max( dot( cs2Tv, cs2Tv ), 1e-20 ) ) ) * cs2Side;
+float cs2NdV = dot( cs2V, cs2N ), cs2Cos = clamp( - cs2NdV, 0.0, 1.0 );
+// CS2's: a layer at offset d is looked up d * (the view across the surface) * cos^0.7 / cos further along, plus the
+// glass's bumps times its refraction.
+vec2 cs2Shift = cs2Vts * ( pow( cs2Cos, 0.7 ) / min( cs2NdV, - 1e-3 ) );
+#ifdef USE_NORMALMAP
+	vec2 cs2Bump = texture2D( normalMap, vNormalMapUv ).xy * 2.0 - 1.0;
+#else
+	vec2 cs2Bump = vec2( 0.0 );
+#endif
+#ifdef USE_ROUGHNESSMAP
+	float cs2Rough = texture2D( roughnessMap, vRoughnessMapUv ).g;
+#else
+	float cs2Rough = roughness;
+#endif
+vec4 cs2C0 = texture2D( cs2Layer0, vMapUv );
+float cs2M = texture2D( cs2Mask, vMapUv ).r;
+vec4 cs2C1a = texture( cs2Layer1, vMapUv + cs2Bump * cs2L1.y + cs2Shift * cs2L1.x, mix( cs2L1.z, cs2L1.w, cs2Rough ) );
+float cs2Blur2 = mix( cs2L2.z, cs2L2.w, cs2Rough );
+vec3 cs2C2a = texture( cs2Layer2, vMapUv + cs2Bump * cs2L2.y + cs2Shift * cs2L2.x, cs2Blur2 ).rgb;
+#ifdef CS2_TINT_MASK
+	float cs2Tint = texture2D( cs2TintMask, vMapUv ).r;
+#else
+	float cs2Tint = 0.0;
+#endif
+diffuseColor.rgb *= mix( mix( cs2C2a, cs2C1a.rgb, cs2C1a.a ), cs2C0.rgb, cs2M );
+// Their glow: the second layer's brighter face-on (its fresnel), lit by the sky behind the glass with F_SECOND_LAYER_CUBEMAP.
+vec3 cs2Glow2a = cs2C2a * pow( max( cs2Cos, 1e-4 ), cs2Fresnel ) * cs2Glow2;
+#ifdef CS2_SKY
+	{
+		vec3 d = normalize( inverseTransformDirection( cs2V, viewMatrix ) + vec3( cs2Bump.y, 0.0, cs2Bump.x ) * cs2L2.y );
+		cs2Glow2a *= textureLod( cs2SkyMap, equirectUv( d ), cs2Blur2 + 1.0 ).rgb * cs2SkyBrightness;
+	}
+#endif
+vec3 cs2Glow = mix( cs2Glow2a, cs2C1a.rgb * cs2Glow1, cs2C1a.a ) * ( 1.0 - cs2M );`)
+    .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+#ifdef CS2_FACTOR
+	totalEmissiveRadiance += cs2Glow * mix( vec3( 1.0 ), vCs2Factor, cs2Tint );
+#else
+	totalEmissiveRadiance += cs2Glow;
+#endif`);
+}
+
+const addLayers = (sh, L) => ({ env: addEnv, parallax: addParallax, glass: addGlass }[L.kind] || addLayer)(sh, L);
+
 // The clock of animated textures (overlays' frame grids: Nuke's water caustics...), set as they're drawn.
 const CS2_TIME = { value: 0 };
 
@@ -303,6 +393,48 @@ function clearMaterial(src, vm, sky, water) {
   return m;
 }
 
+// CS2's csgo_glass, with its own textures (map exports from version 12; glassMaterial makes it see-through): the dust
+// on it (colour, and how much in alpha: CS2's opacity, g_flTranslucencyRemap between its two values) is lit like any
+// surface, and what's behind shows through as much as the glass lets it: less at a glance (fresnel), through the tint
+// (its texture, and the model's colour by g_flModelTintAmount, thicker at an angle) and the dust. The light through it
+// lights the dust from inside too. Returns the material's glass or null.
+function glassOf(vm, textures, load, color) {
+  if (!/csgo_glass/.test(vm.ShaderName || '')) return null;
+  const T = vm.TextureParams || {}, F = vm.FloatParams || {}, V = vm.VectorParams || {};
+  const tex = (k) => (T[k] && textures[T[k]] ? load(textures[T[k]], true) : null);
+  const G = { kind: 'glass', dust: tex('g_tGlassDust'), tint: tex('g_tGlassTintColor') };
+  if (!G.dust || !G.tint) return null;
+  const r = V.g_flTranslucencyRemap || [0, 1];
+  G.remap = new THREE.Vector2(r[0], r[1]);
+  G.modelTint = new THREE.Color(1, 1, 1).lerp(color, F.g_flModelTintAmount ?? 0);
+  G.key = 'G';
+  return G;
+}
+
+// What CS2 draws: the light it gives (rgb) and how much of what's behind shows through (alpha: drawn with glassMaterial's
+// blend, behind * alpha + rgb).
+function addGlass(sh, G) {
+  Object.assign(sh.uniforms, { cs2GlassTint: { value: G.tint }, cs2Remap: { value: G.remap }, cs2ModelTint: { value: G.modelTint } });
+  sh.fragmentShader = 'uniform sampler2D cs2GlassTint;\nuniform vec2 cs2Remap;\nuniform vec3 cs2ModelTint;\n' + sh.fragmentShader
+    .replace('#include <map_fragment>', `vec4 cs2Dust = texture2D( map, vMapUv );
+float cs2O = mix( cs2Remap.x, cs2Remap.y, cs2Dust.a );
+vec3 cs2Tc = texture2D( cs2GlassTint, vMapUv ).rgb * cs2ModelTint;
+diffuseColor.rgb = cs2Dust.rgb;`)
+    .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+float cs2Cos = clamp( abs( dot( normalize( vViewPosition ), normal ) ), 0.0, 1.0 );
+vec3 cs2Through = ( 1.0 - mix( 0.04, 1.0, pow( 1.0 - cs2Cos, 5.0 ) ) ) * pow( cs2Tc, vec3( 1.0 / max( 0.01, sqrt( 1.0 - 0.4444 * ( 1.0 - cs2Cos * cs2Cos ) ) ) ) ) * ( 1.0 - cs2O );
+diffuseColor.rgb *= cs2O * ( 1.0 + cs2Through * pow( cs2Tc, vec3( 1.6 ) ) );`)
+    .replace('#include <opaque_fragment>', `#include <opaque_fragment>
+	gl_FragColor.a = dot( cs2Through, vec3( 0.2125, 0.7154, 0.0721 ) );`);
+}
+
+// A csgo_glass material (a clone of the glTF one) set up to draw as CS2's does: see addGlass.
+function glassMaterial(v, G) {
+  Object.assign(v, { map: G.dust, side: THREE.DoubleSide, transparent: true, depthWrite: false, polygonOffset: false,
+    blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.OneFactor, blendDst: THREE.SrcAlphaFactor });
+  v.userData.clear = true; // (drawn with the see-through surfaces, back to front)
+}
+
 // CS2 reflects its cubemaps off every surface; without one, metal (no diffuse colour) went black (Vertigo's lift
 // doors). The light around a point stands in for its cubemap: the indirect light, as radiance from all around.
 const REFLECT_AROUND = `
@@ -339,9 +471,15 @@ export const SPECULAR_AA = `#include <lights_physical_fragment>
 
 // One material for every prop that uses it, however each is tinted (Dust II's window frames come in 40 colours; the
 // exporter gives each colour a copy of the material): each one's colour (its glTF base colour) per vertex instead.
+// (Only where the material's tint mask says, if it has one: CS2_FACTOR_MASK.)
 function addFactor(sh) {
   sh.vertexShader = 'attribute vec3 cs2Factor;\nvarying vec3 vCs2Factor;\n' + sh.vertexShader.replace('#include <uv_vertex>', '#include <uv_vertex>\n\tvCs2Factor = cs2Factor;');
-  sh.fragmentShader = 'varying vec3 vCs2Factor;\n' + sh.fragmentShader.replace('#include <color_fragment>', '#include <color_fragment>\n\tdiffuseColor.rgb *= vCs2Factor;');
+  sh.fragmentShader = '#define CS2_FACTOR\nvarying vec3 vCs2Factor;\n' + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+#ifdef CS2_FACTOR_MASK
+	diffuseColor.rgb *= mix( vec3( 1.0 ), vCs2Factor, CS2_FACTOR_MASK );
+#else
+	diffuseColor.rgb *= vCs2Factor;
+#endif`);
 }
 
 // Lightmapped surfaces: the sun's direct light is multiplied by the baked sun visibility in the lightmap's alpha.
@@ -354,7 +492,7 @@ function lightmapped(m, lightMap, irrMax, layer = null) {
         'getDirectionalLightInfo( directionalLight, directLight );',
         'getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= cs2SunMask;'));
     sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_maps>', '#include <lights_fragment_maps>' + REFLECT_AROUND);
-    if (layer) (layer.kind === 'env' ? addEnv : addLayer)(sh, layer);
+    if (layer) addLayers(sh, layer);
     if (m.userData.tinted) addFactor(sh);
     sh.fragmentShader = sh.fragmentShader.replace('#include <lights_physical_fragment>', SPECULAR_AA);
     centroidVaryings(sh);
@@ -391,7 +529,7 @@ export function ambientLit(m, ambient, layer = null, { probe = false } = {}) {
     sh.fragmentShader = add + sh.fragmentShader.replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
 	{ ${light} }${REFLECT_AROUND}`);
     sh.fragmentShader = sh.fragmentShader.replace('#include <lights_physical_fragment>', SPECULAR_AA);
-    if (layer) (layer.kind === 'env' ? addEnv : addLayer)(sh, layer);
+    if (layer) addLayers(sh, layer);
     if (m.userData.tinted) addFactor(sh);
     centroidVaryings(sh);
   };
@@ -638,6 +776,9 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     return layerTextures.get(file);
   };
   const ambient = { sky: { value: new THREE.Color(0.42, 0.47, 0.56) }, ground: { value: new THREE.Color(0.46, 0.39, 0.31) } };
+  // How bright CS2 draws the sky (env_sky's brightness scale; Cache's is 4). Not dimmer than its texture: the exported
+  // sky's brightest parts were cut off at 1, so a dimmer one would come out duller than CS2's.
+  const skyBrightness = Math.max(1, info.skyBrightness ?? 1);
   // CS2's light probes (props, players, weapons); where no volume reaches, a sky above and ground below.
   const probes = probeData && info.lighting?.probes
     ? new ProbeField(new Uint8Array(probeData), info.lighting.probes, { up: [0.42, 0.47, 0.56].map((v) => v / Math.PI), down: [0.46, 0.39, 0.31].map((v) => v / Math.PI) })
@@ -697,7 +838,8 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     if (!variants.has(key)) {
       const overlay = shader.includes('static_overlay') ? vm.IntParams?.F_BLEND_MODE | 0 : -1;
       if (overlay === 2 || overlay === 3) variants.set(key, overlayMaterial(m, vm, overlay)); // a decal that multiplies or adds: unlit
-      else if (shader.includes('csgo_glass') || shader.includes('csgo_water')) variants.set(key, clearMaterial(m, vm, sky, shader.includes('csgo_water')));
+      // (Glass without its textures, exported before version 12, as it was.)
+      else if (shader.includes('csgo_water') || (shader.includes('csgo_glass') && !glassOf(vm, info.layers || {}, loadLayer, m.color))) variants.set(key, clearMaterial(m, vm, sky, shader.includes('csgo_water')));
       if (variants.has(key)) originals.add(m);
     }
     if (!variants.has(key)) {
@@ -707,13 +849,16 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
       v.vertexColors = false; // CS2 uses vertex colours for layer blending, not tint
       v.envMap = null;
       if (v.transparent) { v.depthWrite = false; v.polygonOffset = true; v.polygonOffsetFactor = -2; v.polygonOffsetUnits = -4; }
-      const layer = v.map ? layerOf(vm, info.layers || {}, loadLayer) || envOf(vm, info.layers || {}, loadLayer) : null;
+      const layer = v.map ? layerOf(vm, info.layers || {}, loadLayer) || envOf(vm, info.layers || {}, loadLayer) || parallaxOf(vm, info.layers || {}, loadLayer, sky, skyBrightness)
+        : glassOf(vm, info.layers || {}, loadLayer, m.color);
+      if (layer?.kind === 'glass') glassMaterial(v, layer);
       layerData.set(v, layer);
       if (lm) lightmapped(v, lightMap, info.lightmap.irrMax, layer); else ambientLit(v, ambient, layer, { probe: !!probes });
       v.userData.lm = lm;
       v.userData.lmUv = lmUv;
-      v.userData.layer = !!layer && layer.kind !== 'env';
+      v.userData.layer = !!layer && !layer.kind;
       v.userData.env = layer?.kind === 'env';
+      v.userData.parallax = layer?.kind === 'parallax'; // (drawn on its own: its shader isn't batched)
       for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) if (v[k]) v[k].anisotropy = Math.max(v[k].anisotropy, lm ? aniso : Math.min(4, aniso));
       variants.set(key, v);
       originals.add(m);
@@ -741,7 +886,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   const overlayOf = (v) => v.userData.basic && !v.userData.clear && !v.userData.animated && v.isMeshBasicMaterial;
   for (const [gk, g] of groups) {
     const v = g.material;
-    if (g.mover?.[0] === 'd' || g.mover?.[0] === 'r' || v.userData.clear || (v.userData.basic && !overlayOf(v))) continue;
+    if (g.mover?.[0] === 'd' || g.mover?.[0] === 'r' || v.userData.clear || v.userData.parallax || (v.userData.basic && !overlayOf(v))) continue;
     if (!slotsFor.has(v)) {
       const L = layerData.get(v), slots = slotsOf(v, L);
       const glow = !!(v.emissiveMap || v.emissive?.getHex());
@@ -851,7 +996,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   for (const { material: m } of groups.values()) {
     for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) if (m[k]) keep.add(m[k]);
     const L = layerData.get(m);
-    if (L) for (const t of [L.color, L.normal, L.blendMod, L.color2, L.normal2, L.color3, L.normal3, ...(L.height || [])]) if (t) keep.add(t);
+    if (L) for (const t of [...Object.values(L), ...(L.height || [])]) if (t?.isTexture) keep.add(t);
   }
   for (const t of arrays.textures) if (!keep.has(t)) { t.dispose(); t.image?.close?.(); }
   for (const [file, t] of layerTextures) if (!keep.has(t)) layerTextures.delete(file);
@@ -938,6 +1083,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     sky.mapping = THREE.EquirectangularReflectionMapping;
     sky.colorSpace = THREE.SRGBColorSpace;
     scene.background = sky;
+    scene.backgroundIntensity = skyBrightness;
   } else scene.background = new THREE.Color(0x9cc3e8);
 
   // The 3D skybox (see CS2Service.playSky3d): a scene of its own, at its own scale, lit by the sun and the sky; Game
@@ -949,6 +1095,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
       const g3 = await new GLTFLoader().loadAsync(map.sky3d);
       const skyScene = new THREE.Scene(), mats = new Map();
       skyScene.background = scene.background;
+      skyScene.backgroundIntensity = scene.backgroundIntensity;
       const sun3 = new THREE.DirectionalLight(sun.color, sun.intensity);
       sun3.position.copy(travel).multiplyScalar(-1);
       skyScene.add(sun3, sun3.target);
@@ -963,7 +1110,11 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
           v.metalness = 0; // (glTF's factor is 1 under a metalness map: all metal without it)
           if (v.transparent) v.depthWrite = false;
           v.forceSinglePass = true;
-          ambientLit(v, ambient);
+          // Its windows and glass as the map's (Cache's tall buildings), from the map's own textures of them.
+          const layer = v.map ? parallaxOf(vm, info.layers || {}, loadLayer, sky, skyBrightness) : glassOf(vm, info.layers || {}, loadLayer, m.color);
+          if (layer?.kind === 'glass') glassMaterial(v, layer);
+          v.userData.parallax = layer?.kind === 'parallax';
+          ambientLit(v, ambient, layer);
           mats.set(m, v);
         }
         o.material = mats.get(m);
@@ -979,7 +1130,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
       // And the opaque ones batched like the map's (see batch.js): its colour textures in arrays, a draw per size.
       const skyArrays = new TextureArrays(renderer, Math.min(4, aniso)), kinds = new Map(), skyBatches = [];
       for (const [mat, list] of byMat) {
-        const slots = !mat.transparent && !(mat.alphaTest > 0) && slotsOf(mat, null);
+        const slots = !mat.transparent && !(mat.alphaTest > 0) && !mat.userData.parallax && slotsOf(mat, null);
         if (!slots || Object.keys(slots).length !== 1) continue;
         const k = TextureArrays.kind(slots.map, true) + '|' + mat.side;
         if (!kinds.has(k)) kinds.set(k, []);

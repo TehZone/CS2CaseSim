@@ -99,6 +99,14 @@ const LAYER_TEXTURES = ['g_tLayer2Color', 'g_tLayer2NormalRoughness', 'g_tBlendM
 // csgo_environment(_blend)'s: the second and third layers' colour and normal, and every layer's height map (height in
 // red, the colour tint's mask in green).
 const ENV_TEXTURES = ['g_tColor2', 'g_tColor3', 'g_tNormal2', 'g_tNormal3', 'g_tHeight1', 'g_tHeight2', 'g_tHeight3'];
+// csgo_simple_3layer_parallax's (Cache's windows and glass blocks): the glass's colour (the exporter gives the first
+// layer's as the material's) and mask, the two layers seen through it (the first's mask in its alpha) and the mask of
+// where the model's tint applies.
+const PARALLAX_TEXTURES = ['g_tColor', 'g_tLayer0Mask', 'g_tLayer1Color', 'g_tLayer2Color', 'g_tTintMask'];
+// csgo_glass's: the dust on it (how much in alpha) and its tint (the exporter gives glass neither).
+const GLASS_TEXTURES = ['g_tGlassDust', 'g_tGlassTintColor'];
+const layerKeys = (v) => (v?.IntParams?.F_LAYERS ? LAYER_TEXTURES : /csgo_environment/.test(v?.ShaderName || '') ? ENV_TEXTURES
+  : /3layer_parallax/.test(v?.ShaderName || '') ? PARALLAX_TEXTURES : /csgo_glass/.test(v?.ShaderName || '') ? GLASS_TEXTURES : []);
 // Shaders of world geometry (big surfaces seen up close: their textures are kept sharper).
 const WORLD_SHADERS = /lightmappedgeneric|static_overlay|environment_blend|csgo_environment\.vfx/i;
 
@@ -677,7 +685,7 @@ class CS2Service {
         // Older exports are brought up to date step by step; a step that fails (no disk space, say) leaves the export as
         // it was, still playable, rather than exporting the whole map again.
         if (meta.stamp === stamp && meta.version >= 2) {
-          const steps = { 2: 'upgradeMapLighting', 3: 'upgradeMapHidden', 4: 'upgradeMapLayers', 5: 'upgradeMapDoors', 6: 'upgradeMapSky3d', 7: 'upgradeMapTextureSizes', 8: 'upgradeMapBreakables', 9: 'upgradeMapBreakables2', 10: 'upgradeMapSoundscapes' };
+          const steps = { 2: 'upgradeMapLighting', 3: 'upgradeMapHidden', 4: 'upgradeMapLayers', 5: 'upgradeMapDoors', 6: 'upgradeMapSky3d', 7: 'upgradeMapTextureSizes', 8: 'upgradeMapBreakables', 9: 'upgradeMapBreakables2', 10: 'upgradeMapSoundscapes', 11: 'upgradeMapGlass' };
           try { while (steps[meta.version]) meta = await this[steps[meta.version]](id, vpk, dir, meta, say); } catch (e) { this.log('map upgrade: ' + e.message); }
           this.progress.delete('map:' + id);
           return result(meta);
@@ -916,6 +924,21 @@ class CS2Service {
     return next;
   }
 
+  // Version 11 gets version 12's window and glass textures (csgo_simple_3layer_parallax, csgo_glass) and the sky's
+  // brightness, without exporting the rest again.
+  async upgradeMapGlass(id, vpk, dir, meta, say) {
+    say('Updating the map\'s glass…');
+    const tmp = path.join(dir, 'tmp-ents');
+    await this.ensureCS2().run(['-i', vpk, '-f', `maps/${id}/entities/default_ents.vents_c`, '-d', '-o', tmp]);
+    const entFile = path.join(tmp, 'maps', id, 'entities', 'default_ents.vents');
+    const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
+    fs.rmSync(tmp, { recursive: true, force: true });
+    const layers = { ...meta.layers, ...(await this.playLayers(vpk, dir, play.readGlb(path.join(dir, 'world.glb')).json, meta.layers)) };
+    const next = { ...meta, layers, skyBrightness: play.mapInfo(ents).skyBrightness, version: 12 };
+    fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
+    return next;
+  }
+
   // Maps exported as version 8 get version 9's breakable props (with the doors and glass again).
   upgradeMapBreakables(id, vpk, dir, meta, say) { return this.upgradeMapDoors(id, vpk, dir, meta, say, 9); }
   // Version 9 gets version 10's breakables (props named breakable, and what's left of one when broken).
@@ -959,13 +982,13 @@ class CS2Service {
   }
 
   // The second layer of CS2's two-layer world materials (sand painted over asphalt, plaster over brick...): its colour
-  // and normal map and the blend modulation texture, copied into the map folder. Returns { vtex path: file name }.
-  async playLayers(vpk, dir, json) {
+  // and normal map and the blend modulation texture, copied into the map folder (and the other layers' textures: see
+  // layerKeys). Returns { vtex path: file name }, leaving out those in have (already there).
+  async playLayers(vpk, dir, json, have = {}) {
     const want = new Set();
     for (const m of json.materials || []) {
       const v = m.extras?.vmat;
-      const keys = v?.IntParams?.F_LAYERS ? LAYER_TEXTURES : /csgo_environment/.test(v?.ShaderName || '') ? ENV_TEXTURES : [];
-      for (const k of keys) if (v.TextureParams?.[k]) want.add(v.TextureParams[k]);
+      for (const k of layerKeys(v)) if (v.TextureParams?.[k] && !(have[v.TextureParams[k]] && fs.existsSync(path.join(dir, have[v.TextureParams[k]])))) want.add(v.TextureParams[k]);
     }
     if (!want.size) return {};
     const cs2 = this.ensureCS2();

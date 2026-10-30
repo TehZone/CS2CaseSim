@@ -281,9 +281,13 @@ What's in a match:
   and its newer csgo_environment surfaces (most of Train, Cache, Inferno, Ancient, Fachwerk...) with all their layers:
   up to three textures blended by the vertex paint against their height maps like CS2's shader, each layer's colour
   tint and saturation (Train's blue plaster), the vertex tint, and their lightmap from the right UV set; decals that
-  multiply or add like CS2's (grime, Nuke's animated water caustics); see-through glass and water (waves, sky
-  reflections, the map's water colour); metal that reflects the light around it like CS2's cubemaps (Vertigo's lift
-  doors); props with a skeleton (doors, Nuke's vent covers and slats) where their bones put them; the map's sky, its
+  multiply or add like CS2's (grime, Nuke's animated water caustics); glass as CS2's glass shader draws it (its dust
+  and grime lit like any surface, what's behind showing through its tint, less of it at a glance); windows with depth
+  like CS2's parallax windows (Cache's frosted windows and the buildings round it, Fachwerk's curtained ones: the dirty
+  pane, the frames behind it shifting as you move and blurred through the frosted glass, the room or the sky behind
+  those, the ones lit from outside glowing); water (waves, sky reflections, the map's water colour); metal that reflects the light around it like
+  CS2's cubemaps (Vertigo's lift doors); props with a skeleton (doors, Nuke's vent covers and slats) where their bones
+  put them; the map's sky as bright as CS2 draws it (Cache's four times its texture), its
   3D skybox, its collision mesh, nav mesh with ladders, spawns, bomb sites, buy zones and callout areas. Things
   another mode switches on (Wingman's barricades, fences and doors on Vertigo, Nuke, Overpass and Inferno; Retakes'
   blockers) are left out, as in competitive. Doors open with E (CS2's swing and

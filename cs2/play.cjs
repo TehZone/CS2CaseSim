@@ -9,10 +9,11 @@ const { readEXR } = require('./exr.cjs');
 const { decodePNG, encodePNG } = require('./png.cjs');
 
 const IN = 0.0254; // the exporter writes game inches as metres
-const PLAY_VERSION = 11; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading;
+const PLAY_VERSION = 12; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading;
 // 4: entities that start switched off left out, trigger_hurt volumes; 5: csgo_environment(_blend)'s other layers and height maps;
 // 6: doors and breakable glass; 7: the 3D skybox; 8: no texture over 1024 after it; 9: breakable props too; 10: props named
-// breakable (Mirage's vent covers) and what's left of a breakable once broken (Mirage's shutter frame); 11: soundscapes)
+// breakable (Mirage's vent covers) and what's left of a breakable once broken (Mirage's shutter frame); 11: soundscapes;
+// 12: the windows' and glass's own textures, the sky's brightness)
 const PROBE_MAX = 8; // probe irradiance is stored as 8-bit sRGB of value / PROBE_MAX
 const DATA_VERSION = 7; // weapon stats + sound events (6: maps' ambience sounds, every surface's bullet impact sound; 7: how CS2
 // plays each event, and its reverb presets)
@@ -297,6 +298,8 @@ function mapInfo(ents) {
     postProcessing: String(ppv?.postprocessing || '').replace(/^resource_name:"?|"$/g, ''),
     bombRadius: +params?.bombradius || 500,
     sky: ents.find((e) => e.classname === 'env_sky')?.skyname?.replace(/^resource_name:"?|"$/g, '') || '',
+    // How bright CS2 draws the sky (env_sky's brightness scale: Cache's is 4).
+    skyBrightness: Number.isFinite(+ents.find((e) => e.classname === 'env_sky')?.brightnessscale) ? +ents.find((e) => e.classname === 'env_sky').brightnessscale : 1,
   };
 }
 
