@@ -555,8 +555,9 @@ export class Brain {
     if (early && !this.target?.visible) {
       const smoke = early.lineup.kind === 'smoke', l = early.lineup;
       const coming = early.until || this.contactAt(assigned, t, 4) > 0 || (this.heard && t - this.heard.t < 3 && dist2(this.heard.pos, l.land) < 900);
+      // (Not while its choke is smoked, its own team's smoke or theirs: a molotov landing in a smoke goes straight out.)
       if (smoke ? t - g.liveAt < 30 && this.doLineup(early, t, true)
-        : coming && dist2(l.pos, b.pos) < 600 && this.doLineup(early, t, true, (early.until ||= t + 6))) return;
+        : coming && dist2(l.pos, b.pos) < 600 && !this.wastes(l.kind, l.land) && this.doLineup(early, t, true, (early.until ||= t + 6))) return;
     }
     if (site === 'mid' && g.midSpot) { const s = this.spotAt(this.plan.pos?.get(c) && site === assigned ? 'pos:CT:' + this.plan.pos.get(c).id : 'mid:CT', () => g.midSpot); return this.holdAt(s.pos, t, null, s.look); }
     // Its position there (setups.js), unless it's rotated to another site.
@@ -597,6 +598,9 @@ export class Brain {
     this.lineupAim ||= [(Math.random() * 2 - 1) * this.d.utilityErr, (Math.random() * 2 - 1) * this.d.utilityErr];
     const aim = this.lineupFace = [l.pitch + this.lineupAim[0], l.yaw + this.lineupAim[1]];
     const ready = now || (plan.stage === 'execute' && t >= plan.execStart + [0, 0.5, 1.1][x.phase]);
+    // Not into a smoke (a molotov goes straight out), nor a smoke onto its team's own fire (it would put it out): it
+    // waits till that's gone, doing what it would otherwise meanwhile (an execute's goes on without it).
+    if (ready && this.wastes(l.kind, l.land)) { if (!now) x.done = true; this.lineupAim = null; this.lineupFace = null; this.approach = null; return false; }
     if (d < 3 && Math.hypot(b.vel[0], b.vel[1]) < 8) { b.pos[0] = l.pos[0]; b.pos[1] = l.pos[1]; b.vel[0] = b.vel[1] = 0; } // (exactly on it)
     const still = d < 3 && Math.hypot(b.vel[0], b.vel[1]) < 8;
     const aimed = Math.abs(wrap(b.yaw - aim[1])) < 0.5 && Math.abs(b.pitch - aim[0]) < 0.5;
@@ -606,6 +610,12 @@ export class Brain {
       if (l.kind === 'flash' && plan.side === 'T') plan.flashAt = Math.max(plan.flashAt || 0, t + 0.55 + 1.65);
     }
     return true;
+  }
+  // Would a grenade landing there be wasted: a molotov in a smoke (it goes straight out, as in CS2), a smoke on its own
+  // team's fire (it puts it out)?
+  wastes(kind, at) {
+    const nades = this.game.nades;
+    return kind === 'fire' ? nades.smokedAt(at) : kind === 'smoke' ? !!nades.fireSmokedBy(at, this.c.team) : false;
   }
   siteCenter(site) { return site ? [(site.min[0] + site.max[0]) / 2, (site.min[1] + site.max[1]) / 2, site.min[2]] : null; }
   // A spot of its own to hold at a place this round (spots.js: some cover, facing a way in; key as there), kept for the
@@ -722,7 +732,8 @@ export class Brain {
     return this.doLineup(this.retakeX, t, true, this.retakeX.until);
   }
   // Grenades like CS2's bots use them: terrorists smoke off the CT side and flash before taking a site; anyone throws
-  // a molotov or HE where they last saw enemies; retaking CTs flash the bomb; terrorists burn a defuser.
+  // a molotov or HE where they last saw enemies; retaking CTs flash the bomb, and smoke out a molotov on it; terrorists
+  // burn a defuser. (None wasted: see wastes.)
   useNades(t, siteBox) {
     const g = this.game, m = g.match, b = this.bot, c = this.c, n = c.nades, bomb = m.bomb;
     const has = (id) => n[id] > 0;
@@ -742,7 +753,7 @@ export class Brain {
           // Smoke between the site and where CTs come from.
           const k = 0.45, target = [center[0] + (ct[0] - center[0]) * k, center[1] + (ct[1] - center[1]) * k, center[2]];
           const spot = g.nav.findArea(target, 400) ? target : center;
-          if (go('weapon_smokegrenade', spot)) { this.plan.smoked = true; return; }
+          if (!this.wastes('smoke', spot) && go('weapon_smokegrenade', spot)) { this.plan.smoked = true; return; }
         }
         if (d < 1000 && d > 300 && !this.plan.flashed && has('weapon_flashbang')) {
           if (go('weapon_flashbang', [center[0], center[1], center[2] + 120], true)) { this.plan.flashed = true; return; }
@@ -752,12 +763,14 @@ export class Brain {
     // Enemies were just here (out of sight now): burn or blow up the spot.
     if (this.lastSeen && t - this.lastSeen.t < 2.5 && t - this.lastSeen.t > 0.4) {
       const d = Math.hypot(this.lastSeen.pos[0] - b.pos[0], this.lastSeen.pos[1] - b.pos[1]);
-      if (d > 350 && d < 1500) { if (go(fire, this.lastSeen.pos) || go('weapon_hegrenade', this.lastSeen.pos)) return; }
+      if (d > 350 && d < 1500) { if ((!this.wastes('fire', this.lastSeen.pos) && go(fire, this.lastSeen.pos)) || go('weapon_hegrenade', this.lastSeen.pos)) return; }
     }
     if (m.phase === 'planted') {
       const d = Math.hypot(bomb.pos[0] - b.pos[0], bomb.pos[1] - b.pos[1]);
+      // A fire on the bomb (a terrorist's molotov to stop the defuse): a smoke on it puts it out there and then.
+      if (c.team === 'CT' && d < 1300 && d > 250 && g.nades.fireNear(bomb.pos) && g.lineOfSight(b.eye(), [bomb.pos[0], bomb.pos[1], bomb.pos[2] + 40]) && go('weapon_smokegrenade', bomb.pos)) return;
       if (c.team === 'CT' && d < 1200 && d > 400 && go('weapon_flashbang', [bomb.pos[0], bomb.pos[1], bomb.pos[2] + 100], true)) return;
-      if (c.team === 'T' && bomb.defuser && d < 1300 && go(fire, bomb.pos)) return;
+      if (c.team === 'T' && bomb.defuser && d < 1300 && !this.wastes('fire', bomb.pos) && go(fire, bomb.pos)) return;
     }
   }
 

@@ -709,6 +709,64 @@ function fakeGame() {
   fire.dispose();
 }
 
+// Fire and smoke (grenades.js), as in CS2: a molotov burns 7 s; a smoke popping in or next to it puts it out there and
+// then (not through a wall), a smoke grenade landing in the flames pops at once, and a molotov landing in a smoke goes
+// straight out. And the bots' check (ai.js wastes) that none of their utility goes like that.
+{
+  const { Grenades, NADES, FIRE_TIME } = await import('../src/js/play/grenades.js');
+  const { Brain } = await import('../src/js/play/ai.js');
+  const ALL = FLAG_PLAYER | FLAG_BULLET | FLAG_GRENADE;
+  const G = world([[[-4000, -4000, -64], [4000, 4000, 0], ALL], [[1000, -800, 0], [1040, 800, 300], ALL]]); // the floor, a wall
+  const heard = [];
+  const game = { scene: new THREE.Scene(), collision: G, now: 0, combatants: [], positionOf: (c) => c.p, damage() {}, noise() {}, botOf: () => null,
+    sounds: { play: (name) => { heard.push(name); return null; } }, balls: { bump: () => false }, botAssets: { weapon: () => Promise.resolve(null) },
+    lineOfSight: (a, b) => !G.occluded(a, b, FLAG_BULLET, 2) };
+  const N = game.nades = new Grenades(game);
+  const T = { team: 'T' }, CT = { team: 'CT' };
+  const run = (secs) => { for (let i = 0; i < Math.round(secs * 64); i++) { game.now += 1 / 64; N.tick(1 / 64); } };
+  const pop = (id, pos, c = T) => { const n = { c, id, info: NADES[id], pos: pos.slice(), obj: new THREE.Group() }; N.flying.push(n); N.detonate(n, N.flying.length - 1); };
+  const reset = () => { N.clear(); heard.length = 0; };
+
+  pop('weapon_molotov', [0, 0, 2]);
+  run(6.9);
+  const burning = N.fires.length === 1;
+  run(0.2);
+  ok(FIRE_TIME === 7 && burning && !N.fires.length, "fire: a molotov burns CS2's 7 seconds, then dies down");
+  reset();
+  pop('weapon_incgrenade', [0, 0, 2]); run(1);
+  pop('weapon_smokegrenade', [60, 0, 2]);
+  ok(!N.fires.length && heard.includes('Molotov.Extinguish') && !heard.includes('Inferno.FadeOut'), 'fire: a smoke popping in it puts it out there and then (no dying down)');
+  reset();
+  pop('weapon_molotov', [0, 0, 2]); run(1);
+  pop('weapon_smokegrenade', [170, 0, 2]);
+  ok(!N.fires.length, 'fire: so does one popping next to it');
+  reset();
+  pop('weapon_molotov', [0, 0, 2]); run(0.5);
+  pop('weapon_smokegrenade', [420, 0, 2]); run(2);
+  ok(N.fires.length === 1, "fire: a smoke a few metres off doesn't (its cloud never reaches it)");
+  reset();
+  pop('weapon_molotov', [960, 0, 2]); run(0.5);
+  pop('weapon_smokegrenade', [1080, 0, 2]); run(2);
+  ok(N.fires.length === 1, 'fire: nor one on the other side of a wall');
+  reset();
+  pop('weapon_molotov', [0, 0, 2]); run(0.5);
+  const t0 = game.now;
+  N.throw(T, 'weapon_smokegrenade', [-300, 0, 64], [450, 0, 150]);
+  run(1.15);
+  ok(!N.fires.length && N.volume.active && N.volume.fields[0].born - t0 < 1.1, 'fire: a smoke grenade landing in the flames pops at once (before its fuse, still rolling) and puts them out');
+  reset();
+  pop('weapon_smokegrenade', [0, 0, 2]); run(2);
+  pop('weapon_molotov', [50, 0, 2]);
+  ok(!N.fires.length && heard.at(-1) === 'Molotov.Extinguish', 'fire: a molotov landing in a smoke goes straight out');
+  const ct = Object.assign(Object.create(Brain.prototype), { game, bot: { c: CT } }), tb = Object.assign(Object.create(Brain.prototype), { game, bot: { c: T } });
+  ok(ct.wastes('fire', [30, 0, 0]) && !ct.wastes('fire', [800, 0, 0]), "bots: a molotov into a smoke is wasted (they wait), one clear of it isn't");
+  reset();
+  pop('weapon_molotov', [2000, 2000, 2], T); run(0.5);
+  ok(tb.wastes('smoke', [2050, 2000, 0]) && !ct.wastes('smoke', [2050, 2000, 0]), "bots: a smoke on its own team's fire is wasted, on the other team's it's the point (it puts it out)");
+  reset();
+  N.dispose();
+}
+
 // Moving solids (doors, breakable glass) in the collision world, and the map export's entity helpers.
 {
   const w = world([[[-2000, -2000, -64], [2000, 2000, 0]]]);

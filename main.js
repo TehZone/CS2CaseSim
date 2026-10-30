@@ -1421,6 +1421,73 @@ async function runWinSmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=fire` checks molotovs and smokes on a map (CS2SIM_SMOKE_MAP, else Mirage) against CS2: a molotov in
+// front of you burns 7 s (userData/fire-<s>s.png at 1, 4, 6, 6.5 and 6.9 s), a smoke dropped on one puts it out as it
+// pops (before its fuse: it pops in the flames; userData/fire-smoked.png), and a molotov dropped into a smoke goes
+// straight out.
+async function runFireSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => {
+    win.webContents.invalidate();
+    await js('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
+    fs.writeFileSync(path.join(app.getPath('userData'), `fire-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  };
+  const map = process.env.CS2SIM_SMOKE_MAP || 'de_mirage';
+  await wait(3000);
+  if (!(await smokeStartMap(win, map, 'fire'))) { app.quit(); return; }
+  await js(`(async () => { const g = window.__playGame, sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
+    g.console.run('sv_cheats 1'); g.god = true;
+    if (g.match.phase === 'freeze') { g.match.time = 0; await sleep(300); }
+    g.match.time = 9999;
+    for (const b of g.bots) { b.brain.tick = () => { b.vel = [0, 0, 0]; }; b.brain.scan = () => {}; b.root.visible = false; } // (none in the way)
+    // A spot on the floor in front of you, looked down at; grenades dropped onto it.
+    const eye = g.bodyOf(g.me).eye, f = g.viewDir(g.me), h = Math.hypot(f[0], f[1]) || 1;
+    const x = eye[0] + (f[0] / h) * 300, y = eye[1] + (f[1] / h) * 300, z = g.floorAt([x, y, eye[2]], 400) ?? eye[2] - 64;
+    g.input.pitch = 22;
+    window.__fire = { at: [x, y, z], drop: (id) => g.nades.throw(g.me, id, [x, y, z + 40], [0, 0, -60]) };
+    return 1; })()`);
+  const t = (code) => js(`(() => { const g = window.__playGame, N = g.nades, F = window.__fire; ${code} })()`);
+  // 1. How long one burns.
+  await t(`F.drop('weapon_molotov'); return 1;`);
+  for (let i = 0; i < 40 && !(await t(`return N.fires.length;`)); i++) await wait(50);
+  // (When it goes out, on the game's clock: watched every frame, as the screenshots hold up the checks from here.)
+  const born = await t(`F.born = N.fires[0]?.born; const f = N.fires[0]; const watch = () => { if (N.fires.includes(f)) requestAnimationFrame(watch); else F.out = g.now; }; if (f) watch(); return F.born;`);
+  for (const at of [1, 4, 6, 6.5, 6.9]) {
+    // (The game slowed for the last ones: a screenshot takes a moment.)
+    if (at === 6) await t(`g.console.run('host_timescale 0.1'); return 1;`);
+    while ((await t(`return g.now - F.born;`)) < at) await wait(20);
+    await shot(at + 's');
+  }
+  await t(`g.console.run('host_timescale 1'); return 1;`);
+  while (await t(`return N.fires.length;`)) await wait(20);
+  await wait(100);
+  const burn = await t(`return +(F.out - F.born).toFixed(2);`);
+  console.log(`SMOKE fire ${map}: a molotov burned ${burn} s (CS2: 7)${born == null ? ' (it never caught)' : ''}`);
+  // 2. A smoke dropped on one.
+  await t(`N.clear(); F.drop('weapon_molotov'); return 1;`);
+  await wait(1500);
+  await t(`F.burning = N.fires.length; F.thrown = g.now; F.drop('weapon_smokegrenade'); return 1;`);
+  for (let i = 0; i < 60 && !(await t(`return N.volume.fields.length;`)); i++) await wait(25);
+  const smoked = JSON.parse(await t(`return JSON.stringify({ burning: F.burning, left: N.fires.length, popped: N.volume.fields.length ? +(N.volume.fields[0].born - F.thrown).toFixed(2) : null });`));
+  await wait(600);
+  await shot('smoked');
+  console.log(`SMOKE fire ${map}: a smoke dropped on a burning molotov (${smoked.burning} fire) popped ${smoked.popped} s after it was thrown (its fuse: 1.2 s) and left ${smoked.left} burning`);
+  // 3. A molotov dropped into a smoke.
+  await t(`N.clear(); F.drop('weapon_smokegrenade'); return 1;`);
+  await wait(2500);
+  await t(`F.drop('weapon_molotov'); return 1;`);
+  await wait(1500);
+  const into = JSON.parse(await t(`return JSON.stringify({ flying: N.flying.length, fires: N.fires.length, smokes: N.volume.fields.length });`));
+  console.log(`SMOKE fire ${map}: a molotov dropped into a smoke (${into.smokes} up): ${into.fires} fires, ${into.flying} still flying`);
+  const good = Math.abs(burn - 7) < 0.15 && smoked.burning === 1 && smoked.left === 0 && smoked.popped < 1.2 && into.fires === 0 && into.flying === 0 && into.smokes === 1;
+  console.log('SMOKE fire', good ? 'all as in CS2' : 'NOT as in CS2', '(screenshots in', app.getPath('userData') + ')');
+  await js(`import(new URL('js/matchmaking.js', location.href).href).then((mm) => mm.leave()).then(() => 1)`); // (a private match: left at once)
+  await wait(1500);
+  app.quit();
+}
+
 // `CS2SIM_SMOKE=lineups` throws every lineup of each map (CS2SIM_SMOKE_MAPS, else Mirage, Dust II and Inferno) in the
 // game itself: a bot on its spot exactly (its brain off), its aim exact, and logs where each went off against where
 // it's meant to (and where flight.js says it goes on this match's collision), the bad ones (over 110 units off; a flash
@@ -2706,6 +2773,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'aspect') { win.webContents.once('did-finish-load', () => runAspectSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'winbanner') { win.webContents.once('did-finish-load', () => runWinSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'fire') { win.webContents.once('did-finish-load', () => runFireSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'lineups') { win.webContents.once('did-finish-load', () => runLineupsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'drops') { win.webContents.once('did-finish-load', () => runDropsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'breakables') { win.webContents.once('did-finish-load', () => runBreakSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }

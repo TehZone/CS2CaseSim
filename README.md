@@ -86,12 +86,14 @@ The modes:
 What's in a match:
 - Grenades: HE (up to 99 damage over 350 units), flashbangs (blind by how directly you look and how close you are, with
   CS2's burned-in afterimage), molotovs and incendiaries (7 seconds of fire spreading along the ground from where it
-  breaks, not through walls: licking flame tongues, embers, dark smoke, a scorch and glow on the ground and orange
-  light on the walls and players around it), decoys (fake gunfire), and CS2's
+  breaks, not through walls, at full till its last second: licking flame tongues, embers, dark smoke, a scorch and glow
+  on the ground and orange light on the walls and players around it), decoys (fake gunfire), and CS2's
   volumetric smoke: it floods the space it lands in (around corners, through doors, never through walls), bullets punch
   tunnels through it and HE grenades blow holes that refill; sight lines (yours and the bots') go by how much smoke they
-  cross, and a smoke puts out fires. Thrown like CS2: Mouse1 full throw, Mouse2 underhand, both a medium throw, plus
-  your movement; they bounce off the map. CS2's limits: four grenades, two flashbangs.
+  cross. As in CS2 a smoke puts out a fire there and then: one popping in or next to it (a smoke grenade landing in the
+  flames pops at once), or flooding over it, and a molotov landing in a smoke goes straight out. Thrown like CS2:
+  Mouse1 full throw, Mouse2 underhand, both a medium throw, plus your movement; they bounce off the map. CS2's limits:
+  four grenades, two flashbangs.
 - Weapon modes: the M4A1-S and USP-S silencer screws off and on (Mouse2), the Glock-18 and FAMAS switch to burst fire
   (Mouse2), the R8 Revolver cocks for an accurate shot (hold Mouse1) or fans (Mouse2), shotguns load shell by shell and
   can fire mid-reload, and the Zeus x27 (Gear, $200) recharges 30 seconds after a shot.
@@ -208,7 +210,9 @@ What's in a match:
   Counter-terrorists split over the sites (stacking the one that keeps getting hit, at higher ranks), smoke a choke
   early and save the molotov for when the terrorists show there, rotate on information (lower ranks on one sighting,
   higher on two) and retake together, smoking off where the terrorists hold the bomb from and flashing before going
-  in. A default's map control utility (Mirage's window smoke) goes out as the round starts.
+  in. A default's map control utility (Mirage's window smoke) goes out as the round starts. None of it is wasted on
+  the other: a molotov waits while the spot it lands on is smoked (its own team's smoke or theirs), a smoke isn't thrown
+  onto its own team's fire, and retaking CTs smoke out a molotov burning on the bomb to defuse.
   The utility is real lineups (src/data/lineups.json: Dust II, Mirage, Inferno and Nuke: Mirage's window, top
   connector, jungle, CT, stairs and market smokes, triple and van molotovs; Dust II's xbox, CT, long cross, B doors and
   B window smokes, long corner, back plat and car molotovs; Inferno's arch, CT and coffins smokes, pit, new box and
@@ -220,6 +224,8 @@ What's in a match:
   Elite's lined up on the pixel, a Gold Nova's a few tenths of a degree out, Silvers misthrow) and throws.
   `CS2SIM_SMOKE=lineups` throws every lineup of each map in the game itself (a bot on its spot, its aim exact) and logs
   where each went off against where it should.
+  `CS2SIM_SMOKE=fire` does the same for fire and smoke: a molotov dropped in front of you burns 7 s (screenshots to its
+  last second), a smoke dropped on a burning one puts it out as it pops, and a molotov dropped into a smoke goes out.
   `CS2SIM_SMOKE=bots` watches rounds at chosen ranks and logs the plans (the CT setup called, a default's spread, where
   everyone is 20 s in, the CTs' utility and who fell back) and where every lineup landed, and measures how
   the bots behave (userData/bots-<map>-<tier>.json): how often their crosshair is on an enemy behind a wall and why, how

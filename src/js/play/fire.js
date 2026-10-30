@@ -1,7 +1,8 @@
 // Molotov and incendiary fire, drawn in the glTF scene (metres, Y up): flame tongues standing on the ground (quads
 // turned to the camera, playing a looping flipbook made here: noise rising through a flame's shape, white-hot at the
 // root, deep red at the tips), a scorch and a flickering glow on the ground under them, embers and dark smoke rising off
-// them. Each layer is one instanced draw; the fire spreads out from where the bottle broke and dies down from its edges.
+// them. Each layer is one instanced draw; the fire spreads out from where the bottle broke, burns at full till its last
+// second (CS2's 7 s) and dies down from its edges.
 // Grenades adds the orange light it throws on the walls and players around it.
 import * as THREE from 'three';
 
@@ -101,7 +102,7 @@ attribute vec2 aSize;
 varying float vFrame;
 varying float vLife;
 void main() {
-  float life = smoothstep(aAnim.z, aAnim.z + 0.5, uAge) * clamp((uRemain - aAnim.w) / 1.5, 0.0, 1.0);
+  float life = smoothstep(aAnim.z, aAnim.z + 0.5, uAge) * clamp((uRemain - aAnim.w) / 0.5, 0.0, 1.0);
   vec3 base = (modelMatrix * vec4(aBase, 1.0)).xyz;
   vec3 toCam = normalize(cameraPosition - base);
   vec3 right = normalize(vec3(toCam.z, 0.0, -toCam.x) + vec3(1e-4, 0.0, 0.0));
@@ -147,7 +148,7 @@ varying float vLife;
 varying float vAlpha;
 void main() {
   float life = fract(uTime * aAnim.y + aAnim.x);
-  float on = smoothstep(${fadeIn.toFixed(2)}, ${(fadeIn + 0.6).toFixed(2)}, uAge) * clamp(uRemain / 2.0, 0.0, 1.0);
+  float on = smoothstep(${fadeIn.toFixed(2)}, ${(fadeIn + 0.6).toFixed(2)}, uAge) * clamp(uRemain / 1.0, 0.0, 1.0);
   float a = aAnim.w * 6.2832 + life * ${drift.toFixed(1)};
   vec3 c = (modelMatrix * vec4(aBase, 1.0)).xyz + vec3(sin(a) * life * 0.6, life * ${rise.toFixed(2)} * (0.7 + 0.6 * fract(aAnim.w * 7.0)), cos(a) * life * 0.6);
   vec4 mv = viewMatrix * vec4(c, 1.0);
@@ -186,7 +187,7 @@ const GROUND_VS = COMMON + /* glsl */ `
 varying float vLife;
 varying float vFlick;
 void main() {
-  float life = smoothstep(aAnim.z, aAnim.z + 0.6, uAge) * clamp(uRemain / 1.5, 0.0, 1.0);
+  float life = smoothstep(aAnim.z, aAnim.z + 0.6, uAge) * clamp(uRemain / 0.8, 0.0, 1.0);
   vec2 q = spin(aAnim.y) * position.xy * aAnim.x * 2.0 * (0.6 + 0.4 * life);
   gl_Position = projectionMatrix * viewMatrix * vec4((modelMatrix * vec4(aBase, 1.0)).xyz + vec3(q.x, 0.0, q.y), 1.0);
   vUv = position.xy + 0.5;
@@ -263,7 +264,7 @@ export class GroundFire {
       base.set([x, y, z], i * 3);
       const h = (0.45 + 0.75 * (1 - r) ** 1.5 + rnd() * 0.45) * (rnd() < 0.25 ? 0.6 : 1);
       size.set([h * (0.8 + rnd() * 0.35) * (rnd() < 0.5 ? -1 : 1), h], i * 2);
-      anim.set([rnd(), 0.8 + rnd() * 0.6, r * 0.8 + rnd() * 0.15, (1 - r) * 0.2 + r * 0.9 + rnd() * 0.3], i * 4);
+      anim.set([rnd(), 0.8 + rnd() * 0.6, r * 0.8 + rnd() * 0.15, (1 - r) * 0.03 + r * 0.25 + rnd() * 0.1], i * 4);
     });
     this.obj.add(layer(n, [['aBase', 3, base], ['aSize', 2, size], ['aAnim', 4, anim]], art.material(FLAME_VS, FLAME_FS, u, art.flames), 3));
 
@@ -300,7 +301,7 @@ export class GroundFire {
   // How strong the fire is now (0..1): for its light.
   level(now) {
     const age = now - this.start;
-    return Math.min(1, age / 0.8) * Math.min(1, Math.max(0, (this.duration - age) / 1.5));
+    return Math.min(1, age / 0.8) * Math.min(1, Math.max(0, (this.duration - age) / 0.8));
   }
   update(now) {
     this.u.uTime.value = now;

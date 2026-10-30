@@ -1,7 +1,8 @@
 // Grenades: thrown with CS2's throw (Mouse1 full throw, Mouse2 underhand lob, both a medium throw, plus your own
 // movement), bouncing off the world, then: HE explodes, the flashbang blinds whoever looks at it, the smoke grenade
-// floods the area with CS2's volumetric smoke (smoke.js), the molotov/incendiary sets the ground on fire (a smoke puts it
-// out), the decoy fakes gunfire. Game units (inches, Z up); drawn in the glTF scene.
+// floods the area with CS2's volumetric smoke (smoke.js), the molotov/incendiary sets the ground on fire for 7 s (a smoke
+// popping in or next to it, or spreading over it, puts it out at once; one landing in a smoke goes out), the decoy fakes
+// gunfire. Game units (inches, Z up); drawn in the glTF scene.
 import * as THREE from 'three';
 import { FLAG_BULLET } from './collision.js';
 import { toGl } from './world.js';
@@ -25,7 +26,11 @@ export const NADE_SOUNDS = [...new Set(Object.values(NADES).flatMap((n) => [n.bo
 export const NADE_LIMIT = { total: 4, weapon_flashbang: 2 };
 export const isNade = (id) => !!NADES[id];
 
-const FIRE_RADIUS = 140, FIRE_TIME = 7, FIRE_DPS = 40, HE_RADIUS = 350;
+// (CS2's inferno_flame_lifetime: 7 s, the molotov's and the incendiary's.)
+export const FIRE_RADIUS = 140, FIRE_TIME = 7;
+const FIRE_DPS = 40, HE_RADIUS = 350;
+// How far past a fire's edge a smoke popping puts it out (its cloud bursts out over the flames).
+const SMOKE_REACH = 40;
 const FIRE_LIGHT = 6; // the fire's light (candela) on the walls and players around it
 
 export { throwVelocity }; // (see flight.js)
@@ -86,6 +91,7 @@ export class Grenades {
       const k = n.info.kind;
       const stopped = n.still > 0.15;
       if ((k === 'he' || k === 'flash') && age >= n.info.fuse) this.detonate(n, i);
+      else if (k === 'smoke' && this.fires.length && this.inFlames(n.pos)) this.detonate(n, i); // (into the flames: it pops at once)
       else if ((k === 'smoke' || k === 'decoy') && age >= n.info.fuse && stopped) this.detonate(n, i);
       else if (k === 'fire' && (n.landed || age >= n.info.fuse)) this.detonate(n, i);
       else if (age > 20) this.remove(n, i);
@@ -96,7 +102,7 @@ export class Grenades {
       if (now > f.until) { this.endFire(f, i); continue; }
       if (!f.art) this.spreadFire(f);
       // A smoke spreading over the flames puts them out.
-      if (this.volume.active && this.smokedOut(f.pos)) { g.sounds.play('Molotov.Extinguish', { pos: f.pos, listener: g }); this.endFire(f, i); continue; }
+      if (this.volume.active && this.smokedOut(f.pos)) { this.endFire(f, i, true); continue; }
       // Burning: damage four times a second to anyone standing in it.
       if (now >= f.nextHurt) {
         f.nextHurt = now + 0.25;
@@ -196,8 +202,16 @@ export class Grenades {
     }
   }
 
-  // Smoke: CS2's volumetric cloud, flooding the space around where the grenade stopped for 18 seconds.
-  smoke(n) { this.volume.add(n.pos); }
+  // Smoke: CS2's volumetric cloud, flooding the space around where the grenade stopped for 18 seconds. Popping in or
+  // next to a fire (on its level, not through a wall) puts the whole fire out there and then, as in CS2.
+  smoke(n) {
+    this.volume.add(n.pos);
+    for (let i = this.fires.length - 1; i >= 0; i--) if (this.smokeReaches(n.pos, this.fires[i])) this.endFire(this.fires[i], i, true);
+  }
+  smokeReaches(p, f) {
+    return Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius + SMOKE_REACH && Math.abs(p[2] - f.pos[2]) < 100
+      && this.game.lineOfSight([p[0], p[1], p[2] + 24], [f.pos[0], f.pos[1], f.pos[2] + 24]);
+  }
   smokedOut(p) { return this.volume.densityAt([p[0], p[1], p[2] + 20]) > 0.25; }
 
   // Molotov / incendiary: fire on the ground below where it broke (nothing if it bursts high in the air).
@@ -233,15 +247,25 @@ export class Grenades {
     f.art = new GroundFire(this.fireArt, toGl(pos), spots, FIRE_TIME, f.born);
     this.group.add(f.art.obj);
   }
-  endFire(f, i) {
+  // Burnt out (dying down with its sound), or put out by a smoke (out: gone there and then, with the hiss).
+  endFire(f, i, out = false) {
     f.art?.dispose();
     Promise.resolve(f.loop).then((src) => { try { src?.stop(); } catch {} });
-    this.game.sounds.play('Inferno.FadeOut', { pos: f.pos, listener: this.game, volume: 0.5 });
+    this.game.sounds.play(out ? 'Molotov.Extinguish' : 'Inferno.FadeOut', { pos: f.pos, listener: this.game, volume: out ? 1 : 0.5 });
     this.fires.splice(i, 1);
   }
 
   // Does a line pass through enough smoke to hide what's behind it?
   smokeBlocks(a, b) { return this.volume.active && this.volume.blocks(a, b); }
+  // A smoke grenade among the flames (on their level, this side of any wall).
+  inFlames(p) {
+    return this.fires.some((f) => Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius && p[2] - f.pos[2] < 60 && p[2] - f.pos[2] > -30
+      && this.game.lineOfSight([p[0], p[1], p[2] + 8], [f.pos[0], f.pos[1], f.pos[2] + 24]));
+  }
+  // Would a molotov landing at p go straight out (it's in a smoke)? Which fire would a smoke popping at p put out (one
+  // of that team's, when given)? (For the bots: neither wastes its utility on the other's.)
+  smokedAt(p) { return this.volume.active && this.smokedOut(p); }
+  fireSmokedBy(p, team = null) { return this.fires.find((f) => (!team || f.c?.team === team) && this.smokeReaches(p, f)) || null; }
   inFire(p) { return this.fires.some((f) => Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius + 20 && Math.abs(p[2] - f.pos[2]) < 70); }
   // A fire on your level (not one on a ledge above or a floor below).
   fireNear(p, r = 0) { return !this.fires.length ? null : this.fires.find((f) => Math.hypot(p[0] - f.pos[0], p[1] - f.pos[1]) < f.radius + r && Math.abs(p[2] - f.pos[2]) < 70) || null; }
