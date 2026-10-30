@@ -74,7 +74,8 @@ The modes:
 - **Competitive**: you and bot teammates against bots (1v1 up to 5v5 in a private match, first to 9 or first to
   13), with CS2's rounds: freeze time and buy time, the 1:55 round clock, the bomb (one terrorist carries it; plant it
   in a bomb site, 40 second fuse, defuse in 10 seconds or 5 with a kit; you can still plant it after the round is over,
-  as in CS2, without changing the result), win by elimination, bomb, defuse or time,
+  as in CS2, without changing the result; planted, the red LED on its circuit board lights with each beep, faster as it
+  runs down, and you can see it from across the site), win by elimination, bomb, defuse or time,
   halftime side swap and overtime (MR3 with $12,500, sides swapping after 3; or ties as draws).
 - **Wingman**: 2v2 on one bomb site, 90-second rounds, first to 9.
 - **Deathmatch**: free-for-all or teams for 5, 10 or 15 minutes. You respawn after two seconds away from enemies, every
@@ -166,7 +167,10 @@ What's in a match:
   a quarter of a frame).
 - Everyone's picture by the round clock (the bots' real players), dimmed when they die. Grenades stay primed for as
   long as you hold the button and keep the crosshair; tracers come out of the gun's barrel (yours and the bots').
-- Radar (CS2's overview of the map), kill feed (with CS2's marks for headshots, wallbangs, kills through smoke, jumping,
+- Radar (CS2's overview of the map; the bomb a C4 badge you can't miss: red once planted, glowing and sending out a
+  ring with each beep, amber dropped or on the teammate who carries it for the terrorists, kept upright and, when it's
+  off the radar, waiting on its edge the way to it; `CS2SIM_SMOKE=bomb` plants one and screenshots its LED and the
+  radar), kill feed (with CS2's marks for headshots, wallbangs, kills through smoke, jumping,
   no-scope and blinded kills), scoreboard (Tab), damage direction, death cam and spectating teammates (first person
   with their gun, like CS2; Jump for third person), CS2's win panel at the end of each round (the side's title in its
   colours, how the round ended, the MVP and what for, in CS2's words, until the next round starts; `CS2SIM_SMOKE=winbanner`

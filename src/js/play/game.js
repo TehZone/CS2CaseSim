@@ -89,6 +89,40 @@ const _frustum = new THREE.Frustum(), _m4 = new THREE.Matrix4(), _sphere = new T
 const PARTS = ['ai', 'bots', 'draw', 'hud']; // (net_graph 2's split of the frame)
 
 const _d3 = [0, 0, 0], _feet = [0, 0, 0], _from = [0, 0, 0], DOWN = [0, 0, -1]; // (plain arrays: see collision.js)
+// The planted bomb's LED, on its circuit board between the keypad and the screen (metres from where the C4 model sits),
+// lit red for a moment with each beep as in CS2: a solid red point (red over the bright ground too, where only adding
+// light washes out), a hot middle and a red glow round it, and a dot that stays a few pixels across however far off
+// you are (so it's seen across a site); drawn over the model, as a light added mid-match would recompile every material.
+// LED_ON: seconds lit at full, then LED_FADE going out.
+// (Its glow stands just over the top of the C4, 9 cm up: lower, the keypad and the screen's board hid it from the side.)
+const BOMB_LED = [0.0049, 0.09, -0.0002], LED_ON = 0.12, LED_FADE = 0.1;
+function bombLed() {
+  // A soft glow, and a dot: solid to half way out, then soft.
+  const disc = (shape) => {
+    const N = 32, data = new Uint8Array(N * N * 4);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const r = Math.hypot(x + 0.5 - N / 2, y + 0.5 - N / 2) / (N / 2);
+      data.set([255, 255, 255, Math.round(255 * shape(Math.min(1, r)))], (y * N + x) * 4);
+    }
+    const tex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat);
+    tex.needsUpdate = true;
+    return tex;
+  };
+  const glow = disc((r) => (1 - r) ** 2), dot = disc((r) => Math.min(1, 2 * (1 - r)));
+  const led = new THREE.Group();
+  // [size (metres, or of the view's height at a metre off), texture, colour, opacity, added light?, same size on screen?]
+  for (const [size, map, color, opacity, add, fixed] of [[0.18, glow, 0xff1a0a, 0.6, false, false], [0.03, dot, 0xff1206, 1, false, false],
+    [0.014, dot, 0xffc0a0, 1, true, false], [0.009, dot, 0xff1a0a, 1, false, true]]) {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map, color, opacity, transparent: true, blending: add ? THREE.AdditiveBlending : THREE.NormalBlending,
+      depthWrite: false, fog: false, toneMapped: false, sizeAttenuation: !fixed }));
+    s.scale.set(size, size, 1);
+    s.renderOrder = 6;
+    s.userData.opacity = opacity;
+    led.add(s);
+  }
+  led.position.set(0, -1000, 0); // (until a bomb's planted: in the scene from the start, so it compiles with the map)
+  return led;
+}
 
 export class Game {
   // difficulty: the bots' rank tier (skill.js: silver .. global; the old easy .. expert work too). roster (matchmaking,
@@ -305,6 +339,7 @@ export class Game {
     if (this.disposed) return;
     this.bombTemplate = buildCS2Model({ t: 'skin', fl: 0, sd: 0 }, { wid: 'weapon_c4', w: 'C4', n: 'C4', cat: 'equipment', v: true }, this.renderer, { quick: true }).catch(() => null);
     if (map.radar) this.radar = new Radar(this.screen, map.radar);
+    this.scene.add((this.bombLed = bombLed()));
     this.match = this.respawnMode ? new Deathmatch(this, { minutes: this.minutes, ffa: this.ffa, armsRace: this.armsRace }) : new Match(this, this.rules);
     if (this.respawnMode) await Promise.all((this.armsRace ? ARMS_RACE : [this.dmWeapon('primary'), this.dmWeapon('secondary')]).slice(0, 2).map((id) => this.vmData(id).catch(() => {})));
     // Every gun the match will show, now rather than in it (each one loaded mid-round stalled the game a tenth of a second
@@ -1269,10 +1304,22 @@ export class Game {
     if (!box.isEmpty()) m.position.y -= box.min.y;
     toGl([pos[0], pos[1], pos[2] + 0.5], g.position);
     g.rotation.y = (yaw * Math.PI) / 180;
+    if (planted && this.bombLed) { g.add(this.bombLed); this.bombLed.position.fromArray(BOMB_LED); this.ledAt = -9; }
     this.scene.add(g);
     this.bombModel = g;
   }
-  removeBomb() { this.bombToken = null; this.bombModel?.removeFromParent(); this.bombModel = null; }
+  removeBomb() {
+    this.bombToken = null; this.bombModel?.removeFromParent(); this.bombModel = null;
+    if (this.bombLed && this.bombLed.parent !== this.scene) { this.scene.add(this.bombLed); this.bombLed.position.set(0, -1000, 0); }
+  }
+  // The LED as the frame's drawn: lit with the last beep (see tick), out between them.
+  updateBombLed() {
+    const led = this.bombLed;
+    if (!led || led.parent === this.scene) return;
+    const since = this.now - (this.ledAt ?? -9), k = since < LED_ON ? 1 : Math.max(0, 1 - (since - LED_ON) / LED_FADE);
+    led.visible = k > 0;
+    for (const s of led.children) s.material.opacity = s.userData.opacity * k;
+  }
 
   // The C4's screen: a frame of its digits sheet, a row a frame (a sixteenth of the sheet): 0 blank, 1 the seven stars,
   // then the code a digit at a time up to 8, 7355608. Its screen mesh gets its own copy of its (12-vertex) geometry and
@@ -1444,6 +1491,8 @@ export class Game {
     if ((m.phase === 'planted' || (m.phase === 'end' && m.bomb?.state === 'planted')) && this.now >= m.bomb.beepAt) {
       const left = m.rules.bombTime - (this.now - m.bomb.plantedAt);
       this.sounds.play('C4.PlantSound', { pos: m.bomb.pos, listener: this, volume: 0.7 });
+      this.ledAt = this.now; // (its light, and the radar's bomb, flash with it)
+      this.radar?.beep();
       m.bomb.beepAt = this.now + Math.max(0.1, 0.15 + 0.85 * Math.pow(Math.max(0, left) / m.rules.bombTime, 1.4));
     }
     // Is the sun on you? (lights your weapon)
@@ -2255,6 +2304,7 @@ export class Game {
     this.updatePings();
     this.effects.update(dt);
     this.nades.update(dt, a);
+    this.updateBombLed();
     this.vmSun.intensity = this.world.sun.intensity * this.sunVis;
     if (this.away) { this.emit('frame', dt); return; } // (left the match: it goes on, nothing drawn)
 
@@ -2429,7 +2479,10 @@ export class Game {
     const m = this.match, me = this.me;
     const view = !me.alive && this.spectating ? { pos: this.spectating.pos, yaw: this.spectating.yaw } : { pos: this.player.origin, yaw: this.input.yaw };
     const b = m.bomb;
-    const bomb = b && (b.state === 'planted' || (b.state === 'dropped' && me.team === 'T')) ? { pos: b.pos, planted: b.state === 'planted' } : null;
+    // The bomb: planted (everyone), dropped (the terrorists), or on a teammate who carries it (the terrorists, as in CS2).
+    const carried = b?.state === 'carried' && me.team === 'T' && b.carrier?.alive && b.carrier !== me;
+    const bomb = !b ? null : b.state === 'planted' || (b.state === 'dropped' && me.team === 'T') ? { pos: b.pos, planted: b.state === 'planted' }
+      : carried ? { pos: this.positionOf(b.carrier), carried: true } : null;
     return {
       center: view.pos, yaw: view.yaw, myTeam: me.team, bomb, pings: this.pings,
       mates: this.combatants.filter((c) => c !== me && !this.hostile(me, c)).map((c) => ({ pos: this.positionOf(c), alive: c.alive })),

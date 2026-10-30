@@ -1488,6 +1488,79 @@ async function runFireSmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=bomb` plants the bomb at your feet on a map (CS2SIM_SMOKE_MAP, else Mirage) and checks it's easy to
+// find: its LED lit red with a beep and out between them (userData/bomb-led-on.png, bomb-led-off.png, looked at from a
+// couple of metres and from across the room), and the radar's bomb: a C4 badge that flashes and sends out a ring with
+// each beep (bomb-radar.png), held on the radar's edge the way to it when the bomb's off the radar (bomb-radar-edge.png).
+async function runBombSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name, rect) => {
+    win.webContents.invalidate();
+    await js('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
+    fs.writeFileSync(path.join(app.getPath('userData'), `bomb-${name}.png`), (await win.webContents.capturePage(rect)).toPNG());
+  };
+  const map = process.env.CS2SIM_SMOKE_MAP || 'de_mirage';
+  await wait(3000);
+  if (!(await smokeStartMap(win, map, 'bomb'))) { app.quit(); return; }
+  const t = (code) => js(`(async () => { const g = window.__playGame, sleep = (ms) => new Promise((r) => setTimeout(r, ms)); ${code} })()`);
+  const planted = await t(`document.querySelector('.play-pause')?.classList.add('hidden'); g.paused = false;
+    g.console.run('sv_cheats 1'); g.god = true;
+    if (g.match.phase === 'freeze') { g.match.time = 0; await sleep(300); }
+    for (const b of g.bots) { b.brain.tick = () => { b.vel = [0, 0, 0]; }; b.brain.scan = () => {}; b.root.visible = false; } // (none in the way)
+    const carrier = g.combatants.find((c) => c.hasC4) || g.combatants.find((c) => c.team === 'T');
+    carrier.hasC4 = true; g.match.phase = 'live'; g.match.time = 9999;
+    g.match.planted(carrier, g.player.origin.slice()); g.match.rules.bombTime = 9999;
+    for (let i = 0; i < 600 && !g.bombModel; i++) await sleep(50);
+    // Stepped back from it (noclip), looking at it.
+    g.console.run('noclip');
+    const b = g.match.bomb.pos, yaw = g.input.yaw * Math.PI / 180;
+    g.player.origin = [b[0] - Math.cos(yaw) * 70, b[1] - Math.sin(yaw) * 70, b[2]]; g.player.velocity = [0, 0, 0]; g.input.pitch = 38;
+    return !!g.bombModel;`);
+  // The LED: lit as a beep goes (the game slowed right down while it's taken), then out (no beeps meanwhile).
+  const led = async (name) => {
+    await t(`g.console.run('host_timescale 0.02'); g.match.bomb.beepAt = g.now + 999; g.ledAt = g.now; return 1;`);
+    await wait(150); await shot(name + '-on');
+    await t(`g.ledAt = g.now - 5; return 1;`);
+    await wait(150); await shot(name + '-off');
+    await t(`g.console.run('host_timescale 1'); g.match.bomb.beepAt = g.now; return 1;`);
+  };
+  await wait(800);
+  await led('led');
+  await t(`const b = g.match.bomb.pos, yaw = g.input.yaw * Math.PI / 180; g.player.origin = [b[0] - Math.cos(yaw) * 520, b[1] - Math.sin(yaw) * 520, b[2]]; g.input.pitch = 6; return 1;`);
+  await wait(800);
+  await led('led-far');
+  // The radar's bomb, over a few beeps.
+  const radarRect = await t(`const r = document.querySelector('.play-radar').getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };`);
+  await t(`window.__beeps = 0; const r = g.radar, beep = r.beep.bind(r); r.beep = () => { window.__beeps++; beep(); }; return 1;`);
+  await wait(2600);
+  const radar = JSON.parse(await t(`const el = g.radar.bombMark, r = el?.getBoundingClientRect(), R = document.querySelector('.play-radar').getBoundingClientRect();
+    return JSON.stringify({ cls: el?.className, size: r && [Math.round(r.width), Math.round(r.height)], beeps: window.__beeps, rings: el?.getAnimations({ subtree: true }).length ?? 0,
+      off: r && Math.round(Math.hypot(r.left + r.width / 2 - (R.left + R.width / 2), r.top + r.height / 2 - (R.top + R.height / 2))) });`));
+  await shot('radar', radarRect);
+  // Off the radar (well away from it): on its edge, the way to it.
+  await t(`const b = g.match.bomb.pos, yaw = g.input.yaw * Math.PI / 180; g.player.origin = [b[0] + Math.cos(yaw + 0.6) * 2600, b[1] + Math.sin(yaw + 0.6) * 2600, b[2]]; return 1;`);
+  await wait(700);
+  const edge = JSON.parse(await t(`const el = g.radar.bombMark, r = el?.getBoundingClientRect(), R = document.querySelector('.play-radar').getBoundingClientRect();
+    return JSON.stringify({ cls: el?.className, off: r && Math.round(Math.hypot(r.left + r.width / 2 - (R.left + R.width / 2), r.top + r.height / 2 - (R.top + R.height / 2))) });`));
+  await shot('radar-edge', radarRect);
+  // A terrorist's radar: the bomb dropped, then on a teammate who carries it.
+  const t4 = JSON.parse(await t(`const b = g.match.bomb, was = { state: b.state, carrier: b.carrier, pos: b.pos, team: g.me.team };
+    const mate = g.combatants.find((c) => c.team === 'T' && c !== g.me && c.alive), out = {};
+    g.me.team = 'T';
+    Object.assign(b, { state: 'dropped', carrier: null }); g.radar.draw(g.radarData()); out.dropped = g.radar.bombMark?.className;
+    Object.assign(b, { state: 'carried', carrier: mate, pos: null }); g.radar.draw(g.radarData()); out.carried = g.radar.bombMark?.className;
+    Object.assign(b, { state: was.state, carrier: was.carrier, pos: was.pos }); g.me.team = was.team;
+    return JSON.stringify(out);`));
+  console.log(`SMOKE bomb ${map}: planted ${planted}; radar badge ${JSON.stringify(radar)}; away from it ${JSON.stringify(edge)}; a terrorist's radar ${JSON.stringify(t4)}`);
+  const good = planted && /c4 planted/.test(radar.cls) && radar.size?.[0] >= 24 && radar.beeps >= 2 && /edge/.test(edge.cls) && edge.off <= 110 && edge.off >= 80
+    && /^c4( edge)?$/.test(t4.dropped) && /c4 carried/.test(t4.carried);
+  console.log('SMOKE bomb', good ? 'easy to find' : 'NOT right', '(screenshots in', app.getPath('userData') + ')');
+  await js(`import(new URL('js/matchmaking.js', location.href).href).then((mm) => mm.leave()).then(() => 1)`); // (a private match: left at once)
+  await wait(1500);
+  app.quit();
+}
+
 // `CS2SIM_SMOKE=lineups` throws every lineup of each map (CS2SIM_SMOKE_MAPS, else Mirage, Dust II and Inferno) in the
 // game itself: a bot on its spot exactly (its brain off), its aim exact, and logs where each went off against where
 // it's meant to (and where flight.js says it goes on this match's collision), the bad ones (over 110 units off; a flash
@@ -2773,6 +2846,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'aspect') { win.webContents.once('did-finish-load', () => runAspectSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'winbanner') { win.webContents.once('did-finish-load', () => runWinSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'bomb') { win.webContents.once('did-finish-load', () => runBombSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'fire') { win.webContents.once('did-finish-load', () => runFireSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'lineups') { win.webContents.once('did-finish-load', () => runLineupsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'drops') { win.webContents.once('did-finish-load', () => runDropsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }

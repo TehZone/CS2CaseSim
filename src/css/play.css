@@ -127,8 +127,15 @@ body.match-menu #menu-bg { visibility: hidden; }
 .play-radar .map i.dot.t { background: #f2c14e; }
 .play-radar .map i.dot.enemy { background: #ff4040; }
 .play-radar .map i.ping::before { content: ''; position: absolute; left: -8.5px; top: -8.5px; width: 17px; height: 17px; background: #ffd23c; transform: rotate(45deg); box-shadow: 0 0 0 2.2px rgba(0, 0, 0, .7); }
-.play-radar .map i.c4 { width: 40px; margin: -15px 0 0 -20px; font: bold 24px/24px sans-serif; text-align: center; color: #ffb000; }
-.play-radar .map i.c4.planted { color: #ff3030; }
+/* The bomb: a C4 badge (kept upright and on the radar by radar.js), amber dropped or carried by a teammate (smaller, on
+   their dot), red planted with a red glow and a ring sent out with each beep (Radar.beep). The radar's 0.45 scale makes
+   it about 29 x 17 px on screen. */
+.play-radar .map i.c4 { width: 64px; height: 38px; margin: -19px 0 0 -32px; border-radius: 8px; background: #f2a516; color: #160c00;
+  font: 900 27px/38px sans-serif; text-align: center; letter-spacing: 1px; box-shadow: 0 0 0 4px rgba(0, 0, 0, .8), 0 0 16px 4px rgba(0, 0, 0, .35); }
+.play-radar .map i.c4.carried { width: 46px; height: 28px; margin: -14px 0 0 -23px; border-radius: 6px; font-size: 20px; line-height: 28px; }
+.play-radar .map i.c4.planted { background: #e3241b; color: #fff; box-shadow: 0 0 0 4px rgba(0, 0, 0, .8), 0 0 26px 8px rgba(255, 40, 30, .7); }
+.play-radar .map i.c4::after { content: ''; position: absolute; inset: -6px; border-radius: 12px; border: 5px solid #ff3a2a; opacity: 0; pointer-events: none; }
+.play-radar .map i.c4.edge { opacity: .9; }
 .play-radar .me { position: absolute; left: 110.5px; top: 108px; width: 9px; height: 12px; background: #fff; clip-path: polygon(50% 0, 100% 100%, 50% 79%, 0 100%); }
 .play-hud .place { position: absolute; left: 16px; top: 252px; font-size: 15px; font-weight: 600; letter-spacing: .04em; opacity: .95; }
 .play-hud .money { position: absolute; left: 16px; top: 276px; display: flex; align-items: center; gap: 8px; font-size: 25px; font-weight: 700; color: #a6e07a; font-family: var(--font-cond); font-variant-numeric: tabular-nums; }
