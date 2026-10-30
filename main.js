@@ -301,12 +301,10 @@ async function runFeatureSmoke(win) {
   const log = await js(`(async () => {
     const out = [];
     const { act } = await import('./js/backend.js'); const st = await import('./js/state.js'); const { D } = await import('./js/data.js');
-    const I = await import('./js/items.js'); const M = await import('./js/engine/manager.js');
+    const I = await import('./js/items.js');
     st.S.money = 100000; st.S.settings.fast = true;
     const sv = D.cases.find((c) => /Cologne 2014 Cobblestone Souvenir/.test(c.n));
     const r1 = await act('case.open', { id: sv.id, n: 3 }); out.push('souvenir: ' + r1.items.map((i) => I.itemName(i) + ' [' + i.stk.length + ' stickers]').join(', '));
-    for (let i = 0; i < 3; i++) await act('team.pack', { pack: 'premium' });
-    out.push('pro cards: ' + st.S.inv.filter((i) => i.t === 'pro').length);
     const box = D.cases.find((c) => c.n === 'Chroma 2 Case');
     const b = await act('gamble.battle', { cases: [box.id, box.id], format: '2v2', mode: 'normal', clientSeed: 'smoke' });
     out.push('battle: ' + (b.won ? 'won ' + b.prize.length + ' items' : 'lost') + ', totals ' + b.teamTotals.join(' vs '));

@@ -42,7 +42,7 @@ function draw() {
     ['Stickers applied', st.stickersApplied], ['Profile level', levelHtml(S.prof)],
     ['Matches played (Play)', (st.playMatches || 0).toLocaleString()], ['Matches won', (st.playWins || 0).toLocaleString()], ['Kills', (st.playKills || 0).toLocaleString()], ['Earned from matches', money(st.playEarned || 0)],
     ['Competitive rank (Play)', competitiveRank()], ['Wingman rank (Play)', competitiveRank(true)],
-    ['Trade-ups signed', st.tradeups || 0], ['Armory redemptions', st.armory || 0], ['Player packs opened', st.packs || 0], ['Team matches', st.matches || 0],
+    ['Trade-ups signed', st.tradeups || 0], ['Armory redemptions', st.armory || 0],
     ['Case battles', st.battles || 0], ['Gambled', money(st.gambleWagered || 0)], ['Gambling result', `<span class="${(st.gambleWon || 0) >= 0 ? 'green' : 'red'}">${money(st.gambleWon || 0)}</span>`],
   ];
   root.innerHTML = `<div class="page">

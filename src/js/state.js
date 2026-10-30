@@ -2,7 +2,7 @@
 // (updated from the changes the server sends back). Changes go through backend.js actions, not direct edits.
 import { debounce } from './util.js';
 import * as E from './engine/economy.js';
-import { backfillSerials } from './engine/items.js';
+import { backfillSerials, retireOld } from './engine/items.js';
 
 const LS_KEY = 'cs2-case-sim-save';
 export const bus = new EventTarget();
@@ -14,6 +14,7 @@ export const on = (type, fn) => {
 };
 
 export let S = E.freshState();
+export let retiredOnLoad = null; // { n, value }: the chickens and pro cards an older save had, sold on load
 let offlineS = null; // the local save, kept aside while playing online
 export const isOnlineState = () => offlineS != null;
 
@@ -26,6 +27,7 @@ export async function loadState() {
     try {
       S = E.upgradeState(JSON.parse(text));
       backfillSerials(S); // saves from before serial numbers (once)
+      retiredOnLoad = retireOld(S);
     } catch (e) {
       console.error('Save corrupted, starting fresh', e);
     }
@@ -57,7 +59,6 @@ function announceAll() {
   emit('money');
   emit('inv');
   emit('stars');
-  emit('team');
   emit('prof');
   emit('social');
 }
@@ -102,7 +103,6 @@ export function applyDelta(d, { local = false } = {}) {
   if ('money' in set) emit('money');
   if (d.add?.length || d.del?.length || d.upd?.length) emit('inv');
   if ('stars' in set) emit('stars');
-  if ('team' in set) emit('team');
   if ('prof' in set) emit('prof');
   if ('social' in set) emit('social');
   if ('loadout' in set) emit('inv');

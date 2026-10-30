@@ -15,7 +15,6 @@ export function freshState() {
     stars: 0,
     starSpend: 0, // case spending towards the next armory star
     inv: [],
-    team: freshTeam(),
     loadout: {}, // slot (see items.loadoutSlot) -> uid
     charmDetach: 0, // Charm Detachments left (taking a charm off a gun uses one)
     serials: {}, // offline serial counters: items.serialKey -> last number given
@@ -29,7 +28,7 @@ export function freshState() {
     stats: {
       opened: 0, spent: 0, sold: 0,
       bestValue: 0, bestName: '', drops: {}, knives: 0, stickersApplied: 0,
-      tradeups: 0, armory: 0, packs: 0, gambleWagered: 0, gambleWon: 0, battles: 0, matches: 0,
+      tradeups: 0, armory: 0, gambleWagered: 0, gambleWon: 0, battles: 0,
       playMatches: 0, playWins: 0, playKills: 0, playEarned: 0,
     },
     settings: { volume: 0.5, fast: false, confirmSellAbove: 25, showOdds: true, autoSell: { ...AUTO_SELL_DEFAULT } },
@@ -38,17 +37,12 @@ export function freshState() {
   };
 }
 
-export function freshTeam() {
-  return { name: 'My Team', slots: { IGL: null, AWP: null, Entry: null, Support: null, Lurk: null }, bench: [null, null], tokens: {}, w: 0, l: 0, elo: 1000, cup: null, history: [] };
-}
-
 // Older saves: fill in anything added since.
 export function upgradeState(saved) {
   const base = freshState();
   const st = { ...base, ...saved, stats: { ...base.stats, ...saved.stats }, settings: { ...base.settings, ...saved.settings } };
   st.settings.autoSell = { ...AUTO_SELL_DEFAULT, ...(saved.settings?.autoSell || {}) };
-  st.team = { ...freshTeam(), ...(saved.team || {}) };
-  st.team.slots = { ...freshTeam().slots, ...(st.team.slots || {}) };
+  delete st.team; // (the old Team manager's)
   st.loadout = { ...(saved.loadout || {}) };
   st.mm = { ...freshMM(), ...(saved.mm || {}) };
   st.prof = { ...freshProfile(), ...(saved.prof || {}) };

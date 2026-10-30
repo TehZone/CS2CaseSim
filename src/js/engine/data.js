@@ -2,7 +2,6 @@
 // Shared by the client and the multiplayer server: the caller loads game-data.json (and keys.json beside it) and passes
 // them to initData().
 import { round2 } from './util.js';
-import { CHICKEN_COOP } from './chickens.js';
 
 export const D = {
   cases: [], skins: {}, stickers: {}, agents: {}, collections: [], events: {}, proTeams: {}, pros: {},
@@ -49,14 +48,11 @@ export const CASE_KINDS = { case: 'Cases', souvenir: 'Souvenir Packages', packag
 export function initData(json, { keys = {} } = {}) {
   Object.assign(D, json);
   for (const c of D.cases) c.custom = false;
-  D.cases.push(makeAgentLocker(), CHICKEN_COOP);
+  D.cases.push(makeAgentLocker());
   D.caseById = Object.fromEntries(D.cases.map((c) => [c.id, c]));
   initKeys(keys);
   D.colById = Object.fromEntries(D.collections.map((c) => [c.id, c]));
   D.charmColById = Object.fromEntries((D.charmCollections || []).map((c) => [c.id, c]));
-  // Pro player cards grouped into the real rosters they played in (AI opponents in the team manager).
-  D.rosters = {};
-  for (const p of Object.values(D.pros)) (D.rosters[p.ev + '|' + p.tm] ||= []).push(p.id);
   D.proList = Object.values(D.pros);
   return D;
 }
@@ -103,7 +99,6 @@ export function casePrice(c) {
 
 // [[tier, weight], ...] for a case-like container. Weights are relative (only tiers that exist).
 export function caseTiers(c) {
-  if (c.kind === 'chickens') return null;
   if (c.kind === 'case' || ((c.kind === 'package' || c.kind === 'souvenir') && c.rare?.length)) {
     return CASE_ODDS.filter(([k]) => (k === 'rare' ? c.rare?.length : c.pools[k]?.length));
   }

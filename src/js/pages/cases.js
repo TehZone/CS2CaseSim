@@ -6,9 +6,7 @@ import { autoSellLabel, autoSellModal, autoSellRules } from '../autosell.js';
 import { act } from '../backend.js';
 import { sfx } from '../audio.js';
 import { toast, openModal, itemCard, patternTag, sellItems, openInspect, showItemDetail, rarityOddsHTML } from '../ui.js';
-import { renderChickenThumb } from '../chicken3d.js';
 import { playCaseIntro } from '../caseintro.js';
-import { BREED, HAT, chickenValue } from '../chickens.js';
 
 const view = { mode: 'list', caseId: null, colId: null, filter: 'case', sort: 'new', q: '', qty: 1, major: 'all' };
 const SKIN_KINDS = new Set(['case', 'souvenir', 'package', 'collection']);
@@ -72,43 +70,30 @@ export function caseEV(c) {
   const key = c.id + D.pricedAt;
   if (evCache.has(key)) return evCache.get(key);
   let ev = 0;
-  if (c.kind === 'chickens') {
-    const hatEV = HAT_EV();
-    const tiers = [[2, 0.7992], [3, 0.1598], [4, 0.032], [5, 0.0064], [6, 0.0026]];
-    for (const [r, w] of tiers) {
-      const bs = c.pools[r].map((id) => BREED[id].v);
-      ev += (w * bs.reduce((s, x) => s + x, 0)) / bs.length * hatEV * 1.03;
+  const tiers = caseTiers(c);
+  const tw = tiers.reduce((s, t) => s + t[1], 0);
+  for (const [k, w] of tiers) {
+    let avg;
+    if (k === 'rare') {
+      avg = c.rare.reduce((s, g) => {
+        const ws = g.map((id) => (g.length > 1 ? DOPPLER_PHASE_WEIGHT[D.skins[id].ph] ?? 0.2 : 1));
+        const t = ws.reduce((a, b) => a + b, 0);
+        return s + g.reduce((a, id, i) => a + (ws[i] / t) * expectedSkin(D.skins[id], 'case'), 0);
+      }, 0) / c.rare.length;
+    } else {
+      const ids = c.pools[k];
+      const val = (id) => (SKIN_KINDS.has(c.kind) ? expectedSkin(D.skins[id], c.kind) : c.kind === 'agents' ? D.agents[id].p : D.stickers[id].p);
+      avg = ids.reduce((s, id) => s + val(id), 0) / ids.length;
     }
-  } else {
-    const tiers = caseTiers(c);
-    const tw = tiers.reduce((s, t) => s + t[1], 0);
-    for (const [k, w] of tiers) {
-      let avg;
-      if (k === 'rare') {
-        avg = c.rare.reduce((s, g) => {
-          const ws = g.map((id) => (g.length > 1 ? DOPPLER_PHASE_WEIGHT[D.skins[id].ph] ?? 0.2 : 1));
-          const t = ws.reduce((a, b) => a + b, 0);
-          return s + g.reduce((a, id, i) => a + (ws[i] / t) * expectedSkin(D.skins[id], 'case'), 0);
-        }, 0) / c.rare.length;
-      } else {
-        const ids = c.pools[k];
-        const val = (id) => (SKIN_KINDS.has(c.kind) ? expectedSkin(D.skins[id], c.kind) : c.kind === 'agents' ? D.agents[id].p : D.stickers[id].p);
-        avg = ids.reduce((s, id) => s + val(id), 0) / ids.length;
-      }
-      ev += (w / tw) * avg;
-    }
+    ev += (w / tw) * avg;
   }
   evCache.set(key, ev);
   return ev;
 }
-function HAT_EV() {
-  const tw = Object.values(HAT).reduce((s, h) => s + h.w, 0);
-  return Object.values(HAT).reduce((s, h) => s + (h.w / tw) * h.m, 0);
-}
 
 // ---- case list -----------------------------------------------------------------------------
 const FILTERS = [['case', 'Weapon Cases'], ['souvenir', 'Souvenir Packages'], ['package', 'Packages'], ['collection', 'Collections'],
-  ['capsule', 'Sticker Capsules'], ['autograph', 'Autograph Capsules'], ['special', 'Agents & Chickens']];
+  ['capsule', 'Sticker Capsules'], ['autograph', 'Autograph Capsules'], ['special', 'Agents']];
 const majors = () => [...new Set(D.cases.filter((c) => c.kind === 'souvenir').map((c) => c.ev))].sort((a, b) => b - a);
 
 function renderList(root) {
@@ -248,13 +233,6 @@ function defTile(kind, id, oddsEach) {
       <div class="meta"><div class="n1">${esc(w)}</div><div class="n2">${esc(f || '')}</div>
       <div class="row"><span class="wear">${money(lo)} – ${money(hi)}</span><span class="dim">${(oddsEach * 100).toFixed(oddsEach < 0.001 ? 3 : 2)}%</span></div></div></div>`;
   }
-  if (kind === 'chickens') {
-    const b = BREED[id];
-    return `<div class="card def" data-prev="chicken|${id}|${oddsEach}" style="--rc:${rarityColor(b.r)}">
-      <div class="img"><img src="${renderChickenThumb({ id, hat: 'none' })}"></div><div class="rbar"></div>
-      <div class="meta"><div class="n1">Chicken</div><div class="n2">${esc(b.n)}</div>
-      <div class="row"><span class="wear">from ${money(chickenValue({ id, hat: 'none', fl: 0.5 }))}</span><span class="dim">${(oddsEach * 100).toFixed(2)}%</span></div></div></div>`;
-  }
   const d = kind === 'agents' ? D.agents[id] : D.stickers[id];
   const parts = kind === 'agents' ? d.n.split(' | ') : [d.n.replace('Sticker | ', '')];
   return `<div class="card def" data-prev="${kind === 'agents' ? 'agent' : 'sticker'}|${id}|${oddsEach}" style="--rc:${rarityColor(d.r)}">
@@ -268,7 +246,7 @@ function renderCase(root, c) {
   const key = keyFor(c), own = { cases: ownedCases(c), keys: ownedKeys(c) };
   const missing = shortfall(c, view.qty).list;
   const ev = caseEV(c);
-  const tiers = c.kind === 'chickens' ? [['2', 0.7992], ['3', 0.1598], ['4', 0.032], ['5', 0.0064], ['6', 0.0026]] : caseTiers(c);
+  const tiers = caseTiers(c);
   const tw = tiers.reduce((s, t) => s + t[1], 0);
   const keys = Object.keys(c.pools).sort((a, b) => b - a);
   const contents = keys.map((k) => {
@@ -291,7 +269,7 @@ function renderCase(root, c) {
     <div class="case-hero">
       <img class="ci" src="${caseImage(c)}" alt="">
       <div>
-        <div class="kicker">Unlock container · ${({ case: 'Weapon case', agents: 'Agent locker', chickens: 'Chicken crate', autograph: 'Autograph capsule', capsule: 'Sticker capsule', souvenir: 'Souvenir package', package: 'Package' })[c.kind] || ''}</div>
+        <div class="kicker">Unlock container · ${({ case: 'Weapon case', agents: 'Agent locker', autograph: 'Autograph capsule', capsule: 'Sticker capsule', souvenir: 'Souvenir package', package: 'Package' })[c.kind] || ''}</div>
         <h2>${esc(c.n)}</h2>
         ${c.kind === 'souvenir' ? `<div class="muted" style="margin:-4px 0 10px">${esc(D.events[c.ev]?.n || '')} · every drop is a Souvenir with that Major's team stickers${D.events[c.ev] && Object.keys(D.events[c.ev].mvp).length ? ' and a gold MVP autograph' : ''}${c.col && D.colById[c.col] ? ` · <a href="#" data-col="${c.col}">${esc(D.colById[c.col].n)}</a>` : ''}</div>` : ''}
         ${c.kind === 'package' && c.col && D.colById[c.col] ? `<div class="muted" style="margin:-4px 0 10px"><a href="#" data-col="${c.col}">${esc(D.colById[c.col].n)}</a></div>` : ''}
@@ -315,9 +293,7 @@ function renderCase(root, c) {
             <button class="buy-card both" data-buyboth title="A case and its key, both to your inventory"><span><small>Case + key</small><b>×${view.qty} · ${money((c.price + D.keyPrice) * view.qty)}</b><i>ready to open</i></span></button>` : ''}
         </div>
         <div class="own-line muted">${key ? `Cases go to your inventory and open with a <b>${esc(D.keys[key].n)}</b> (one key per case).` : 'Cases go to your inventory. This one needs no key.'}${missing.length ? ` <span class="red">To open ×${view.qty} you need ${esc(missing.join(' and '))}.</span>` : ''}</div>
-        <div class="odds">${c.kind === 'chickens'
-          ? tiers.map(([k, w]) => `<span style="--rc:${rarityColor(+k)}">${['', '', 'Barnyard', 'Free-Range', 'Prize', 'Legendary', '★ Mythic'][k]}: ${(w * 100).toFixed(2)}%</span>`).join('')
-          : rarityOddsHTML(c, tiers)}</div>
+        <div class="odds">${rarityOddsHTML(c, tiers)}</div>
       </div>
     </div>
     <div class="section-title">Contains one of the following</div>
@@ -351,11 +327,10 @@ function showContentPreview(c, kind, ids, odds) {
   const make = {
     sticker: () => I.makeStickerItem(D.stickers[ids[0]], c.n),
     agent: () => I.makeAgentItem(D.agents[ids[0]], c.n),
-    chicken: () => ({ uid: 'preview', t: 'chicken', id: ids[0], hat: 'none', fl: 0.5, sd: 1, at: Date.now() }),
   }[kind];
   const item = make();
   const r = I.rarityInfo(item);
-  const price = kind === 'chicken' ? `from ${money(chickenValue(item))}` : money(I.itemValue(item));
+  const price = money(I.itemValue(item));
   const m = openModal({
     title: esc(I.nameParts(item).bottom),
     cls: 'wide',
@@ -613,7 +588,7 @@ export async function openCase(c, n, { uids = null } = {}) {
     toast(esc(e.message), 'bad');
     return;
   }
-  const intro = S.settings.caseIntro !== false && c.kind !== 'chickens' && c.kind !== 'agents'
+  const intro = S.settings.caseIntro !== false && c.kind !== 'agents'
     ? (stage) => playCaseIntro(stage, c, caseImage(c)) : null;
   if (!intro) sfx.open();
   try {
@@ -756,7 +731,7 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro 
 function resultCard(it) {
   const r = I.rarityInfo(it);
   const pat = I.patternInfo(it);
-  const sub = (it.t === 'skin' && it.fl != null ? `${I.wearName(it)} · ${it.fl.toFixed(6)} · Seed ${it.sd}` : it.t === 'chicken' ? `${HAT[it.hat].n} · Feather ${it.fl.toFixed(4)}`
+  const sub = (it.t === 'skin' && it.fl != null ? `${I.wearName(it)} · ${it.fl.toFixed(6)} · Seed ${it.sd}`
     : it.t === 'charm' ? `${r.n} · Pattern #${it.pat.toLocaleString()}` : r.n)
     + (it.sn ? ` · #${it.sn.toLocaleString()}` : '');
   return `<div class="result ${r.rank >= 6 ? 'gold' : ''} ${it.as ? 'autosold' : ''}" style="--rc:${r.c}" data-uid="${it.uid}">

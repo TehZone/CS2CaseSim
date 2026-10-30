@@ -3,6 +3,7 @@
 // value between players (trades, gambling escrow and payouts) is written for everyone involved in one transaction
 // before the request is answered.
 import { upgradeState } from '../src/js/engine/economy.js';
+import { retireOld } from '../src/js/engine/items.js';
 
 const FLUSH_MS = 2000;
 const IDLE_EVICT_MS = 10 * 60 * 1000;
@@ -26,6 +27,7 @@ export class Store {
     if (e) return e;
     e = { id: rows[0].id, name: rows[0].name, st: upgradeState(typeof rows[0].state === 'string' ? JSON.parse(rows[0].state) : rows[0].state), dirty: false, touched: Date.now() };
     delete e.st.settings;
+    if (retireOld(e.st).n) e.dirty = true; // older accounts' chickens and pro cards, sold once
     this.cache.set(id, e);
     return e;
   }

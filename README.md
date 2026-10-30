@@ -371,7 +371,7 @@ What's in a match:
 ## Features
 - Money comes from playing matches in Play: a win or a draw pays $250, a loss $100, and every kill $20 and assist $10
   (online too, for a match the server saw start, once, and only what it could have earned). There's no clicker or
-  passive income, and the team manager's events pay pack tokens, not money
+  passive income
 - Profile levels like CS2's: 5,000 XP a level, from 1 to 40 (a win or draw is 250 XP, a loss 100, each kill 20, each assist
   10 and each round your team wins 50). Past level 40 you earn the next Service Medal and start again at level 1: every
   colour of the 2026 medal first, then 2025's, back to the first ever (2015's), 69 in all. Your level, XP bar and medal
@@ -400,7 +400,7 @@ What's in a match:
   to make them an offer from. Your own profile: name, avatar (any agent), country, summary, a CS2 map behind it and up
   to six items to show off
 - 42 real weapon cases, 150 souvenir packages (each Major's team stickers and gold MVP autographs), packages
-  (X-Ray, Anubis, Genesis/Dead Hand Terminals), 229 sticker/autograph capsules, an Agent Locker and a Chicken Coop Crate
+  (X-Ray, Anubis, Genesis/Dead Hand Terminals), 229 sticker/autograph capsules and an Agent Locker
 - All 94 weapon collections (e.g. Cobblestone with the Dragon Lore), browsable with odds and prices
 - Trade Up Contracts with CS2's rules: 10 skins of one rarity, ticket-based odds per collection, normalised output
   floats, StatTrak contracts, and 5-Covert contracts into a knife or gloves
@@ -412,10 +412,8 @@ What's in a match:
   for $0.99). Sticker Slabs turn any sticker into a charm (the sticker plus $0.44, the cheapest slabs' going rate)
 - Gambling (virtual money, no house edge, provably fair with a verify button): case battles (1v1 to 2v2, normal or
   crazy), coinflip and jackpot, against bots or, online, other players
-- Team manager: 2,570 pro player cards (one per player per Major, rated from real Major results), packs, a
-  five-role lineup with chemistry, round-by-round match simulation, cups, LANs and Majors against real rosters
 - Online play (optional): accounts on your own server, trading between players, live lobbies; see DEPLOY.md
-- Item Database (like CSFloat's): search every skin, knife, glove, sticker, charm, agent and pro card in the game; open one to
+- Item Database (like CSFloat's): search every skin, knife, glove, sticker, charm and agent in the game; open one to
   see every copy that exists with its owner, float, seed, pattern and stickers (online: everyone on the server;
   offline: you and the NPC players, each owner a link to their profile), its float rank (#1-#3 lowest and highest, StatTrak™ and Souvenir copies ranked apart), the
   guns a sticker is applied to, and a skin's current Market listings. Your own top floats carry the same #1-#3 badge
@@ -441,7 +439,7 @@ npm run vendor    # copy three.js into src/vendor (with the patch in scripts/cop
 npm start         # run the game
 npm run dev       # browser preview at http://localhost:5178
 npm run dist      # build dist/CS2-Case-Simulator-Setup.exe and dist/CS2-Case-Simulator.exe
-node scripts/test-engine.mjs            # game rule checks (odds, trade-ups, armory, gambling, team manager)
+node scripts/test-engine.mjs            # game rule checks (odds, trade-ups, armory, gambling, NPCs)
 node scripts/test-play.mjs              # Play mode checks (traces, movement, ladders, rules, overtime, smoke, modes)
 cd server && npm install && cd ..       # multiplayer server dependencies
 PGLITE_DIR=server/.data node server/index.mjs   # run the server locally (port 8787)

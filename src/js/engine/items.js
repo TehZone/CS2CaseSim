@@ -2,7 +2,7 @@
 // Shared by the client and the multiplayer server (no DOM). Images live in the client's items.js.
 import { D, WEARS, WEAR_BY_KEY, wearOf, RARITY, rarityColor, caseTiers, DOPPLER_PHASE_WEIGHT, eventShort } from './data.js';
 import { analyzePattern } from './patterns.js';
-import { BREED, HAT, rollChicken, chickenValue, chickenName } from './chickens.js';
+import { BREED, chickenValue, chickenName } from './chickens.js';
 import { rand, pick, pickWeighted, round2, uid } from './util.js';
 
 export const MAX_STICKERS = 5;
@@ -38,7 +38,6 @@ export const makeAgentItem = (a, src = '') => ({ uid: uid(), t: 'agent', id: a.i
 // A case (or capsule, package...) in your inventory, and a key that opens one.
 export const makeCrateItem = (c, src = '') => ({ uid: uid(), t: 'crate', id: c.id, at: Date.now(), src });
 export const makeKeyItem = (keyId, src = '') => ({ uid: uid(), t: 'key', id: keyId, at: Date.now(), src });
-export const makeProItem = (p, src = '') => ({ uid: uid(), t: 'pro', id: p.id, at: Date.now(), src });
 
 // ---- charms ----------------------------------------------------------------------------------
 // A charm hangs off a gun's keychain point. Each copy has a pattern (1-100,000, like CS2's): which way it hangs and turns.
@@ -108,7 +107,6 @@ export function souvenirStickers(ev, r = rand) {
 
 // ---- rolling a case ------------------------------------------------------------------------
 export function rollFromCase(c, r = rand) {
-  if (c.kind === 'chickens') return rollChicken(r, c.n);
   const tier = pickWeighted(caseTiers(c), r);
   if (SKIN_KINDS.has(c.kind)) {
     let skinId;
@@ -132,20 +130,15 @@ export function rollFromCase(c, r = rand) {
   return c.kind === 'agents' ? makeAgentItem(D.agents[id], c.n) : makeStickerItem(D.stickers[id], c.n);
 }
 
-// A visual-only filler entry for the roulette strip. Fillers never show the gold "Rare Special Item"
-// (or ★ chickens): gold only appears in the reel when it is what you actually pulled.
+// A visual-only filler entry for the roulette strip. Fillers never show the gold "Rare Special Item": gold only
+// appears in the reel when it is what you actually pulled.
 export function fakeRoll(c, r = rand) {
-  if (c.kind === 'chickens') {
-    let ch;
-    do { ch = rollChicken(r); } while (BREED[ch.id].r >= 6);
-    return ch;
-  }
   const tier = pickWeighted(caseTiers(c).filter(([k]) => k !== 'rare'), r);
   if (SKIN_KINDS.has(c.kind)) return { t: 'skin', id: pick(c.pools[tier], r), fl: 0.2, sv: c.kind === 'souvenir' };
   return { t: c.kind === 'agents' ? 'agent' : c.kind === 'charms' ? 'charm' : 'sticker', id: pick(c.pools[tier], r) };
 }
 
-// ---- pro player cards ------------------------------------------------------------------------
+// ---- pro player cards (the old Team manager's: kept to price the ones in older saves, see retireOld) ----------------
 export const PRO_RARITY = [
   { n: 'Bronze', c: '#b9824f', min: 60, p: 0.12 },
   { n: 'Silver', c: '#c3ccd8', min: 74, p: 0.45 },
@@ -154,7 +147,6 @@ export const PRO_RARITY = [
   { n: 'Legend', c: '#ff5cdb', min: 90, p: 30 },
 ];
 export const proTier = (ovr) => PRO_RARITY.reduce((t, x, i) => (ovr >= x.min ? i : t), 0);
-export const proTeamName = (p) => D.proTeams[p.tm]?.n || '';
 export const proTeamTag = (p) => D.proTeams[p.tm]?.tag || '';
 export function proValue(p) {
   const t = proTier(p.ovr);
@@ -332,6 +324,19 @@ export function backfillSerials(st) {
   st.serials = counts;
 }
 
+// Chickens (the old Chicken Coop Crate) and pro player cards (the old Team manager) are no longer in the game: an older
+// save's are sold once when it loads, for what they're worth. Returns { n, value } (n 0: there were none).
+const RETIRED = new Set(['chicken', 'pro']);
+export function retireOld(st) {
+  const old = st.inv.filter((it) => RETIRED.has(it.t));
+  if (!old.length) return { n: 0, value: 0 };
+  const value = round2(old.reduce((s, it) => s + itemValue(it), 0));
+  st.inv = st.inv.filter((it) => !RETIRED.has(it.t));
+  st.money = round2(st.money + value);
+  st.stats.sold = round2((st.stats.sold || 0) + value);
+  return { n: old.length, value };
+}
+
 export function serialLabel(sn) {
   if (!sn) return '';
   return sn === 1 ? 'First ever unboxed' : sn <= 10 ? 'Top 10' : sn <= 100 ? 'Top 100' : isSpecialSerial(sn) ? 'Special number' : '';
@@ -363,9 +368,9 @@ export function itemValue(item) {
 
 // Auto-sell: does a new drop match the player's rules? (see AUTO_SELL_DEFAULT in economy.js)
 export function autoSellMatch(item, rules) {
-  if (!rules?.on || item.t === 'pro') return false;
+  if (!rules?.on) return false;
   const rank = rarityRank(item);
-  if (rank >= 6) return false; // knives, gloves, ★ chickens: never
+  if (rank >= 6) return false; // knives, gloves: never
   if (rules.keepStt && item.stt) return false;
   if (rules.keepRare && item.t === 'skin' && (patternInfo(item).mult > 1 || floatMultiplier(item) > 1)) return false;
   const byValue = rules.below > 0 && itemValue(item) < rules.below;
@@ -396,4 +401,4 @@ export function floatString(f) {
   return f == null ? '—' : String(Math.fround(f));
 }
 
-export { WEARS, HAT };
+export { WEARS };

@@ -1,6 +1,6 @@
 // Shared UI: cards, modals, toasts, tooltips, context menus, item detail, 3D inspect overlay, selling.
 import { esc, money, imgUrl } from './util.js';
-import { D, WEARS, wearOf, WEAR_BY_KEY, rarityColor, eventName, keyFor } from './data.js';
+import { D, WEARS, wearOf, WEAR_BY_KEY, rarityColor, keyFor } from './data.js';
 import * as I from './items.js';
 import { S, emit, save } from './state.js';
 import { act } from './backend.js';
@@ -9,7 +9,6 @@ import { inspectView } from './inspect.js';
 import { cs2VanityMaps, cs2Status } from './cs2/api.js';
 import { placementFromHit, rehangCharm } from './cs2/charm.js';
 import { composeItem, alphaBox } from './composite.js';
-import { featherMult, HAT, BREED } from './chickens.js';
 import { openStickerEditor } from './stickerEditor.js';
 import { TIER_LABEL } from './patterns.js';
 import { isEquipped, slotName } from './loadout.js';
@@ -198,7 +197,7 @@ export function itemCard(item, { selectable = false, selected = false, extra = '
   // Skins show the wear abbreviation (coloured like its stretch of the wear bar) and the float, like CS2's inventory.
   const wk = item.t === 'skin' && item.fl != null ? wearOf(item.fl) : null;
   const wear = wk ? `<b class="wk" style="--wc:${WEAR_BY_KEY[wk].c}" title="${WEAR_BY_KEY[wk].n}">${wk}</b>${item.fl.toFixed(4)}`
-    : esc(item.t === 'chicken' ? HAT[item.hat].n : r.n);
+    : esc(r.n);
   const stk = item.stk?.length ? `<div class="stickers">${item.stk.map((s) => `<img src="${imgUrl(D.stickers[s.id]?.img, 's')}">`).join('')}</div>` : '';
   const kc = item.kc ? charmBadge(I.attachedCharm(item)) : '';
   return `<div class="card ${selected ? 'selected' : ''} ${extra}" data-uid="${item.uid}" style="--rc:${r.c}">
@@ -390,14 +389,6 @@ function detailBody(item) {
     kv.push(['Type', d.ty || 'Sticker']);
   } else if (item.t === 'agent') {
     kv.push(['Team', d.team === 'T' ? 'Terrorist' : 'Counter-Terrorist']);
-  } else if (item.t === 'pro') {
-    kv.push(['Overall', d.ovr], ['Role', d.role], ['Team', esc(I.proTeamName(d))], ['Major', esc(eventName(d.ev))]);
-    kv.push(['Aim / Utility / Positioning / Clutch', d.a.join(' / ')]);
-    if (d.geo) kv.push(['Country', esc(d.geo)]);
-  } else if (item.t === 'chicken') {
-    kv.push(['Breed', BREED[item.id].n.replace('★ ', '')]);
-    kv.push(['Hat', HAT[item.hat].n]);
-    kv.push(['Feather float', `<span class="money">${I.floatString(item.fl)}</span>`]);
   } else if (item.t === 'crate') {
     const key = keyFor(d);
     kv.push(['Opens with', key ? `${esc(D.keys[key].n)} <span class="muted">· ${S.inv.filter((it) => it.t === 'key' && it.id === key && !it.lk).length} in your inventory</span>` : 'No key needed']);
@@ -405,7 +396,7 @@ function detailBody(item) {
     kv.push(['Opens', d.cases.map((id) => esc(D.caseById[id]?.n || '?')).join(', ')]);
   }
   if (item.sn) kv.push(['Serial number', `#${item.sn.toLocaleString()}${I.serialLabel(item.sn) ? ` <span class="muted">· ${I.serialLabel(item.sn)}</span>` : ''}`]);
-  else if (['skin', 'sticker', 'agent', 'chicken', 'charm'].includes(item.t)) kv.push(['Serial number', '<span class="muted">None (only unboxed items are numbered)</span>']);
+  else if (['skin', 'sticker', 'agent', 'charm'].includes(item.t)) kv.push(['Serial number', '<span class="muted">None (only unboxed items are numbered)</span>']);
   if (item.src) kv.push(['Obtained from', esc(item.src)]);
 
   const lines = [];
@@ -419,10 +410,6 @@ function detailBody(item) {
     if (d.slab) lines.push(['Sticker', money(D.stickers[item.sk]?.p || 0)], ['Sticker Slab', '+' + money(D.slab.p)]);
     else lines.push(['Market price', money(vb.base)]);
     if (vb.pat.mult !== 1) lines.push([`Pattern (${esc(vb.pat.label)})`, '×' + vb.pat.mult]);
-  } else if (item.t === 'chicken') {
-    lines.push(['Breed value', money(BREED[item.id].v)]);
-    lines.push(['Hat multiplier', '×' + HAT[item.hat].m]);
-    lines.push(['Feather premium', '×' + featherMult(item.fl).toFixed(2)]);
   } else {
     lines.push(['Market price', money(vb.base)]);
   }

@@ -7,7 +7,6 @@ import { D, keyFor } from './data.js';
 import * as I from './items.js';
 import { tradeupContract, rollTradeup } from './tradeup.js';
 import { PASS_PRICE, PASS_STARS, findLiveOffer, offerBox, starsFromSpend } from './armory.js';
-import * as M from './manager.js';
 import * as G from './gamble.js';
 import * as MK from './market.js';
 import * as R from './ranks.js';
@@ -609,105 +608,6 @@ export const ACTIONS = {
     give(ctx, items.filter((i) => !i.as));
     stats(ctx).armory += n;
     return { item: items[0], items, offer: o, autoSold };
-  },
-
-  'team.pack'(ctx, { pack, token = false }) {
-    const def = M.packById(String(pack));
-    if (!def || (def.perEvent && !M.packEvents().includes(+String(pack).split(':')[1]))) fail('Unknown pack');
-    if (token) {
-      const t = ctx.st.team.tokens[def.id] || 0;
-      if (t < 1) fail('No pack token');
-      ctx.st.team.tokens = { ...ctx.st.team.tokens, [def.id]: t - 1 };
-      ctx.dirty.add('team');
-    } else spend(ctx, M.packPrice(String(pack)));
-    const items = M.openPack(String(pack), ctx.rng);
-    for (const it of items) it.nw = true;
-    give(ctx, items);
-    stats(ctx).packs++;
-    return { items };
-  },
-  'team.set'(ctx, { slots = {}, bench = [], name }) {
-    const used = new Set();
-    const check = (u) => {
-      if (u == null) return null;
-      const it = findOwned(ctx, String(u));
-      if (it.t !== 'pro') fail('Only pro player cards can be in your team');
-      if (used.has(it.uid)) fail('A card can only be in one slot');
-      const pid = D.pros[it.id].pid;
-      if ([...used].some((x) => D.pros[ctx.st.inv.find((i) => i.uid === x).id].pid === pid)) fail('That player is already in your team');
-      used.add(it.uid);
-      return it.uid;
-    };
-    const t = { ...ctx.st.team, slots: {}, bench: [] };
-    for (const s of M.SLOTS) t.slots[s] = check(slots[s]);
-    t.bench = [0, 1].map((i) => check(bench[i]));
-    if (typeof name === 'string') t.name = name.replace(/[<>]/g, '').trim().slice(0, 24) || 'My Team';
-    ctx.st.team = t;
-    ctx.dirty.add('team');
-  },
-  'team.match'(ctx, { opp }) {
-    const lineup = M.lineupFromState(ctx.st);
-    const mine = M.teamRating(lineup);
-    if (!mine.complete) fail('Fill all five roles first');
-    const other = M.rosterTeam(String(opp));
-    if (!other) fail('Unknown opponent');
-    const match = M.simulateMatch({ name: ctx.st.team.name, lineup }, other, ctx.rng);
-    const won = match.winner === 'A';
-    const t = ctx.st.team;
-    const exp = 1 / (1 + Math.pow(10, (other.rating * 12 + 100 - t.elo) / 400));
-    ctx.st.team = {
-      ...t, w: t.w + (won ? 1 : 0), l: t.l + (won ? 0 : 1), elo: Math.round(t.elo + 24 * ((won ? 1 : 0) - exp)),
-      history: [{ opp: other.name, score: match.score, won, at: ctx.now }, ...t.history].slice(0, 20),
-    };
-    ctx.dirty.add('team');
-    stats(ctx).matches++;
-    return { match, opp: { key: other.key, name: other.name, rating: other.rating }, mine: mine.rating };
-  },
-  'team.cupStart'(ctx, { type }) {
-    if (!M.CUPS[type]) fail('Unknown event');
-    const mine = M.teamRating(M.lineupFromState(ctx.st));
-    if (!mine.complete) fail('Fill all five roles first');
-    if (ctx.st.team.cup && !ctx.st.team.cup.done) fail('Finish your current event first');
-    ctx.st.team = { ...ctx.st.team, cup: M.newCup(type, mine.rating, ctx.rng) };
-    ctx.dirty.add('team');
-    return { cup: ctx.st.team.cup };
-  },
-  'team.cupPlay'(ctx) {
-    const cup = ctx.st.team.cup;
-    if (!cup || cup.done) fail('No event in progress');
-    const lineup = M.lineupFromState(ctx.st);
-    const mine = M.teamRating(lineup);
-    if (!mine.complete) fail('Fill all five roles first');
-    const me = { name: ctx.st.team.name, lineup };
-    const def = M.CUPS[cup.type];
-    const next = [], results = [];
-    let myMatch = null, myOpp = null;
-    for (let i = 0; i < cup.alive.length; i += 2) {
-      const a = cup.alive[i], b = cup.alive[i + 1];
-      const ta = a === 'me' ? me : M.rosterTeam(a), tb = b === 'me' ? me : M.rosterTeam(b);
-      const m = M.simulateMatch(ta, tb, ctx.rng);
-      const w = m.winner === 'A' ? a : b;
-      next.push(w);
-      results.push({ a, b, score: m.score, w });
-      if (a === 'me' || b === 'me') { myMatch = a === 'me' ? m : { ...m, score: [m.score[1], m.score[0]], winner: m.winner === 'A' ? 'B' : 'A' }; myOpp = a === 'me' ? b : a; }
-    }
-    const out = { ...cup, round: cup.round + 1, results: [...cup.results, results], alive: next };
-    let token = null;
-    const stillIn = next.includes('me');
-    if (!stillIn || next.length === 1) {
-      out.done = true;
-      out.place = stillIn ? 1 : cup.alive.length / 2 + 1;
-      if (out.place === 1) token = def.token;
-    }
-    const tokens = token ? { ...ctx.st.team.tokens, [token]: (ctx.st.team.tokens[token] || 0) + 1 } : ctx.st.team.tokens;
-    ctx.st.team = { ...ctx.st.team, cup: out, tokens };
-    ctx.dirty.add('team');
-    stats(ctx).matches++;
-    return { match: myMatch, opp: myOpp, oppName: M.teamLabel(myOpp), cup: out, token };
-  },
-  'team.cupLeave'(ctx) {
-    ctx.st.team = { ...ctx.st.team, cup: null };
-    ctx.dirty.add('team');
   },
 
   // ---- NPC players (offline only, see engine/npcs.js) ----

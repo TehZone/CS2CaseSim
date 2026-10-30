@@ -1,4 +1,4 @@
-// Engine checks: odds, armory rotation, trade-up rules, provably-fair gambling, team manager and actions.
+// Engine checks: odds, armory rotation, trade-up rules, provably-fair gambling and actions.
 //   node scripts/test-engine.mjs
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,7 +13,6 @@ const I = await E('items');
 const T = await E('tradeup');
 const A = await E('armory');
 const G = await E('gamble');
-const M = await E('manager');
 const ACT = await E('actions');
 const { freshState } = await E('economy');
 const { mulberry32, round2 } = await E('util');
@@ -202,24 +201,6 @@ function tierFreq(box, n) {
   check('battle winners take every item', shared === b1.rounds.flat().length);
 }
 
-// ---- team manager -------------------------------------------------------------------------------
-{
-  const teams = M.allRosterTeams();
-  const nearT = (r) => teams.reduce((a, b) => (Math.abs(b.rating - r) < Math.abs(a.rating - r) ? b : a));
-  const winRate = (d) => { const A2 = nearT(80 + d), B = nearT(80); let w = 0; for (let i = 0; i < 300; i++) if (M.simulateMatch(A2, B, rng).winner === 'A') w++; return w / 300; };
-  const w0 = winRate(0), w5 = winRate(5), w12 = winRate(12);
-  check('match sim: better teams win more often', w0 < w5 && w5 < w12 && w12 > 0.85 && w0 > 0.3 && w0 < 0.7, `even ${w0.toFixed(2)}, +5 ${w5.toFixed(2)}, +12 ${w12.toFixed(2)}`);
-  const m = M.simulateMatch(nearT(85), nearT(84), rng);
-  check('matches end 13-x or in overtime', (Math.max(...m.score) === 13 && Math.min(...m.score) <= 11) || (m.overtime && Math.abs(m.score[0] - m.score[1]) >= 1), m.score.join('-'));
-  const cards = M.openPack('premium', rng);
-  check('premium pack has 5 cards with a Gold+', cards.length === 5 && cards.some((c) => I.proTier(D.pros[c.id].ovr) >= 2));
-  for (const p of M.PACKS) {
-    const id = p.perEvent ? 'major:' + M.packEvents()[0] : p.id;
-    const ev = M.packEV(p, p.perEvent ? M.packEvents()[0] : null);
-    check(`${p.n} returns ~85% (${id} $${M.packPrice(id)})`, near(ev / M.packPrice(id), 0.85, 0.06));
-  }
-}
-
 // ---- actions --------------------------------------------------------------------------------------
 {
   const st = freshState();
@@ -297,8 +278,6 @@ function tierFreq(box, n) {
   const offer = A.armoryOffers(w.i).offers[0];
   const red = run('armory.redeem', { offer: offer.id });
   check('armory redeem spends stars and gives an item', st.stars === 40 - offer.stars && red.r.item);
-  const pk = run('team.pack', { pack: 'legend' });
-  const cards = pk.r.items;
   const flip = run('gamble.coinflip', { money: 10, side: 'ct', clientSeed: 'x' });
   check('coinflip settles with the revealed seed', flip.r.result === G.coinflipResult(flip.r.fair.serverSeed, flip.r.fair.clientSeed));
   const m0 = st.money;
@@ -306,20 +285,6 @@ function tierFreq(box, n) {
   check('bot battle charges the cost and pays out the winner', near(st.money, m0 - bat.r.cost, 1e-9) && (bat.r.won ? bat.r.prize.length === 6 : bat.r.prize.length === 0));
   const jp = run('gamble.jackpot', { money: 5, bots: 3, clientSeed: 'z' });
   check('jackpot vs bots has 4 entries', jp.r.entries.length === 4);
-  // Fill a team and play a match.
-  for (let i = 0; i < 4; i++) run('team.pack', { pack: 'premium' });
-  const owned = st.inv.filter((i) => i.t === 'pro');
-  const pick = M.autoLineup([...new Map(owned.map((it) => [D.pros[it.id].pid, D.pros[it.id]])).values()]);
-  const slots = Object.fromEntries(M.SLOTS.map((s) => [s, owned.find((it) => it.id === pick[s].id).uid]));
-  run('team.set', { slots });
-  const mBefore = st.money;
-  const mt = run('team.match', { opp: M.allRosterTeams()[100].key });
-  check('team match plays out (and pays no money: matches in Play do)', mt.r.match.rounds.length >= 13 && st.money === mBefore);
-  run('team.cupStart', { type: 'lan' });
-  let cup;
-  for (let k = 0; k < 4; k++) { cup = run('team.cupPlay').r.cup; if (cup.done) break; }
-  check('LAN event plays to a finish', cup.done && cup.place >= 1, 'place ' + cup.place);
-  void cards;
 }
 
 // ---- CS:GO competitive ranks ----------------------------------------------------------------------
@@ -498,6 +463,21 @@ function tierFreq(box, n) {
   const seen = {};
   check('online, the server hook numbers them (not the save)', r.items.every((it) => it.sn === (seen[I.serialKey(it)] = (seen[I.serialKey(it)] || 0) + 1))
     && !('serials' in ACT.delta(ctx).set) && JSON.stringify(st.serials) === JSON.stringify(before));
+}
+
+// ---- older saves: chickens and pro cards are sold on load ----------------------------------------------------
+{
+  const { upgradeState } = await E('economy');
+  const pro = Object.values(D.pros)[0];
+  const old = { ...freshState(), money: 5, team: { name: 'My Team', slots: {} },
+    inv: [{ uid: 'c1', t: 'chicken', id: 'golden', hat: 'crown', fl: 0.2, sd: 1, at: 1 }, { uid: 'p1', t: 'pro', id: pro.id, at: 2 }, { uid: 'k1', t: 'key', id: Object.keys(D.keys)[0], at: 3 }] };
+  const worth = round2(I.itemValue(old.inv[0]) + I.itemValue(old.inv[1]));
+  const st = upgradeState(JSON.parse(JSON.stringify(old)));
+  const ret = I.retireOld(st);
+  check("an older save's chickens and pro cards are sold for their value (the rest stays)", ret.n === 2 && near(ret.value, worth, 1e-9)
+    && near(st.money, 5 + worth, 1e-9) && st.inv.length === 1 && st.inv[0].uid === 'k1' && !('team' in st), `$${worth}`);
+  check('and only once', I.retireOld(st).n === 0 && near(st.money, 5 + worth, 1e-9));
+  check('no Chicken Coop Crate or rosters any more', !D.cases.some((c) => c.kind === 'chickens') && !('rosters' in D));
 }
 
 // ---- item database: float ranks -----------------------------------------------------------------------------

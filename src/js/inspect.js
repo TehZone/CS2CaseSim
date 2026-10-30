@@ -3,7 +3,6 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { composeItem, bleedEdges, normalMapFrom, wearAmount } from './composite.js';
 import { itemDef } from './items.js';
-import { buildChicken } from './chicken3d.js';
 import { cs2Status } from './cs2/api.js';
 import { buildCS2Model } from './cs2/skin.js';
 import { buildCharmModel } from './cs2/charm.js';
@@ -572,13 +571,6 @@ class InspectView {
 
   async buildModel(item) {
     const def = itemDef(item);
-    if (item.t === 'chicken') {
-      const g = buildChicken(item);
-      g.position.y = -1.2;
-      const wrap = new THREE.Group();
-      wrap.add(g);
-      return wrap;
-    }
     // Real CS2 model + CS2's own skin shader when the game is installed (guns and knives).
     if (item.t === 'skin') {
       try {

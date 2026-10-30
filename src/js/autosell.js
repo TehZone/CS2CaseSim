@@ -33,7 +33,7 @@ export function autoSellModal(onChange) {
     title: 'Auto-sell',
     body: `<div style="display:grid;gap:14px;max-width:560px">
       <label class="check" style="font-size:15px;color:var(--text)"><input type="checkbox" data-on ${r.on ? 'checked' : ''}> Auto-sell new drops</label>
-      <div class="muted" style="font-size:12px;line-height:1.5">Applies to cases, souvenir packages, packages, capsules, the Agent Locker, the Chicken Coop Crate and the Armory.
+      <div class="muted" style="font-size:12px;line-height:1.5">Applies to cases, souvenir packages, packages, capsules, the Agent Locker and the Armory.
         A drop is sold right after the reveal if it matches <b>either</b> rule below. Knives, gloves and other ★ items are never auto-sold.</div>
       <div class="panel" style="padding:12px 14px">
         <h3 style="margin-bottom:6px">By amount</h3>

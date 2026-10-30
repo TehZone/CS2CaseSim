@@ -11,7 +11,7 @@ import { iconFor } from '../play/icons.js';
 import { refreshRanks } from '../floatranks.js';
 
 const view = { type: 'all', sort: 'new', q: '', select: false, selected: new Set(), limit: 150 };
-const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['pro', 'Players'], ['chicken', 'Chickens'], ['crate', 'Cases'], ['key', 'Keys']];
+const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['crate', 'Cases'], ['key', 'Keys']];
 let root, off;
 
 function matches(item) {
@@ -21,7 +21,7 @@ function matches(item) {
     if (view.type === 'gun' && !(item.t === 'skin' && !['knife', 'gloves'].includes(d.cat))) return false;
     if (view.type === 'knife' && !(item.t === 'skin' && d.cat === 'knife')) return false;
     if (view.type === 'gloves' && !(item.t === 'skin' && d.cat === 'gloves')) return false;
-    if (['sticker', 'charm', 'agent', 'chicken', 'pro', 'crate', 'key'].includes(view.type) && item.t !== view.type) return false;
+    if (['sticker', 'charm', 'agent', 'crate', 'key'].includes(view.type) && item.t !== view.type) return false;
     if (view.type === 'souvenir' && !item.sv) return false;
   }
   if (view.q && !I.itemName(item).toLowerCase().includes(view.q)) return false;
@@ -33,7 +33,8 @@ const SORTS = {
   old: (a, b) => a.at - b.at,
   vdesc: (a, b) => I.itemValue(b) - I.itemValue(a),
   vasc: (a, b) => I.itemValue(a) - I.itemValue(b),
-  rarity: (a, b) => I.rarityRank(b) - I.rarityRank(a) || I.itemValue(b) - I.itemValue(a),
+  // CS2's "Quality": by rarity, best first (★ knives and gloves on top), StatTrak™ and Souvenir before plain copies.
+  quality: (a, b) => I.rarityRank(b) - I.rarityRank(a) || (b.stt || b.sv ? 1 : 0) - (a.stt || a.sv ? 1 : 0) || I.itemValue(b) - I.itemValue(a),
   float: (a, b) => (a.fl ?? 2) - (b.fl ?? 2),
 };
 
@@ -77,7 +78,7 @@ function draw() {
     <div class="toolbar">
       <div class="seg">${TYPES.map(([k, n]) => `<button data-type="${k}" class="${view.type === k ? 'active' : ''}">${n}</button>`).join('')}</div>
       <input class="input" type="search" placeholder="Search inventory…" value="${esc(view.q)}">
-      <select class="input" data-sort>${[['new', 'Newest'], ['old', 'Oldest'], ['vdesc', 'Value: high → low'], ['vasc', 'Value: low → high'], ['rarity', 'Rarity'], ['float', 'Float: low → high']].map(([k, n]) => `<option value="${k}" ${view.sort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      <select class="input" data-sort>${[['new', 'Newest'], ['old', 'Oldest'], ['vdesc', 'Value: high → low'], ['vasc', 'Value: low → high'], ['quality', 'Quality'], ['float', 'Float: low → high']].map(([k, n]) => `<option value="${k}" ${view.sort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <span class="spacer"></span>
       ${view.select
         ? `<button class="btn" data-a="all">Select all shown</button><button class="btn" data-a="none">Clear</button>
@@ -189,14 +190,13 @@ function bulkSell() {
     foot: `<button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>Sell</button>`,
   });
   const th = m.el.querySelector('[data-th]'), ty = m.el.querySelector('[data-ty]'), pv = m.el.querySelector('[data-preview]');
-  const teamUids = new Set([...Object.values(S.team?.slots || {}), ...(S.team?.bench || [])].filter(Boolean));
-  for (const u of equippedUids()) teamUids.add(u);
+  const keep = new Set(equippedUids());
   const matchesType = (i) => { const prevT = view.type, prevQ = view.q; view.type = ty.value; view.q = ''; const r = matches(i); view.type = prevT; view.q = prevQ; return r; };
   const pick = () => {
     const below = +th.value || 0;
     const ranks = new Set([...m.el.querySelectorAll('[data-rank]:checked')].map((x) => +x.dataset.rank));
-    return S.inv.filter((i) => !i.lk && !teamUids.has(i.uid) && I.rarityRank(i) < 6 && matchesType(i)
-      && ((below > 0 && I.itemValue(i) < below) || (i.t !== 'pro' && ranks.has(I.rarityRank(i)))));
+    return S.inv.filter((i) => !i.lk && !keep.has(i.uid) && I.rarityRank(i) < 6 && matchesType(i)
+      && ((below > 0 && I.itemValue(i) < below) || ranks.has(I.rarityRank(i))));
   };
   const upd = () => { const l = pick(); pv.innerHTML = `${l.length} items · <b class="green">${money(l.reduce((s, i) => s + I.itemValue(i), 0))}</b>`; };
   th.addEventListener('input', upd); ty.addEventListener('change', upd);

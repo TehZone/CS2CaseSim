@@ -16,7 +16,7 @@ import { marketWindow, skinListings, localSold, lowestPrice } from '../engine/ma
 import { floatRanks, countCopies, copyCategory, CATEGORY_NAME, itemKey } from '../engine/database.js';
 
 const PAGE = 60;
-const TYPES = [['all', 'All items'], ['skin', 'Weapon skins'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['pro', 'Pro cards']];
+const TYPES = [['all', 'All items'], ['skin', 'Weapon skins'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents']];
 const WEAPON_CATS = [['all', 'All weapons'], ['rifle', 'Rifles'], ['pistol', 'Pistols'], ['smg', 'SMGs'], ['heavy', 'Heavy']];
 const SORTS = [['owned', 'Most copies'], ['pricey', 'Price: high → low'], ['cheap', 'Price: low → high'], ['rarity', 'Rarity'], ['name', 'Name']];
 const COPY_SORTS = [['low', 'Float: low → high'], ['high', 'Float: high → low'], ['value', 'Value'], ['new', 'Newest']];
@@ -43,7 +43,6 @@ function catalog() {
   for (const s of Object.values(D.stickers)) { const [, a, ...b] = s.n.split(' | '); add('sticker', s, 'sticker', b.length ? `Sticker · ${b.join(' | ')}` : 'Sticker', a || s.n, s.p); }
   for (const c of Object.values(D.charms)) add('charm', c, 'charm', `Charm · ${(D.charmColById[c.col]?.n || '').replace(' Charm Collection', '')}`, c.n.replace('Charm | ', ''), c.p);
   for (const a of Object.values(D.agents)) { const [n, f] = a.n.split(' | '); add('agent', a, 'agent', f || 'Agent', n, a.p); }
-  for (const p of Object.values(D.pros)) add('pro', p, 'pro', `Pro card · ${D.proTeams[p.tm]?.n || ''}`.trim(), I.itemName({ t: 'pro', id: p.id }), I.basePrice({ t: 'pro', id: p.id }));
   return (CATALOG = out);
 }
 
@@ -194,7 +193,7 @@ function drawItem() {
   root.innerHTML = `<div class="page db">
     <div class="page-head"><button class="btn sm ghost" data-back>‹ Item Database</button><h1>${esc(e.bottom)}</h1><span class="sub">${esc(e.top)}</span></div>
     <div class="db-item">
-      <div class="db-hero" style="--rc:${e.rc}"><img src="${imgUrl(e.img, 'l')}" alt=""><div class="rbar"></div>${e.t !== 'pro' ? '<button class="btn sm" data-inspect>Inspect</button>' : ''}</div>
+      <div class="db-hero" style="--rc:${e.rc}"><img src="${imgUrl(e.img, 'l')}" alt=""><div class="rbar"></div><button class="btn sm" data-inspect>Inspect</button></div>
       <div class="db-facts">
         <div class="db-stats">
           <div><b>${all.length.toLocaleString()}</b><span>${all.length === 1 ? 'copy' : 'copies'}</span></div>
@@ -263,7 +262,7 @@ function copyRow(c, i, skin, ranks) {
   const it = c.item, r = ranks.get(it.uid);
   return `<tr class="${r ? 'ranked' : ''}">${skin ? `<td class="db-rank-col"><div class="db-ranks">${rankBadges(r, copyCategory(it))}</div></td><td>${floatCell(it)}</td><td>${it.sd ?? '—'}</td>` : ''}
     <td>${skin ? itemCell(it) : esc(I.itemName(it))}</td><td>${ownerCell(c)}</td><td>${money(I.itemValue(it))}</td>
-    <td>${it.t !== 'pro' ? `<button class="btn sm" data-cinsp="${i}">Inspect</button>` : ''}</td></tr>`;
+    <td><button class="btn sm" data-cinsp="${i}">Inspect</button></td></tr>`;
 }
 
 function inspectCopy(item) {

@@ -1,7 +1,7 @@
 import { $, $$, money, debounce, esc } from './util.js';
 import { act, online } from './backend.js';
 import { loadData } from './data.js';
-import { S, loadState, on, saveSync, save } from './state.js';
+import { S, loadState, on, saveSync, save, retiredOnLoad } from './state.js';
 import { itemValue } from './items.js';
 import { toast, topModal, openModal, installTooltips } from './ui.js';
 import { initMenu, initMoreMenu } from './menu.js';
@@ -14,7 +14,6 @@ import * as tradeup from './pages/tradeup.js';
 import * as armory from './pages/armory.js';
 import * as market from './pages/market.js';
 import * as gamble from './pages/gamble.js';
-import * as team from './pages/team.js';
 import * as trade from './pages/trade.js';
 import * as stats from './pages/stats.js';
 import * as database from './pages/database.js';
@@ -24,7 +23,7 @@ import { npcOf, crowd, inventoryOf } from './engine/npcs.js';
 import { initMatchmaking } from './matchmaking.js';
 import { initProfile } from './profile.js';
 
-const PAGES = { play, cases, inventory, tradeup, armory, market, database, gamble, team, trade, stats, community };
+const PAGES = { play, cases, inventory, tradeup, armory, market, database, gamble, trade, stats, community };
 let current = null, currentName = 'cases';
 
 function go(name) {
@@ -194,6 +193,10 @@ async function boot() {
   updateAccount();
   net.resume();
   setTimeout(keepPrepared, 10000); // after a CS2 update, everything prepared is brought up to date in the background
+  if (retiredOnLoad?.n) {
+    save();
+    toast(`Chickens and player cards are no longer in the game, so ${retiredOnLoad.n === 1 ? 'yours was' : `your ${retiredOnLoad.n} were`} sold for <b class="green">${money(retiredOnLoad.value)}</b>.`, 'gold');
+  }
   if (S.stats.opened === 0 && S.inv.length === 0 && S.money === 10) {
     toast('Welcome! You start with <b class="green">$10.00</b>. Earn more by playing matches in <b>Play</b>: $250 a win, $100 a loss, $20 a kill.', 'gold');
   }
