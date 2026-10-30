@@ -647,7 +647,21 @@ function slotHTML(entry, showAll = false) {
   return `<div class="slot" style="--rc:${r.c}"><img src="${I.itemImage(entry, 's')}"><div class="sn">${esc(np.bottom)}</div></div>`;
 }
 
-const WIN_INDEX = 58, REEL_LEN = 66;
+// CS2's unlock reel (panorama popup_capability_decodable): it scrolls 32 tiles in 6 s on cubic-bezier(.075, .82, .165, 1),
+// stops 10-90% into the item and ticks on its own schedule (not per tile). Fast open is the shorter spin.
+const START_INDEX = 4, WIN_INDEX = 36, REEL_LEN = 40;
+const CS2_SPIN = 6000;
+const CS2_TICKS = [0, 63, 125, 188, 250, 313, 375, 438, 500, 563, 625, 688, 750, 813, 875, 938, 1000, 1063, 1125, 1188, 1250, 1313,
+  1351, 1375, 1483, 1620, 1701, 1786, 1872, 2003, 2154, 2313, 2466, 2615, 2773, 2941, 3104, 3339, 3630, 3953, 4385, 5004];
+function cubicBezier(x1, y1, x2, y2) {
+  const f = (a, b, u) => 3 * a * u * (1 - u) ** 2 + 3 * b * u * u * (1 - u) + u ** 3;
+  return (t) => {
+    let lo = 0, hi = 1, u = t;
+    for (let i = 0; i < 24; i++) { u = (lo + hi) / 2; if (f(x1, x2, u) < t) lo = u; else hi = u; }
+    return f(y1, y2, u);
+  };
+}
+const cs2Ease = cubicBezier(0.075, 0.82, 0.165, 1), fastEase = (t) => 1 - Math.pow(1 - t, 4.4);
 // `intro(stage)` (optional) plays first in the overlay and returns { done, skip } (see caseintro.js).
 export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro = null } = {}) {
   return new Promise((resolve) => {
@@ -669,16 +683,17 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro 
     const spin = () => requestAnimationFrame(() => {
       const fast = S.settings.fast;
       const anims = reels.map(({ strip, reel }, si) => {
-        const slot = reel.children[0];
-        const slotW = slot.getBoundingClientRect().width + 6;
+        const tileW = reel.children[0].getBoundingClientRect().width;
+        const slotW = tileW + (parseFloat(getComputedStyle(reel).columnGap) || 0);
         const center = strip.clientWidth / 2;
-        const jitter = (Math.random() - 0.5) * slotW * 0.8;
-        const target = WIN_INDEX * slotW + (slotW - 6) / 2 + jitter - center;
-        return { reel, slotW, center, target, dur: (fast ? 2400 : 6200) + si * (fast ? 120 : 350), lastIdx: -1, done: false };
+        const from = START_INDEX * slotW + tileW / 2 - center;
+        const target = WIN_INDEX * slotW + tileW * (0.1 + Math.random() * 0.8) - center;
+        reel.style.transform = `translateX(${-from}px)`;
+        return { reel, slotW, center, from, target, dur: (fast ? 2400 : CS2_SPIN) + si * (fast ? 120 : 350), lastIdx: -1, done: false };
       });
       const start = performance.now();
-      const ease = (t) => 1 - Math.pow(1 - t, 4.4);
-      let finished = false;
+      const ease = fast ? fastEase : cs2Ease;
+      let ticks = 0, finished = false;
       const finish = () => {
         if (finished) return;
         finished = true;
@@ -694,14 +709,18 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro 
         let allDone = true;
         anims.forEach((a, i) => {
           const t = Math.min(1, (now - start) / a.dur);
-          const x = ease(t) * a.target;
+          const x = a.from + ease(t) * (a.target - a.from);
           a.reel.style.transform = `translateX(${-x}px)`;
-          if (i === 0) {
+          if (i === 0 && fast) {
             const idx = Math.floor((x + a.center) / a.slotW);
             if (idx !== a.lastIdx) { a.lastIdx = idx; if (t < 1) sfx.tick(); }
           }
           if (t < 1) allDone = false;
         });
+        if (!fast && ticks < CS2_TICKS.length && now - start >= CS2_TICKS[ticks]) {
+          while (ticks < CS2_TICKS.length && now - start >= CS2_TICKS[ticks]) ticks++;
+          sfx.tick();
+        }
         if (allDone) finish();
         else requestAnimationFrame(step);
       };
