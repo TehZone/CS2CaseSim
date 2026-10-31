@@ -627,6 +627,32 @@ function fakeGame() {
     && zeus.clip === 1 && zeus.rechargeAt === 0 && knife.clip === undefined, 'round start: kept guns get a full magazine and reserve, reloads stop, the Zeus is charged');
 }
 
+// ---- a sniper rifle put away is unscoped: drawn again it's at 1×, even switched from between the AWP's shots -------------
+{
+  const { Arsenal, Gun, refillAmmo } = await import('../src/js/play/weapons.js');
+  const base = { recoilSeed: 1, recoilAngle: [0, 0], recoilAngleVariance: [0, 0], recoilMagnitude: [0, 0], recoilMagnitudeVariance: [0, 0],
+    recoveryStart: 0, recoveryEnd: 1, recoveryStand: 0.3, recoveryStandFinal: 0.3, cycle: [0.2, 0.2], deploy: 1, clip: 5, reserve: 30 };
+  const vm = { play: () => 0.5, has: () => false, role: 'idle', rig: {} };
+  const awp = new Gun({ slot: 'primary', id: 'weapon_awp', name: 'AWP', stats: { ...base, type: 'WEAPONTYPE_SNIPER_RIFLE', zoomLevels: 2, unzoomsAfterShot: true, cycle: [1.45, 1.45], maxSpeed: [200, 100] }, vm });
+  const scar = new Gun({ slot: 'primary', id: 'weapon_scar20', name: 'SCAR-20', stats: { ...base, type: 'WEAPONTYPE_SNIPER_RIFLE', zoomLevels: 2, maxSpeed: [215, 120] }, vm });
+  const usp = new Gun({ slot: 'secondary', id: 'weapon_usp_silencer', name: 'USP-S', stats: { ...base, maxSpeed: [240, 240] }, vm });
+  const game = { player: { ducked: false }, me: { alive: true }, cv: {}, canAttack: () => true, emit() {} };
+  const input = { buttons: 0, takePressed: () => new Set(), takeClicked: () => 0, takeWheel: () => 0 };
+  const ars = new Arsenal(game, {});
+  ars.give('secondary', usp, 0, false); ars.give('primary', awp, 0);
+  // Fired scoped: unscoped through the bolt, scoped again once it's done (as shoot() leaves it).
+  const shot = (t) => { awp.zoom = 0; awp.resumeZoom = 1; awp.nextAttack = t + 1.45; };
+  shot(2); ars.tick(0.016, 4, input);
+  const held = awp.zoom === 1;
+  shot(5); ars.select('secondary', 5.3); ars.select('primary', 5.6); ars.tick(0.016, 8, input);
+  const quick = awp.zoom === 0 && ars.maxSpeed() === 200;
+  awp.zoom = 2; ars.select('secondary', 9); const away = awp.zoom === 0; ars.select('primary', 9.5); ars.tick(0.016, 11, input);
+  ars.give('primary', scar, 12); scar.zoom = 1; ars.select('secondary', 12.5); ars.select('primary', 13); ars.tick(0.016, 15, input);
+  ok(held && quick && away && awp.zoom === 0 && scar.zoom === 0, 'sniper scope: a switch unscopes it, and it stays at 1× when drawn again, even switched from mid-bolt');
+  awp.zoom = 1; awp.resumeZoom = 1; refillAmmo(awp);
+  ok(awp.zoom === 0 && awp.resumeZoom === 0, 'sniper scope: a new round draws it unscoped');
+}
+
 // ---- CS2's binds: key names, older saves' keys, scroll jump, mouse buttons, console commands -------------------------
 {
   const { Input, keyName, bindTable, DEFAULT_BINDS } = await import('../src/js/play/input.js');

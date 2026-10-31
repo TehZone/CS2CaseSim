@@ -75,13 +75,14 @@ export class Gun {
 }
 
 // A new round: like CS2, every gun you still carry is topped up to a full magazine and full reserve, a reload in
-// progress is cut short, and a used Zeus is charged again.
+// progress is cut short, a used Zeus is charged again, and a sniper rifle is drawn unscoped.
 export function refillAmmo(g) {
   if (!g || g.melee || g.nade || g.id === 'weapon_c4' || g.stats.clip == null) return;
   g.clip = g.stats.clip;
   g.reserve = g.stats.reserve ?? g.reserve;
   g.reloading = false; g.shellReload = false; g.reloadEnd = 0;
   g.cockAt = null; g.burstLeft = 0; g.rechargeAt = 0; g.recoilIndex = 0;
+  g.zoom = 0; g.resumeZoom = 0;
 }
 
 export class Arsenal {
@@ -133,7 +134,9 @@ export class Arsenal {
     if (!g || g === this.current) return;
     if (this.current) {
       const c = this.current;
-      c.zoom = 0; c.reloading = false; c.shellReload = false; c.burstLeft = 0; c.cockAt = null;
+      // Put away, a sniper rifle is unscoped, as in CS2: drawn again, it's at 1×, even when it was switched from between
+      // shots (the AWP and the Scout scope back in after the bolt only while you hold them).
+      c.zoom = 0; c.resumeZoom = 0; c.reloading = false; c.shellReload = false; c.burstLeft = 0; c.cockAt = null;
       if (c.pendingSilencer != null) { c.pendingSilencer = null; c.vm.setSilencer?.(c.silenced); } // switching away cancels it
     }
     this.last = this.current;
