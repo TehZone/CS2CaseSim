@@ -20,6 +20,7 @@ import { START_RATING, ACTIVE_DUTY } from './engine/premier.js';
 import { matchedSkill, privateSkill, ratingOfSkill, groupOfSkill } from './play/skill.js';
 import { botIdentities, pickIdentities } from './play/identity.js';
 import { playPrefs, savePlayPrefs, matchSettings, privateRanks } from './pages/play-settings.js';
+import { BINDS_VERSION } from './play/input.js';
 import { premierVeto } from './pages/veto.js';
 
 // How long a search takes before it finds the match (seconds, at random between; and never before the map's loaded).
@@ -74,7 +75,8 @@ function makeOverlay({ loading = false, behind = false } = {}) {
 function gameOptions(p, extra) {
   return {
     sensitivity: p.sensitivity, quality: p.quality,
-    settings: { ...matchSettings(p), onBinds: (t) => { const q = playPrefs(); q.keybinds = t; savePlayPrefs(q); }, onNetGraph: (n) => { const q = playPrefs(); q.netGraph = n; savePlayPrefs(q); } },
+    settings: { ...matchSettings(p), onBinds: (t) => { const q = playPrefs(); q.keybinds = t; q.bindsVersion = BINDS_VERSION; savePlayPrefs(q); }, onNetGraph: (n) => { const q = playPrefs(); q.netGraph = n; savePlayPrefs(q); },
+      onLeftHanded: (on) => { const q = playPrefs(); q.leftHanded = on; savePlayPrefs(q); } },
     ...extra,
   };
 }

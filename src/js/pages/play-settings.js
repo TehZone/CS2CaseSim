@@ -3,12 +3,13 @@
 // other Play preferences; a match reads them when it starts (and from the match's menu, at once).
 import { esc } from '../util.js';
 import { CROSSHAIR, crosshairHtml } from '../play/hud.js';
-import { ACTIONS, COMMANDS, bindTable, keyName, keyLabel } from '../play/input.js';
+import { ACTIONS, BINDS_VERSION, COMMANDS, bindTable, keyName, keyLabel } from '../play/input.js';
 import { tierOf } from '../play/skill.js';
 import { ASPECTS, RESOLUTIONS } from '../play/screen.js';
 
 // keybinds: your binds (CS2 key name -> command), null for the defaults; binds: older saves' per-action keys.
-export const SETTINGS_DEFAULTS = { crosshair: { ...CROSSHAIR }, viewmodel: { fov: 68, x: 1, y: 1, z: -1 }, keybinds: null, binds: {}, musicVolume: 1, voiceVolume: 1, showFps: true,
+// leftHanded: CS2's cl_prefer_lefthanded (H switches hands in a match).
+export const SETTINGS_DEFAULTS = { crosshair: { ...CROSSHAIR }, viewmodel: { fov: 68, x: 1, y: 1, z: -1 }, leftHanded: false, keybinds: null, binds: {}, musicVolume: 1, voiceVolume: 1, showFps: true,
   renderScale: 1, fpsMax: 0, netGraph: false, aspect: 'native', scaling: 'stretched', resolution: 'native' };
 // The frame rate caps on offer (0: the monitor's, with vsync; past it needs the unlock below).
 const FPS_CAPS = [[0, 'Monitor refresh rate'], [60, '60'], [120, '120'], [144, '144'], [240, '240'], [300, '300'], [400, '400']];
@@ -47,6 +48,7 @@ export function settingsHtml(p, show = {}) {
         <div class="ps-presets">${Object.keys(PRESETS).map((k) => `<button class="btn ghost sm" data-preset="${k}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div>
         ${range('fov', 'Field of view', 54, 68, 1, v.fov, 'viewmodel')}${range('x', 'Offset X (sideways)', -2.5, 2.5, 0.5, v.x, 'viewmodel')}
         ${range('y', 'Offset Y (forward)', -2, 2, 0.5, v.y, 'viewmodel')}${range('z', 'Offset Z (height)', -2, 2, 0.5, v.z, 'viewmodel')}
+        ${check('leftHanded', 'Left hand (cl_prefer_lefthanded; Switch hands swaps it in a match)', !!p.leftHanded, 'root')}
         <h4>Sound and HUD</h4>
         ${range('musicVolume', 'Music', 0, 1, 0.05, p.musicVolume ?? 1, 'root')}${range('voiceVolume', 'Radio voices', 0, 1, 0.05, p.voiceVolume ?? 1, 'root')}
         <label>Show fps (cl_showfps)<select class="input" data-s="root.showFps">${[['0', 'Off'], ['1', 'Frame rate'], ['2', 'Frame rate and frame-time graph (stutters show as red spikes)']]
@@ -107,7 +109,7 @@ export function bindSettings(el, prefs, savePrefs, rerender) {
   el.querySelector('[data-relaunch]')?.addEventListener('click', (e) => { e.preventDefault(); window.native.relaunch(); });
   el.querySelectorAll('[data-preset]').forEach((b) => b.addEventListener('click', () => { const q = prefs(); q.viewmodel = { ...PRESETS[b.dataset.preset] }; savePrefs(q); rerender(); }));
   el.querySelector('[data-resetbinds]')?.addEventListener('click', (e) => { e.preventDefault(); const q = prefs(); q.keybinds = null; q.binds = {}; savePrefs(q); rerender(); });
-  const saveTable = (change) => { const q = prefs(); const t = bindTable(q); change(t); q.keybinds = t; savePrefs(q); rerender(); };
+  const saveTable = (change) => { const q = prefs(); const t = bindTable(q); change(t); q.keybinds = t; q.bindsVersion = BINDS_VERSION; savePrefs(q); rerender(); };
   el.querySelectorAll('[data-unbind]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); saveTable((t) => { delete t[b.dataset.unbind]; }); }));
   el.querySelectorAll('[data-bind]').forEach((b) => b.addEventListener('click', (e) => {
     e.preventDefault();
@@ -147,7 +149,7 @@ export const privateRanks = (p) => { const t = 'tier:' + tierOf(p.difficulty); r
 
 // What a match gets from the saved preferences.
 export function matchSettings(p) {
-  return { crosshair: p.crosshair, viewmodel: p.viewmodel, keybinds: bindTable(p), musicVolume: p.musicVolume ?? 1, voiceVolume: p.voiceVolume ?? 1, showFps: p.showFps === 2 ? 2 : p.showFps !== false,
+  return { crosshair: p.crosshair, viewmodel: p.viewmodel, leftHanded: !!p.leftHanded, keybinds: bindTable(p), musicVolume: p.musicVolume ?? 1, voiceVolume: p.voiceVolume ?? 1, showFps: p.showFps === 2 ? 2 : p.showFps !== false,
     renderScale: Math.min(1, Math.max(0.5, p.renderScale ?? 1)), fpsMax: p.fpsMax || 0, netGraph: p.netGraph === 2 ? 2 : !!p.netGraph,
     aspect: ASPECTS[p.aspect] ? p.aspect : 'native', scaling: p.scaling === 'bars' ? 'bars' : 'stretched', resolution: p.resolution || 'native' };
 }

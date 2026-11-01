@@ -177,7 +177,10 @@ What's in a match:
   plays out each way a round ends and screenshots it), CS2's announcer, round music and bomb sounds, and an end screen with
   your K/D/A, ADR, headshots, accuracy, MVPs and multi-kills, then what the match paid (the result, your kills of
   enemies and your assists: see Features) and the XP it gave, with your level's bar, and a level up or a Service Medal
-  with CS2's sound; the scoreboard under it. You can inspect your weapon during freeze time.
+  with CS2's sound; the scoreboard under it. You can inspect your weapon during freeze time. Your viewmodel blends from
+  one animation into the next as CS2's does (F again starts the inspect over from where the weapon is, R takes over from
+  it), and H (CS2's switchhands, cl_prefer_lefthanded; also in the settings) puts it in your left hand, kept for your
+  next matches.
 - Sound plays the way CS2 plays it, by each sound event's own settings in your install: its volume by distance (a
   gunshot loud up close and gone by 2500 units as its distant version takes over, footsteps gone by 1100), the events it
   plays along with it (a gunshot's distant layer, a landing's thud), random pitch and volume, how much a wall in

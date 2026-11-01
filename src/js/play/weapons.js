@@ -45,6 +45,8 @@ export function basis(pitch, yaw) {
 export const altMode = (g) => (g.zoom > 0 || (g.detachable && !g.silenced) || g.burstMode ? 1 : 0);
 const REVOLVER_COCK = 0.2, TASER_RECHARGE = 30, SHELL_TIME = 0.5;
 const SLOT_KEYS = ['slot1', 'primary', 'slot2', 'secondary', 'slot5', 'c4']; // (the key, the slot it picks)
+// How long an inspect or a reload takes to blend in from the pose the viewmodel is in (Source's sequence blend).
+const BLEND = 0.2;
 // Every slot in the weapon wheel's order: guns, knife, Zeus, grenades (CS2's order), bomb.
 export const WHEEL = ['primary', 'secondary', 'knife', 'taser', ...NADE_ORDER.map((id) => 'g_' + id), 'c4'];
 
@@ -144,7 +146,7 @@ export class Arsenal {
     this.scheduled = [];
     g.deployEnd = t + (g.stats.deploy || 1);
     g.nextAttack = Math.max(g.nextAttack, g.deployEnd);
-    g.animEnd = t + g.vm.play(this.rare(g, 'drawRare') ? 'drawRare' : 'draw');
+    g.animEnd = t + g.vm.play(this.rare(g, 'drawRare') ? 'drawRare' : 'draw', { fade: 0 }); // (from below the screen, not the pose it was put away in)
     if (g.nade) { g.pin = null; g.throwAt = null; g.released = false; this.sound(g.id === 'weapon_molotov' ? 'Molotov.Draw' : 'HEGrenade.Draw', { volume: 0.5 }); }
     else this.sound(g.melee ? 'Weapon_Knife.Deploy' : g.prefix + 'Draw');
     this.game.emit('weapon', g);
@@ -213,9 +215,10 @@ export class Arsenal {
     // The bomb: hold fire in a bomb site to plant (the game runs the planting).
     if (cur.id === 'weapon_c4') { this.game.playerPlant(!!(input.buttons & 1), t); return; }
     // Inspecting works in freeze time too, like CS2 (not while defusing or buying). Now and then it's one of CS2's
-    // special inspects (cl_inspect_rare: 1 always, -1 never).
+    // special inspects (cl_inspect_rare: 1 always, -1 never). Pressed again, it starts over from where the weapon is,
+    // blended as CS2 blends it (BLEND), not snapped back to the start.
     if (pressed.has('inspect') && !cur.reloading && t >= cur.nextAttack && cur.vm.has('inspect') && !this.game.defusing && !this.game.buyMenu?.isOpen) {
-      cur.zoom = 0; cur.animEnd = t + cur.vm.play(this.rare(cur, 'inspectRare') ? 'inspectRare' : 'inspect');
+      cur.zoom = 0; cur.animEnd = t + cur.vm.play(this.rare(cur, 'inspectRare') ? 'inspectRare' : 'inspect', { fade: BLEND });
     }
     if (!this.game.canAttack()) { if (pressed.has('reload')) this.reload(cur, t); return; }
     if (pressed.has('reload')) this.reload(cur, t);
@@ -409,7 +412,7 @@ export class Arsenal {
     g.zoom = 0; g.resumeZoom = 0; g.burstLeft = 0; g.cockAt = null;
     if (g.stats.bulletsPerReload === 1) { this.loadShell(g, t); this.game.emit('reload', g); return; }
     const empty = g.clip === 0 && g.vm.has('reloadEmpty');
-    const len = g.vm.play(empty ? 'reloadEmpty' : 'reload') || 2.5;
+    const len = g.vm.play(empty ? 'reloadEmpty' : 'reload', { fade: BLEND }) || 2.5; // (from an inspect too, blended into it)
     g.reloading = true;
     g.reloadEnd = t + len * 0.92;
     g.animEnd = t + len;

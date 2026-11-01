@@ -8,7 +8,7 @@
 export const DEFAULT_BINDS = {
   w: '+forward', s: '+back', a: '+left', d: '+right', space: '+jump', ctrl: '+duck', rctrl: '+duck', c: '+duck', shift: '+sprint', rshift: '+sprint',
   r: '+reload', f: '+lookatweapon', 1: 'slot1', 2: 'slot2', 3: 'slot3', 4: 'slot4', 5: 'slot5', q: 'lastinv', tab: '+showscores', e: '+use',
-  g: 'drop', b: 'buymenu', z: 'radio1', x: 'radio2', v: 'radio3', y: 'messagemode', u: 'messagemode2', '`': 'toggleconsole',
+  g: 'drop', h: 'switchhands', b: 'buymenu', z: 'radio1', x: 'radio2', v: 'radio3', y: 'messagemode', u: 'messagemode2', '`': 'toggleconsole',
   mouse1: '+attack', mouse2: '+attack2', mouse3: 'player_ping', mwheelup: 'invprev', mwheeldown: 'invnext',
 };
 // What the game does for each command (its action). Anything else is run as a console command.
@@ -17,13 +17,13 @@ export const COMMANDS = {
   '+duck': 'duck', '+sprint': 'walk', '+speed': 'walk', '+reload': 'reload', '+lookatweapon': 'inspect', '+use': 'use', '+showscores': 'scores',
   '+attack': 'attack', '+attack2': 'attack2', slot1: 'slot1', slot2: 'slot2', slot3: 'slot3', slot4: 'slot4', slot5: 'slot5', lastinv: 'lastWeapon',
   drop: 'drop', buymenu: 'buy', radio1: 'radio1', radio2: 'radio2', radio3: 'radio3', messagemode: 'chatAll', messagemode2: 'chatTeam',
-  toggleconsole: 'console', invprev: 'invprev', invnext: 'invnext', player_ping: 'ping',
+  toggleconsole: 'console', invprev: 'invprev', invnext: 'invnext', player_ping: 'ping', switchhands: 'switchHands',
 };
 // The actions in the settings screen, with the command each one binds.
 export const ACTIONS = [
   ['forward', 'Forward', '+forward'], ['back', 'Back', '+back'], ['left', 'Left', '+left'], ['right', 'Right', '+right'], ['jump', 'Jump', '+jump'],
   ['duck', 'Crouch', '+duck'], ['walk', 'Walk', '+sprint'], ['attack', 'Fire', '+attack'], ['attack2', 'Secondary fire / scope', '+attack2'],
-  ['reload', 'Reload', '+reload'], ['inspect', 'Inspect', '+lookatweapon'], ['use', 'Use / defuse', '+use'], ['slot1', 'Primary', 'slot1'],
+  ['reload', 'Reload', '+reload'], ['inspect', 'Inspect', '+lookatweapon'], ['switchHands', 'Switch hands', 'switchhands'], ['use', 'Use / defuse', '+use'], ['slot1', 'Primary', 'slot1'],
   ['slot2', 'Pistol', 'slot2'], ['slot3', 'Knife / Zeus', 'slot3'], ['slot4', 'Grenades', 'slot4'], ['slot5', 'Bomb', 'slot5'],
   ['lastWeapon', 'Last weapon', 'lastinv'], ['invprev', 'Previous weapon', 'invprev'], ['invnext', 'Next weapon', 'invnext'], ['drop', 'Drop weapon', 'drop'],
   ['buy', 'Buy menu', 'buymenu'], ['scores', 'Scoreboard', '+showscores'], ['radio1', 'Radio: commands', 'radio1'], ['radio2', 'Radio: reports', 'radio2'],
@@ -54,9 +54,20 @@ export const keyLabel = (name) => ({ space: 'Space', ctrl: 'Ctrl', rctrl: 'Right
   mouse1: 'Mouse 1', mouse2: 'Mouse 2', mouse3: 'Middle mouse', mouse4: 'Mouse 4', mouse5: 'Mouse 5', mwheelup: 'Wheel up', mwheeldown: 'Wheel down',
   '`': '~', escape: 'Esc', enter: 'Enter', backspace: 'Backspace', capslock: 'Caps Lock' }[name] || name.toUpperCase());
 
+// Binds added to the defaults since your table was saved (bindsVersion: the version it was saved at), bound for you
+// when the key's free and no key runs the command yet; unbound after that, it stays unbound.
+export const BINDS_VERSION = 2;
+const NEW_BINDS = { 2: { h: 'switchhands' } };
+
 // The binds a match uses: your table (key -> command), else your older per-action keys over the defaults.
-export function bindTable({ keybinds = null, binds = {} } = {}) {
-  if (keybinds) return { ...keybinds };
+export function bindTable({ keybinds = null, binds = {}, bindsVersion = 1 } = {}) {
+  if (keybinds) {
+    const t = { ...keybinds };
+    for (let v = bindsVersion + 1; v <= BINDS_VERSION; v++) {
+      for (const [k, c] of Object.entries(NEW_BINDS[v] || {})) if (!t[k] && !Object.values(t).includes(c)) t[k] = c;
+    }
+    return t;
+  }
   const t = { ...DEFAULT_BINDS };
   for (const [action, code] of Object.entries(binds || {})) {
     const cmd = ACTIONS.find(([a]) => a === action)?.[2], key = keyName(code);
@@ -159,7 +170,7 @@ export class Input {
   run(cmd, a) {
     if (a === 'invprev' || a === 'invnext') this.wheel += a === 'invnext' ? 1 : -1;
     else if (a === 'ping') this.pinged = true;
-    else if (a === 'console' || a === 'buy' || a === 'chatAll' || a === 'chatTeam' || /^radio\d$/.test(a || '')) this.onCommand?.(a);
+    else if (a === 'console' || a === 'buy' || a === 'chatAll' || a === 'chatTeam' || a === 'switchHands' || /^radio\d$/.test(a || '')) this.onCommand?.(a);
     else if (a) this.pressed.add(a);
     else this.onCommand?.(cmd); // a console command
   }

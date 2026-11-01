@@ -203,6 +203,7 @@ export class Game {
     this.vmRoot = new THREE.Group();
     this.vmRoot.rotation.order = 'YXZ';
     this.vmScene.add(this.vmRoot);
+    this.setLeftHanded(settings.leftHanded, false);
     this.input = new Input(this.canvas, { sensitivity, binds: bindTable(settings), onLockChange: (locked) => this.lockChanged(locked) });
     this.input.onKey = (code, down) => this.menuKey(code, down);
     this.input.onCommand = (c) => this.command(c);
@@ -763,6 +764,15 @@ export class Game {
     return true;
   }
   setViewmodelFov(fov) { this.vmCamera.fov = vfov(fov); this.vmCamera.updateProjectionMatrix(); }
+  // cl_prefer_lefthanded (switchhands, H): your viewmodel mirrored into your left hand, as CS2 does it: arms, gloves and
+  // weapon, the muzzle flash and your tracers coming from that side (and the spectated player's too). Saved for your next
+  // matches (save: false for the setting as it's saved).
+  setLeftHanded(on, save = true) {
+    this.leftHanded = !!on;
+    this.vmRoot.scale.x = this.leftHanded ? -1 : 1;
+    this.settings.leftHanded = this.leftHanded;
+    if (save) this.settings.onLeftHanded?.(this.leftHanded);
+  }
   // mp_restartgame: a fresh match (scores, money and stats back to the start; the sides stay as they are).
   restartMatch() {
     const m = this.match;
@@ -791,6 +801,7 @@ export class Game {
   command(c) {
     if (c === 'console') { this.toggleConsole(); return; }
     if (!this.me || this.console.isOpen) return;
+    if (c === 'switchHands') { this.setLeftHanded(!this.leftHanded); return; }
     if (c === 'chatAll' || c === 'chatTeam') { if (!this.buyMenu.isOpen) this.openChat(c === 'chatTeam'); return; }
     if (/^radio\d$/.test(c)) { if (this.radio && this.me.alive && !this.buyMenu.isOpen && !this.ffa) this.radio.open(['KeyZ', 'KeyX', 'KeyV'][c[5] - 1]); return; }
     if (c === 'buy') { if (this.me.alive && this.match) { if (this.buyMenu.isOpen) this.closeBuyMenu(); else this.openBuyMenu(); } return; }
@@ -1373,6 +1384,7 @@ export class Game {
     this.hud.setCrosshairStyle(s.crosshair);
     this.vm = { ...VIEWMODEL, ...(s.viewmodel || {}) };
     this.setViewmodelFov(this.vm.fov);
+    this.setLeftHanded(s.leftHanded, false);
     this.musicVolume = s.musicVolume ?? 1;
     this.voiceVolume = s.voiceVolume ?? 1;
     if (s.keybinds) this.input.setBinds(s.keybinds);
@@ -1952,7 +1964,7 @@ export class Game {
     if (tracer) this.effects.tracer(muzzle || (shooter === this.me && this.myMuzzle(gun)) || [origin[0] + dir[0] * 40, origin[1] + dir[1] * 40, origin[2] + dir[2] * 40 - 4], end(Math.min(lastT, range)));
     if (shooter === this.me) {
       if (gun.vm.muzzle) this.effects.muzzleFlash(gun.vm.muzzle.getWorldPosition(new THREE.Vector3()));
-      else this.effects.muzzleFlash(new THREE.Vector3(0.09, -0.06, -0.55).applyQuaternion(this.camera.quaternion));
+      else this.effects.muzzleFlash(new THREE.Vector3(this.leftHanded ? -0.09 : 0.09, -0.06, -0.55).applyQuaternion(this.camera.quaternion));
     }
   }
 
@@ -2160,7 +2172,7 @@ export class Game {
         if (this.specLoading !== key) return;
         this.specLoading = null;
         if (this.spectating !== s || s.holding !== wid || (s.holdingSkin || null) !== skin || this.disposed) return;
-        const draw = vm.has('draw') ? vm.play('draw') : (vm.play('idle', { loop: true }), 0);
+        const draw = vm.has('draw') ? vm.play('draw', { fade: 0 }) : (vm.play('idle', { loop: true }), 0);
         this.specVm = { bot: s, wid, skin, vm, animEnd: this.now + draw };
       }).catch(() => { if (this.specLoading === key) this.specLoading = null; });
     }

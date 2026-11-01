@@ -653,6 +653,63 @@ function fakeGame() {
   ok(awp.zoom === 0 && awp.resumeZoom === 0, 'sniper scope: a new round draws it unscoped');
 }
 
+// ---- viewmodel animations blend in from where the viewmodel is (CS2's): an inspect pressed again, a reload during one --
+{
+  const { clipPlayer } = await import('../src/js/play/viewmodel.js');
+  const root = new THREE.Object3D(), hand = new THREE.Object3D(), mag = new THREE.Object3D();
+  hand.name = 'hand'; mag.name = 'mag'; root.add(hand, mag);
+  const track = (n, xs) => new THREE.VectorKeyframeTrack(n + '.position', [0, 1, 2], xs.flatMap((x) => [x, 0, 0]));
+  const vm = clipPlayer(root, {
+    idle: [new THREE.AnimationClip('idle', 2, [track('hand', [0, 0, 0])])],
+    inspect: [new THREE.AnimationClip('inspect', 2, [track('hand', [0, 10, 20])])],
+    reload: [new THREE.AnimationClip('reload', 2, [track('mag', [0, -5, -10])])],
+  });
+  const steps = (n) => { for (let i = 0; i < n; i++) vm.update(0.01); };
+  vm.play('idle', { loop: true }); vm.update(0);
+  vm.play('inspect', { fade: 0.2 }); steps(100);
+  const mid = hand.position.x; // a second in: 10
+  vm.play('inspect', { fade: 0.2 });
+  const held = hand.position.x; steps(1);
+  const next = hand.position.x; steps(30);
+  const after = hand.position.x; // 0.31 s into the new one: 3.1
+  ok(Math.abs(mid - 10) < 0.01 && held === mid && next > 9.9 && Math.abs(after - 3.1) < 0.01,
+    `viewmodel: an inspect pressed again starts over from where it was, blended, not snapped to its start (${mid.toFixed(2)}, ${next.toFixed(2)}, ${after.toFixed(2)})`);
+  steps(69);
+  vm.play('reload', { fade: 0.2 });
+  const r0 = hand.position.x; steps(1);
+  const r1 = hand.position.x; steps(30);
+  ok(Math.abs(r0 - 10) < 0.01 && r1 > 9.9 && hand.position.x === 0 && Math.abs(mag.position.x + 1.55) < 0.01,
+    `viewmodel: a reload during an inspect takes over from it, and the hand the reload doesn't move goes back smoothly (${r0.toFixed(2)}, ${r1.toFixed(2)}, ${hand.position.x})`);
+  steps(10); const rest = hand.position.x;
+  vm.play('inspect', { fade: 0 }); vm.update(0.01);
+  ok(rest === 0 && Math.abs(hand.position.x - 0.1) < 1e-6 && vm.role === 'inspect', 'viewmodel: with no blend (a draw) a clip starts at its first frame');
+}
+
+// ---- H switches hands (CS2's switchhands, cl_prefer_lefthanded): bound for older saved binds too, saved -------------------
+{
+  const { bindTable, BINDS_VERSION, DEFAULT_BINDS, Input } = await import('../src/js/play/input.js');
+  const old = bindTable({ keybinds: { w: '+forward', f: '+lookatweapon' } });
+  const taken = bindTable({ keybinds: { h: 'say hi' } });
+  const unbound = bindTable({ keybinds: { w: '+forward' }, bindsVersion: BINDS_VERSION });
+  const elsewhere = bindTable({ keybinds: { j: 'switchhands' } });
+  ok(DEFAULT_BINDS.h === 'switchhands' && old.h === 'switchhands' && taken.h === 'say hi' && !unbound.h && !elsewhere.h && elsewhere.j === 'switchhands',
+    'switch hands: H by default, and for a saved table from before (unless H is taken, or you bound it elsewhere or unbound it since)');
+  const inp = Object.create(Input.prototype); Object.assign(inp, { keys: new Set(), pressed: new Set(), pulses: new Set(), buttons: 0, clicked: 0, wheel: 0 });
+  inp.setBinds(DEFAULT_BINDS);
+  const ran = []; inp.onCommand = (c) => ran.push(c);
+  inp.down('h'); inp.up('h');
+  const { Game } = await import('../src/js/play/game.js');
+  const saved = [];
+  const g = { vmRoot: new THREE.Group(), settings: { onLeftHanded: (on) => saved.push(on) }, me: {}, console: { isOpen: false } };
+  g.setLeftHanded = Game.prototype.setLeftHanded;
+  Game.prototype.command.call(g, ran[0]);
+  const left = g.vmRoot.scale.x === -1 && g.leftHanded && g.settings.leftHanded;
+  Game.prototype.command.call(g, 'switchHands');
+  g.setLeftHanded(true, false);
+  ok(ran.join() === 'switchHands' && left && saved.join() === 'true,false' && g.vmRoot.scale.x === -1,
+    'switch hands: H mirrors your viewmodel into the left hand and back, saved each time (and not when the setting is only applied)');
+}
+
 // ---- CS2's binds: key names, older saves' keys, scroll jump, mouse buttons, console commands -------------------------
 {
   const { Input, keyName, bindTable, DEFAULT_BINDS } = await import('../src/js/play/input.js');
