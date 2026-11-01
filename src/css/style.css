@@ -340,48 +340,41 @@ input[type=range]:focus { outline: none; }
   background: radial-gradient(ellipse 70% 55% at 50% 50%, rgba(30, 37, 46, .72), rgba(5, 7, 9, .9) 78%); backdrop-filter: blur(12px) saturate(1.1);
 }
 .opening h3 { margin: 0; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--hi); font-size: 22px; font-family: var(--font-cond); text-shadow: 0 2px 10px rgba(0, 0, 0, .6); }
-.strips { width: min(1400px, 96vw); display: flex; flex-direction: column; gap: 10px; }
+/* CS2's size, scaled like Panorama from 1080p (320×224 tiles 20px apart, a 4px bar), across the screen with the outer tiles
+   dimmed. Several reels (opening ×2-5, the Armory's ×10 in two columns) are drawn the same way, as big as fits the screen's
+   height up to that size: --th is the tile height, --rows how many reels stack. */
+.strips { --rows: 1; --th: min(clamp(154px, 20.7vh, 314px), max(64px, calc((100vh - 230px) / var(--rows) - 28px)));
+  --bar: max(4px, calc(var(--th) * .045)); width: 100vw; display: grid; gap: 12px; }
+.strips.n2 { --rows: 2; }
+.strips.n3, .strips.n6 { --rows: 3; }
+.strips.n4, .strips.n7, .strips.n8 { --rows: 4; }
+.strips.n5, .strips.n9, .strips.n10 { --rows: 5; }
+.strips.n6, .strips.n7, .strips.n8, .strips.n9, .strips.n10 { grid-template-columns: 1fr 1fr; column-gap: 3vw; }
 .strip {
-  position: relative; height: 168px; overflow: hidden; border-radius: var(--radius); border: 1px solid rgba(255, 255, 255, .1);
+  position: relative; height: calc(var(--th) + 16px); overflow: hidden; border-block: 1px solid rgba(255, 255, 255, .1);
   background: linear-gradient(180deg, rgba(10, 12, 15, .9), rgba(26, 31, 38, .9) 50%, rgba(10, 12, 15, .9)); box-shadow: inset 0 0 40px rgba(0, 0, 0, .7);
-  mask-image: linear-gradient(90deg, transparent, #000 9%, #000 91%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent);
 }
-.strips.n2 .strip, .strips.n3 .strip { height: 140px; }
-.strips.n4 .strip, .strips.n5 .strip { height: 112px; }
-/* 6-10 reels (Armory ×10): two columns */
-.strips.n6, .strips.n7, .strips.n8, .strips.n9, .strips.n10 { display: grid; grid-template-columns: 1fr 1fr; }
-.strips.n6 .strip, .strips.n7 .strip, .strips.n8 .strip, .strips.n9 .strip, .strips.n10 .strip { height: 104px; }
-.strip .reel { position: absolute; top: 0; left: 0; height: 100%; display: flex; gap: 6px; padding: 8px 0; will-change: transform; }
+.strip::after { content: ''; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  background: linear-gradient(90deg, rgba(5, 7, 9, .55), transparent 34%, transparent 66%, rgba(5, 7, 9, .55)); }
+.strip .reel { position: absolute; top: 0; left: 0; height: 100%; display: flex; gap: calc(var(--th) * .0893); padding: 8px 0; will-change: transform; }
 .strip .slot {
-  flex: none; height: 100%; aspect-ratio: 1.22; border-radius: var(--radius); position: relative;
+  flex: none; height: 100%; aspect-ratio: 1.43; border-radius: var(--radius); position: relative;
   background: linear-gradient(0deg, color-mix(in srgb, var(--rc) 40%, #232a32) 0%, #2a3139 45%, #252b33 100%);
-  border: 1px solid rgba(255, 255, 255, .06); box-shadow: inset 0 -4px 0 var(--rc);
-  display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; padding-bottom: 4px;
+  border: 1px solid rgba(255, 255, 255, .06); box-shadow: inset 0 calc(var(--bar) * -1) 0 var(--rc);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; overflow: hidden; padding-bottom: calc(var(--bar) + 2px);
 }
-.strip .slot img { width: 86%; height: 70%; object-fit: contain; filter: drop-shadow(0 4px 6px rgba(0, 0, 0, .6)); }
-.strip .slot .sn { font-size: 11px; color: var(--text); max-width: 92%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.strip .slot img { width: 86%; height: 72%; object-fit: contain; filter: drop-shadow(0 4px 6px rgba(0, 0, 0, .6)); }
+.strip .slot .sn { font-size: clamp(10px, calc(var(--th) * .064), 17px); color: var(--text); max-width: 92%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .strip .slot.rare { background: linear-gradient(0deg, #6b5016 0%, #3a2f17 50%, #2b2516 100%); }
-.strip .slot.rare .rare-icon { width: 86%; height: 70%; }
+.strip .slot.rare .rare-icon { width: 86%; height: 72%; }
 .strip .slot.rare .sn { color: var(--gold2); }
-.strip .marker { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: #f2c24c; box-shadow: 0 0 12px #f2c24c, 0 0 2px #fff; z-index: 3; }
-.strip .marker::before, .strip .marker::after { content: ''; position: absolute; left: -6px; border: 7px solid transparent; }
+.strip .marker { position: absolute; top: 0; bottom: 0; left: 50%; width: 4px; margin-left: -2px; background: #f2c24c; box-shadow: 0 0 12px #f2c24c, 0 0 2px #fff; z-index: 3; }
+.strip .marker::before, .strip .marker::after { content: ''; position: absolute; left: 50%; margin-left: -7px; border: 7px solid transparent; }
 .strip .marker::before { top: -1px; border-top-color: #f2c24c; }
 .strip .marker::after { bottom: -1px; border-bottom-color: #f2c24c; }
-/* one reel: CS2's size, scaled like Panorama from 1080p (320×224 tiles 20px apart, a 4px bar), across the screen with the outer tiles dimmed */
-.strips.n1 { width: 100vw; }
-.strips.n1 .strip { height: clamp(170px, calc(20.7vh + 16px), 330px); border-radius: 0; border-left: 0; border-right: 0;
-  mask-image: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent); }
-.strips.n1 .strip::after { content: ''; position: absolute; inset: 0; z-index: 2; pointer-events: none;
-  background: linear-gradient(90deg, rgba(5, 7, 9, .55), transparent 34%, transparent 66%, rgba(5, 7, 9, .55)); }
-.strips.n1 .strip .reel { gap: clamp(12px, 1.85vh, 28px); }
-.strips.n1 .strip .slot { aspect-ratio: 1.43; box-shadow: inset 0 -10px 0 var(--rc); padding-bottom: 12px; }
-.strips.n1 .strip .slot img { height: 72%; }
-.strips.n1 .strip .slot .sn { font-size: clamp(12px, 1.3vh, 17px); }
-.strips.n1 .strip .marker { width: 4px; margin-left: -2px; }
 .strip .slot.win { animation: winpulse 1s ease infinite; border-color: rgba(255, 255, 255, .6); }
-@keyframes winpulse { 50% { box-shadow: inset 0 -4px 0 var(--rc), 0 0 26px var(--rc), inset 0 0 22px color-mix(in srgb, var(--rc) 50%, transparent); } }
-.strips.n1 .strip .slot.win { animation-name: winpulse1; }
-@keyframes winpulse1 { 50% { box-shadow: inset 0 -10px 0 var(--rc), 0 0 34px var(--rc), inset 0 0 30px color-mix(in srgb, var(--rc) 50%, transparent); } }
+@keyframes winpulse { 50% { box-shadow: inset 0 calc(var(--bar) * -1) 0 var(--rc), 0 0 34px var(--rc), inset 0 0 30px color-mix(in srgb, var(--rc) 50%, transparent); } }
 .opening .hint { color: var(--dim); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
 
 /* case drop intro (caseintro.js): the crate stage covers the overlay until the container is open */
