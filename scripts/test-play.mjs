@@ -912,6 +912,18 @@ function fakeGame() {
   const mo = simulateFlight(G, [0, 0, 64], throwVelocity(-10, 0, 1), 'fire');
   ok(mo && mo.landed && near(mo.pos[2], 2, 3) && mo.time < FUSE.fire, 'flight: a molotov breaks where it first hits the floor');
   ok(throwVelocity(0, 90, 1, [0, 0, 301.993])[2] > 300, 'flight: a jump-throw carries the jump up');
+  // CS2's throw: aimed 10 degrees above the crosshair looking level, less looking up or down; 750 x 0.9 x (0.7 strength +
+  // 0.3); a softer throw leaves the hand lower.
+  const { throwPitch, aimPitch, throwSpeed, throwOrigin } = await import('../src/js/play/flight.js');
+  ok(throwPitch(0) === -10 && throwPitch(90) === 90 && throwPitch(-90) === -90 && throwPitch(45) === 40 && throwPitch(-45) === -50
+    && [-80, -30, -10, 0, 20, 60].every((p) => near(aimPitch(throwPitch(p)), p, 1e-9)), "flight: CS2's raised aim (10 degrees looking level, none straight up or down)");
+  ok(throwSpeed(1) === 675 && near(throwSpeed(0.5), 438.75, 1e-9) && near(throwSpeed(0), 202.5, 1e-9), "flight: CS2's throw speeds (Mouse1, both, Mouse2)");
+  const o1 = throwOrigin(G, [0, 0, 64], 0, 0, 1), o0 = throwOrigin(G, [0, 0, 64], 0, 0, 0);
+  ok(near(Math.hypot(o1[0], o1[1]), 16 * Math.cos(Math.PI / 18), 1e-6) && near(o0[2] - o1[2], -12, 1e-6), 'flight: it leaves the hand 16 units out (22 short of a wall, 6 back), 12 lower for Mouse2');
+  // CS2's bounce keeps 0.45 of the speed along the floor too: a grenade that lands carries on only a little way.
+  const run = simulateFlight(G, [0, 0, 64], throwVelocity(0, 0, 1), 'smoke', { keepPath: true });
+  const first = run.path.find((p) => p[2] < 3);
+  ok(first && run.pos[0] - first[0] > 50 && run.pos[0] - first[0] < 400, 'flight: a grenade thrown level comes to rest a short way past where it lands: ' + Math.round(run.pos[0] - first[0]));
 }
 
 // ---- bots: skill by rank, CS Ratings, who they are -------------------------------------------------------------------

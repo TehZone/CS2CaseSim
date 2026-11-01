@@ -8,7 +8,7 @@ import { FLAG_BULLET } from './collision.js';
 import { toGl } from './world.js';
 import { SmokeSystem } from './smoke.js';
 import { FireArt, GroundFire } from './fire.js';
-import { GRAVITY, flightStep, throwVelocity, FUSE } from './flight.js';
+import { GRAVITY, flightStep, throwVelocity, throwOrigin, throwSpeed, aimPitch, FUSE } from './flight.js';
 
 export const NADES = {
   weapon_hegrenade: { kind: 'he', name: 'HE Grenade', short: 'HE', fuse: FUSE.he, bounce: 'HEGrenade.Bounce', boom: 'BaseGrenade.Explode', pin: 'HEGrenade.PullPin_Grenade', throw: 'HEGrenade.Throw' },
@@ -33,19 +33,19 @@ const FIRE_DPS = 40, HE_RADIUS = 350;
 const SMOKE_REACH = 40;
 const FIRE_LIGHT = 6; // the fire's light (candela) on the walls and players around it
 
-export { throwVelocity }; // (see flight.js)
+export { throwVelocity, throwOrigin }; // (see flight.js)
 
-// The pitch (game degrees) a bot needs to land a throw of `strength` on `to` from `from`, or null if out of reach.
+// The pitch (game degrees) a bot needs to land a throw of `strength` on `to` from `from` (its eye), or null if out of
+// reach.
 export function aimThrow(from, to, strength, preferHigh = false) {
-  const speed = 675 * (0.7 * strength + 0.3);
-  const dx = Math.hypot(to[0] - from[0], to[1] - from[1]), dz = to[2] - from[2];
+  const speed = throwSpeed(strength);
+  const dx = Math.hypot(to[0] - from[0], to[1] - from[1]), dz = to[2] - (from[2] + strength * 12 - 12); // (a softer throw leaves the hand lower)
   const v2 = speed * speed, g = GRAVITY;
   const disc = v2 * v2 - g * (g * dx * dx + 2 * dz * v2);
   if (disc < 0) return null;
   const root = Math.sqrt(disc);
   const angle = Math.atan((v2 + (preferHigh ? root : -root)) / (g * dx)); // elevation of the actual throw
-  // Undo the throw's pitch remap: elevation e = -(-10 + pitch * 80/90) -> pitch = (10 - e) * 90/80
-  return ((10 - (angle * 180) / Math.PI) * 90) / 80;
+  return aimPitch(-(angle * 180) / Math.PI); // (the pitch to look at for that: the throw raises it)
 }
 
 export class Grenades {

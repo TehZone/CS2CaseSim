@@ -19,7 +19,7 @@ export async function loadLineups(mapId, col) {
 // Where a lineup's grenade goes off, thrown from its spot (pitch and yaw nudged by err: [dp, dy] degrees).
 export function landing(col, l, err = [0, 0]) {
   const eye = [l.pos[0], l.pos[1], l.pos[2] + EYE], pitch = l.pitch + err[0], yaw = l.yaw + err[1];
-  return simulateFlight(col, throwOrigin(col, eye, pitch, yaw), throwVelocity(pitch, yaw, l.strength, l.jump ? [0, 0, JUMP] : [0, 0, 0]), l.kind);
+  return simulateFlight(col, throwOrigin(col, eye, pitch, yaw, l.strength), throwVelocity(pitch, yaw, l.strength, l.jump ? [0, 0, JUMP] : [0, 0, 0]), l.kind);
 }
 
 // The lineups a side has for a purpose ('A', 'B', 'mid', 'default', 'holdA', 'retakeB'...), by kind.

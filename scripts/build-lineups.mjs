@@ -8,6 +8,8 @@
 // if one lands close enough: smokes and molotovs on it, flashbangs bursting in the air over it (a pop flash).
 // Needs the maps exported into the CS2 cache (play/<map>/: Play mode does that).
 //   node scripts/build-lineups.mjs [map ...]        (CS2SIM_CACHE: the cache, else the app's)
+// CS2SIM_LINEUP_IDS=topcon,heaven finds only those again (the map's others kept as they are); CS2SIM_LINEUP_SPOTS: how
+// many throw spots to try for each (40).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -111,6 +113,7 @@ const SPECS = {
 // How far each kind is thrown from (units), and how close it has to land.
 const RANGE = { smoke: [500, 2800, 1500], fire: [350, 1700, 850], flash: [250, 1500, 650], he: [300, 1600, 800] };
 const TOLERANCE = { smoke: 72, fire: 64, flash: 140, he: 90 };
+const SPOTS = Number(process.env.CS2SIM_LINEUP_SPOTS) || 40, ONLY = process.env.CS2SIM_LINEUP_IDS?.split(',').filter(Boolean);
 const FLASH_HEIGHT = 110; // a pop flash bursts this far over the spot
 
 const inBox = (p, b) => p[0] >= b.min[0] && p[0] <= b.max[0] && p[1] >= b.min[1] && p[1] <= b.max[1] && p[2] >= b.min[2] - 64 && p[2] <= b.max[2];
@@ -147,7 +150,7 @@ function target(map, to) {
 
 function landing(col, eye, pitch, yaw, strength, jump, kind, dt) {
   const vel = throwVelocity(pitch, yaw, strength, jump ? [0, 0, JUMP] : [0, 0, 0]);
-  const origin = throwOrigin(col, eye, pitch, yaw);
+  const origin = throwOrigin(col, eye, pitch, yaw, strength);
   return simulateFlight(col, origin, vel, kind, { dt });
 }
 
@@ -175,7 +178,7 @@ function findLineup(map, spec, side) {
   const found = []; // throws that land close enough, to pick the steadiest of
   let tried = 0;
   for (const a of spots) {
-    if (tried >= 40 || found.filter((x) => x.err < TOLERANCE[kind] * 0.5).length >= 8) break;
+    if (tried >= SPOTS || found.filter((x) => x.err < TOLERANCE[kind] * 0.5).length >= 8) break;
     if (spawn && !map.nav.path(spawn, a.center)) continue; // the side can't get there
     tried++;
     // Where a player standing there has its feet (on the floor under the hull, not the nav area's own height), in whole
@@ -236,6 +239,9 @@ for (const id of maps) {
   const map = loadMap(id);
   const found = [];
   for (const spec of SPECS[id]) {
+    const kept = ONLY && !ONLY.includes(spec[0]) && (out[id] || []).find((l) => l.id === spec[0]);
+    if (kept) { found.push(kept); continue; }
+    if (ONLY && !ONLY.includes(spec[0])) continue;
     const t = Date.now();
     const r = findLineup(map, spec, spec[2]);
     if (r.error) console.log(`  ${id} ${spec[0]}: ${r.error}`);

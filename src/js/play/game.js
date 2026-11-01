@@ -28,7 +28,7 @@ import { DevConsole } from './console.js';
 import { iconFor, iconPictures } from './icons.js';
 import { Radar } from './radar.js';
 import { buildCS2Model, buildGloveScene } from '../cs2/skin.js';
-import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, aimThrow as aimThrowPitch } from './grenades.js';
+import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, throwOrigin, aimThrow as aimThrowPitch } from './grenades.js';
 import { Drops, gunSkin, LOCAL } from './drops.js';
 import { Balls } from './props.js';
 import { Doors } from './doors.js';
@@ -641,9 +641,8 @@ export class Game {
   }
   // Your grenade leaves your hand.
   throwMyNade(id, strength) {
-    const eye = this.player.eye(), { fwd } = basis(this.input.pitch, this.input.yaw);
-    const tr = this.collision.traceBox(eye, eye.map((v, i) => v + fwd[i] * 16), [-2, -2, -2], [2, 2, 2], FLAG_PLAYER);
-    this.nades.throw(this.me, id, tr.endpos, throwVelocity(this.input.pitch, this.input.yaw, strength, this.player.velocity));
+    const { pitch, yaw } = this.input;
+    this.nades.throw(this.me, id, throwOrigin(this.collision, this.player.eye(), pitch, yaw, strength), throwVelocity(pitch, yaw, strength, this.player.velocity));
   }
   // After a throw: one fewer; keep holding the same kind if you have more, else back to your gun.
   usedNade(id, t) {
@@ -694,12 +693,11 @@ export class Game {
       p.released = true;
       this.specAnim(b, p.strength >= 0.5 ? 'throw' : 'throwUnder');
       b.gesture(p.strength >= 0.5 ? this.botAssets.clips.throw : this.botAssets.clips.lob);
-      const eye = b.eye(), { fwd } = basis(p.pitch, p.yaw);
-      const tr = this.collision.traceBox(eye, eye.map((v, i) => v + fwd[i] * 16), [-2, -2, -2], [2, 2, 2], FLAG_PLAYER);
+      const from = throwOrigin(this.collision, b.eye(), p.pitch, p.yaw, p.strength);
       // (A jump-throw leaves the hand as the jump starts: the jump's speed up, and the bot hops.)
       if (p.jump) { b.vel = [0, 0, 301.993]; b.jumped = true; }
       // (A lineup's standing throw: still, exactly as it was worked out.)
-      const n = this.nades.throw(b.c, p.id, tr.endpos, throwVelocity(p.pitch, p.yaw, p.strength, p.jump ? [0, 0, 301.993] : p.lineup ? [0, 0, 0] : b.vel));
+      const n = this.nades.throw(b.c, p.id, from, throwVelocity(p.pitch, p.yaw, p.strength, p.jump ? [0, 0, 301.993] : p.lineup ? [0, 0, 0] : b.vel));
       if (n && p.lineup) n.lineup = p.lineup;
       this.radio.chatter(b.c, { flash: 'flash', smoke: 'smoke', fire: 'fire', he: 'he' }[NADES[p.id].kind] || 'he');
       p.done = this.now + 0.45;

@@ -93,8 +93,10 @@ What's in a match:
   tunnels through it and HE grenades blow holes that refill; sight lines (yours and the bots') go by how much smoke they
   cross. As in CS2 a smoke puts out a fire there and then: one popping in or next to it (a smoke grenade landing in the
   flames pops at once), or flooding over it, and a molotov landing in a smoke goes straight out. Thrown like CS2:
-  Mouse1 full throw, Mouse2 underhand, both a medium throw, plus your movement; they bounce off the map. CS2's limits:
-  four grenades, two flashbangs.
+  Mouse1 full throw, Mouse2 underhand, both a medium throw (750 × 0.9 × (0.7 × strength + 0.3) units/s, aimed 10° above
+  the crosshair looking level and less looking up or down, from lower for a softer throw), plus 1.25 × your movement;
+  they fall at 0.4 × sv_gravity and bounce off the map as CS2's do, keeping 0.45 of their speed each time, along the
+  floor too, so one lands and stops a short way on. CS2's limits: four grenades, two flashbangs.
 - Weapon modes: the M4A1-S and USP-S silencer screws off and on (Mouse2), the Glock-18 and FAMAS switch to burst fire
   (Mouse2), the R8 Revolver cocks for an accurate shot (hold Mouse1) or fans (Mouse2), shotguns load shell by shell and
   can fire mid-reload, and the Zeus x27 (Gear, $200) recharges 30 seconds after a shot.
