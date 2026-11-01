@@ -19,6 +19,7 @@ export class NavMesh {
     });
     this.byId = new Map(this.areas.map((a) => [a.id, a]));
     this.failed = new Set(); // jumps ("from>to" area ids) a bot couldn't make this match (something in the way): paths go round
+    this.blocked = new Set(); // ways ("from>to") a bot got stuck on again and again this round (see Brain.move): paths go round
 
     // How far each link climbs where the two areas meet: up to a step is a walk, up to a crouch-jump a jump, higher
     // can't be climbed (the link is only for coming down).
@@ -148,7 +149,8 @@ export class NavMesh {
           const lad = chain[i].ladder;
           if (!lad) {
             const rise = areas[i - 1].rise.get(areas[i].id) || 0;
-            const p = rise > STEP_HEIGHT ? Object.assign(portal(areas[i - 1], areas[i]), { jump: rise, into: across(areas[i - 1], areas[i]), link: areas[i - 1].id + '>' + areas[i].id }) : portal(areas[i - 1], areas[i]);
+            const link = areas[i - 1].id + '>' + areas[i].id;
+            const p = rise > STEP_HEIGHT ? Object.assign(portal(areas[i - 1], areas[i]), { jump: rise, into: across(areas[i - 1], areas[i]), link }) : Object.assign(portal(areas[i - 1], areas[i]), { link });
             if ((areas[i - 1].flags | areas[i].flags) & FLAG_CROUCH) p.crouch = true; // (a vent, a hole in a wall: crouch through)
             pts.push(p);
             continue;
@@ -168,7 +170,7 @@ export class NavMesh {
         if (closed.has(id)) continue;
         const b = this.byId.get(id);
         const rise = cur.a.rise.get(id) || 0;
-        if (!b || rise > CROUCH_JUMP_HEIGHT || (rise > STEP_HEIGHT && this.failed.has(cur.a.id + '>' + id))) continue;
+        if (!b || rise > CROUCH_JUMP_HEIGHT || (rise > STEP_HEIGHT && this.failed.has(cur.a.id + '>' + id)) || (this.blocked.size && this.blocked.has(cur.a.id + '>' + id))) continue;
         const g = cur.g + dist(cur.a.center, b.center) * (b.flags & FLAG_CROUCH ? 2 : 1) + (rise > STEP_HEIGHT ? JUMP_COST : 0);
         const o = open.get(id);
         if (!o || g < o.g) open.set(id, { a: b, g, f: g + dist(b.center, goal.center), prev: cur });

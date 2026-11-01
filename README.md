@@ -108,9 +108,13 @@ What's in a match:
   src/js/play/drops.js), so a gun dropped by another player would carry theirs the same way; Play has no matches with
   other players yet. Dead CTs drop their defuse kit. Bullets go through thin walls (wood easily, metal less, concrete
   barely) with less damage.
-- Breakables: glass, shop windows, Nuke's and Mirage's vent covers, Mirage's B window shutter, Train's cabinet doors,
-  bottles and pots break when shot (or knifed) with their sound, in pieces, leaving what CS2 leaves (the shutter's
-  splintered frame), and are whole again each round. Until then a vent cover blocks the vent.
+- Breakables: glass, shop windows, Nuke's, Mirage's and Cache's vent covers and Nuke's vent slats, Nuke's windows,
+  Mirage's B window shutter, Train's cabinet doors, bottles and pots: whatever CS2 breaks, by the map's own entities and
+  its models' own prop data (their health, what they're made of, the pieces they break into). Bullets, a knife or an HE
+  grenade's blast take their health away; they break with their sound, in pieces, leaving what CS2 leaves (the
+  shutter's splintered frame), and are whole again each round. Until then a vent cover blocks the vent; a bot going
+  through shoots or slashes it open. A bot stuck at the same place again and again goes another way for the rest of
+  the round. Doors start every round closed; E opens and closes them (bots open them as they come).
 - CS2's economy: $800 start, round rewards, the loss bonus ($1400 rising by $500, dropping by one on a win), kill
   rewards by weapon, planting and defusing bonuses, the $16,000 cap. Buy menu (B) with CS2's prices and team-only guns,
   Kevlar, helmet, defuse kits and the Zeus.

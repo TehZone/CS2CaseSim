@@ -172,6 +172,7 @@ export class Grenades {
     g.effects.explosion(n.pos, 0.35);
     this.volume.blast(n.pos);
     g.balls.blast(n.pos, HE_RADIUS);
+    g.doors.blast(n.pos, HE_RADIUS, 99); // (vent covers, glass: CS2's breakables take explosions too)
     for (const c of g.combatants.slice()) {
       if (!c.alive) continue;
       const p = g.bodyOf(c).chest;

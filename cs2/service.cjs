@@ -685,7 +685,7 @@ class CS2Service {
         // Older exports are brought up to date step by step; a step that fails (no disk space, say) leaves the export as
         // it was, still playable, rather than exporting the whole map again.
         if (meta.stamp === stamp && meta.version >= 2) {
-          const steps = { 2: 'upgradeMapLighting', 3: 'upgradeMapHidden', 4: 'upgradeMapLayers', 5: 'upgradeMapDoors', 6: 'upgradeMapSky3d', 7: 'upgradeMapTextureSizes', 8: 'upgradeMapBreakables', 9: 'upgradeMapBreakables2', 10: 'upgradeMapSoundscapes', 11: 'upgradeMapGlass' };
+          const steps = { 2: 'upgradeMapLighting', 3: 'upgradeMapHidden', 4: 'upgradeMapLayers', 5: 'upgradeMapDoors', 6: 'upgradeMapSky3d', 7: 'upgradeMapTextureSizes', 8: 'upgradeMapBreakables', 9: 'upgradeMapBreakables2', 10: 'upgradeMapSoundscapes', 11: 'upgradeMapGlass', 12: 'upgradeMapBreakables3' };
           try { while (steps[meta.version]) meta = await this[steps[meta.version]](id, vpk, dir, meta, say); } catch (e) { this.log('map upgrade: ' + e.message); }
           this.progress.delete('map:' + id);
           return result(meta);
@@ -735,7 +735,7 @@ class CS2Service {
       const { json } = play.readGlb(glb);
       const hidden = play.disabledNodes(json, ents);
       const hurts = await this.playHurts(vpk, dir, ents);
-      const doors = play.doorNodes(json, ents), glass = play.glassNodes(json, ents);
+      const doors = play.doorNodes(json, ents), glass = play.glassNodes(json, ents, await this.playPropBreaks(vpk, ents));
       say('Exporting the map\'s 3D skybox…');
       const sky3d = await this.playSky3d(dir, ents);
       const layers = await this.playLayers(vpk, dir, json);
@@ -943,6 +943,24 @@ class CS2Service {
   upgradeMapBreakables(id, vpk, dir, meta, say) { return this.upgradeMapDoors(id, vpk, dir, meta, say, 9); }
   // Version 9 gets version 10's breakables (props named breakable, and what's left of one when broken).
   upgradeMapBreakables2(id, vpk, dir, meta, say) { return this.upgradeMapDoors(id, vpk, dir, meta, say, 10); }
+  // Version 12 gets version 13's: props that break by their own prop data (Nuke's vent slats, Cache's vents), with health.
+  upgradeMapBreakables3(id, vpk, dir, meta, say) { return this.upgradeMapDoors(id, vpk, dir, meta, say, 13); }
+
+  // The map's props' own break data (play.propBreakData), by model path: read from their models' data blocks, in the
+  // game's files or the map's own.
+  async playPropBreaks(vpk, ents) {
+    const cs2 = this.ensureCS2(), out = {};
+    const models = [...new Set(ents.filter((e) => /^prop_(dynamic|physics)/.test(e.classname) && e.model && !/^(true|1)$/i.test(String(e.startdisabled ?? '')))
+      .map(play.modelPath).filter((m) => /\.vmdl$/.test(m)))];
+    for (let i = 0; i < models.length; i += 60) {
+      const filter = models.slice(i, i + 60).map((m) => m + '_c').join(',');
+      for (const v of [cs2.vpk, vpk]) {
+        const dumped = await cs2.dump(filter, null, v).catch((e) => { this.log('prop data: ' + e.message); return {}; });
+        for (const [p, data] of Object.entries(dumped)) { const b = play.propBreakData(data); if (b) out[p.toLowerCase()] = b; }
+      }
+    }
+    return out;
+  }
 
   // Maps exported as version 5 get version 6's doors and breakable glass.
   async upgradeMapDoors(id, vpk, dir, meta, say, version = 6) {
@@ -953,7 +971,7 @@ class CS2Service {
     const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
     fs.rmSync(tmp, { recursive: true, force: true });
     const { json } = play.readGlb(path.join(dir, 'world.glb'));
-    const next = { ...meta, doors: play.doorNodes(json, ents), glass: play.glassNodes(json, ents), version };
+    const next = { ...meta, doors: play.doorNodes(json, ents), glass: play.glassNodes(json, ents, await this.playPropBreaks(vpk, ents)), version };
     fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
     return next;
   }

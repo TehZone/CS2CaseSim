@@ -949,7 +949,16 @@ export class Brain {
     // new paths) and then try again.
     if (moving && this.path && !b.climbing) {
       this.stuckT += dt;
-      if (this.stuckT > 1) {
+      // Getting no nearer the point it's making for in 3 s is stuck too, though it moves: going back and forth under a
+      // jump it keeps missing (into Nuke's vent from B), sliding off a ledge.
+      const aim = this.path[this.pi];
+      if (aim !== this.aimWp) { this.aimWp = aim; this.aimBest = Infinity; this.aimSince = this.aimGain = t; }
+      const gap = aim ? Math.hypot(aim[0] - b.pos[0], aim[1] - b.pos[1], aim[2] - b.pos[2]) : 0;
+      if (gap < this.aimBest - 8) { this.aimBest = gap; this.aimSince = this.aimGain = t; }
+      const noHeadway = !!aim && t - this.aimSince > 3;
+      if (noHeadway) this.aimSince = t;
+      if (this.stuckT > 1 || noHeadway) {
+        if (noHeadway) this.lastProgress = b.pos.slice(); // (counts as no progress below)
         if (dist2(b.pos, this.lastProgress) < 20 && this.goal && this.dodgeFor && t < this.dodgeUntil + 0.5 && this.dodgeFlips < 2) {
           // Held up by someone it was steering round: the other way round them, for longer (not a new path: it would be
           // the same one).
@@ -959,10 +968,17 @@ export class Brain {
           // off): every bot goes another way from now on.
           const wp = this.path[this.pi];
           if (this.pi >= this.path.length - 1 && dist2(b.pos, wp) < 40 && Math.abs(wp[2] - b.pos[2]) < STEP_HEIGHT) { this.path = null; this.stuckTries = 0; } // as near as it gets (a spot close to a wall): there
-          else if (this.stuckTries >= 1 && wp?.link && b.pos[2] < wp[2] + wp.jump - STEP_HEIGHT) { nav.failed.add(wp.link); this.stuckTries = 0; this.goTo(this.goal); }
-          else if (++this.stuckTries >= 3) { this.path = null; this.stuckTries = 0; this.restUntil = t + 2 + Math.random() * 2; b.vel[0] = b.vel[1] = 0; }
+          else if (this.stuckTries >= 1 && wp?.jump && b.pos[2] < wp[2] + wp.jump - STEP_HEIGHT) { nav.failed.add(wp.link); this.stuckTries = 0; this.goTo(this.goal); }
+          // Stuck at the same way through again and again (a vent it can't get along, a gap something fills): every bot
+          // goes round it for the rest of the round, if there's another way; else it stands a moment and tries again.
+          else if (++this.stuckTries >= 3) {
+            this.stuckTries = 0;
+            const other = wp?.link && !nav.blocked.has(wp.link) && (nav.blocked.add(wp.link), nav.path(b.pos, this.goal));
+            if (other) this.goTo(this.goal);
+            else { if (wp?.link) nav.blocked.delete(wp.link); this.path = null; this.restUntil = t + 2 + Math.random() * 2; b.vel[0] = b.vel[1] = 0; }
+          }
           else this.goTo(this.goal);
-        } else { this.stuckTries = 0; this.dodgeFlips = 0; }
+        } else if (t - this.aimGain < 1.5) { this.stuckTries = 0; this.dodgeFlips = 0; } // (getting somewhere)
         this.lastProgress = b.pos.slice();
         this.stuckT = 0;
       }
@@ -1107,7 +1123,30 @@ export class Brain {
     b.ducked = false;
     b.yaw = (Math.atan2(-n[1], -n[0]) * 180) / Math.PI;
     if (!moving) { b.vel = [0, 0, 0]; return true; }
-    const dz = wp[2] - b.pos[2], step = Math.sign(dz) * Math.min(Math.abs(dz), 156 * dt);
+    // (Up, it climbs till its feet are level with the floor it steps off onto: a ladder's top can be short of it, Nuke's
+    // vent ladder by 25 units, more than a step.)
+    const next = wp.up && this.path[this.pi + 1], topZ = next ? Math.max(wp[2], next[2] + 1) : wp[2];
+    const off = next && Math.abs(topZ - b.pos[2]) < 48 && next;
+    // A breakable over the way off the top (Nuke's vent slats, climbing up from B): broken from the ladder first, or it
+    // would step off into it and fall back down.
+    const pane = off && this.game.doors?.paneAhead([wp[0], wp[1], wp[2] + 2], [off[0], off[1], off[2] + 2]);
+    if (pane) { this.breakPane(pane, this.game.now); b.vel = [0, 0, 0]; return true; }
+    // And with the way off low (Nuke's vent mouth), crouched to go through it, as you'd duck at the top.
+    if (off) { const dx = off[0] - b.pos[0], dy = off[1] - b.pos[1], l = Math.hypot(dx, dy) || 1; if (off.crouch || this.lowAhead(dx / l, dy / l)) b.ducked = true; }
+    const dz = topZ - b.pos[2];
+    if (next && Math.abs(dz) < 1) {
+      // At the top: over the edge onto the floor it steps off onto, as the ladder takes you over, not off the ladder
+      // back down the hole it came up.
+      const hx = next[0] - b.pos[0], hy = next[1] - b.pos[1], hl = Math.hypot(hx, hy);
+      if (hl > 4 && this.game.floorAt(b.pos, 8) == null) {
+        const st = Math.min(hl, 120 * dt);
+        b.pos[0] += (hx / hl) * st; b.pos[1] += (hy / hl) * st; b.vel = [0, 0, 0];
+        return true;
+      }
+      this.pi++; b.climbing = null; b.vel = [0, 0, 0];
+      return true;
+    }
+    const step = Math.sign(dz) * Math.min(Math.abs(dz), 156 * dt);
     b.pos[0] += (wp[0] - b.pos[0]) * Math.min(1, dt * 8);
     b.pos[1] += (wp[1] - b.pos[1]) * Math.min(1, dt * 8);
     b.pos[2] += step;

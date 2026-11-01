@@ -840,7 +840,7 @@ export class Game {
   // ---- rounds (called by the match) -------------------------------------------------------------------------------
   onRoundStart(round, { halftime, pistol, overtime, respawn }) {
     numberUniforms(this.renderer); // (a shader new since: see uniforms.js)
-    if (!respawn) { this.balls?.reset(); this.doors?.reset(); }
+    if (!respawn) { this.balls?.reset(); this.doors?.reset(); this.nav?.blocked.clear(); } // (ways the bots got stuck on: open again)
     if (respawn) { this.startRespawnMode(); return; }
     // (No full collection here: one stops everything while it goes through the whole heap, 100 ms to 360 ms a round start
     // and the frames after it slow too, where V8's own, marking alongside the game, never held a frame up for long.)
@@ -1927,7 +1927,7 @@ export class Game {
       if (!wall) { lastT = range; break; }
       const p = [0, 1, 2].map((i) => o[i] + dir[i] * wall.t);
       this.effects.impact(p, wall.normal, wall.surface);
-      if (this.doors.shot(wall, p, dir)) { travelled += wall.t + 0.5; o = p.map((v, i) => v + dir[i] * 0.5); continue; } // breakable glass: broken, on it goes
+      if (this.doors.shot(wall, p, dir, st.damage * Math.pow(st.rangeModifier, (travelled + wall.t) / 500) * scale)) { travelled += wall.t + 0.5; o = p.map((v, i) => v + dir[i] * 0.5); continue; } // breakable glass: broken, on it goes
       if (wallNo === 0) {
         const ev = [this.impactSound(wall.surface), `${impactName(wall.surface)}.BulletImpact`].find((e) => this.sounds.has(e)) || 'Default.BulletImpact';
         this.sounds.play(ev, { pos: p, listener: this, volume: 0.6 });

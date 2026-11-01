@@ -27,6 +27,13 @@ export class CollisionWorld {
   // game units; update them in place as it moves), flags, surface (name), off (true: gone) }. Traces test these after
   // the static world; a hit on one has tri -1 and its shape.
   addDynamic(shape) { this.dynamic.push(shape); return shape; }
+  // A dynamic shape's bounds, after its triangles changed (a door turning): rays and sweeps that miss them skip its
+  // triangles (Inferno has some 300 breakables, and bots test dozens of sight lines a tick).
+  bound(shape) {
+    const t = shape.tris, lo = (shape.min ||= [0, 0, 0]), hi = (shape.max ||= [0, 0, 0]);
+    lo[0] = lo[1] = lo[2] = Infinity; hi[0] = hi[1] = hi[2] = -Infinity;
+    for (let i = 0; i < t.length; i += 3) for (let k = 0; k < 3; k++) { const v = t[i + k]; if (v < lo[k]) lo[k] = v; if (v > hi[k]) hi[k] = v; }
+  }
 
   // Median-split BVH. Nodes: bounds (6 floats) + [left child | first triangle, right child | -count].
   build() {
@@ -101,7 +108,7 @@ export class CollisionWorld {
     }
     let shape = null, at = 0;
     for (const sh of this.dynamic) {
-      if (sh.off || !(sh.flags & mask)) continue;
+      if (sh.off || !(sh.flags & mask) || (sh.min && !rayBox(o, d, best, sh.min, sh.max))) continue;
       for (let i = 0; i < sh.tris.length; i += 9) if (rayTri(sh.tris, i, o, d) && RAY_T[0] < best) { best = RAY_T[0]; shape = sh; at = i; }
     }
     if (shape) return { t: best, normal: triNormal(shape.tris, at), tri: -1, surface: shape.surface || 'default', shape };
@@ -138,7 +145,7 @@ export class CollisionWorld {
       }
     }
     for (const sh of this.dynamic) {
-      if (sh.off || !(sh.flags & mask)) continue;
+      if (sh.off || !(sh.flags & mask) || (sh.min && !rayBox(a, d, maxT, sh.min, sh.max))) continue;
       for (let i = 0; i < sh.tris.length; i += 9) if (rayTri(sh.tris, i, a, d) && RAY_T[0] < maxT) return true;
     }
     return false;
@@ -174,6 +181,7 @@ export class CollisionWorld {
     }
     for (const sh of this.dynamic) {
       if (sh.off || !(sh.flags & mask) || only) continue;
+      if (sh.min && (sh.min[0] > hi[0] || sh.max[0] < lo[0] || sh.min[1] > hi[1] || sh.max[1] < lo[1] || sh.min[2] > hi[2] || sh.max[2] < lo[2])) continue;
       for (let i = 0; i < sh.tris.length; i += 9) {
         if (!sweepBoxTri(sh.tris, i, c0, ext, v, best, res)) continue;
         if (res.solid) { startsolid = true; continue; }
@@ -261,6 +269,21 @@ function nthElement(a, lo, hi, n, key) {
 // Ray from o along d against triangle i: whether it hits it ahead of o, how far in RAY_T[0]. (Not the distance
 // returned: from a function V8 doesn't inline, every fraction returned is a new object, for every triangle tested.)
 const RAY_T = new Float64Array(1);
+// Does the ray from o along d reach the box min..max within maxT?
+function rayBox(o, d, maxT, min, max) {
+  let tn = 0, tf = maxT;
+  for (let k = 0; k < 3; k++) {
+    if (Math.abs(d[k]) < 1e-12) { if (o[k] < min[k] || o[k] > max[k]) return false; continue; }
+    const inv = 1 / d[k];
+    let t0 = (min[k] - o[k]) * inv, t1 = (max[k] - o[k]) * inv;
+    if (t0 > t1) { const s = t0; t0 = t1; t1 = s; }
+    if (t0 > tn) tn = t0;
+    if (t1 < tf) tf = t1;
+    if (tf < tn) return false;
+  }
+  return true;
+}
+
 function rayTri(P, i, o, d) {
   const e1x = P[i + 3] - P[i], e1y = P[i + 4] - P[i + 1], e1z = P[i + 5] - P[i + 2];
   const e2x = P[i + 6] - P[i], e2y = P[i + 7] - P[i + 1], e2z = P[i + 8] - P[i + 2];

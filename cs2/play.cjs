@@ -9,11 +9,12 @@ const { readEXR } = require('./exr.cjs');
 const { decodePNG, encodePNG } = require('./png.cjs');
 
 const IN = 0.0254; // the exporter writes game inches as metres
-const PLAY_VERSION = 12; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading;
+const PLAY_VERSION = 13; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading;
 // 4: entities that start switched off left out, trigger_hurt volumes; 5: csgo_environment(_blend)'s other layers and height maps;
 // 6: doors and breakable glass; 7: the 3D skybox; 8: no texture over 1024 after it; 9: breakable props too; 10: props named
 // breakable (Mirage's vent covers) and what's left of a breakable once broken (Mirage's shutter frame); 11: soundscapes;
-// 12: the windows' and glass's own textures, the sky's brightness)
+// 12: the windows' and glass's own textures, the sky's brightness; 13: props that break by their own prop data, Nuke's
+// vent slats and Cache's vents, and each breakable's health)
 const PROBE_MAX = 8; // probe irradiance is stored as 8-bit sRGB of value / PROBE_MAX
 const DATA_VERSION = 7; // weapon stats + sound events (6: maps' ambience sounds, every surface's bullet impact sound; 7: how CS2
 // plays each event, and its reverb presets)
@@ -212,16 +213,26 @@ const BREAKS = [
   [/vase|pot|planter/i, 'pottery', 'Pottery.Break', false],
   [/./, 'default', 'Wood.Break', false],
 ];
-function glassNodes(json, ents) {
+// What a prop that breaks by its own prop data is made of (its base: Metal.Medium...), when its name doesn't say.
+const BREAK_BASES = [[/^metal/i, 'metalvent'], [/^wood/i, 'wood'], [/^glass/i, 'glass'], [/^(pottery|ceramic)/i, 'pottery']];
+// props: the map's props' own break data (propBreakData, by model path): a prop breaks in CS2 when its model has health
+// and pieces to break into (Nuke's vent slats, Cache's vents), whatever it's called.
+function glassNodes(json, ents, props = {}) {
   const find = entityNodes(json), out = [];
   for (const e of ents) {
     if (!e.model || /^(true|1)$/i.test(String(e.startdisabled ?? ''))) continue;
     const model = String(e.model).replace(/^resource_name:"?|"$/g, '').replace(/.*\//, '').replace(/\.vmdl$/, '');
-    let nodes, kind;
+    const own = props[modelPath(e)];
+    let nodes, kind, health = +e.health || 1;
     if (e.classname === 'func_breakable' && String(e.material ?? '0') === '0') { nodes = find.brush(e); kind = BREAKS.find((k) => k[1] === 'glass'); }
-    else if (/^prop_(dynamic|physics)/.test(e.classname) && (/breakable/i.test(model) || /breakable/i.test(String(e.targetname || '')))) { nodes = find.prop(e); kind = BREAKS.find(([re]) => re.test(model)); }
-    else continue;
-    if (nodes.length) out.push({ nodes, health: +e.health || 1, surface: kind[1], sound: kind[2], solid: kind[3], origin: vec(e.origin), remainder: [] });
+    else if (/^prop_(dynamic|physics)/.test(e.classname) && (/breakable/i.test(model) || /breakable/i.test(String(e.targetname || '')) || (own?.health > 0 && own.pieces > 0))) {
+      nodes = find.prop(e);
+      kind = BREAKS.find(([re]) => re.test(model));
+      const made = own && BREAK_BASES.find(([re]) => re.test(own.base));
+      if (kind[1] === 'default' && made) kind = BREAKS.find((k) => k[1] === made[1]);
+      if (own?.health > 0) health = own.health;
+    } else continue;
+    if (nodes.length) out.push({ nodes, health, surface: kind[1], sound: kind[2], solid: kind[3], origin: vec(e.origin), remainder: [] });
   }
   for (const e of ents) {
     if (!/^prop_dynamic/.test(e.classname) || !/^(true|1)$/i.test(String(e.startdisabled ?? '')) || !/remainder/i.test(String(e.model || ''))) continue;
@@ -230,6 +241,27 @@ function glassNodes(json, ents) {
     if (near) near.remainder.push(...find.prop(e));
   }
   return out;
+}
+
+// An entity's model, as the game files name it (models/.../x.vmdl).
+const modelPath = (e) => String(e.model || '').replace(/^resource_name:"?|"$/g, '').replace(/^"|"$/g, '').toLowerCase();
+
+// A model's own break data, from its compiled data block (a cs2.dump of it): its prop_data's health and base (what it's
+// made of) and how many pieces it breaks into. null for a model without prop_data.
+function propBreakData(data) {
+  let text = null;
+  const look = (o) => {
+    if (text || !o || typeof o !== 'object') return;
+    if (typeof o.m_keyValueText === 'string') { text = o.m_keyValueText; return; }
+    for (const v of Object.values(o)) look(v);
+  };
+  look(data);
+  if (!text) return null;
+  let kv;
+  try { kv = parseKV3(text); } catch { return null; }
+  const pd = kv?.prop_data;
+  if (!pd) return null;
+  return { health: +pd.health || 0, base: String(pd.base || ''), pieces: Array.isArray(kv.break_list) ? kv.break_list.length : 0 };
 }
 
 // Every surface's bullet impact sound (surfaceproperties.vsurf): { surface (lower case): sound event }. Inferno's
@@ -586,5 +618,5 @@ function mapSoundscapes(ents) {
 module.exports = {
   PLAY_VERSION, DATA_VERSION, F_PLAYER, F_BULLET, F_GRENADE, IRR_MAX, readGlb, buildCollision, brushSolid, gameVolumes, mapInfo, bakeLightmap, bakeSky,
   probeVolumes, bakeProbes, toneMapping, disabledNodes, hurtVolume, surfaceImpacts, doorNodes, glassNodes,
-  weaponStats, soundEventFiles, soundEventInfo, reverbPreset, mapSoundscapes, parseEntities, compactNav, NAV_VERSION, parseKV3,
+  weaponStats, soundEventFiles, modelPath, propBreakData, soundEventInfo, reverbPreset, mapSoundscapes, parseEntities, compactNav, NAV_VERSION, parseKV3,
 };

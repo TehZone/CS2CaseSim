@@ -2,9 +2,10 @@
 // glass apart). Use (E) opens or closes the door you're looking at: it swings away from you (or its own way) at CS2's
 // speed with its sounds, and closes again after its wait if it has one. A door is solid (its box, turned with it, in the
 // collision world, so it stops you, the bots, bullets and grenades), and a bot that walks into a closed one opens it.
-// A breakable (a pane of glass, a shop window, Nuke's and Mirage's vent covers, Mirage's shutter, a bottle...) is solid
-// until a bullet or a knife breaks it (a bottle or a pot only to bullets): it goes in pieces with its break sound, what's
-// left of it shows (Mirage's shutter frame), and it's whole again next round.
+// A breakable (a pane of glass, a shop window, Nuke's, Mirage's and Cache's vent covers and Nuke's vent slats, Mirage's
+// shutter, a bottle...) is solid until bullets, a knife or an HE grenade's blast take its health (the map's own) away
+// (a bottle or a pot only stops bullets): it goes in pieces with its break sound, what's left of it shows (Mirage's
+// shutter frame), and it's whole again next round.
 import { FLAG_PLAYER, FLAG_BULLET, FLAG_GRENADE } from './collision.js';
 import { fromGl } from './world.js';
 
@@ -29,11 +30,12 @@ export class Doors {
       return door;
     });
     this.panes = (world.glass || []).filter((g) => !g.box.isEmpty()).map((g) => {
-      const pane = { ...g, broken: false };
+      const pane = { ...g, broken: false, health: g.health || 1, hp: g.health || 1 };
       const b = g.box, corners = [];
       for (let i = 0; i < 8; i++) corners.push(fromGl({ x: i & 1 ? b.max.x : b.min.x, y: i & 2 ? b.max.y : b.min.y, z: i & 4 ? b.max.z : b.min.z }));
       pane.shape = game.collision.addDynamic({ tris: new Float32Array(12 * 9), flags: g.solid === false ? FLAG_BULLET : SOLID, surface: g.surface || 'glass', pane });
       boxTris(corners, pane.shape.tris);
+      game.collision.bound?.(pane.shape);
       pane.center = corners.reduce((s, c) => s.map((v, k) => v + c[k] / 8), [0, 0, 0]);
       return pane;
     });
@@ -56,6 +58,7 @@ export class Doors {
       corners.push(fromGl({ x: e[0] * v.x + e[4] * v.y + e[8] * v.z + e[12], y: e[1] * v.x + e[5] * v.y + e[9] * v.z + e[13], z: e[2] * v.x + e[6] * v.y + e[10] * v.z + e[14] }));
     }
     boxTris(corners, d.shape.tris);
+    this.game.collision.bound?.(d.shape);
     d.corners = corners;
     d.center = corners.reduce((s2, c) => s2.map((x, k) => x + c[k] / 8), [0, 0, 0]);
   }
@@ -107,13 +110,29 @@ export class Doors {
     return true;
   }
 
-  // Bullets (and knives): a pane of glass (or a vent cover, a bottle...) it hits breaks (returns true: a bullet goes on).
-  // dir: which way the hit went (its pieces fly that way).
-  shot(hit, p, dir = null) {
+  // Bullets (and knives): a pane of glass (or a vent cover, a bottle...) it hits takes the damage, and breaks once that's
+  // its health (returns true: a bullet goes on). dir: which way the hit went (its pieces fly that way).
+  shot(hit, p, dir = null, damage = Infinity) {
     const pane = hit?.shape?.pane;
     if (!pane || pane.broken) return false;
+    pane.hp -= damage;
+    if (pane.hp > 0) return false;
     this.breakPane(pane, p, dir);
     return true;
+  }
+  // An HE grenade going off at p: what it reaches (in the open, within radius) takes its damage, less further off.
+  blast(p, radius, damage) {
+    const col = this.game.collision;
+    for (const pane of this.panes) {
+      if (pane.broken) continue;
+      const d = Math.hypot(pane.center[0] - p[0], pane.center[1] - p[1], pane.center[2] - p[2]);
+      if (d >= radius) continue;
+      const to = pane.center.map((v, i) => (v - p[i]) / (d || 1));
+      const hit = col.raycast(p, to, d, FLAG_BULLET);
+      if (hit && hit.shape?.pane !== pane && hit.t < d - 8) continue; // (a wall in between)
+      pane.hp -= damage * (1 - d / radius);
+      if (pane.hp <= 0) this.breakPane(pane, pane.center, to);
+    }
   }
   breakPane(pane, p = pane.center, dir = null) {
     pane.broken = true;
@@ -161,7 +180,7 @@ export class Doors {
   reset() {
     for (const d of this.list) { d.angle = d.target = 0; d.closeAt = Infinity; this.place(d); }
     for (const p of this.panes) {
-      p.broken = false; p.shape.off = false;
+      p.broken = false; p.shape.off = false; p.hp = p.health;
       for (const m of p.meshes) m.visible = true;
       for (const m of p.after || []) m.visible = false;
       this.world.setBroken?.(p.piece, false);

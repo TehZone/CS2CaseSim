@@ -894,8 +894,52 @@ function fakeGame() {
   ]);
   ok(mirage.length === 2 && mirage[0].surface === 'metalvent' && mirage[0].solid && mirage[1].surface === 'wood' && JSON.stringify(mirage[1].remainder) === '[2,3]',
     "map export: Mirage's vent covers (breakable by name) and the shutter, its frame left when it breaks");
+  // Props that break by their own prop data (their models' health and pieces), whatever they're called: Nuke's vent
+  // slats, Cache's vents; a prop with prop data but nothing to break into (a radio) doesn't.
+  const kvText = (pd, pieces) => `<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:vmdlkeys4:version{9f5c1002-f19f-470c-bd42-c3c26c063d33} -->
+{ break_list = [ ${Array.from({ length: pieces }, (_, i) => `{ piece_name = "p${i}" }`).join(', ')} ] prop_data = { base = "${pd.base}" health = ${pd.health} } }`;
+  const slats = play.propBreakData({ m_modelInfo: { m_keyValueText: kvText({ base: 'Metal.Medium', health: 1.0 }, 10) } });
+  const radio = play.propBreakData({ m_modelInfo: { m_keyValueText: kvText({ base: 'Plastic.Medium', health: 5.0 }, 0) } });
+  ok(slats?.health === 1 && slats.base === 'Metal.Medium' && slats.pieces === 10 && radio?.pieces === 0 && play.propBreakData({ m_name: 'x' }) === null, "map export: a model's own break data (prop_data's health and base, its pieces)");
+  const pjson = { nodes: [{ name: 'nuke_vent_slats', matrix: m(448, -1403, -416) }, { name: 'newvent', matrix: m(374, -276, 1789) }, { name: 'vintage_radio_1', matrix: m(1, 2, 3) }] };
+  const own = { 'models/props/de_nuke/hr_nuke/nuke_vent_slats/nuke_vent_slats.vmdl': slats, 'models/de_cache_s2/newvent/newvent.vmdl': { health: 3, base: 'Metal.Medium', pieces: 10 },
+    'models/cs_italy/props/radio/vintage_radio_1.vmdl': radio };
+  const props = play.glassNodes(pjson, [
+    { classname: 'prop_dynamic', targetname: '[PR#]nuke_vent', model: 'resource_name:"models/props/de_nuke/hr_nuke/nuke_vent_slats/nuke_vent_slats.vmdl"', origin: '[ 448.0, -1403.0, -416.0 ]' },
+    { classname: 'prop_dynamic', model: '"models/de_cache_s2/newvent/newvent.vmdl"', origin: '[ 374.0, -276.0, 1789.0 ]' },
+    { classname: 'prop_dynamic', model: 'resource_name:"models/cs_italy/props/radio/vintage_radio_1.vmdl"', origin: '[ 1.0, 2.0, 3.0 ]' },
+  ], own);
+  ok(props.length === 2 && props.every((p) => p.surface === 'metalvent' && p.sound === 'Metal_Box.Break' && p.solid) && props[1].health === 3 && JSON.stringify(props.map((p) => p.nodes[0])) === '[0,1]',
+    "map export: props that break by their own prop data (Nuke's vent slats, Cache's vents) with their health, not a radio");
   const impacts = play.surfaceImpacts('{ surfacePropertyName = "brass_bell_large" audiosounds = { bulletimpact = "inferno.bell_c" } }, { surfacePropertyName = "Glass" audiosounds = { bulletimpact = "Glass.BulletImpact" } }');
   ok(impacts.brass_bell_large === 'inferno.bell_c' && impacts.glass === 'Glass.BulletImpact', "map export: every surface's bullet impact sound (Inferno's bells)");
+}
+
+// ---- breakables (doors.js): their health taken by bullets and an HE grenade's blast, whole again each round ------------
+{
+  const { Doors } = await import('../src/js/play/doors.js');
+  const played = [];
+  const game = { collision: { addDynamic: (o) => o, raycast: () => null }, sounds: { play: (e) => played.push(e) }, effects: {}, bots: [], combatants: [] };
+  const box = new THREE.Box3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 1, 0.1)); // (metres, three's axes)
+  const doors = new Doors(game, { doors: [], glass: [{ box, meshes: [], health: 30, surface: 'metalvent', sound: 'Metal_Box.Break', solid: true }] });
+  const pane = doors.panes[0], hit = { shape: pane.shape };
+  const first = doors.shot(hit, pane.center, [1, 0, 0], 20), second = doors.shot(hit, pane.center, [1, 0, 0], 20);
+  ok(!first && second && pane.broken && played.join() === 'Metal_Box.Break', 'breakables: bullets take its health away, and it breaks once it has none');
+  doors.reset();
+  const away = pane.center.map((v, i) => v + (i === 0 ? 400 : 0)), near = pane.center.map((v, i) => v + (i === 0 ? 100 : 0));
+  doors.blast(away, 350, 99);
+  const survived = !pane.broken && pane.hp === 30;
+  doors.blast(near, 350, 99);
+  ok(survived && pane.broken && pane.shape.off, 'breakables: an HE grenade breaks one in its reach (not one past it), and a round starts with it whole');
+  // Rays and sweeps skip a door's or breakable's triangles when they miss its bounds, and still hit it when they don't.
+  const W = world([[[-1000, -1000, -64], [1000, 1000, 0]]]);
+  const tris = new Float32Array(boxTris([100, -20, 0], [110, 20, 80]).flat(2));
+  const sh = W.addDynamic({ tris, flags: FLAG_PLAYER | FLAG_BULLET, surface: 'metalvent' });
+  W.bound(sh);
+  const hitIt = W.raycast([0, 0, 40], [1, 0, 0], 500), past = W.raycast([0, 60, 40], [1, 0, 0], 500), short = W.raycast([0, 0, 40], [1, 0, 0], 50);
+  const swept = W.traceBox([0, 0, 2], [200, 0, 2], [-16, -16, 0], [16, 16, 54]);
+  ok(hitIt?.shape === sh && Math.abs(hitIt.t - 100) < 1e-3 && !past && !short && swept.shape === sh && W.occluded([0, 0, 40], [300, 0, 40]) && !W.occluded([0, 60, 40], [300, 60, 40]),
+    "collision: a breakable's bounds let rays and sweeps past it skip it, and ones into it still hit");
 }
 
 // ---- grenade flight (flight.js): how the game, the bots and the lineup finder all fly grenades -----------------------
