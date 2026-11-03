@@ -484,6 +484,13 @@ export async function buildCS2Model(item, def, renderer, { statTrak = true, quic
     else o.material = await plainMaterial(prep.materials[matName]);
     o.frustumCulled = false;
   }
+  // The XM1014 carries the four shells its reload feeds in (bones shell1-shell4). CS2's animations keep them tucked into
+  // the gun (its inspect parks all four inside the receiver), but at rest they float in a row under it: folded away into
+  // the gun's own pivot here. A clip that moves them (first person, Play's reload) drives its own bones of the same name,
+  // so they still show there; the Nova's and Sawed-Off's one shell sits in the chamber and stays.
+  let folded = false;
+  root.traverse((o) => { if (o.isBone && /^shell\d+$/.test(o.name)) { o.position.set(0, 0, 0); o.scale.setScalar(0); folded = true; } });
+  if (folded) root.traverse((o) => { if (o.isSkinnedMesh) { o.boundingBox = null; o.boundingSphere = null; } });
 
   // Centre and orient: longest axis along X, model standing upright.
   root.updateMatrixWorld(true);
