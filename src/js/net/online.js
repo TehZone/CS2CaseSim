@@ -3,10 +3,13 @@
 //
 // Protocol (JSON over WebSocket at <server>/ws):
 //   client -> server  { t: 'hello', token, data }            first message; data = game data build stamp
-//                     { t: 'rpc', id, ns, m, args }          ns: 'act' | 'gamble' | 'trade' | 'social'
-//   server -> client  { t: 'welcome', user, state, ... }     after hello
+//                     { t: 'rpc', id, ns, m, args }          ns: 'act' | 'gamble' | 'trade' | 'social' | 'account' | 'admin'
+//   server -> client  { t: 'welcome', user, state, account, motd, ... }   after hello
 //                     { t: 'res', id, ok, r, d, err }        reply to an rpc (d = state changes)
 //                     { t: 'delta', d }                      state changes from elsewhere (trades, idle income, wins)
+//                     { t: 'account', account }              your Discord link or staff level changed
+//                     { t: 'admin.msg', kind, msg, from }    a moderator's warning or a broadcast
+//                     { t: 'fatal', code, error, ban? }      refused or thrown off (auth, version, banned, kicked, maintenance)
 //                     { t: 'lobbies' | 'players' | 'trades' | 'gamble.result' | 'notice', ... }
 import { D } from '../data.js';
 import { S, applyDelta, enterOnline, leaveOnline } from '../state.js';
@@ -19,6 +22,8 @@ let ws = null, user = null, status = 'offline', seq = 0, retry = 0, retryTimer =
 const pending = new Map();
 let lobbies = { battles: [], flips: [], jackpot: null };
 let players = [], trades = [];
+// Your account's Discord link and staff level ({ discord, staff, discordOn, discordBans }), and the server's message of the day.
+let account = null, motd = '';
 // Server clock offset and the market listings already bought on the server (per 10-minute window).
 let clockOffset = 0;
 const marketSold = new Map(); // window -> Set of listing ids
@@ -35,6 +40,15 @@ function setStatus(s, detail = '') {
 }
 function emit(type, detail) { bus.dispatchEvent(new CustomEvent(type, { detail })); }
 
+// Staff see the Admin section (the server still checks every admin request).
+function setAccount(a, announce = true) {
+  account = a && typeof a === 'object' ? a : null;
+  document.body.classList.toggle('is-staff', (account?.staff || 0) >= 1);
+  if (announce) emit('account', account);
+}
+// Fatal codes that end the session for a reason the player is shown in a window (main.js / account.js).
+const SHOWN_FATAL = new Set(['banned', 'kicked', 'maintenance']);
+
 export const net = {
   on(type, fn) { const h = (e) => fn(e.detail); bus.addEventListener(type, h); return () => bus.removeEventListener(type, h); },
   status: () => status,
@@ -49,6 +63,13 @@ export const net = {
   gamble: (m, args) => rpc('gamble', m, args),
   trade: (m, args) => rpc('trade', m, args),
   social: (m, args) => rpc('social', m, args),
+  account: () => account,
+  motd: () => motd,
+  // (Admin answers come as the server sent them: a snapshot's or another player's items aren't your live ones.)
+  admin: (m, args) => rpc('admin', m, args, { relink: false }),
+  // (info and unlink answer with the account: it is kept like a pushed one.)
+  accountRpc: (m, args) => rpc('account', m, args).then((r) => { if ((m === 'info' || m === 'unlink') && r && typeof r === 'object') setAccount(r); return r; }),
+  resetPassword: (name, code, password) => http('/api/reset', { name, code, password }),
   login, logout, resume,
 };
 
@@ -121,7 +142,9 @@ function connect() {
         wantOnline = false;
         if (msg.code === 'auth') store({ token: null });
         reject(new Error(msg.error));
-        emit('notice', { msg: msg.error, type: 'bad' });
+        // A ban, kick or maintenance gets a window of its own instead of a toast.
+        if (SHOWN_FATAL.has(msg.code)) emit('fatal', { code: msg.code, error: msg.error || '', ban: msg.ban || null });
+        else emit('notice', { msg: msg.error, type: 'bad' });
         sock.close();
       } else handle(msg);
     };
@@ -145,12 +168,18 @@ function disconnect() {
   clearInterval(keepAlive);
   setRemote(null);
   document.body.classList.remove('is-online');
+  motd = '';
+  if (account) setAccount(null);
+  document.body.classList.remove('is-staff');
   leaveOnline();
   setStatus('offline');
 }
 
 async function onWelcome(msg) {
   user = msg.user;
+  motd = typeof msg.motd === 'string' ? msg.motd : '';
+  // (Set before enterOnline: the page drawn again on 'reset' already knows your staff level.)
+  setAccount(msg.account, false);
   if (msg.serverTime) clockOffset = msg.serverTime - Date.now();
   marketSold.clear();
   for (const [w, ids] of Object.entries(msg.market || {})) marketSold.set(+w, new Set(ids));
@@ -166,6 +195,7 @@ async function onWelcome(msg) {
   emit('players', players);
   emit('trades', trades);
   emit('lobbies', lobbies);
+  emit('account', account);
 }
 
 // Use the server's market prices so item values match what the server pays.
@@ -185,7 +215,7 @@ function handle(msg) {
       if (!p) return;
       pending.delete(msg.id);
       if (msg.d) applyDelta(msg.d);
-      if (msg.ok) p.resolve(relink(msg.r));
+      if (msg.ok) p.resolve(p.raw ? msg.r : relink(msg.r));
       else p.reject(Object.assign(new Error(msg.err || 'Request failed'), { code: msg.code || 'bad', remote: true }));
       return;
     }
@@ -196,6 +226,8 @@ function handle(msg) {
     case 'gamble.result': emit('gamble.result', msg.ev); return;
     case 'notice': emit('notice', { msg: msg.msg, type: msg.type }); return;
     case 'market': net.marketSold(msg.w).add(msg.lid); emit('market', msg); return;
+    case 'account': setAccount(msg.account); return;
+    case 'admin.msg': emit('admin.msg', { kind: msg.kind, msg: msg.msg || '', from: msg.from || '' }); return;
   }
 }
 
@@ -214,11 +246,12 @@ function relink(r) {
   return walk(r);
 }
 
-function rpc(ns, m, args = {}) {
+// relink: false resolves with the answer as it came (see relink).
+function rpc(ns, m, args = {}, { relink: link = true } = {}) {
   return new Promise((resolve, reject) => {
     if (!ws || ws.readyState !== 1 || status !== 'online') return reject(Object.assign(new Error('Not connected to the server'), { remote: true }));
     const id = ++seq;
-    pending.set(id, { resolve, reject });
+    pending.set(id, { resolve, reject, raw: !link });
     ws.send(JSON.stringify({ t: 'rpc', id, ns, m, args }));
     setTimeout(() => { if (pending.has(id)) { pending.delete(id); reject(Object.assign(new Error('The server did not answer'), { remote: true })); } }, 30000);
   });

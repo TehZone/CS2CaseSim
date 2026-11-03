@@ -1,0 +1,180 @@
+/* The admin panel (pages/admin.js): Panorama's panels, tabs and tables, tightened into a moderation tool. */
+
+.adm .page-head .sub { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.adm .page-head .fair { font-size: 12px; }
+.adm-tabs { margin-bottom: 18px; }
+.adm-body { min-height: 300px; }
+.adm-empty { padding: 40px 20px; font-size: 14px; }
+.adm-empty .btn { margin-top: 12px; }
+.adm-bar { margin-bottom: 12px; }
+.adm-bar .input[type=search] { width: 280px; }
+.adm-bar .seg { border-bottom: 0; }
+.adm-note { font-size: 12px; line-height: 1.45; }
+.adm-p { margin: 0; line-height: 1.5; }
+
+/* ---------- dashboard ---------- */
+/* (eight numbers: two even rows of four, so none is left alone on a row) */
+.adm-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 18px; }
+.adm-stats .stat b { font-family: var(--font-cond); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.adm-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+.adm-state { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.adm-access { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; font-size: 12.5px; }
+.adm-access li { display: flex; gap: 8px; align-items: baseline; line-height: 1.4; }
+.adm-access li::before { flex: none; width: 12px; text-align: center; font-weight: 700; }
+.adm-access li.yes::before { content: '✓'; color: var(--green); }
+.adm-access li.no { color: var(--dim); }
+.adm-access li.no::before { content: '–'; }
+.adm-switch { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid rgba(255, 255, 255, .05); font-size: 13px; }
+.adm-motd { display: grid; gap: 4px; padding-top: 8px; font-size: 13px; }
+.adm-motd > span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.adm-motd > div { word-break: break-word; }
+.adm-panel-foot { display: flex; justify-content: flex-end; margin-top: 10px; }
+
+/* ---------- tables ---------- */
+.adm-table { margin-top: 0; }
+.adm-table th.num, .adm-table td.num { text-align: right; }
+.adm-table td { vertical-align: middle; }
+.adm-table td.nw { white-space: nowrap; }
+.adm-table tbody tr { transition: background .1s; }
+.adm-table tbody tr:hover td { background: rgba(255, 255, 255, .055); }
+.adm-click tbody tr { cursor: pointer; }
+.adm-detail { min-width: 220px; max-width: 520px; font-size: 12px; color: #c3cad2; line-height: 1.5; word-break: break-word; }
+.adm-diff b { color: var(--hi); font-weight: 600; }
+.adm-link { background: none; border: 0; padding: 0; color: var(--hi); font-weight: 600; text-decoration: underline; text-decoration-color: rgba(255, 255, 255, .25); text-underline-offset: 2px; }
+.adm-link:hover { color: var(--gold2); text-decoration-color: var(--gold2); }
+.adm-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #5d6772; margin-right: 8px; vertical-align: middle; flex: none; }
+.adm-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.chip .adm-dot { margin-right: 0; }
+.adm-lvl { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.adm-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 12px; font-size: 12px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+.adm-rowbtns { display: flex; gap: 6px; justify-content: flex-end; }
+.adm-label { width: 320px; }
+.adm-count { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; font-size: 10px; line-height: 15px; text-align: center; background: rgba(255, 255, 255, .1); color: var(--muted); letter-spacing: 0; }
+
+/* ---------- a player ---------- */
+.adm-back { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.adm-head { margin-bottom: 14px; padding: 16px 18px; }
+.adm-head-top { display: grid; grid-template-columns: auto minmax(200px, 1fr) minmax(280px, 1.2fr); gap: 18px; align-items: start; }
+.adm-av { width: 64px; height: 64px; font-size: 22px; font-family: var(--font-cond); }
+.adm-who h2 { margin: 2px 0 8px; font-size: 26px; font-weight: 700; font-family: var(--font-cond); letter-spacing: .03em; color: #fff; word-break: break-all; }
+.adm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.adm-facts dd { word-break: break-word; }
+.adm-banline { margin-top: 14px; padding: 9px 12px; background: rgba(236, 90, 81, .1); border: 1px solid rgba(236, 90, 81, .35); border-left: 3px solid var(--red); font-size: 13px; display: grid; gap: 3px; }
+.adm-banline b { color: #ff9a92; }
+.adm-actions { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); align-items: center; }
+.adm-subtabs { margin-bottom: 14px; }
+.adm-subbody { min-height: 200px; }
+.adm-summary { margin-bottom: 14px; }
+.adm-summary b { font-family: var(--font-cond); font-variant-numeric: tabular-nums; }
+.adm-summary .lvl-ico { width: 20px; height: 20px; }
+
+/* the editor: every number in a grid of small labelled fields, a changed one marked gold */
+.adm-editor { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; align-items: start; }
+.adm-editor > div { display: grid; gap: 14px; min-width: 0; }
+.adm-editor > div:empty { display: none; }
+.adm-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px 12px; }
+.adm-field { display: grid; gap: 4px; min-width: 0; }
+.adm-field span { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adm-field .input { width: 100%; font-variant-numeric: tabular-nums; }
+.adm-field .input:disabled { opacity: .75; cursor: default; }
+.input.changed { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(228, 174, 57, .35); }
+.adm-save { align-items: center; position: sticky; bottom: 0; padding: 10px 0 4px; background: linear-gradient(0deg, rgba(14, 18, 22, .92) 60%, transparent); z-index: 2; }
+.adm-json { width: 100%; min-height: 52vh; font-family: Consolas, monospace; font-size: 12px; line-height: 1.45; resize: vertical; white-space: pre; tab-size: 2; }
+.adm-json-bar { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+
+/* inventory rows: the item's picture over its rarity, StatTrak / Souvenir names coloured like the cards */
+.adm-inv td { padding-top: 3px; padding-bottom: 3px; }
+.adm-inv td.cb, .adm-inv th.cb { width: 28px; }
+.adm-inv tr.sel td { background: rgba(255, 255, 255, .07); }
+.adm-thumb { width: 64px; padding: 2px 4px !important; background: linear-gradient(0deg, color-mix(in srgb, var(--rc) 30%, transparent), transparent 70%) !important; box-shadow: inset 0 -2px 0 var(--rc); }
+.adm-thumb img { display: block; width: 56px; height: 42px; object-fit: contain; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .6)); }
+.adm-iname { font-weight: 600; color: var(--hi); white-space: nowrap; max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+.adm-iname.stt { color: var(--st); }
+.adm-iname.sv { color: var(--sv); }
+.adm-uid { font-family: Consolas, monospace; font-size: 10px; color: var(--dim); }
+.adm-tags { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; min-height: 34px; }
+.adm-src { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+
+/* giving items: the game's items on the left, the one picked and its options on the right */
+.adm-give { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 18px; align-items: start; }
+.adm-give-pick .toolbar { margin-bottom: 8px; }
+.adm-give-pick .input[type=search] { flex: 1; min-width: 160px; }
+.adm-give-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px; max-height: 52vh; overflow: auto; padding-right: 2px; }
+.adm-gi { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 8px 4px 4px; text-align: left; color: var(--text); font-size: 12px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--rc) 16%, rgba(0, 0, 0, .3)), rgba(0, 0, 0, .25) 60%); border: 1px solid var(--line); border-left: 3px solid var(--rc); }
+.adm-gi:hover { border-color: rgba(255, 255, 255, .35); border-left-color: var(--rc); }
+.adm-gi.on { border-color: #fff; border-left-color: var(--rc); background: linear-gradient(90deg, color-mix(in srgb, var(--rc) 30%, rgba(0, 0, 0, .3)), rgba(255, 255, 255, .06) 60%); }
+.adm-gi img { width: 48px; height: 36px; object-fit: contain; }
+.adm-gi span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adm-gi b { color: var(--green); font-variant-numeric: tabular-nums; font-weight: 600; }
+.adm-give-side { display: grid; gap: 12px; position: sticky; top: 0; }
+.adm-give-side > label { display: grid; gap: 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; font-weight: 600; }
+.adm-give-prev { min-height: 120px; display: grid; place-items: center; background: var(--well); border: 1px solid var(--line); padding: 10px; }
+.adm-give-card { display: grid; gap: 4px; justify-items: center; text-align: center; font-size: 13px; width: 100%;
+  background: linear-gradient(0deg, color-mix(in srgb, var(--rc) 28%, transparent), transparent 60%); border-bottom: 3px solid var(--rc); padding-bottom: 8px; }
+.adm-give-card img { width: 100%; max-width: 220px; aspect-ratio: 4 / 3; object-fit: contain; filter: drop-shadow(0 4px 8px rgba(0, 0, 0, .6)); }
+.adm-give-card b { color: var(--hi); }
+
+/* configs: the crosshair drawn small, its colour, the key binds as keycaps */
+.adm-xrow { display: inline-flex; align-items: center; gap: 10px; }
+.adm-xhair { position: relative; display: inline-block; width: 46px; height: 46px; flex: none; background: radial-gradient(circle, #59636e, #2b323a); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12); }
+.adm-xhair > span { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+.adm-xhair i { position: absolute; display: block; }
+.adm-swatch { display: inline-block; width: 14px; height: 14px; margin-right: 8px; vertical-align: -2px; box-shadow: 0 0 0 1px rgba(0, 0, 0, .6), 0 0 0 2px rgba(255, 255, 255, .2); }
+.adm-binds { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 14px; }
+.adm-bind { display: flex; align-items: center; gap: 10px; padding: 4px 8px; background: var(--well); border: 1px solid var(--line); font-size: 12px; min-width: 0; }
+.adm-bind .fair { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adm-key { flex: none; min-width: 34px; padding: 1px 6px; text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .04em; color: #10140f; background: linear-gradient(180deg, #e8ecef, #b9c1c9); box-shadow: 0 1px 0 #6d7781; }
+
+/* history: notes beside the trades */
+.adm-hist { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 0 20px; align-items: start; }
+/* (min-width 0: a wide table scrolls in its own wrap instead of widening the column, and with it the page) */
+.adm-hist > div, .adm-cols > *, .adm-server > div { min-width: 0; }
+.adm-hist .section-title:first-child { margin-top: 0; }
+.adm-notes { display: grid; gap: 10px; }
+.adm-note-add { display: flex; gap: 8px; align-items: stretch; }
+.adm-note-add .input { flex: 1; resize: vertical; min-height: 40px; }
+.adm-noterow { padding: 8px 10px; background: var(--well); border-left: 2px solid var(--gold); }
+.adm-notehead { font-size: 11px; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
+.adm-notehead b { color: var(--hi); font-size: 12px; }
+.adm-notetext { margin-top: 3px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+
+/* ---------- server ---------- */
+.adm-server { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(300px, 1fr); gap: 22px; align-items: start; }
+.adm-settings { max-width: none; }
+.adm-settings .adm-wide { width: min(360px, 45vw); }
+.setting.changed { box-shadow: inset 3px 0 0 var(--gold); }
+.adm-cast { display: grid; gap: 10px; }
+.adm-cast .input { width: 100%; resize: vertical; min-height: 96px; }
+.adm-cast-bar { display: flex; align-items: center; gap: 10px; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* ---------- forms in the admin's windows ---------- */
+.adm-form { display: grid; gap: 12px; }
+.adm-form > label:not(.check) { display: grid; gap: 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; font-weight: 600; }
+.adm-form > label small { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--dim); font-size: 11px; }
+.adm-form textarea.input { resize: vertical; line-height: 1.45; text-transform: none; letter-spacing: 0; }
+.adm-form .check { font-size: 13px; }
+.adm-form .err { color: var(--red); font-size: 13px; min-height: 18px; }
+.adm-form [hidden] { display: none !important; }
+
+/* (a short window, 720p: a smaller picture, so the skin's options fit above the window's buttons) */
+@media (max-height: 820px) {
+  .adm-give-prev { min-height: 0; }
+  .adm-give-card img { max-width: 140px; }
+}
+
+/* ---------- narrow windows ---------- */
+@media (max-width: 1100px) {
+  .adm-head-top { grid-template-columns: auto minmax(0, 1fr); }
+  .adm-facts { grid-column: 1 / -1; }
+  .adm-server, .adm-give { grid-template-columns: 1fr; }
+  .adm-give-side { position: static; }
+}
+@media (max-width: 760px) {
+  .adm-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .adm-bar .input[type=search] { width: 100%; }
+  .adm-hist { grid-template-columns: minmax(0, 1fr); }
+  .adm-editor { grid-template-columns: minmax(0, 1fr); }
+  .adm-settings .adm-wide { width: 100%; }
+  .adm-settings .setting { flex-wrap: wrap; }
+}

@@ -4,6 +4,7 @@
 .pill.star { background: rgba(228, 174, 57, .2); color: var(--gold2); }
 .pill.star::before { content: '★'; margin-right: 1px; }
 body:not(.is-online) .online-only { display: none !important; }
+body:not(.is-staff) .staff-only { display: none !important; }
 /* the profile corner, like CS2's: avatar with a status dot (grey on this PC, green online), your name over your balance */
 .account {
   display: flex; align-items: center; gap: 12px; padding: 0 18px 0 14px; background: none; border: 0; border-left: 1px solid rgba(255, 255, 255, .08);
@@ -142,6 +143,33 @@ body:not(.is-online) .online-only { display: none !important; }
 .auth { display: grid; gap: 12px; max-width: 420px; }
 .auth label { display: grid; gap: 4px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; font-weight: 600; }
 .auth .err { color: var(--red); font-size: 13px; min-height: 18px; }
+.link-btn { justify-self: start; background: none; border: 0; padding: 0; margin-top: -6px; color: var(--muted); font-size: 12px; text-decoration: underline; text-underline-offset: 2px; }
+.link-btn:hover { color: var(--hi); }
+.fair-input { font-family: Consolas, monospace; letter-spacing: .12em; text-transform: uppercase; }
+
+/* ---------- your account's Discord link (account.js) ---------- */
+.acct-discord { display: grid; gap: 10px; margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+.acct-discord h4 { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.acct-linked, .acct-staff, .link-done { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.acct-linked { padding: 10px 12px; background: var(--well); border: 1px solid var(--line); }
+.acct-linked .muted { font-size: 12px; line-height: 1.45; }
+.acct-staff .muted { font-size: 12px; }
+.acct-dc { width: 34px; height: 34px; flex: none; display: grid; place-items: center; color: #fff; background: #5865f2; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .2); }
+.acct-dc.off { background: #3a414b; color: #aab3bd; }
+/* the link code: big, in the code font, with how long it has left */
+.link-box { display: grid; gap: 12px; }
+.link-code { font-size: 44px; font-weight: 700; color: var(--hi); letter-spacing: .18em; text-align: center; padding: 16px 10px; background: var(--well); border: 1px solid var(--line2); word-break: normal; user-select: all; }
+.link-code.expired { color: var(--dim); text-decoration: line-through; }
+.link-meta { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.link-steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 13px; line-height: 1.5; }
+.link-steps .fair { font-size: 13px; color: var(--hi); }
+.link-done { padding: 14px; background: rgba(138, 208, 100, .08); border: 1px solid rgba(138, 208, 100, .35); }
+.link-done b { color: var(--green); font-size: 15px; }
+/* a ban, kick, maintenance or a moderator's warning */
+.fatal-box { display: grid; gap: 12px; padding-left: 14px; border-left: 3px solid var(--line2); }
+.fatal-box.bad { border-left-color: var(--red); }
+.fatal-box.gold { border-left-color: var(--gold); }
+.fatal-reason { font-size: 15px; line-height: 1.5; color: var(--hi); white-space: pre-wrap; word-break: break-word; }
 
 /* souvenir items (yellow like in CS2) */
 .card .sv { color: var(--sv); }

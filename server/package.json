@@ -8,7 +8,7 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "start": "node index.mjs",
-    "test": "node test.mjs"
+    "test": "node test.mjs && node test-admin.mjs"
   },
   "dependencies": {
     "pg": "^8.16.3",

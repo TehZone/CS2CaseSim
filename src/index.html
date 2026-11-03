@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="css/features.css">
   <link rel="stylesheet" href="css/loadout.css">
   <link rel="stylesheet" href="css/play.css">
+  <link rel="stylesheet" href="css/admin.css">
   <script type="importmap">
     { "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/addons/" } }
   </script>
@@ -39,6 +40,8 @@
             <button data-page="database" role="menuitem"><i class="ico" data-icon="stats_grid"><svg viewBox="0 0 32 32"><path fill-rule="evenodd" d="M4.5 6h23v20h-23zm2 2v4h5V8zm7 0v4h12V8zm-7 6v4h5v-4zm7 0v4h12v-4zm-7 6v4h5v-4zm7 0v4h12v-4z"/></svg></i><span class="mlbl">Item Database</span></button>
             <button data-page="gamble" role="menuitem"><i class="ico" data-icon="coin_stack"><svg viewBox="0 0 32 32"><ellipse cx="12.5" cy="8.5" rx="8" ry="3.4"/><path d="M4.5 11c1.5 1.7 4.5 2.7 8 2.7s6.5-1 8-2.7v3c0 1.9-3.6 3.4-8 3.4s-8-1.5-8-3.4z"/><path d="M4.5 16.6c1.5 1.7 4.5 2.7 8 2.7.6 0 1.2 0 1.8-.1v3.3c-.6.1-1.2.1-1.8.1-4.4 0-8-1.5-8-3.4z"/><ellipse cx="21" cy="20" rx="7.5" ry="3.2"/><path d="M13.5 22.4c1.4 1.6 4.2 2.6 7.5 2.6s6.1-1 7.5-2.6v2.9c0 1.8-3.4 3.2-7.5 3.2s-7.5-1.4-7.5-3.2z"/></svg></i><span class="mlbl">Gamble</span></button>
             <button data-page="trade" class="online-only" role="menuitem"><i class="ico" data-icon="trade"><svg viewBox="0 0 32 32"><path d="M21.5 3.5L28 10l-6.5 6.5V12H7.5V8h14zM10.5 15.5V20h14v4h-14v4.5L4 22z"/></svg></i><span class="mlbl">Trade</span></button>
+            <!-- staff on an online server (moderators and admins, from the account's Discord roles): admin.js -->
+            <button data-page="admin" class="staff-only" role="menuitem"><i class="ico" data-icon="admin"><svg viewBox="0 0 32 32"><path fill-rule="evenodd" d="M16 3L27 7V15.2C27 21.8 22.4 27 16 29C9.6 27 5 21.8 5 15.2V7ZM16 6.2L8 9.1V15.2C8 20 11.3 23.9 16 25.8C20.7 23.9 24 20 24 15.2V9.1ZM16 10.5L17.6 13.8L21.2 14.2L18.5 16.6L19.3 20.2L16 18.4L12.7 20.2L13.5 16.6L10.8 14.2L14.4 13.8Z"/></svg></i><span class="mlbl">Admin</span></button>
           </div>
         </div>
       </nav>

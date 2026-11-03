@@ -16,6 +16,34 @@ const MIGRATIONS = [
      id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, data JSONB NOT NULL, created BIGINT NOT NULL, updated BIGINT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS rounds_status ON rounds (status)`,
   `CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v JSONB NOT NULL)`,
+  // The admin panel and Discord linking (server/admin.mjs). IP addresses are only ever kept as salted hashes.
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_id TEXT`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS discord_name TEXT`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS linked_at BIGINT`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS config JSONB`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS config_at BIGINT`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS users_discord ON users (discord_id) WHERE discord_id IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS user_ips (
+     user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, ip_hash TEXT NOT NULL, last BIGINT NOT NULL, PRIMARY KEY (user_id, ip_hash))`,
+  `CREATE INDEX IF NOT EXISTS user_ips_hash ON user_ips (ip_hash)`,
+  `CREATE TABLE IF NOT EXISTS bans (
+     id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id) ON DELETE CASCADE, ip_hash TEXT, reason TEXT NOT NULL, by_name TEXT NOT NULL,
+     created BIGINT NOT NULL, expires BIGINT, lifted BIGINT, lifted_by TEXT)`,
+  // The banner's staff level: a ban can only be lifted at that level or above (older rows: NULL, anyone).
+  `ALTER TABLE bans ADD COLUMN IF NOT EXISTS by_level INT`,
+  `CREATE INDEX IF NOT EXISTS bans_user ON bans (user_id)`,
+  `CREATE INDEX IF NOT EXISTS bans_ip ON bans (ip_hash)`,
+  `CREATE TABLE IF NOT EXISTS snapshots (
+     id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, label TEXT NOT NULL, kind TEXT NOT NULL,
+     state JSONB NOT NULL, config JSONB, by_name TEXT NOT NULL, created BIGINT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS snapshots_user ON snapshots (user_id, created)`,
+  `CREATE TABLE IF NOT EXISTS notes (
+     id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, by_name TEXT NOT NULL, text TEXT NOT NULL, created BIGINT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS audit (
+     id SERIAL PRIMARY KEY, at BIGINT NOT NULL, actor TEXT NOT NULL, actor_discord TEXT, action TEXT NOT NULL, target_id INT, target_name TEXT,
+     detail JSONB NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS audit_at ON audit (at)`,
+  `CREATE INDEX IF NOT EXISTS audit_target ON audit (target_id, at)`,
 ];
 
 export async function openDb({ url = process.env.DATABASE_URL, dataDir = process.env.PGLITE_DIR } = {}) {

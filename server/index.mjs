@@ -1,8 +1,13 @@
 // CS2 Case Simulator multiplayer server.
 //   node server/index.mjs            (DATABASE_URL=postgres://... for Postgres/Neon; without it an embedded
 //                                     Postgres is used: in memory, or on disk with PGLITE_DIR=./server/.data)
-// HTTP: GET /health, POST /api/register | /api/login | /api/logout, GET /api/prices
+//   node server/index.mjs --admins alice,bob --discord-token-file <path>   (dev: staff by name, the bot's token from a file)
+// HTTP: GET /health, POST /api/register | /api/login | /api/logout | /api/reset, GET /api/prices
 // WebSocket: /ws (protocol described in src/js/net/online.js)
+// Staff, bans and the Discord bot: server/admin.mjs and server/discord.mjs (env: ADMIN_USERS, DISCORD_BOT_TOKEN or
+// DISCORD_TOKEN_FILE, DISCORD_GUILD_ID, DISCORD_ADMIN_ROLES, DISCORD_MOD_ROLES, DISCORD_LOG_CHANNEL, DISCORD_LINKED_ROLE,
+// DISCORD_GATEWAY=0 for an instance that must not run the bot's gateway). TRUST_PROXY=<hops>: only behind reverse
+// proxies (Render: 1), the client's address is taken from X-Forwarded-For, that many entries from the right.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,6 +20,7 @@ import { Store } from './store.mjs';
 import { Trades } from './trade.mjs';
 import { Live } from './live.mjs';
 import * as A from './accounts.mjs';
+import { Admin, banText, networkBanText } from './admin.mjs';
 import { D, initData } from '../src/js/engine/data.js';
 import { makeCtx, runAction, delta, GameError } from '../src/js/engine/actions.js';
 import { marketWindow } from '../src/js/engine/market.js';
@@ -26,18 +32,71 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROTOCOL = 1;
 const INV_CAP = 3000;
 const MAX_MSG = 64 * 1024;
+// Requests that end your own offer or round still work while trading or gambling is turned off.
+const TRADE_ALWAYS = new Set(['cancel', 'decline']);
+const GAMBLE_ALWAYS = new Set(['flip.cancel', 'battle.cancel']);
+const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
 
-export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts = {}, log = console.log, priceRefresh = process.env.PRICE_REFRESH !== '0' } = {}) {
+// The bot's options from the environment (false: no token, no bot). The token is read, never logged.
+export function discordFromEnv({ env = process.env, tokenFile = env.DISCORD_TOKEN_FILE, log = console.log } = {}) {
+  let token = String(env.DISCORD_BOT_TOKEN || '').trim();
+  if (!token && tokenFile) {
+    try { token = fs.readFileSync(tokenFile, 'utf8').split(/\r?\n/)[0].trim(); } catch (e) {
+      log(`[discord] could not read the token file (${e.code || 'error'}): the bot is off`);
+      return false;
+    }
+  }
+  token = token.replace(/^Bot\s+/i, '');
+  if (!token) return false;
+  return {
+    token, guildId: env.DISCORD_GUILD_ID || undefined,
+    adminRoles: env.DISCORD_ADMIN_ROLES ? list(env.DISCORD_ADMIN_ROLES) : undefined,
+    modRoles: env.DISCORD_MOD_ROLES ? list(env.DISCORD_MOD_ROLES) : undefined,
+    logChannel: env.DISCORD_LOG_CHANNEL || undefined, linkedRole: env.DISCORD_LINKED_ROLE || undefined,
+    gateway: env.DISCORD_GATEWAY !== '0',
+  };
+}
+
+// No bot on this server: the same methods, doing nothing (server/discord.mjs isn't even loaded).
+function noDiscord() {
+  const off = { ok: false, error: 'This server isn\'t connected to Discord' };
+  return {
+    enabled: false, interactions: false,
+    status: () => ({ enabled: false, connected: false, ready: false, bot: null, guild: null, guildId: null, error: null }),
+    start: async () => null, close() {}, onInteraction() {},
+    memberLevel: async () => 0, levelOf: async () => 0, member: async () => null, setLinkedRole: async () => false,
+    dm: async () => false, ban: async () => off, unban: async () => off, modLog: async () => null,
+  };
+}
+
+// `discord`: false (no bot), createDiscord's options (tests point them at a stand-in), or undefined (the environment).
+async function openDiscord(opt, log) {
+  const cfg = opt === undefined ? discordFromEnv({ log }) : opt;
+  if (!cfg || !cfg.token) return noDiscord();
+  const clean = Object.fromEntries(Object.entries(cfg).filter(([, v]) => v !== undefined)); // (so createDiscord's defaults apply)
+  const { createDiscord } = await import('./discord.mjs');
+  return createDiscord({ log, ...clean });
+}
+
+export async function startServer({
+  port = +process.env.PORT || 8787, db: dbOpts = {}, log = console.log, priceRefresh = process.env.PRICE_REFRESH !== '0',
+  admins = list(process.env.ADMIN_USERS), discord: discordOpt, trustProxy = process.env.TRUST_PROXY,
+} = {}) {
   const data = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/game-data.json'), 'utf8'));
   initData(data, { keys: JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/keys.json'), 'utf8')) });
   const db = await openDb(dbOpts);
   log(`[server] database: ${db.kind}`);
   const store = new Store(db, { log });
   const sockets = new Map(); // userId -> Set<ws>
+  // The latest kick of each player ({ seq, at, msg }): a hello already under way when it happened is refused with it.
+  const kicks = new Map();
+  let kickSeq = 0;
   const pricing = require('../shared/pricing.cjs');
+  const discord = await openDiscord(discordOpt, log);
+  log(discord.enabled ? '[discord] bot configured' : '[discord] no bot (set DISCORD_BOT_TOKEN to link accounts and use Discord roles)');
 
   const srv = {
-    db, store, log, INV_CAP,
+    db, store, log, INV_CAP, sockets, discord,
     isOnline: (id) => sockets.has(id),
     forEachOnline: (fn) => { for (const id of sockets.keys()) fn(id); },
     sendTo(id, msg, except = null) {
@@ -54,6 +113,30 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
     async bumpStat(id, key) {
       await store.withUser(id, async (e) => { e.st.stats[key] = (e.st.stats[key] || 0) + 1; store.markDirty(e); srv.deltaTo(id, { set: { stats: e.st.stats }, add: [], del: [], upd: [] }); });
     },
+    // Throws a player off: `fatal` to each of their connections, which then close (and ignore anything still coming).
+    kick(id, { code, error, ban } = {}) {
+      kicks.set(id, { seq: ++kickSeq, at: Date.now(), msg: { t: 'fatal', code, error, ...(ban ? { ban } : {}) } });
+      const set = sockets.get(id);
+      if (!set) return false;
+      const text = JSON.stringify(kicks.get(id).msg);
+      for (const ws of [...set]) {
+        ws.kicked = true;
+        if (ws.readyState === 1) ws.send(text);
+        ws.close(1000);
+      }
+      sockets.delete(id);
+      store.online.delete(id);
+      broadcastPlayers();
+      return true;
+    },
+    async pushAccount(id) {
+      if (!sockets.has(id)) return;
+      srv.sendTo(id, { t: 'account', account: await admin.account(id) });
+    },
+    broadcastMsg(msg) {
+      for (const id of sockets.keys()) srv.sendTo(id, msg);
+      return sockets.size;
+    },
   };
   const trades = new Trades(srv);
   srv.trades = trades;
@@ -61,6 +144,9 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
   const live = new Live(srv);
   srv.live = live;
   await live.refundOpen();
+  const admin = new Admin(srv, discord, { admins });
+  srv.admin = admin;
+  await admin.init();
 
   // ---- market prices: same data build as the client, refreshed daily from the marketplaces ----------------
   let pricePatch = null, pricePatchGz = null;
@@ -162,13 +248,24 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
     req.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString() || '{}')); } catch { reject(new Error('bad json')); } });
     req.on('error', reject);
   });
-  const ipOf = (req) => (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '?';
+  // The client's address (rate limits, network bans): the connection's own, unless TRUST_PROXY says how many reverse
+  // proxies in front each append the address they saw to X-Forwarded-For. Then it's the entry that many from the
+  // right: anything to its left came from the client, who can write whatever they like there.
+  const hops = Math.max(0, Math.floor(Number(trustProxy) || 0));
+  const ipOf = (req) => {
+    if (hops) {
+      const xff = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
+      if (xff.length >= hops) return xff[xff.length - hops];
+    }
+    return req.socket.remoteAddress || '?';
+  };
+  log(hops ? `[server] client addresses: X-Forwarded-For, ${hops} proxy hop${hops === 1 ? '' : 's'} (TRUST_PROXY)` : '[server] client addresses: the connection\'s own (no TRUST_PROXY)');
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
     try {
-      if (url.pathname === '/health') return json(res, 200, { ok: true, online: sockets.size, data: D.generatedAt, pricedAt: D.pricedAt });
+      if (url.pathname === '/health') return json(res, 200, { ok: true, online: sockets.size, data: D.generatedAt, pricedAt: D.pricedAt, discord: { connected: !!discord.status().connected } });
       if (url.pathname === '/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         return res.end(`<!doctype html><title>CS2 Case Simulator server</title><body style="font-family:system-ui;background:#0a0d12;color:#e8eef5;padding:40px">
@@ -180,17 +277,35 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
         res.writeHead(200, { 'content-type': 'application/json', ...(gz ? { 'content-encoding': 'gzip' } : {}), ...cors });
         return res.end(gz ? pricePatchGz : JSON.stringify(pricePatch));
       }
-      if (req.method === 'POST' && ['/api/register', '/api/login', '/api/logout'].includes(url.pathname)) {
-        if (!ipLimit(ipOf(req))) return json(res, 429, { error: 'Too many attempts. Wait a minute.' });
+      if (req.method === 'POST' && ['/api/register', '/api/login', '/api/logout', '/api/reset'].includes(url.pathname)) {
+        const ip = ipOf(req);
+        if (!ipLimit(ip)) return json(res, 429, { error: 'Too many attempts. Wait a minute.' });
         const body = await readBody(req);
         if (url.pathname === '/api/logout') { await A.logout(db, body.token); return json(res, 200, { ok: true }); }
         if (!nameLimit(String(body.name || '').toLowerCase())) return json(res, 429, { error: 'Too many attempts for this account. Try later.' });
-        const r = url.pathname === '/api/register' ? await A.register(db, body.name, body.password) : await A.login(db, body.name, body.password);
+        if (url.pathname === '/api/reset') return json(res, 200, await admin.resetPassword(body.name, body.code, body.password));
+        const ipHash = admin.ipHash(ip);
+        let r;
+        if (url.pathname === '/api/register') {
+          if (!admin.settings.registration) return json(res, 403, { error: 'New accounts are closed right now' });
+          const ban = await admin.activeBan({ ipHash });
+          if (ban) return json(res, 403, { error: networkBanText(ban), ban: { reason: ban.reason, expires: ban.expires, by: ban.by } });
+          r = await A.register(db, body.name, body.password);
+        } else {
+          // A banned account (or one on a banned network) gets no session; maintenance only stops the WebSocket.
+          r = await A.login(db, body.name, body.password, {
+            check: async (u) => {
+              const ban = await admin.activeBan({ userId: u.id, ipHash });
+              if (ban) throw new A.AuthError(banText(ban), 403, { ban: { reason: ban.reason, expires: ban.expires, by: ban.by } });
+            },
+          });
+        }
+        await admin.noteIp(r.id, ip);
         return json(res, 200, { token: r.token, name: r.name });
       }
       json(res, 404, { error: 'Not found' });
     } catch (e) {
-      if (e instanceof A.AuthError) return json(res, 400, { error: e.message });
+      if (e instanceof A.AuthError) return json(res, e.status || 400, { error: e.message, ...(e.extra || {}) });
       log('[http]', e);
       json(res, 500, { error: 'Server error' });
     }
@@ -258,14 +373,17 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
   const broadcastPlayers = () => { const players = playersList(); for (const id of sockets.keys()) srv.sendTo(id, { t: 'players', players }); };
 
   wss.on('connection', (ws, req) => {
-    let user = null;
+    let user = null, greeting = false;
     let tokens = 60, lastRefill = Date.now();
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
     const send = (m) => ws.readyState === 1 && ws.send(JSON.stringify(m));
+    // A refused hello: the reason, then the connection closes (the game closes it too, on reading it).
+    const refuse = (m) => { send(m); setTimeout(() => { if (!user && ws.readyState === 1) ws.close(1000); }, 1000).unref?.(); };
     const hello = setTimeout(() => { if (!user) ws.close(); }, 15000);
 
     ws.on('message', async (raw) => {
+      if (ws.kicked) return; // (thrown off: what was already on its way is ignored)
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
       // Token bucket: 20 requests per second on average, bursts of 60.
@@ -275,28 +393,52 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
       if (--tokens < 0) { if (msg.id) send({ t: 'res', id: msg.id, ok: false, err: 'Slow down a little', code: 'rate' }); return; }
 
       if (msg.t === 'hello') {
-        if (user) return;
-        if (msg.v !== PROTOCOL) return send({ t: 'fatal', error: 'Your game is a different version from the server. Update the game.', code: 'version' });
-        if (msg.data !== D.generatedAt) return send({ t: 'fatal', error: 'Your game data is a different version from the server. Update the game (or the server).', code: 'version' });
-        const u = await A.userForToken(db, msg.token).catch(() => null);
-        if (!u) return send({ t: 'fatal', error: 'Your login has expired. Log in again.', code: 'auth' });
-        clearTimeout(hello);
-        user = u;
-        if (!sockets.has(u.id)) sockets.set(u.id, new Set());
-        sockets.get(u.id).add(ws);
-        store.online.add(u.id);
-        const state = await store.withUser(u.id, async (e) => e.st);
-        send({
-          t: 'welcome', user: { id: u.id, name: u.name }, state, pricedAt: D.pricedAt, serverTime: Date.now(),
-          players: playersList(), trades: await trades.list(u.id), lobbies: live.snapshot(u.id), market: marketSnapshot(),
-        });
-        broadcastPlayers();
+        if (user || greeting) return;
+        if (msg.v !== PROTOCOL) return refuse({ t: 'fatal', error: 'Your game is a different version from the server. Update the game.', code: 'version' });
+        if (msg.data !== D.generatedAt) return refuse({ t: 'fatal', error: 'Your game data is a different version from the server. Update the game (or the server).', code: 'version' });
+        greeting = true;
+        const began = kickSeq; // (a kick from here on that this hello's checks can't have seen)
+        try {
+          const u = await A.userForToken(db, msg.token).catch(() => null);
+          if (!u) return refuse({ t: 'fatal', error: 'Your login has expired. Log in again.', code: 'auth' });
+          const ip = ipOf(req), ipHash = admin.ipHash(ip);
+          await admin.noteIp(u.id, ip);
+          const ban = await admin.activeBan({ userId: u.id, ipHash });
+          if (ban) return refuse({ t: 'fatal', code: 'banned', error: banText(ban), ban: { reason: ban.reason, expires: ban.expires, by: ban.by } });
+          if (admin.settings.maintenance && await admin.levelOf(u.id, { fast: true }) < 1) return refuse({ t: 'fatal', code: 'maintenance', error: admin.maintenanceMsg() });
+          if (ws.readyState !== 1) return;
+          // Kicked (banned, signed out, a new password...) while the checks above were waiting: the kick only reached the
+          // connections registered then, so this one goes too. From the next line on, a kick finds it in `sockets`.
+          const kicked = kicks.get(u.id);
+          if (kicked && kicked.seq > began) return refuse(kicked.msg);
+          clearTimeout(hello);
+          user = u;
+          ws.user = u; // (a rename updates the name its requests use)
+          ws.ipHash = ipHash; // (a network ban throws off every account connected from it)
+          if (!sockets.has(u.id)) sockets.set(u.id, new Set());
+          sockets.get(u.id).add(ws);
+          store.online.add(u.id);
+          const state = await store.withUser(u.id, async (e) => e.st);
+          send({
+            t: 'welcome', user: { id: u.id, name: u.name }, state, pricedAt: D.pricedAt, serverTime: Date.now(),
+            players: playersList(), trades: await trades.list(u.id), lobbies: live.snapshot(u.id), market: marketSnapshot(),
+            account: await admin.account(u.id), motd: admin.settings.motd || '',
+          });
+          broadcastPlayers();
+        } catch (e) {
+          log('[ws] hello failed', e);
+          ws.close(1011);
+        } finally {
+          greeting = false;
+        }
         return;
       }
       if (!user || msg.t !== 'rpc') return;
       const reply = (ok, body) => send({ t: 'res', id: msg.id, ok, ...body });
       try {
         if (msg.ns === 'act') {
+          // (the games against bots are gambling too)
+          if (!admin.settings.gambling && /^gamble\./.test(String(msg.m))) throw new GameError('Gambling is turned off on this server right now', 'off');
           const args = msg.args || {};
           const boughtNow = [];
           const out = await store.withUser(user.id, async (e) => {
@@ -318,8 +460,16 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
           const out = await social(user, String(msg.m), msg.args || {});
           return reply(true, { r: out.r, d: out.d });
         }
-        if (msg.ns === 'trade') return reply(true, { r: await trades.rpc(user, String(msg.m), msg.args || {}) });
-        if (msg.ns === 'gamble') return reply(true, { r: await live.rpc(user, String(msg.m), msg.args || {}) });
+        if (msg.ns === 'trade') {
+          if (!admin.settings.trading && !TRADE_ALWAYS.has(String(msg.m))) throw new GameError('Trading is turned off on this server right now', 'off');
+          return reply(true, { r: await trades.rpc(user, String(msg.m), msg.args || {}) });
+        }
+        if (msg.ns === 'gamble') {
+          if (!admin.settings.gambling && !GAMBLE_ALWAYS.has(String(msg.m))) throw new GameError('Gambling is turned off on this server right now', 'off');
+          return reply(true, { r: await live.rpc(user, String(msg.m), msg.args || {}) });
+        }
+        if (msg.ns === 'account') return reply(true, { r: await admin.accountRpc(user, String(msg.m), msg.args || {}) });
+        if (msg.ns === 'admin') return reply(true, { r: await admin.rpc(user, String(msg.m), msg.args || {}) });
         reply(false, { err: 'Unknown request' });
       } catch (e) {
         if (e instanceof GameError) return reply(false, { err: e.message, code: e.code });
@@ -348,14 +498,19 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
       ws.isAlive = false;
       ws.ping();
     }
+    for (const [id, k] of kicks) if (Date.now() - k.at > 120000) kicks.delete(id); // (no hello waits that long)
   }, 30000);
 
   await new Promise((r) => server.listen(port, r));
   const actualPort = server.address().port;
   log(`[server] listening on :${actualPort}`);
+  // The bot connects in the background; nothing waits for Discord.
+  if (discord.enabled) Promise.resolve().then(() => discord.start()).catch((e) => log('[discord] start failed', e?.message || e));
 
   async function close() {
     clearInterval(ping); clearInterval(priceTimer); clearInterval(saveMarket); clearInterval(serialTimer);
+    admin.close();
+    try { discord.close(); } catch (e) { log('[discord] close failed', e?.message || e); }
     await saveSerials();
     if (marketDirty) await db.query("INSERT INTO kv (k, v) VALUES ('market', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(marketSnapshot())]).catch(() => {});
     live.close();
@@ -364,7 +519,7 @@ export async function startServer({ port = +process.env.PORT || 8787, db: dbOpts
     await store.close();
     await db.close();
   }
-  return { port: actualPort, close, srv, db, store, refreshPrices };
+  return { port: actualPort, close, srv, db, store, refreshPrices, admin, discord };
 }
 
 // Run directly: start and shut down cleanly on SIGTERM (Render sends it before stopping an instance).
@@ -373,7 +528,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.error('DATABASE_URL is not set. Set it to your Neon connection string (see DEPLOY.md).');
     process.exit(1);
   }
-  const s = await startServer();
+  // Dev conveniences: --admins a,b (as ADMIN_USERS) and --discord-token-file <path> (as DISCORD_TOKEN_FILE).
+  const argv = process.argv.slice(2);
+  const arg = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined; };
+  const admins = arg('--admins'), tokenFile = arg('--discord-token-file');
+  const s = await startServer({
+    ...(admins != null ? { admins: list(admins) } : {}),
+    ...(tokenFile ? { discord: discordFromEnv({ tokenFile }) } : {}),
+  });
   let stopping = false;
   const stop = async () => {
     if (stopping) return;

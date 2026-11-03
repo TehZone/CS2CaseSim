@@ -16,7 +16,7 @@ const check = (name, ok, info = '') => { ok ? passed++ : failed++; console.log(`
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const quiet = () => {};
 
-let server = await startServer({ port: 0, db: { dataDir: DIR }, log: quiet, priceRefresh: false });
+let server = await startServer({ port: 0, db: { dataDir: DIR }, log: quiet, priceRefresh: false, discord: false });
 const base = () => `http://localhost:${server.port}`;
 
 async function post(p, body) {
@@ -211,7 +211,7 @@ try {
   const r1 = (await serverState(A.user.id)).money;
   A.close(); B.close();
   await server.close();
-  server = await startServer({ port: 0, db: { dataDir: DIR }, log: quiet, priceRefresh: false });
+  server = await startServer({ port: 0, db: { dataDir: DIR }, log: quiet, priceRefresh: false, discord: false });
   const r2 = (await serverState(A.user.id)).money;
   check('open coinflip escrow refunded after a restart', Math.abs(r1 - (r0 - 25)) < 0.011 && Math.abs(r2 - r0) < 0.5, `${r0} -> ${r1} -> ${r2}`);
   const A2 = await client(la.body.token);

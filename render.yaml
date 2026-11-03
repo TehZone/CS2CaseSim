@@ -13,6 +13,16 @@ services:
         value: production
       - key: NODE_VERSION
         value: "22.12.0"
+      # Players' addresses (network bans, sign-in rate limits): Render puts the address it saw last in X-Forwarded-For,
+      # one proxy hop. Anything before it comes from the player. See "Players' addresses" in DEPLOY.md.
+      - key: TRUST_PROXY
+        value: "1"
       # Your Neon connection string (postgres://...). Render asks for it when you create the Blueprint.
       - key: DATABASE_URL
+        sync: false
+      # The Discord bot (account linking, staff roles, slash commands); leave empty for a server without Discord.
+      # See "Discord: account linking and the admin panel" in DEPLOY.md.
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: DISCORD_GUILD_ID
         sync: false

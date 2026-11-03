@@ -142,6 +142,15 @@
       "permissions": [],
       "selfAssignable": true,
       "purpose": "Pinged for community events like case battle nights. Not mentionable, so only staff can ping it."
+    },
+    {
+      "key": "linked",
+      "name": "🔗 Linked",
+      "color": "",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [],
+      "purpose": "Given by the game server's bot when a member links their game account with /link, and taken away when they unlink."
     }
   ],
   "everyonePermissions": [
@@ -883,7 +892,7 @@
         },
         {
           "title": "🌐 Online mode (optional)",
-          "description": "Make an account on a server to trade with real players and join live case battle, coinflip and jackpot lobbies. Online accounts start fresh and stay separate from your offline save. Click **Offline** at the top right of the game to connect.\n\nWhen there's a community server to join, its address goes up in {{channel:announcements}}.",
+          "description": "Make an account on a server to trade with real players and join live case battle, coinflip and jackpot lobbies. Online accounts start fresh and stay separate from your offline save. Click **Offline** at the top right of the game to connect.\n\nWhen there's a community server to join, its address goes up in {{channel:announcements}}.\n\n**Link your Discord:** online, click your name at the top right, then **Link Discord**. Type `/link` here with the code the game shows, and press **Link** on the bot's reply. Forgot your password? Type `/resetpassword` here for a reset code, then use **Forgot password?** in the game.",
           "color": "#e4ae39",
           "thumbnail": "",
           "fields": [],
@@ -933,6 +942,11 @@
             {
               "name": "Do I have to go online?",
               "value": "No, online mode is optional. Offline you still have 2,000 NPC players who trade with you, send you offers and haggle.",
+              "inline": false
+            },
+            {
+              "name": "How do I link my game account?",
+              "value": "Online, click your name at the top right → **Link Discord**, then type `/link` here with the code. Only you can see the bot's answer. `/profile` shows anyone's linked account, and `/unlink` undoes it.",
               "inline": false
             },
             {
@@ -1085,6 +1099,11 @@
             {
               "name": "Warn, timeout, ban",
               "value": "Warn first for normal rule breaks, then time out, then ban. Scams, malware and real-money deals go straight to a ban.",
+              "inline": false
+            },
+            {
+              "name": "The game's admin panel",
+              "value": "Link your game account with `/link`, and **More → Admin** appears in the game: players, bans, kicks, warnings, notes, snapshots and the audit log. {{role:developer}} can also edit stats and items and change the server's settings. From Discord: `/game lookup`, `ban`, `unban`, `kick` and `warn`. Everything you do is logged in {{channel:mod_log}}.",
               "inline": false
             },
             {

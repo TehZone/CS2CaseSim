@@ -10,7 +10,10 @@ const RUDE = /(fuck|shit|cunt|nigg|fag|rape|hitler|nazi)/i;
 const scrypt = (pass, salt) => new Promise((res, rej) => crypto.scrypt(pass, salt, 64, { N: 16384, r: 8, p: 1 }, (e, k) => (e ? rej(e) : res(k))));
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
-export class AuthError extends Error {}
+// A refused login or register: shown to the player as is. `status` and `extra` (e.g. the ban) go into the HTTP answer.
+export class AuthError extends Error {
+  constructor(message, status = 400, extra = null) { super(message); this.status = status; this.extra = extra; }
+}
 
 export function validName(name) {
   if (typeof name !== 'string' || !NAME_RE.test(name)) return 'Username: 3-20 letters, numbers, _ or -';
@@ -37,12 +40,20 @@ async function newSession(db, userId) {
   return token;
 }
 
+const checkPass = (pass) => { if (typeof pass !== 'string' || pass.length < 6 || pass.length > 200) throw new AuthError('Password: at least 6 characters'); };
+
+// A new account's state (also what an admin's reset gives): the game's settings stay on the player's PC.
+export function newState() {
+  const st = freshState();
+  delete st.settings;
+  return st;
+}
+
 export async function register(db, name, pass) {
   const bad = validName(name);
   if (bad) throw new AuthError(bad);
-  if (typeof pass !== 'string' || pass.length < 6 || pass.length > 200) throw new AuthError('Password: at least 6 characters');
-  const st = freshState();
-  delete st.settings;
+  checkPass(pass);
+  const st = newState();
   const now = Date.now();
   let id;
   try {
@@ -58,13 +69,36 @@ export async function register(db, name, pass) {
   return { id, name, token: await newSession(db, id) };
 }
 
-export async function login(db, name, pass) {
+// `check({ id, name })` runs after the password is right and before a session is made (a ban refuses the login there,
+// so a banned player's password check never hands out a token).
+export async function login(db, name, pass, { check } = {}) {
   if (typeof name !== 'string' || typeof pass !== 'string') throw new AuthError('Wrong username or password');
   const { rows } = await db.query('SELECT id, name, pass FROM users WHERE name_lc = $1', [name.toLowerCase()]);
   // Hash anyway when the user doesn't exist, so timing doesn't reveal which usernames exist.
   const ok = rows.length ? await checkPassword(pass, rows[0].pass) : (await hashPassword(pass), false);
   if (!ok) throw new AuthError('Wrong username or password');
+  await check?.({ id: rows[0].id, name: rows[0].name });
   return { id: rows[0].id, name: rows[0].name, token: await newSession(db, rows[0].id) };
+}
+
+// A new password (a reset through Discord): every session of the account ends with it. With `discordId`, only while
+// the account is still linked to that Discord user. → whether it was set
+export async function setPassword(db, userId, pass, { discordId = null } = {}) {
+  checkPass(pass);
+  const hash = await hashPassword(pass);
+  return db.tx(async (q) => {
+    const { rows } = discordId == null
+      ? await q('UPDATE users SET pass = $1 WHERE id = $2 RETURNING id', [hash, userId])
+      : await q('UPDATE users SET pass = $1 WHERE id = $2 AND discord_id = $3 RETURNING id', [hash, userId, discordId]);
+    if (!rows.length) return false;
+    await q('DELETE FROM sessions WHERE user_id = $1', [userId]);
+    return true;
+  });
+}
+
+// Signs a player out everywhere.
+export async function endSessions(db, userId) {
+  await db.query('DELETE FROM sessions WHERE user_id = $1', [userId]);
 }
 
 export async function userForToken(db, token) {
