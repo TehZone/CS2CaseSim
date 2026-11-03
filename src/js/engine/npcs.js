@@ -139,7 +139,7 @@ export function crowd(seed) {
   crowds.set(seed, list);
   return list;
 }
-export const npcOf = (seed, id) => (/^n\d+$/.test(id) ? crowd(seed)[+id.slice(1)] || null : null);
+export const npcOf = (seed, id) => (/^n(0|[1-9]\d*)$/.test(id) ? crowd(seed)[+id.slice(1)] || null : null); // (their own id only: not n007)
 // The 66 who message you, buy on the market and send friend requests.
 const actives = new Map();
 export function activeCrowd(seed) {
@@ -264,7 +264,8 @@ export function startingState(seed, npc) {
 
 // ---- the save's NPC state ---------------------------------------------------------------------------------------------------
 // state.social: { seed, at (last tick), npcs: { id: { money, inv, friend, mood, trades, tier } }, threads: { id: [msg] },
-// offers: [offer], unread: { id: n }, feed: [{ at, npc, text }], me: your profile, comments: [{ at, npc, text }] }.
+// offers: [offer], unread: { id: n }, feed: [{ at, npc, text }], me: your profile, comments: [{ at, npc, text }],
+// blocked, rules (the admin panel's, see below) }.
 // friend: 0 none, 1 friends, 2 they sent you a request, 3 you sent them one.
 export function freshSocial(seed, now = Date.now()) {
   const so = { seed, at: now, npcs: {}, threads: {}, offers: [], unread: {}, feed: [], comments: [], me: freshPersona() };
@@ -276,6 +277,55 @@ export const freshPersona = () => ({ name: '', avatar: null, bio: '', country: '
 export function npcState(so, id) {
   if (!so.npcs[id]) so.npcs[id] = startingState(so.seed, npcOf(so.seed, id));
   return so.npcs[id];
+}
+
+// ---- blocks and rules (the admin panel offline) ---------------------------------------------------------------------------
+// so.blocked: { id: { at, reason, expires (null: for good), by } }. A blocked NPC does nothing on their own (no offers,
+// market buys, friend requests or chat; every pick in the tick passes them over) and takes no offers or messages from
+// you. A lapsed block counts for nothing (the tick sweeps it). so.rules: { trading, market, chat }, each on unless false:
+// off, the tick skips their offers to you, their market buying (and taking what you sell), or their friend requests and
+// chat. These change `so` in place.
+export const NPC_RULES = ['trading', 'market', 'chat'];
+export const ruleOn = (so, k) => so?.rules?.[k] !== false;
+export function blockOf(so, id, now = Date.now()) {
+  const b = so?.blocked?.[id];
+  return b && (b.expires == null || b.expires > now) ? b : null;
+}
+export const isBlocked = (so, id, now = Date.now()) => !!blockOf(so, id, now);
+// The blocks in force: [[id, block]].
+export const activeBlocks = (so, now = Date.now()) => Object.entries(so?.blocked || {}).filter(([id]) => isBlocked(so, id, now));
+// Cancels their open offers to you. → how many
+export function cancelOffersOf(so, id) {
+  let n = 0;
+  for (const o of so.offers) if (o.npc === id && o.status === 'open') { o.status = 'cancelled'; n++; }
+  return n;
+}
+// Blocks one of the crowd (minutes null: for good; a block they had is replaced). → { block, cancelled } (null: not one of
+// the crowd)
+export function blockNpc(so, id, { minutes = null, reason = '', by = '' } = {}, now = Date.now()) {
+  if (!npcOf(so.seed, id)) return null;
+  const block = { at: now, reason, expires: minutes == null ? null : now + minutes * MIN, by };
+  (so.blocked ||= {})[id] = block;
+  return { block, cancelled: cancelOffersOf(so, id) };
+}
+// Lifts a block, lapsed or not. → the block, or null (there was none)
+export function unblockNpc(so, id) {
+  const b = so.blocked?.[id] || null;
+  if (b) delete so.blocked[id];
+  return b;
+}
+// Lapsed blocks go. → how many
+export function sweepBlocks(so, now = Date.now()) {
+  const gone = Object.keys(so.blocked || {}).filter((id) => !isBlocked(so, id, now));
+  for (const id of gone) delete so.blocked[id];
+  return gone.length;
+}
+// One of the crowd back as the save's seed made them (money, inventory, friendship, mood: npcState makes them again), their
+// open offers cancelled; your chat with them and a block stay. → { cancelled } (null: not one of the crowd)
+export function resetNpc(so, id) {
+  if (!npcOf(so.seed, id)) return null;
+  delete so.npcs[id];
+  return { cancelled: cancelOffersOf(so, id) };
 }
 
 // What someone owns: as the save has it once you've dealt with them, else as they start (worked out once a session:
@@ -371,7 +421,7 @@ export function notable(it) {
 export function makeOffer(so, st, { r, now }) {
   const mine = st.inv.filter((it) => !it.lk && notable(it) && !so.offers.some((o) => o.status === 'open' && o.want.uids.includes(it.uid)));
   if (!mine.length) return null;
-  const people = activeCrowd(so.seed);
+  const people = activeCrowd(so.seed).filter((n) => !isBlocked(so, n.id, now));
   const cands = [];
   for (const it of mine) {
     const v = I.itemValue(it);
@@ -533,7 +583,8 @@ export function judge(so, n, s, { yours, theirs, myMoney, theirMoney }) {
 // ---- the NPCs' own market buying ------------------------------------------------------------------------------------------------
 // One NPC buys a listing from the market's current stock (offline, it's gone for you too). Returns the feed line.
 export function marketBuy(so, st, { r, now }) {
-  const people = activeCrowd(so.seed);
+  const people = activeCrowd(so.seed).filter((p) => !isBlocked(so, p.id, now));
+  if (!people.length) return null;
   const n = pickWeighted(people.map((p) => [p, Math.sqrt(Math.max(1, npcState(so, p.id).money))]), r);
   const s = npcState(so, n.id);
   const w = MK.marketWindow(now);

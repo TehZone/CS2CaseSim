@@ -5,27 +5,23 @@
 // The game's admin panel (ns 'admin' and 'account') and the bot's slash commands call the same methods, so every check,
 // audit row and mod-log message is the same whichever way a request comes in. Permissions are always checked here.
 import crypto from 'node:crypto';
-import { D } from '../src/js/engine/data.js';
 import { makeCtx, delta, take, give, GameError } from '../src/js/engine/actions.js';
-import { freshState, upgradeState } from '../src/js/engine/economy.js';
-import * as I from '../src/js/engine/items.js';
-import { MAX_LEVEL, MEDALS } from '../src/js/engine/levels.js';
+import { upgradeState } from '../src/js/engine/economy.js';
 import { round2 } from '../src/js/engine/util.js';
+// (the checks and rules the offline panel shares)
+import {
+  KEEP_AUTO, MAX_MANUAL, PAGE, LEVEL_NAMES, fail, isObj, pick, wellFormed, worthOf, replaceInPlace, revOf, rawView, text, int, bool, optBool,
+  jsonOf, editPlan, applyEdit, rawEdit, restoreUids, restoreMerge, giveSpecs, buildItems, removeUids, givenDetail, removedDetail,
+} from '../src/js/engine/admin.js';
 import * as A from './accounts.mjs';
 
 const MIN = 60000;
 const LINK_MS = 10 * MIN, RESET_MS = 15 * MIN, LEVEL_MS = 60000, UNKNOWN_MS = 10000, LINK_TRIES = 5, BEST_EFFORT_MS = 4000;
-const MAX_JSON = 48 * 1024, KEEP_AUTO = 20, MAX_MANUAL = 50, PAGE = 50, MAX_STAFF_SCAN = 200;
+const MAX_STAFF_SCAN = 200;
 const DEFAULTS = { motd: '', maintenance: false, maintenanceMsg: '', registration: true, trading: true, gambling: true };
 const ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // (no 0/O or 1/I to mix up)
 const DURATIONS = { '1h': 60, '1d': 1440, '7d': 10080, '30d': 43200, perm: null };
 const FILTERS = ['all', 'online', 'banned', 'linked', 'staff'];
-const ITEM_KINDS = ['skin', 'crate', 'key', 'sticker', 'agent', 'charm'];
-// The objects of a raw edit whose fields the panel's editor shows by name: their field names must be plain identifiers.
-const NAMED_FIELDS = new Set(['stats', 'rank', 'wingman', 'prof', 'mm', 'premier']);
-const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const SERIAL_KINDS = new Set(['skin', 'sticker', 'agent', 'charm']); // (what comes out of containers; bought cases and keys have none)
-const LEVEL_NAMES = ['Player', 'Moderator', 'Admin', 'Owner'];
 const TITLES = {
   ban: 'Player banned', unban: 'Player unbanned', kick: 'Player kicked', warn: 'Player warned', signout: 'Player signed out everywhere',
   edit: 'Account edited', 'edit.raw': 'Account edited (raw JSON)', 'items.give': 'Items given', 'items.remove': 'Items removed',
@@ -36,11 +32,8 @@ const TITLES = {
 const RED = 0xeb4b4b, GOLD = 0xe4ae39, BLUE = 0x4b69ff, GREEN = 0x4ade80;
 const COLORS = { ban: RED, kick: RED, signout: RED, reset: RED, warn: GOLD, unban: GREEN, link: GREEN, broadcast: BLUE, 'settings.set': BLUE };
 
-const fail = (m, code) => { throw new GameError(m, code); };
-const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
 const num = (v) => (v == null ? null : Number(v));
 const parse = (v) => (typeof v === 'string' && /^[[{]/.test(v) ? JSON.parse(v) : v); // (JSONB: objects, or their text)
-const pick = (o, keys) => Object.fromEntries(keys.map((k) => [k, o?.[k]]));
 const like = (s) => '%' + s.replace(/[\\%_]/g, '\\$&') + '%';
 const clampLevel = (n) => Math.max(0, Math.min(3, Math.floor(Number(n) || 0)));
 const md = (s) => String(s).replace(/[\\*_~`|>]/g, '\\$&'); // (game and Discord names in Discord's markdown)
@@ -52,18 +45,6 @@ const untilText = (exp) => (exp ? `until ${dateText(exp)}` : 'permanently');
 const publicBan = (b) => ({ reason: b.reason, expires: b.expires, by: b.by });
 export const banText = (b) => `This account is banned: ${b.reason} (${untilText(b.expires)})`;
 export const networkBanText = (b) => `Your network is banned from this server: ${b.reason} (${untilText(b.expires)})`;
-// Strings as a JSONB column takes them: a lone UTF-16 surrogate (which it refuses, losing the row) becomes U+FFFD.
-const wellFormed = (v) => (typeof v === 'string' ? v.toWellFormed()
-  : Array.isArray(v) ? v.map(wellFormed)
-    : isObj(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k.toWellFormed(), wellFormed(x)])) : v);
-// The account's state as edit.raw replaces it (all but the inventory and the NPC data), as a short hash: the panel sends
-// back the one it loaded, so a raw edit can't put back what changed since. Keys sorted (a state read back from JSONB has
-// them in another order).
-const canon = (v) => (Array.isArray(v) ? v.map(canon) : isObj(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
-function revOf(st) {
-  const { inv: _inv, social: _social, ...rest } = st;
-  return crypto.createHash('sha256').update(JSON.stringify(canon(rest))).digest('hex').slice(0, 32);
-}
 // A best-effort Discord call made after a change is committed, on a request path: the answer waits for it a few seconds
 // at most (null: no word from Discord yet; the call goes on in the background).
 function soon(p, ms = BEST_EFFORT_MS) {
@@ -71,62 +52,15 @@ function soon(p, ms = BEST_EFFORT_MS) {
   return Promise.race([p, new Promise((r) => { timer = setTimeout(r, ms, null); timer.unref?.(); })]).finally(() => clearTimeout(timer));
 }
 
-// ---- argument checks (a refusal is a GameError the panel shows as is) ---------------------------------------------
-function text(v, name, max, { min = 1 } = {}) {
-  if (v == null) v = '';
-  if (typeof v !== 'string') fail(`${name} must be text`);
-  const s = v.replace(/\u0000/g, '').toWellFormed().trim(); // (Postgres can't store NUL characters, JSONB lone surrogates)
-  if (s.length < min) fail(`${name} is required`);
-  if (s.length > max) fail(`${name}: at most ${max} characters`);
-  return s;
-}
-function int(v, name, lo, hi) {
-  if (typeof v !== 'number' || !Number.isInteger(v) || v < lo || v > hi) fail(`${name} must be a whole number from ${lo} to ${hi}`);
-  return v;
-}
-function number(v, name, lo, hi) {
-  if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi) fail(`${name} must be a number from ${lo} to ${hi}`);
-  return v;
-}
-function bool(v, name) {
-  if (typeof v !== 'boolean') fail(`${name} must be true or false`);
-  return v;
-}
-const optBool = (v, name) => (v == null ? false : bool(v, name));
+// ---- argument checks (a refusal is a GameError the panel shows as is; the shared ones are in engine/admin.js) --------
 const playerId = (v) => int(v, 'Player id', 1, 2 ** 31 - 1);
-// JSON a player or an admin sent, as stored: an object, at most 48 KB, nothing Postgres refuses. → { value, json }
-function jsonOf(v, what) {
-  if (!isObj(v)) fail(`${what} must be a JSON object`);
-  if (Buffer.byteLength(JSON.stringify(v)) > MAX_JSON) fail(`Too big to save: ${Math.ceil(Buffer.byteLength(JSON.stringify(v)) / 1024)} KB (48 KB at most)`);
-  const value = wellFormed(v);
-  const json = JSON.stringify(value);
-  if (json.includes('\\u0000')) fail(`${what} can't contain NUL characters`);
-  return { value, json };
-}
-// A partial object of numbers: only the keys given in `spec` ({ key: [lo, hi, integer] }).
-function numbers(v, name, spec) {
-  if (!isObj(v)) fail(`${name} must be an object`);
-  const out = {};
-  for (const [k, x] of Object.entries(v)) {
-    const s = spec[k];
-    if (!s) fail(`Unknown field: ${name}.${k}`);
-    out[k] = s[2] ? int(x, `${name}.${k}`, s[0], s[1]) : round2(number(x, `${name}.${k}`, s[0], s[1]));
-  }
-  return out;
-}
 const cleanSettings = (saved) => {
   const s = { ...DEFAULTS };
   if (isObj(saved)) for (const k of Object.keys(DEFAULTS)) if (typeof saved[k] === typeof DEFAULTS[k]) s[k] = saved[k];
   return s;
 };
-// Replaces a player's state object in place (anything holding e.st keeps seeing the current one).
-function replaceState(st, next) {
-  for (const k of Object.keys(st)) if (!(k in next)) delete st[k];
-  Object.assign(st, next);
-}
 // Every top-level key, and as null the ones the new state no longer has (the game only sets the keys it's sent).
 const fullDelta = (st, gone = []) => ({ set: { ...Object.fromEntries(gone.map((k) => [k, null])), ...st }, add: [], del: [], upd: [] });
-const worthOf = (inv) => round2((inv || []).reduce((s, it) => s + I.itemValue(it), 0));
 
 function auditRow(r) {
   return { id: r.id, at: num(r.at), actor: r.actor, actorDiscord: r.actor_discord || null, action: r.action, target: r.target_id != null ? { id: r.target_id, name: r.target_name } : null, detail: parse(r.detail) };
@@ -392,27 +326,12 @@ export class Admin {
     return this.srv.store.withUser(t.id, async (e) => {
       await this.refuseIfGambling(t);
       await this.cancelOffers(t.id);
-      delete next.settings;
-      I.retireOld(next);
-      // A level-up reward hands out its offers' uids as they are: one whose items exist now (another inventory, an
-      // escrow, this player's own) was claimed since, and claiming it again would make second copies.
-      const drops = Array.isArray(next.prof?.drops) ? next.prof.drops : [];
-      const offerUids = drops.flatMap((d) => (Array.isArray(d?.offers) ? d.offers : []).map((o) => o?.uid));
-      const elsewhere = await this.ownedElsewhere(t.id, [...next.inv.map((i) => i.uid), ...offerUids.filter(Boolean)]);
-      const seen = new Set();
-      const inv = next.inv.filter((i) => !elsewhere.has(i.uid) && !seen.has(i.uid) && seen.add(i.uid));
-      const mine = new Set(e.st.inv.map((i) => i.uid));
-      const exists = (u) => elsewhere.has(u) || mine.has(u) || seen.has(u);
-      const keep = drops.filter((d) => !(Array.isArray(d?.offers) ? d.offers : []).some((o) => exists(o?.uid)));
-      const rewards = drops.length - keep.length, dropped = next.inv.length - inv.length + rewards;
-      next.inv = inv;
-      if (next.prof) next.prof = { ...next.prof, drops: keep };
-      next.loadout = Object.fromEntries(Object.entries(next.loadout || {}).filter(([, u]) => seen.has(u)));
-      next.play = e.st.play; // (a match being played goes on; one already paid isn't paid again)
-      next.mm = { ...next.mm, match: e.st.mm?.match ?? null }; // (and a ranked match finished since isn't open again)
+      // (its items and its rewards' items owned elsewhere now are left out: see restoreMerge)
+      const elsewhere = await this.ownedElsewhere(t.id, restoreUids(next));
+      const { dropped, rewards } = restoreMerge(e.st, next, { elsewhere });
       const before = JSON.stringify(e.st);
       const gone = Object.keys(e.st).filter((k) => !(k in next));
-      replaceState(e.st, next);
+      replaceInPlace(e.st, next);
       this.srv.store.markDirty(e);
       await this.srv.store.commit([e], this.autoSnap(t, actor, what, before));
       this.srv.deltaTo(t.id, fullDelta(e.st, gone));
@@ -546,43 +465,17 @@ export class Admin {
     };
   }
 
-  // Money, stars, detachments, the profile, stats and ranks: checked field by field, then saved before the answer.
+  // Money, stars, detachments, the profile, stats and ranks: checked field by field (editPlan), then saved before the
+  // answer.
   async edit(actor, a) {
     const t = await this.target(a.id);
     await this.canChange(actor, t);
-    if (!isObj(a.set) || !Object.keys(a.set).length) fail('Nothing to change');
     const out = await this.srv.store.withUser(t.id, async (e) => {
       const st = e.st;
-      const next = {}, before = {}, after = {};
-      for (const [k, v] of Object.entries(a.set)) {
-        if (k === 'money') next.money = round2(number(v, 'Money', 0, 1e12));
-        else if (k === 'stars') next.stars = int(v, 'Stars', 0, 1e9);
-        else if (k === 'charmDetach') next.charmDetach = int(v, 'Charm detachments', 0, 1e6);
-        else if (k === 'prof') next.prof = numbers(v, 'prof', { level: [1, MAX_LEVEL, true], xp: [0, 1e9, true], medals: [0, MEDALS.length, true] });
-        else if (k === 'stats') {
-          // Existing number stats only; the net gambling result can be below zero.
-          const spec = Object.fromEntries(Object.entries(st.stats).filter(([, x]) => typeof x === 'number').map(([s]) => [s, [s === 'gambleWon' ? -1e12 : 0, 1e12, false]]));
-          next.stats = numbers(v, 'stats', spec);
-        } else if (k === 'rank' || k === 'wingman') {
-          const spec = Object.fromEntries(Object.entries(st[k] || {}).filter(([, x]) => typeof x === 'number').map(([s]) => [s, [0, 1e13, false]]));
-          next[k] = numbers(v, k, spec);
-        } else fail(`Unknown field: ${k}`);
-      }
-      const changed = [];
-      for (const [k, v] of Object.entries(next)) {
-        if (isObj(v)) {
-          const keys = Object.keys(v).filter((s) => st[k]?.[s] !== v[s]);
-          if (!keys.length) continue;
-          before[k] = pick(st[k], keys); after[k] = pick(v, keys);
-          changed.push(...keys.map((s) => `${k}.${s}`));
-        } else if (st[k] !== v) {
-          before[k] = st[k]; after[k] = v;
-          changed.push(k);
-        }
-      }
+      const { next, changed, before, after } = editPlan(st, a.set);
       if (!changed.length) return { state: pick(st, Object.keys(next)), changed };
       const snapJson = JSON.stringify(st);
-      for (const [k, v] of Object.entries(next)) st[k] = isObj(v) ? { ...st[k], ...v } : v;
+      applyEdit(st, next);
       this.srv.store.markDirty(e);
       await this.srv.store.commit([e], this.autoSnap(t, actor, 'edit', snapJson));
       const keys = Object.keys(before);
@@ -593,116 +486,34 @@ export class Admin {
     return { state: out.state };
   }
 
-  // Every top-level field but the inventory and the NPC data, replaced as given (filled in through upgradeState), from
-  // the state the panel loaded: `base` is that `player` answer's `rev`, and anything changed since refuses the edit.
+  // Every top-level field but the inventory and the NPC data, replaced as given, from the state the panel loaded: `base`
+  // is that `player` answer's `rev`, and anything changed since refuses the edit (the rules: rawEdit).
   async editRaw(actor, a) {
     const t = await this.target(a.id);
     await this.canChange(actor, t);
-    const src = jsonOf(a.state, 'The state').value;
     const out = await this.srv.store.withUser(t.id, async (e) => {
-      if (typeof a.base !== 'string' || a.base !== revOf(e.st)) fail('The account changed since you opened it. Reload it and try again.', 'stale');
-      const fresh = freshState();
-      for (const [k, v] of Object.entries(src)) {
-        if (k === 'inv' || k === 'social') fail(`${k} can't be edited here (use the inventory tools)`);
-        if (k === 'settings' || !(k in fresh || k in e.st)) fail(`Unknown field: ${k}`);
-        const d = k in fresh ? fresh[k] : e.st[k];
-        const ok = d === null ? v === null || isObj(v)
-          : typeof d === 'number' ? typeof v === 'number' && Number.isFinite(v)
-            : Array.isArray(d) ? Array.isArray(v) : isObj(d) ? isObj(v) : typeof v === typeof d;
-        if (!ok) fail(`${k} has the wrong type`);
-        if (typeof d === 'number' && (v < 0 || v > 1e13)) fail(`${k} must be from 0 to 10,000,000,000,000`);
-        if (NAMED_FIELDS.has(k) && isObj(v)) for (const f of Object.keys(v)) if (!IDENT.test(f)) fail(`${k} has a field with an invalid name: ${JSON.stringify(f.slice(0, 40))}`);
-      }
-      if (src.money != null && src.money > 1e12) fail('Money must be a number from 0 to 1000000000000');
-      const st = upgradeState({ ...src, inv: e.st.inv, social: e.st.social });
-      delete st.settings;
-      // Never from the JSON: the rewards waiting (their items' uids are handed out as they are), the Play match being
-      // played (what its reward is checked against) and the ranked match in progress.
-      st.prof = { ...st.prof, drops: e.st.prof?.drops ?? [] };
-      st.play = e.st.play ?? null;
-      st.mm = { ...st.mm, match: e.st.mm?.match ?? null };
-      const uids = new Set(st.inv.map((i) => i.uid));
-      st.loadout = Object.fromEntries(Object.entries(st.loadout || {}).filter(([, u]) => uids.has(u)));
-      if (typeof st.money === 'number') st.money = round2(st.money);
-      const changed = [...new Set([...Object.keys(e.st), ...Object.keys(st)])].filter((k) => k !== 'inv' && k !== 'social' && JSON.stringify(e.st[k]) !== JSON.stringify(st[k]));
-      const before = pick(e.st, changed), after = pick(st, changed);
-      const view = () => { const { inv: _inv, social: _social, ...rest } = e.st; return rest; };
-      if (!changed.length) return { state: view(), rev: revOf(e.st), changed };
+      const { next, changed, before, after } = rawEdit(e.st, a.state, a.base);
+      if (!changed.length) return { state: rawView(e.st), rev: revOf(e.st), changed };
       const snapJson = JSON.stringify(e.st);
-      replaceState(e.st, st);
+      replaceInPlace(e.st, next);
       this.srv.store.markDirty(e);
       await this.srv.store.commit([e], this.autoSnap(t, actor, 'raw edit', snapJson));
       // (a field the new state no longer has goes as null: the game only sets the keys it's sent)
       this.srv.deltaTo(t.id, { set: Object.fromEntries(changed.map((k) => [k, e.st[k] ?? null])), add: [], del: [], upd: [] });
-      return { state: view(), rev: revOf(e.st), changed, before, after };
+      return { state: rawView(e.st), rev: revOf(e.st), changed, before, after };
     });
     if (out.changed.length) await this.audit(actor, 'edit.raw', t, { changed: out.changed, before: out.before, after: out.after });
     return { state: out.state, rev: out.rev };
   }
 
-  // One entry of items.give: checked against the game data, and a maker for each copy.
-  itemSpec(x) {
-    if (!isObj(x)) fail('Invalid item');
-    if (!ITEM_KINDS.includes(x.t)) fail(`Unknown item kind: ${String(x.t).slice(0, 20)}`);
-    const id = text(x.id, 'Item id', 120);
-    const n = x.n == null ? 1 : int(x.n, 'Count', 1, 100);
-    const src = 'Admin';
-    switch (x.t) {
-      case 'skin': {
-        const s = D.skins[id] || fail(`Unknown skin: ${id}`);
-        const o = { src, stt: false };
-        if (x.fl != null) { if (s.v) fail(`${s.n} has no float`); o.fl = Math.fround(number(x.fl, 'Float', s.mn, s.mx)); }
-        if (x.sd != null) { if (s.v) fail(`${s.n} has no pattern seed`); o.sd = int(x.sd, 'Pattern seed', 0, 1000); }
-        if (x.stt != null && bool(x.stt, 'StatTrak™')) { if (!s.stt || s.cat === 'gloves') fail(`${s.n} has no StatTrak™ version`); o.stt = true; }
-        if (x.sv != null && bool(x.sv, 'Souvenir')) {
-          if (s.svp == null) fail(`${s.n} has no Souvenir version`);
-          if (o.stt) fail('A skin is StatTrak™ or Souvenir, not both');
-          o.sv = true;
-        }
-        return { n, make: () => I.makeSkinItem(s, o) };
-      }
-      case 'crate': {
-        const c = D.caseById[id];
-        if (!c || c.price == null) fail(`Unknown case: ${id}`);
-        return { n, make: () => I.makeCrateItem(c, src) };
-      }
-      case 'key': {
-        if (!D.keys[id]) fail(`Unknown key: ${id}`);
-        return { n, make: () => I.makeKeyItem(id, src) };
-      }
-      case 'sticker': {
-        const s = D.stickers[id] || fail(`Unknown sticker: ${id}`);
-        return { n, make: () => I.makeStickerItem(s, src) };
-      }
-      case 'agent': {
-        const g = D.agents[id] || fail(`Unknown agent: ${id}`);
-        return { n, make: () => I.makeAgentItem(g, src) };
-      }
-      case 'charm': {
-        const pat = x.pat == null ? undefined : int(x.pat, 'Charm pattern', 1, I.CHARM_PATTERNS);
-        if (id === 'slab') {
-          const sk = text(x.sk, 'Sticker of the slab', 120);
-          if (!D.stickers[sk] || !D.slab) fail(`Unknown sticker: ${sk}`);
-          return { n, make: () => I.makeSlabItem(sk, { src, pat }) };
-        }
-        const c = D.charms[id] || fail(`Unknown charm: ${id}`);
-        return { n, make: () => I.makeCharmItem(c, { src, pat }) };
-      }
-    }
-    return fail('Invalid item');
-  }
-
   async itemsGive(actor, a) {
     const t = await this.target(a.id);
     await this.canChange(actor, t);
-    if (!Array.isArray(a.items) || !a.items.length || a.items.length > 50) fail('Give 1 to 50 kinds of items at a time');
-    const specs = a.items.map((x) => this.itemSpec(x));
-    const total = specs.reduce((s, x) => s + x.n, 0);
+    const { specs, total } = giveSpecs(a.items);
     const out = await this.srv.store.withUser(t.id, async (e) => {
       const cap = this.srv.INV_CAP;
       if (e.st.inv.length + total > cap) fail(`${t.name}'s inventory would be over the limit (${cap} items)`, 'full');
-      const items = specs.flatMap((s) => Array.from({ length: s.n }, () => ({ ...s.make(), nw: true })));
-      for (const it of items) if (SERIAL_KINDS.has(it.t)) it.sn = this.srv.serial(I.serialKey(it)); // (the server's own counters)
+      const items = buildItems(specs, (key) => this.srv.serial(key)); // (the server's own counters)
       const ctx = makeCtx(e.st, { online: true, invCap: cap });
       give(ctx, items);
       this.srv.store.markDirty(e);
@@ -710,17 +521,14 @@ export class Admin {
       this.srv.deltaTo(t.id, delta(ctx), `You got ${items.length} item${items.length === 1 ? '' : 's'} from the staff`);
       return items;
     });
-    const names = {};
-    for (const it of out) names[I.itemName(it)] = (names[I.itemName(it)] || 0) + 1;
-    await this.audit(actor, 'items.give', t, { count: out.length, items: Object.entries(names).slice(0, 50).map(([name, n]) => ({ name, n })), uids: out.slice(0, 200).map((i) => i.uid) });
+    await this.audit(actor, 'items.give', t, givenDetail(out));
     return { added: out.length };
   }
 
   async itemsRemove(actor, a) {
     const t = await this.target(a.id);
     await this.canChange(actor, t);
-    if (!Array.isArray(a.uids) || !a.uids.length || a.uids.length > 3000) fail('Pick the items to remove');
-    const uids = a.uids.map((u) => (typeof u === 'string' && u && u.length <= 64 ? u : fail('Invalid item')));
+    const uids = removeUids(a.uids);
     const out = await this.srv.store.withUser(t.id, async (e) => {
       const snapJson = JSON.stringify(e.st);
       // Locked items go too; items in an open trade offer don't (take() refuses them before changing anything).
@@ -731,7 +539,7 @@ export class Admin {
       this.srv.deltaTo(t.id, delta(ctx));
       return items;
     });
-    await this.audit(actor, 'items.remove', t, { count: out.length, items: out.slice(0, 100).map((it) => ({ uid: it.uid, name: I.itemName(it), value: I.itemValue(it) })) });
+    await this.audit(actor, 'items.remove', t, removedDetail(out));
     return { removed: out.length };
   }
 

@@ -197,6 +197,11 @@ function openOffer(so, id) {
   if (!o || o.status !== 'open') fail('That offer is no longer open', 'missing');
   return o;
 }
+// A blocked NPC (the admin panel offline) takes no offers, messages or friend requests from you, and you can't take
+// theirs.
+function notBlocked(ctx, so, n) {
+  if (N.isBlocked(so, n.id, ctx.now)) fail(`${n.name} is blocked in the admin panel`, 'blocked');
+}
 const tradeText = (items, cash) => [...items.map(I.itemName), cash ? N.dollars(cash) : ''].filter(Boolean).join(' + ') || 'nothing';
 // An NPC keeps at most 60 items (the cheapest go).
 function trimInv(s) {
@@ -228,14 +233,17 @@ function swapWithNpc(ctx, so, n, { mine, theirs, myMoney, theirMoney }) {
   st.npcTrades = (st.npcTrades || 0) + 1;
   return { got: items, given, money: round2(theirMoney - myMoney) };
 }
-// Offline, what you sell on the Market is bought by someone: the better items end up in an NPC's inventory.
+// Offline, what you sell on the Market is bought by someone: the better items end up in an NPC's inventory (not a
+// blocked one's, and nobody's with the NPCs' market rule off).
 function passToNpcs(ctx, items) {
-  if (ctx.online || !ctx.st.social) return;
+  if (ctx.online || !ctx.st.social || !N.ruleOn(ctx.st.social, 'market')) return;
   const worth = items.filter((it) => I.itemValue(it) >= 5);
   if (!worth.length) return;
   const so = structuredClone(ctx.st.social);
+  const people = N.activeCrowd(so.seed).filter((n) => !N.isBlocked(so, n.id, ctx.now));
+  if (!people.length) return;
   for (const { lk: _lk, nw: _nw, ...it } of worth) {
-    const s = N.npcState(so, pick(N.activeCrowd(so.seed), ctx.rng).id);
+    const s = N.npcState(so, pick(people, ctx.rng).id);
     s.inv.push({ ...it, at: ctx.now, src: 'Market' });
     trimInv(s);
   }
@@ -612,16 +620,21 @@ export const ACTIONS = {
 
   // ---- NPC players (offline only, see engine/npcs.js) ----
   // Time passing for the NPCs: offers expire, they buy from the market, message you about your rare items, add you as a
-  // friend and chat. Returns the messages they sent { events: [{ npc, text }] }.
+  // friend and chat (each only while the admin panel's rule for it is on, and never a blocked NPC: see npcs.js). Returns
+  // the messages they sent { events: [{ npc, text }] }.
   'npc.tick'(ctx) {
     const so = social(ctx), r = ctx.rng, now = ctx.now;
     const dt = clamp(now - (so.at || now), 0, 6 * 3600e3);
     so.at = now;
+    N.sweepBlocks(so, now);
+    const free = (id) => !N.isBlocked(so, id, now);
+    const chat = N.ruleOn(so, 'chat');
     const events = [];
     const said = (id) => { const t = so.threads[id]; if (t?.length) events.push({ npc: id, text: t[t.length - 1].text }); };
     const rolls = (perMin, cap) => { const x = (dt / 60000) * perMin; return Math.min(cap, Math.floor(x) + (r() < x % 1 ? 1 : 0)); };
     for (const o of so.offers) {
       if (o.status !== 'open') continue;
+      if (!free(o.npc)) { o.status = 'cancelled'; continue; } // (blocking cancels them; this catches a block from elsewhere)
       const gone = o.want.uids.some((u) => !ctx.st.inv.some((it) => it.uid === u));
       if (gone || now > o.exp) {
         o.status = 'expired';
@@ -629,16 +642,16 @@ export const ACTIONS = {
       }
     }
     let bought = 0;
-    for (let k = rolls(0.4, 4); k > 0; k--) if (N.marketBuy(so, ctx.st, { r, now })) bought++;
+    if (N.ruleOn(so, 'market')) for (let k = rolls(0.4, 4); k > 0; k--) if (N.marketBuy(so, ctx.st, { r, now })) bought++;
     if (bought) ctx.dirty.add('market');
     const open = so.offers.filter((o) => o.status === 'open').length;
-    for (let k = Math.min(rolls(0.3, 2), 6 - open); k > 0; k--) { const o = N.makeOffer(so, ctx.st, { r, now }); if (o) said(o.npc); }
+    if (N.ruleOn(so, 'trading')) for (let k = Math.min(rolls(0.3, 2), 6 - open); k > 0; k--) { const o = N.makeOffer(so, ctx.st, { r, now }); if (o) said(o.npc); }
     for (const [id, s] of Object.entries(so.npcs)) {
-      if (s.friend !== 3 || r() > Math.min(1, dt / (3 * 60e3))) continue;
+      if (!chat || s.friend !== 3 || !free(id) || r() > Math.min(1, dt / (3 * 60e3))) continue;
       if (r() < s.mood + 0.2) { s.friend = 1; N.post(so, id, 'npc', pick(['thx for the add!', 'hey 👋', 'added, what\'s up'], r), {}, now); said(id); } else s.friend = 0;
     }
-    if (rolls(1 / 30, 1)) {
-      const people = N.activeCrowd(so.seed).filter((n) => !so.npcs[n.id]?.friend);
+    if (chat && rolls(1 / 30, 1)) {
+      const people = N.activeCrowd(so.seed).filter((n) => !so.npcs[n.id]?.friend && free(n.id));
       if (people.length) {
         const n = pickWeighted(people.map((p) => [p, so.threads[p.id] ? 4 : 1]), r);
         N.npcState(so, n.id).friend = 2;
@@ -646,8 +659,8 @@ export const ACTIONS = {
         said(n.id);
       }
     }
-    if (rolls(1 / 25, 1)) {
-      const friends = N.crowd(so.seed).filter((n) => so.npcs[n.id]?.friend === 1);
+    if (chat && rolls(1 / 25, 1)) {
+      const friends = N.crowd(so.seed).filter((n) => so.npcs[n.id]?.friend === 1 && free(n.id));
       if (friends.length) { const n = pick(friends, r); N.post(so, n.id, 'npc', N.chatLine(n, N.npcState(so, n.id), r), {}, now); said(n.id); }
     }
     for (const s of Object.values(so.npcs)) s.money = round2(s.money + (dt / 3600e3) * [2, 10, 40, 120][s.tier]);
@@ -667,6 +680,7 @@ export const ACTIONS = {
   'npc.accept'(ctx, { offer }) {
     const so = social(ctx), o = openOffer(so, offer);
     const n = N.npcOf(so.seed, o.npc);
+    notBlocked(ctx, so, n);
     const out = swapWithNpc(ctx, so, n, { mine: o.want.uids, theirs: o.give.uids, myMoney: o.want.money || 0, theirMoney: o.give.money || 0 });
     o.status = 'accepted';
     N.post(so, n.id, 'npc', N.voice(n, 'thanks', ctx.rng), {}, ctx.now);
@@ -684,6 +698,7 @@ export const ACTIONS = {
   // Haggling: the net cash you want from their offer (negative: what you'd pay them), with an argument for it.
   'npc.counter'(ctx, { offer, price, arg = null }) {
     const so = social(ctx), o = openOffer(so, offer);
+    notBlocked(ctx, so, N.npcOf(so.seed, o.npc));
     price = Number(price);
     if (!Number.isFinite(price) || Math.abs(price) > 1e9) fail('Invalid price');
     price = round2(price);
@@ -699,6 +714,7 @@ export const ACTIONS = {
   'npc.say'(ctx, { npc, text }) {
     const so = social(ctx), n = N.npcOf(so.seed, String(npc));
     if (!n) fail('Unknown player');
+    notBlocked(ctx, so, n);
     text = String(text || '').replace(/[<>]/g, '').trim().slice(0, 300);
     if (!text) fail('Type a message first');
     N.post(so, n.id, 'me', text, {}, ctx.now);
@@ -726,6 +742,7 @@ export const ACTIONS = {
   'npc.offer'(ctx, { npc, give: g = {}, get = {}, msg = '' }) {
     const so = social(ctx), n = N.npcOf(so.seed, String(npc));
     if (!n) fail('Unknown player');
+    notBlocked(ctx, so, n);
     const s = N.npcState(so, n.id);
     const mine = [...new Set((g.uids || []).map(String))], theirs = [...new Set((get.uids || []).map(String))];
     const myMoney = money(g.money), theirMoney = money(get.money);
@@ -764,6 +781,7 @@ export const ACTIONS = {
   'npc.friend'(ctx, { npc, on = true }) {
     const so = social(ctx), n = N.npcOf(so.seed, String(npc));
     if (!n) fail('Unknown player');
+    if (on) notBlocked(ctx, so, n); // (unfriending them is fine)
     const s = N.npcState(so, n.id);
     if (!on) s.friend = 0;
     else if (s.friend === 2) { s.friend = 1; N.post(so, n.id, 'npc', pick(['👋', 'ty for accepting!', 'hey!'], ctx.rng), {}, ctx.now); }

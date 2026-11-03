@@ -1,28 +1,40 @@
-// The admin panel (online, staff only): the server at a glance, its players (find one, then ban, kick or warn them, edit
+// The admin panel (staff only): the server at a glance, its players (find one, then ban, kick or warn them, edit
 // their stats and items, read the configs their game synced, save and restore snapshots of their account), the bans,
 // the audit log and the server's settings. The server checks every request against your staff level (1 moderator,
 // 2 admin, 3 owner, from your linked Discord roles) and refuses what you can't do; this page only hides it.
+// Offline, on a PC that has signed in to a staff account (account.js), the same page works on this PC's save and its
+// 2,000 NPC traders through admin-local.js: your numbers, items, configs and snapshots, the traders' money, items and
+// blocks, the local log, and the save itself (export, import, reset, a new NPC world).
 import { esc, money, timeAgo, debounce } from '../util.js';
 import { D, WEAR_BY_KEY, wearOf } from '../data.js';
 import * as I from '../items.js';
 import { online } from '../backend.js';
+import { S, save as saveState } from '../state.js';
 import { sfx } from '../audio.js';
-import { toast, openModal, confirmDialog, openInspect } from '../ui.js';
+import { toast, openModal, confirmDialog as askUser, openInspect } from '../ui.js';
 import { levelIconHtml } from '../profile.js';
 import { net } from '../net/online.js';
-import { LEVEL_NAMES } from '../account.js';
+import { LEVEL_NAMES, staffPc } from '../account.js';
+import { localAdmin } from '../admin-local.js';
+import { FOCUS } from '../engine/npcs.js';
 import { playPrefs, savePlayPrefs } from './play-settings.js';
 import { BINDS_VERSION } from '../play/input.js';
 import { ASPECTS, RESOLUTIONS } from '../play/screen.js';
 
 const TABS = [['dash', 'Dashboard'], ['players', 'Players'], ['bans', 'Bans'], ['audit', 'Audit log'], ['server', 'Server']];
+// (Offline the bans are the NPC traders you've blocked, and the server is your save and its NPC world.)
+const OFF_TABS = { bans: 'Blocked traders', server: 'Save & world' };
 const TAB_DATA = { dash: 'overview', players: 'players', bans: 'bans', audit: 'audit', server: 'settings' };
 const FILTERS = [['all', 'All'], ['online', 'Online'], ['banned', 'Banned'], ['linked', 'Linked'], ['staff', 'Staff']];
+const OFF_FILTERS = [['all', 'All'], ['online', 'Online'], ['banned', 'Blocked'], ['friends', 'Friends']];
+const filters = () => (online() ? FILTERS : OFF_FILTERS);
 const SUBS = [['overview', 'Overview'], ['inventory', 'Inventory'], ['configs', 'Configs'], ['snapshots', 'Snapshots'], ['history', 'History']];
+// (An NPC trader has no configs, and snapshots are of your own save only.)
+const NPC_SUBS = SUBS.filter(([k]) => k !== 'configs' && k !== 'snapshots');
 const KINDS = [['all', 'All items'], ['skin', 'Skins'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['charm', 'Charms'], ['crate', 'Cases'], ['key', 'Keys']];
 const GIVE_KINDS = [['skin', 'Skin'], ['crate', 'Case'], ['key', 'Key'], ['sticker', 'Sticker'], ['agent', 'Agent'], ['charm', 'Charm']];
 const DURATIONS = [['60', '1 hour'], ['1440', '1 day'], ['10080', '7 days'], ['43200', '30 days'], ['perm', 'Permanent'], ['custom', 'Custom (minutes)']];
-const PAGE = 50, INV_PAGE = 100, MAX_JSON = 48 * 1024, MAX_MINUTES = 5256000;
+const PAGE = 50, INV_PAGE = 100, MAX_JSON = 48 * 1024, MAX_MINUTES = 5256000, MAX_SAVE = 64 * 1024 * 1024;
 const STAT_LABELS = {
   opened: 'Cases opened', spent: 'Spent on cases', sold: 'Sold items for', bestValue: 'Best drop value', knives: 'Knives & gloves',
   stickersApplied: 'Stickers applied', tradeups: 'Trade-ups', armory: 'Armory redemptions', gambleWagered: 'Gambled', gambleWon: 'Gambling result',
@@ -45,7 +57,8 @@ const view = {
   tab: 'dash', q: '', filter: 'all', page: 0, player: null, sub: 'overview', bansActive: true, auditQ: '', auditPage: 0,
   inv: { q: '', kind: 'all', sort: 'value', page: 0, sel: new Set() },
 };
-let root = null, offs = [], shownLevel = 0;
+// (shownOnline: whether the page on screen is the server's or this PC's; switches: how many times that changed.)
+let root = null, offs = [], shownLevel = 0, shownOnline = null, switches = 0;
 
 export function render(r) {
   root = r;
@@ -54,21 +67,24 @@ export function render(r) {
   for (const k of Object.keys(store)) delete store[k];
   offs = [
     // A role given or taken in the Discord changes what you can do here.
-    net.on('account', () => { if (myLevel() !== shownLevel) draw(); }),
-    net.on('status', ({ status }) => { if (status === 'online') drawBody(); }),
+    net.on('account', () => { if (myLevel() !== shownLevel || online() !== shownOnline) draw(); }),
+    net.on('status', ({ status }) => { if (online() !== shownOnline) draw(); else if (status === 'online') drawBody(); }),
   ];
   draw();
 }
 export function destroy() { offs.forEach((o) => o()); offs = []; root = null; }
 
 // ---- who may do what (the server decides; this hides what it would refuse) ----------------------
-const myLevel = () => (online() && net.account()?.staff) || 0;
+// (Offline, on a staff PC, it's your own save: every tool.)
+const myLevel = () => (online() ? net.account()?.staff || 0 : staffPc() ? 3 : 0);
 const isAdmin = () => myLevel() >= 2;
-const isSelf = (u) => u?.id != null && u.id === net.me()?.id;
+const isSelf = (u) => u?.id != null && (online() ? u.id === net.me()?.id : u.id === 'me');
 const canPunish = (u) => myLevel() >= 1 && !isSelf(u) && myLevel() > (u.staff || 0);
 const canChange = (u) => myLevel() >= 2 && (isSelf(u) || myLevel() > (u.staff || 0));
 
 // ---- requests ----------------------------------------------------------------------------------
+// The server's answers online; offline this PC's (admin-local.js answers the same requests on the save).
+const adminCall = (m, args) => (online() ? net.admin(m, args) : localAdmin(m, args));
 // What each section shows, as the server last answered it: { m, args, data, error, pending } per key.
 const store = {};
 const invalidate = (...keys) => keys.forEach((k) => delete store[k]);
@@ -87,7 +103,7 @@ function need(key, m, args, el, redraw) {
   el.innerHTML = '<div class="empty adm-empty">Loading…</div>';
   if (!s.pending) {
     s.pending = true;
-    net.admin(m, args).then((d) => { s.data = d; }, (e) => { s.error = e.message || 'Request failed'; })
+    adminCall(m, args).then((d) => { s.data = d; }, (e) => { s.error = e.message || 'Request failed'; })
       .finally(() => { s.pending = false; if (store[key] === s && root) redraw(); });
   }
   return null;
@@ -98,7 +114,7 @@ function refresh(key, redraw) {
   if (!s || !('data' in s)) { invalidate(key); redraw(); return; }
   if (s.pending) return;
   s.pending = true;
-  net.admin(s.m, JSON.parse(s.args)).then((d) => { s.data = d; }, (e) => toast(esc(e.message), 'bad'))
+  adminCall(s.m, JSON.parse(s.args)).then((d) => { s.data = d; }, (e) => toast(esc(e.message), 'bad'))
     .finally(() => { s.pending = false; if (store[key] === s && root) redraw(); });
 }
 // Runs a request with its button(s) disabled until the answer; a refusal or error is a toast (unless `fail(e)` shows it
@@ -108,7 +124,7 @@ async function run(btns, m, args, ok, fail) {
   const list = [].concat(btns || []).filter(Boolean);
   list.forEach((b) => { b.disabled = true; });
   try {
-    const r = await net.admin(m, args);
+    const r = await adminCall(m, args);
     if (ok) { sfx.coin(); toast(typeof ok === 'function' ? ok(r || {}) : ok, 'good'); }
     return r || {};
   } catch (e) {
@@ -156,15 +172,19 @@ function dbText(db) {
   if (typeof db !== 'object') return String(db);
   return [db.kind || db.type || db.name, db.size != null ? (typeof db.size === 'number' ? kb(db.size) : db.size) : null].filter(Boolean).join(' · ') || clip(JSON.stringify(db), 40);
 }
-// Bans as the server gives them (in a player's history they may be the table's own rows).
+// Bans as the server gives them (in a player's history they may be the table's own rows; offline an NPC's block has `at`).
 const normBan = (b) => ({
   ...b, by: b.by ?? b.by_name ?? '', liftedBy: b.liftedBy ?? b.lifted_by ?? '', network: b.network ?? !!b.ip_hash,
-  created: +b.created || null, expires: b.expires != null ? +b.expires : null, lifted: b.lifted != null ? +b.lifted : null,
+  created: +(b.created ?? b.at) || null, expires: b.expires != null ? +b.expires : null, lifted: b.lifted != null ? +b.lifted : null,
 });
-const banActive = (b) => b.active ?? (!b.lifted && (!b.expires || b.expires > net.serverNow()));
+// (The server's clock online; offline this PC's.)
+const nowMs = () => (online() ? net.serverNow() : Date.now());
+const banActive = (b) => b.active ?? (!b.lifted && (!b.expires || b.expires > nowMs()));
 function banStatus(b) {
   if (b.lifted) return `<span class="chip">Lifted</span> <span class="muted">${b.liftedBy ? `by ${esc(b.liftedBy)} ` : ''}${when(b.lifted)}</span>`;
-  if (b.expires && b.expires <= net.serverNow()) return '<span class="chip">Expired</span>';
+  if (b.expires && b.expires <= nowMs()) return '<span class="chip">Expired</span>';
+  // (Offline, a block the save no longer has that the log can't tell the end of.)
+  if (!online() && b.active === false) return '<span class="chip">Ended</span>';
   return '<span class="chip red">Active</span>';
 }
 // Items as the server keeps them: one this build's game data doesn't know mustn't break the page.
@@ -174,8 +194,8 @@ const itemValue = safe((i) => I.itemValue(i), 0);
 const itemImg = safe((i) => I.itemImage(i, 's'), '');
 const itemColor = safe((i) => I.rarityInfo(i).c, '#b0c3d9');
 
-function downloadJson(name, data) {
-  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+function downloadText(name, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
   const a = document.createElement('a');
   a.href = url;
   a.download = name.replace(/[^\w.-]+/g, '_').replace(/_+/g, '_');
@@ -184,7 +204,19 @@ function downloadJson(name, data) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
+const downloadJson = (name, data) => downloadText(name, JSON.stringify(data, null, 2));
 const today = (ts = Date.now()) => new Date(+ts).toISOString().slice(0, 10);
+// A file picked from disk (null when the window is closed without one).
+function pickFile(accept) {
+  return new Promise((resolve) => {
+    const i = document.createElement('input');
+    i.type = 'file';
+    i.accept = accept;
+    i.addEventListener('change', () => resolve(i.files?.[0] || null));
+    i.addEventListener('cancel', () => resolve(null));
+    i.click();
+  });
+}
 
 function pagerHtml(total, idx, size = PAGE) {
   const pages = Math.max(1, Math.ceil((+total || 0) / size));
@@ -193,13 +225,34 @@ function pagerHtml(total, idx, size = PAGE) {
     <span>Page ${idx + 1} of ${pages}</span><button class="btn sm" data-pg="${idx + 1}" ${idx >= pages - 1 ? 'disabled' : ''}>Next ›</button></div>`;
 }
 const wirePager = (el, go) => el.querySelectorAll('[data-pg]').forEach((b) => b.addEventListener('click', () => go(+b.dataset.pg)));
-// Player names anywhere on the page open that player.
-const wireOpen = (el) => el.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); openPlayer(+b.dataset.open); }));
-const playerLink = (u) => (u ? `<button class="adm-link" data-open="${+u.id}">${esc(u.name)}</button>` : '<span class="dim">—</span>');
+// Player names anywhere on the page open that player (online by account number; offline 'me' or an NPC's 'n<k>').
+const pid = (v) => (online() ? +v : String(v));
+const wireOpen = (el) => el.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); openPlayer(pid(b.dataset.open)); }));
+const playerLink = (u) => (u ? `<button class="adm-link" data-open="${esc(pid(u.id))}">${esc(u.name)}</button>` : '<span class="dim">—</span>');
+// A player as a toast names them (offline your own save is "your save").
+const whose = (u) => (!online() && isSelf(u) ? 'your save' : `<b>${esc(u.name)}</b>`);
+// The NPC traders (offline): a country as a small tag like the Community page's, who they are, and where you stand.
+const cc = (c) => (c ? `<span class="cc">${esc(c)}</span>` : '');
+const TYPE_NAMES = { player: 'Player', collector: 'Collector', beginner: 'New to trading' };
+const typeName = (n) => (n.type === 'collector' && Object.hasOwn(FOCUS, n.focus || '') ? FOCUS[n.focus].n : TYPE_NAMES[n.type] || 'Trader');
+const FRIENDS = ['Not friends', 'Friends', 'They sent you a request', 'You sent them a request'];
+const friendText = (f) => (f === true ? FRIENDS[1] : FRIENDS[f | 0] || FRIENDS[0]);
+const TIERS = ['Small wallet', 'Regular', 'Rich', 'Whale'];
+
+// A window opened before a switch online ⇄ offline does nothing on OK: what it holds (a snapshot's number, a player's
+// id) is someone else's on the other side.
+function sameSide(at) {
+  if (at === switches) return true;
+  sfx.error();
+  toast(`You went ${online() ? 'online' : 'offline'} meanwhile: nothing was done.`, 'bad');
+  return false;
+}
+const confirmDialog = async (text, o) => { const at = switches; return (await askUser(text, o)) && sameSide(at); };
 
 // A window with a form. `submit($, err)` runs on OK (and Enter in a one-line field) and returns true when it's done
 // (the window closes); OK is disabled while it runs.
 function formModal({ title, body, ok = 'OK', danger = false, cls = '', submit }) {
+  const at = switches;
   const m = openModal({
     title, cls, body: `<div class="adm-form">${body}<div class="err" data-err></div></div>`,
     foot: `<button class="btn ghost" data-close>Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" data-ok>${ok}</button>`,
@@ -208,6 +261,7 @@ function formModal({ title, body, ok = 'OK', danger = false, cls = '', submit })
   const btn = $('[data-ok]'), errEl = $('[data-err]');
   const go = async () => {
     if (btn.disabled) return;
+    if (!sameSide(at)) { m.close(); return; }
     errEl.textContent = '';
     btn.disabled = true;
     let done = false;
@@ -223,15 +277,25 @@ function formModal({ title, body, ok = 'OK', danger = false, cls = '', submit })
 // ---- the page ------------------------------------------------------------------------------------
 function draw() {
   if (!root) return;
+  // Online and offline are other players, ids and answers: switching starts the page over.
+  if (shownOnline !== online()) {
+    shownOnline = online();
+    switches++;
+    for (const k of Object.keys(store)) delete store[k];
+    for (const k of Object.keys(pageBase)) delete pageBase[k];
+    Object.assign(view, { filter: 'all', page: 0, player: null, sub: 'overview', auditPage: 0 });
+  }
   const lvl = shownLevel = myLevel();
-  if (!online() || lvl < 1) {
+  if (lvl < 1) {
     root.innerHTML = `<div class="page"><div class="empty">${online() ? "The admin panel is for this server's moderators and admins."
       : 'The admin panel needs an online account with staff rights. Click <b>Offline</b> at the top right to log in.'}</div></div>`;
     return;
   }
+  const pc = online() ? null : staffPc();
   root.innerHTML = `<div class="page adm">
-    <div class="page-head"><h1>Admin</h1><span class="sub">${esc(net.me()?.name || '')} ${staffChip(lvl)} on <span class="fair">${esc(net.serverUrl())}</span></span></div>
-    <div class="seg adm-tabs" data-tabs>${TABS.map(([k, n]) => `<button data-v="${k}" class="${view.tab === k ? 'active' : ''}">${n}</button>`).join('')}</div>
+    <div class="page-head"><h1>Admin</h1><span class="sub">${pc ? `Offline save on this PC · unlocked by ${esc(pc.name)} (${esc(levelName(pc.level))}) on <span class="fair">${esc(pc.server)}</span>`
+      : `${esc(net.me()?.name || '')} ${staffChip(lvl)} on <span class="fair">${esc(net.serverUrl())}</span>`}</span></div>
+    <div class="seg adm-tabs" data-tabs>${TABS.map(([k, n]) => `<button data-v="${k}" class="${view.tab === k ? 'active' : ''}">${pc ? OFF_TABS[k] || n : n}</button>`).join('')}</div>
     <div class="adm-body" data-body></div>
   </div>`;
   root.querySelectorAll('[data-tabs] button').forEach((b) => b.addEventListener('click', () => {
@@ -246,13 +310,13 @@ function draw() {
 function drawBody() {
   const el = root?.querySelector('[data-body]');
   if (!el) return;
-  if (net.status() !== 'online') { el.innerHTML = '<div class="empty adm-empty">Connecting to the server…</div>'; return; }
+  if (online() && net.status() !== 'online') { el.innerHTML = '<div class="empty adm-empty">Connecting to the server…</div>'; return; }
   if (view.tab === 'players') return view.player != null ? drawPlayer(el) : drawPlayers(el);
   ({ dash: drawDash, bans: drawBans, audit: drawAudit, server: drawServer })[view.tab]?.(el);
 }
 
 function openPlayer(id) {
-  if (!Number.isFinite(id)) return;
+  if (online() ? !Number.isFinite(id) : !id) return;
   Object.assign(view, { tab: 'players', player: id, sub: 'overview', inv: { q: '', kind: 'all', sort: 'value', page: 0, sel: new Set() } });
   invalidate('player');
   draw();
@@ -267,6 +331,7 @@ function afterChange() {
 function drawDash(el) {
   const o = need('overview', 'overview', {}, el, drawBody);
   if (!o) return;
+  if (!online()) return drawLocalDash(el, o);
   const stats = [
     ['Online now', num(o.online)], ['Accounts', num(o.accounts)], ['Linked to Discord', num(o.linked)], ['Active bans', num(o.activeBans)],
     ['Money in circulation', money(+o.money || 0)], ['Items', num(o.items)], ['Uptime', uptimeText(o.uptime)], ['Database', esc(dbText(o.db))],
@@ -287,6 +352,39 @@ function drawDash(el) {
   wireOpen(el);
 }
 
+// Offline: this PC's save, its NPC world and the latest changes made here.
+function drawLocalDash(el, o) {
+  const pc = staffPc() || {};
+  const stats = [
+    ['Balance', money(+o.money || 0)], ['Items', num(o.items)], ['Inventory value', money(+o.invValue || 0)], ['Level', profLevel(o.level)],
+    ['Cases opened', num(o.opened)], ['Traders online', `${num(o.activeNow)} <small class="dim">of ${num(o.npcs)}</small>`], ['Blocked traders', num(o.blocked)], ['Snapshots', num(o.snapshots)],
+  ];
+  el.innerHTML = `<div class="toolbar adm-bar"><span class="muted">Your offline save at a glance</span><span class="spacer"></span><button class="btn sm" data-refresh>Refresh</button></div>
+    <div class="statgrid adm-stats">${stats.map(([k, v]) => `<div class="stat"><span>${k}</span><b>${v}</b></div>`).join('')}</div>
+    <div class="adm-cols">
+      <div class="panel"><h3>Your save</h3><dl class="kv"><dt>Saved</dt><dd>${when(o.lastSaved)}</dd><dt>Size</dt><dd>${kb(o.saveBytes)}</dd>
+        <dt>Kept</dt><dd>On this PC only: offline progress never goes online</dd></dl>
+        <div class="adm-panel-foot"><button class="btn ghost sm" data-go="server">Save & world</button></div></div>
+      <div class="panel"><h3>Your access</h3><div class="adm-state">${staffChip(pc.level)}<span class="muted">unlocked by ${esc(pc.name)}</span></div>
+        <ul class="adm-access">${LOCAL_ACCESS.map((t) => `<li class="yes">${t}</li>`).join('')}</ul></div>
+      <div class="panel"><h3>NPC traders</h3>${NPC_ROWS.map(([k, label]) => swHtml(label, obj(o.settings)[k] !== false, true)).join('')}
+        <div class="adm-panel-foot"><button class="btn ghost sm" data-go="server">NPC settings</button></div></div>
+    </div>
+    <div class="section-title">Latest changes</div>
+    ${auditTableHtml(Array.isArray(o.recent) ? o.recent : [])}
+    <div class="adm-panel-foot"><button class="btn ghost sm" data-go="audit">Full log</button></div>`;
+  el.querySelector('[data-refresh]').addEventListener('click', () => refresh('overview', drawBody));
+  el.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => { view.tab = b.dataset.go; invalidate(TAB_DATA[view.tab]); draw(); }));
+  wireOpen(el);
+}
+// What the panel does offline (your own save: all of it, whatever your level online).
+const LOCAL_ACCESS = [
+  'Edit your money, stats and items; read and import your configs',
+  'Save, restore and delete snapshots of your save',
+  'Edit, block and reset the NPC traders',
+  'Export, import and reset the save; make a new NPC world',
+];
+
 function discordStatusHtml(dc) {
   if (!dc.enabled) return `<div class="adm-state"><span class="chip">Not configured</span></div>
     <p class="muted adm-note">This server runs without a Discord bot: no account linking or slash commands, and staff come from ADMIN_USERS.</p>`;
@@ -299,15 +397,18 @@ function accessHtml(me) {
   return `<div class="adm-state">${staffChip(l)}<span class="muted">as ${esc(me?.name || net.me()?.name || '')}</span></div>
     <ul class="adm-access">${ACCESS.map(([n, t]) => `<li class="${l >= n ? 'yes' : 'no'}">${t}</li>`).join('')}</ul>`;
 }
+// (Green when the switch is where a normal day has it.)
+const swHtml = (label, on, normal) => `<div class="adm-switch"><span>${label}</span><span class="chip ${on === normal ? 'green' : 'red'}">${on ? 'On' : 'Off'}</span></div>`;
 function switchesHtml(s) {
-  // (Green when the switch is where a normal day has it.)
-  const sw = (label, on, normal) => `<div class="adm-switch"><span>${label}</span><span class="chip ${on === normal ? 'green' : 'red'}">${on ? 'On' : 'Off'}</span></div>`;
+  const sw = swHtml;
   return `${sw('Maintenance', !!s.maintenance, false)}${sw('New accounts', s.registration !== false, true)}${sw('Trading', s.trading !== false, true)}${sw('Gambling', s.gambling !== false, true)}
     <div class="adm-motd"><span>Message of the day</span>${s.motd ? `<div>${esc(s.motd)}</div>` : '<div class="dim">None</div>'}</div>`;
 }
 
 // ---- the audit log (its tab, the Dashboard and a player's history) ---------------------------------
-const actionTone = (a) => (a === 'ban' || a === 'reset' || a === 'items.remove' ? 'red' : a === 'unban' ? 'green' : ['kick', 'warn', 'signout'].includes(a) ? 'gold' : '');
+const actionTone = (a) => (['ban', 'reset', 'items.remove', 'save.import', 'world.reset'].includes(a) ? 'red' : a === 'unban' ? 'green' : ['kick', 'warn', 'signout'].includes(a) ? 'gold' : '');
+// (Offline a ban is an NPC trader blocked.)
+const actionName = (a) => (!online() && { ban: 'block', unban: 'unblock' }[a]) || a;
 // A value in a log line: times as dates, a Discord account or player by name, lists by length.
 function short(v, k = '') {
   if (v == null) return '—';
@@ -352,13 +453,13 @@ function auditTableHtml(rows, { target = true } = {}) {
   return `<div class="db-table-wrap"><table class="price-table adm-table"><thead><tr><th>When</th><th>Who</th><th>Action</th>${target ? '<th>Player</th>' : ''}<th>Details</th></tr></thead><tbody>
     ${rows.map((r) => {
       const t = r.target || (r.target_id != null ? { id: r.target_id, name: r.target_name } : null);
-      return `<tr><td class="nw">${when(r.at)}</td><td class="nw">${esc(r.actor)}</td><td class="nw"><span class="chip ${actionTone(r.action)}">${esc(r.action)}</span></td>
+      return `<tr><td class="nw">${when(r.at)}</td><td class="nw">${esc(r.actor)}</td><td class="nw"><span class="chip ${actionTone(r.action)}">${esc(actionName(r.action))}</span></td>
         ${target ? `<td class="nw">${playerLink(t)}</td>` : ''}<td class="adm-detail" title="${esc(clip(JSON.stringify(r.detail ?? ''), 1500))}">${auditSummary(r.detail)}</td></tr>`;
     }).join('')}</tbody></table></div>`;
 }
 
 function drawAudit(el) {
-  el.innerHTML = `<div class="toolbar adm-bar"><input class="input" type="search" data-aq placeholder="Who, player or action…" value="${esc(view.auditQ)}">
+  el.innerHTML = `<div class="toolbar adm-bar"><input class="input" type="search" data-aq placeholder="${online() ? 'Who, player or action…' : 'Trader or action…'}" value="${esc(view.auditQ)}">
     <span class="spacer"></span><span class="muted" data-acount></span><button class="btn sm" data-refresh>Refresh</button></div><div data-alist></div>`;
   const q = el.querySelector('[data-aq]');
   q.addEventListener('input', debounce(() => { view.auditQ = q.value; view.auditPage = 0; drawAuditList(); }, 300));
@@ -374,7 +475,7 @@ function drawAuditList() {
   notePage('audit', idx, d);
   const rows = Array.isArray(d.rows) ? d.rows : [];
   root.querySelector('[data-acount]').textContent = plural(d.total ?? rows.length, 'entry', 'entries');
-  el.innerHTML = rows.length ? auditTableHtml(rows) + pagerHtml(d.total, idx) : `<div class="empty adm-empty">${q ? 'Nothing matches that.' : 'No staff actions yet.'}</div>`;
+  el.innerHTML = rows.length ? auditTableHtml(rows) + pagerHtml(d.total, idx) : `<div class="empty adm-empty">${q ? 'Nothing matches that.' : online() ? 'No staff actions yet.' : 'No changes yet.'}</div>`;
   wireOpen(el);
   wirePager(el, (i) => { view.auditPage = i; drawAuditList(); });
 }
@@ -382,8 +483,8 @@ function drawAuditList() {
 // ---- Players ---------------------------------------------------------------------------------------
 function drawPlayers(el) {
   el.innerHTML = `<div class="toolbar adm-bar">
-      <input class="input" type="search" data-q placeholder="Name or Discord name…" value="${esc(view.q)}">
-      <div class="seg" data-filter>${FILTERS.map(([k, n]) => `<button data-v="${k}" class="${view.filter === k ? 'active' : ''}">${n}</button>`).join('')}</div>
+      <input class="input" type="search" data-q placeholder="${online() ? 'Name or Discord name…' : 'Name…'}" value="${esc(view.q)}">
+      <div class="seg" data-filter>${filters().map(([k, n]) => `<button data-v="${k}" class="${view.filter === k ? 'active' : ''}">${n}</button>`).join('')}</div>
       <span class="spacer"></span><span class="muted" data-pcount></span><button class="btn sm" data-refresh>Refresh</button>
     </div><div data-plist></div>`;
   const q = el.querySelector('[data-q]');
@@ -404,9 +505,14 @@ function drawPlayerList() {
   const d = need('players', 'players', { ...(q ? { q } : {}), filter: view.filter, ...pageArg('players', idx) }, el, drawPlayerList);
   if (!d) return;
   notePage('players', idx, d);
-  const rows = Array.isArray(d.rows) ? d.rows : [];
+  // (Offline the list is `players`: you, then the NPC traders.)
+  const rows = Array.isArray(d.rows) ? d.rows : Array.isArray(d.players) ? d.players : [];
   root.querySelector('[data-pcount]').textContent = plural(d.total ?? rows.length, 'player');
-  if (!rows.length) { el.innerHTML = `<div class="empty adm-empty">${q ? 'No player matches that.' : 'No players here.'}</div>`; return; }
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty adm-empty">${q ? 'No player matches that.' : online() ? 'No players here.' : view.filter === 'banned' ? 'No trader is blocked.' : view.filter === 'friends' ? 'No friends yet.' : 'No players here.'}</div>`;
+    return;
+  }
+  if (!online()) return drawLocalPlayers(el, d, rows, idx);
   el.innerHTML = `<div class="db-table-wrap"><table class="price-table adm-table adm-click"><thead><tr>
       <th>Player</th><th>Level</th><th class="num">Money</th><th class="num">Items</th><th class="num">Worth</th><th>Discord</th><th>Status</th><th>Last seen</th><th>Joined</th></tr></thead><tbody>
     ${rows.map((r) => `<tr data-id="${+r.id}">
@@ -417,6 +523,21 @@ function drawPlayerList() {
       <td class="nw">${r.online ? '<span class="green">Online now</span>' : when(r.lastSeen)}</td><td class="nw">${when(r.created)}</td></tr>`).join('')}
     </tbody></table></div>${pagerHtml(d.total, idx)}`;
   el.querySelectorAll('tr[data-id]').forEach((tr) => tr.addEventListener('click', () => openPlayer(+tr.dataset.id)));
+  wirePager(el, (i) => { view.page = i; drawPlayerList(); });
+}
+// Offline: you and the NPC traders (their money and items once the save has dealt with them, else as they start).
+function drawLocalPlayers(el, d, rows, idx) {
+  const friend = (f) => (f === 1 || f === true ? '<span class="chip green">Friends</span>' : f === 2 ? '<span class="chip gold">Wants to be friends</span>' : f === 3 ? '<span class="chip">Request sent</span>' : '');
+  el.innerHTML = `<div class="db-table-wrap"><table class="price-table adm-table adm-click"><thead><tr>
+      <th>Trader</th><th>Type</th><th class="num">Money</th><th class="num">Items</th><th>Friend</th><th>Status</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr data-id="${esc(r.id)}">
+      <td class="nw"><span class="adm-dot ${r.online ? 'on' : ''}" title="${r.online ? 'Online' : 'Offline'}"></span>${cc(r.country)}<b>${esc(r.name)}</b></td>
+      <td class="nw">${r.self ? `<span class="chip gold">You</span>${r.level != null ? ` ${profLevel(r.level)}` : ''}` : esc(typeName(r))}</td>
+      <td class="num">${r.money != null ? money(+r.money || 0) : '<span class="dim">—</span>'}</td><td class="num">${num(r.items)}</td>
+      <td class="nw">${r.self ? '' : friend(r.friend)}</td>
+      <td class="nw">${r.blocked ? `<span class="chip red" ${r.blocked.reason ? `title="${esc(r.blocked.reason)}"` : ''}>Blocked</span>` : ''}</td></tr>`).join('')}
+    </tbody></table></div>${pagerHtml(d.total, idx)}`;
+  el.querySelectorAll('tr[data-id]').forEach((tr) => tr.addEventListener('click', () => openPlayer(tr.dataset.id)));
   wirePager(el, (i) => { view.page = i; drawPlayerList(); });
 }
 
@@ -431,13 +552,17 @@ function drawPlayer(el) {
   const p = need('player', 'player', { id: view.player }, pv, drawBody);
   if (!p) return;
   if (!p.user) { pv.innerHTML = '<div class="empty adm-empty">There is no such player.</div>'; return; }
-  const ban = (p.bans || []).map(normBan).find(banActive) || (p.user.ban ? normBan(p.user.ban) : null);
+  // (Offline an NPC trader's block, while it lasts.)
+  const ban = online() ? (p.bans || []).map(normBan).find(banActive) || (p.user.ban ? normBan(p.user.ban) : null)
+    : p.user.npc?.blocked && banActive(normBan(p.user.npc.blocked)) ? normBan(p.user.npc.blocked) : null;
   const inv = p.state?.inv || [];
   const counts = { inventory: inv.length, snapshots: (p.snapshots || []).length };
-  pv.innerHTML = `${playerHeadHtml(p, ban)}
-    <div class="seg adm-subtabs" data-sub>${SUBS.map(([k, n]) => `<button data-v="${k}" class="${view.sub === k ? 'active' : ''}">${n}${counts[k] ? ` <span class="adm-count">${counts[k].toLocaleString()}</span>` : ''}</button>`).join('')}</div>
+  const subs = p.user.npc ? NPC_SUBS : SUBS, acts = online() ? PLAYER_ACTIONS : LOCAL_ACTIONS;
+  if (!subs.some(([k]) => k === view.sub)) view.sub = 'overview';
+  pv.innerHTML = `${online() ? playerHeadHtml(p, ban) : localHeadHtml(p, ban)}
+    <div class="seg adm-subtabs" data-sub>${subs.map(([k, n]) => `<button data-v="${k}" class="${view.sub === k ? 'active' : ''}">${n}${counts[k] ? ` <span class="adm-count">${counts[k].toLocaleString()}</span>` : ''}</button>`).join('')}</div>
     <div class="adm-subbody" data-subbody></div>`;
-  pv.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => PLAYER_ACTIONS[b.dataset.act](p, b, ban)));
+  pv.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => acts[b.dataset.act](p, b, ban)));
   wireOpen(pv.querySelector('.adm-head'));
   const sub = pv.querySelector('[data-subbody]');
   pv.querySelectorAll('[data-sub] button').forEach((b) => b.addEventListener('click', () => {
@@ -481,6 +606,45 @@ function actionButtons(u, ban) {
   return `<span class="muted">${isSelf(u) ? "That's you: you can look, but not punish yourself." : `${esc(u.name)} is ${esc(levelName(u.staff))}, the same level as you or above: you can only look.`}</span>`;
 }
 
+// Offline: your own save, or an NPC trader (who they are, where you stand, their block).
+function localHeadHtml(p, ban) {
+  const u = p.user, n = u.npc, pc = staffPc() || {};
+  const facts = n
+    ? [['Trader', esc(typeName(n))], ['Country', n.country ? cc(n.country) : '<span class="dim">—</span>'], ['Friend', esc(friendText(n.friend))], ['Trades with you', num(+n.trades || 0)]]
+    : [['Save', 'Offline, on this PC'], ['Unlocked by', `${esc(pc.name)} <span class="dim">(${esc(levelName(pc.level))}) on ${esc(pc.server)}</span>`]];
+  const chips = n
+    ? `${u.online != null ? `<span class="chip ${u.online ? 'green' : ''}"><span class="adm-dot ${u.online ? 'on' : ''}"></span>${u.online ? 'Online' : 'Offline'}</span>` : ''}<span class="chip">NPC trader</span>${ban ? '<span class="chip red">Blocked</span>' : ''}`
+    : '<span class="chip gold">Your save</span>';
+  return `<div class="panel adm-head">
+    <div class="adm-head-top">
+      ${avatar(u.name, 'adm-av')}
+      <div class="adm-who"><h2>${esc(u.name)}</h2><div class="adm-chips">${chips}</div></div>
+      <dl class="kv adm-facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
+    </div>
+    ${ban ? `<div class="adm-banline"><b>Blocked ${esc(untilText(ban.expires))}</b>${ban.by ? ` by ${esc(ban.by)}` : ''}<div>${esc(ban.reason)}</div></div>` : ''}
+    <div class="actions adm-actions">${n ? `${ban ? '<button class="btn primary" data-act="unban">Unblock</button>' : '<button class="btn danger" data-act="ban">Block</button>'}
+      <span class="spacer"></span><button class="btn ghost" data-act="reset">Reset trader</button>`
+      : '<span class="muted">Your own save on this PC: every change is in the log, and your save is snapshotted before it.</span><span class="spacer"></span><button class="btn ghost" data-act="reset">Reset save</button>'}</div>
+  </div>`;
+}
+
+// A ban's (or a block's) length: the picker, and what it says as minutes (null: permanent; false: not a length, `err`
+// says why).
+const DURATION_HTML = `<label>Length<select class="input" data-dur>${DURATIONS.map(([v, n]) => `<option value="${v}">${n}</option>`).join('')}</select></label>
+  <label data-customrow hidden>Minutes (1 to ${MAX_MINUTES.toLocaleString()})<input class="input" type="number" min="1" max="${MAX_MINUTES}" step="1" data-min></label>`;
+function wireDuration(m) {
+  const dur = m.el.querySelector('[data-dur]');
+  dur.addEventListener('change', () => { m.el.querySelector('[data-customrow]').hidden = dur.value !== 'custom'; });
+}
+function minutesOf($, err) {
+  const dur = $('[data-dur]').value;
+  if (dur === 'perm') return null;
+  if (dur !== 'custom') return +dur;
+  const n = Number($('[data-min]').value);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_MINUTES) { err(`Enter the minutes: a whole number from 1 to ${MAX_MINUTES.toLocaleString()}.`); return false; }
+  return n;
+}
+
 // The actions in a player's header: each a window with a form or a confirmation.
 const PLAYER_ACTIONS = {
   ban(p) {
@@ -488,20 +652,16 @@ const PLAYER_ACTIONS = {
     const m = formModal({
       title: `Ban ${esc(u.name)}`, ok: 'Ban', danger: true,
       body: `<label>Reason <small>(they see it)</small><textarea class="input" data-reason maxlength="300" rows="3" placeholder="e.g. Scamming other players in trades"></textarea></label>
-        <label>Length<select class="input" data-dur>${DURATIONS.map(([v, n]) => `<option value="${v}">${n}</option>`).join('')}</select></label>
-        <label data-customrow hidden>Minutes (1 to ${MAX_MINUTES.toLocaleString()})<input class="input" type="number" min="1" max="${MAX_MINUTES}" step="1" data-min></label>
+        ${DURATION_HTML}
         ${admin ? '<label class="check"><input type="checkbox" data-net> Also block their network (other accounts from it)</label>' : ''}
         ${admin && u.discord && net.account()?.discordBans ? `<label class="check"><input type="checkbox" data-dban> Also ban them from the Discord server (@${esc(u.discord.name)})</label>` : ''}
         ${u.online ? '<div class="muted adm-note">They are online: they are disconnected at once.</div>' : ''}`,
       submit: async ($, err) => {
-        const reason = $('[data-reason]').value.trim(), dur = $('[data-dur]').value;
+        const reason = $('[data-reason]').value.trim();
         if (!reason) { err('Give a reason.'); return false; }
-        const args = { id: u.id, reason };
-        if (dur === 'custom') {
-          const n = Number($('[data-min]').value);
-          if (!Number.isInteger(n) || n < 1 || n > MAX_MINUTES) { err(`Enter the minutes: a whole number from 1 to ${MAX_MINUTES.toLocaleString()}.`); return false; }
-          args.minutes = n;
-        } else if (dur !== 'perm') args.minutes = +dur;
+        const args = { id: u.id, reason }, minutes = minutesOf($, err);
+        if (minutes === false) return false;
+        if (minutes) args.minutes = minutes;
         if ($('[data-net]')?.checked) args.network = true;
         if ($('[data-dban]')?.checked) args.discordBan = true;
         const r = await run(null, 'ban', args, `Banned <b>${esc(u.name)}</b> ${args.minutes ? 'for ' + durText(args.minutes) : 'permanently'}`);
@@ -509,8 +669,7 @@ const PLAYER_ACTIONS = {
         return !!r;
       },
     });
-    const dur = m.el.querySelector('[data-dur]');
-    dur.addEventListener('change', () => { m.el.querySelector('[data-customrow]').hidden = dur.value !== 'custom'; });
+    wireDuration(m);
   },
   unban(p, btn, ban) {
     const u = p.user;
@@ -588,6 +747,46 @@ const PLAYER_ACTIONS = {
   },
 };
 
+// Offline: blocking an NPC trader and lifting it, and starting a trader (or your save) over.
+const LOCAL_ACTIONS = {
+  ban(p) {
+    const u = p.user;
+    const m = formModal({
+      title: `Block ${esc(u.name)}`, ok: 'Block', danger: true,
+      body: `<label>Reason <small>(for the log)</small><textarea class="input" data-reason maxlength="300" rows="3" placeholder="e.g. Lowball offers every few minutes"></textarea></label>
+        ${DURATION_HTML}
+        <div class="muted adm-note">While blocked they send you no offers, messages or friend requests and buy nothing from your market listings, and their open offers to you are cancelled.</div>`,
+      submit: async ($, err) => {
+        const reason = $('[data-reason]').value.trim();
+        if (!reason) { err('Give a reason.'); return false; }
+        const minutes = minutesOf($, err);
+        if (minutes === false) return false;
+        const r = await run(null, 'ban', { id: u.id, minutes, reason }, `Blocked <b>${esc(u.name)}</b> ${minutes ? 'for ' + durText(minutes) : 'permanently'}`);
+        if (r) afterChange();
+        return !!r;
+      },
+    });
+    wireDuration(m);
+  },
+  async unban(p, btn) {
+    const u = p.user;
+    if (!(await confirmDialog(`Unblock <b>${esc(u.name)}</b>? They can send you offers and messages and buy from your listings again.`, { ok: 'Unblock' }))) return;
+    if (await run(btn, 'unban', { id: u.id }, `Unblocked <b>${esc(u.name)}</b>`)) afterChange();
+  },
+  async reset(p, btn) {
+    const u = p.user;
+    if (!u.npc) { if (await resetSave(btn)) afterChange(); return; }
+    if (!(await confirmDialog(`Reset <b>${esc(u.name)}</b> to how they started in this world? Their money, items, mood and friendship go back to their start, and their open offers to you are cancelled.`, { ok: 'Reset trader', danger: true }))) return;
+    if (await run(btn, 'reset', { id: u.id }, `<b>${esc(u.name)}</b> is back to their start`)) afterChange();
+  },
+};
+// Your offline save started over (its settings kept): true when it was.
+async function resetSave(btn) {
+  if (!(await confirmDialog(`Reset your offline save to a new game's? Your money, inventory, stats, ranks, level and the NPC traders start over; your settings stay.
+    An auto snapshot is saved first, so it can be restored.`, { ok: 'Reset save', danger: true }))) return false;
+  return !!(await run(btn, 'reset', { id: 'me' }, 'Your save is a fresh one'));
+}
+
 const SUB_DRAW = { overview: drawOverview, inventory: drawInventory, configs: drawConfigs, snapshots: drawSnapshots, history: drawHistory };
 
 // ---- a player: Overview (their numbers, editable by admins) ------------------------------------------
@@ -612,6 +811,7 @@ function editorGroups(st) {
   return groups.filter(([, f]) => f.length);
 }
 function drawOverview(el, p) {
+  if (p.user.npc) return drawNpcOverview(el, p);
   const u = p.user, st = p.state || {}, edit = canChange(u);
   const inv = st.inv || [], invValue = inv.reduce((s, i) => s + itemValue(i), 0), s = obj(st.stats);
   const sum = [
@@ -652,20 +852,72 @@ function drawOverview(el, p) {
       if (b) (set[a] ||= {})[b] = v; else set[a] = v;
     }
     const n = changed().length;
-    if (await run([save, undo], 'edit', { id: u.id, set }, `Saved ${plural(n, 'change')} to <b>${esc(u.name)}</b>`)) afterChange();
+    if (await run([save, undo], 'edit', { id: u.id, set }, `Saved ${plural(n, 'change')} to ${whose(u)}`)) afterChange();
   });
   el.querySelector('[data-raw]').addEventListener('click', () => rawModal(p));
+}
+
+// Offline, an NPC trader: who they are, and their money, mood and friendship with you to change.
+function drawNpcOverview(el, p) {
+  const u = p.user, n = u.npc, st = p.state || {}, inv = st.inv || [], invValue = inv.reduce((s, i) => s + itemValue(i), 0);
+  const mood = Number.isFinite(+n.mood) ? +n.mood : null;
+  const sum = [
+    ['Money', money(+st.money || 0)], ['Inventory', `${num(inv.length)} · ${money(invValue)}`], ['Net worth', money((+st.money || 0) + invValue)],
+    ['Mood', mood == null ? '—' : pct(mood)], ['Trades with you', num(+n.trades || 0)],
+  ];
+  const who = [
+    ['Type', esc(typeName(n))], ['Country', n.country ? cc(n.country) : '<span class="dim">—</span>'],
+    ['Wallet', n.tier != null ? esc(TIERS[n.tier] || `Tier ${n.tier}`) : '<span class="dim">—</span>'], ['Friend', esc(friendText(n.friend))],
+    ['Trader id', `<span class="fair">${esc(u.id)}</span>`],
+  ];
+  const f = (label, input) => `<label class="adm-field"><span>${label}</span>${input}</label>`;
+  el.innerHTML = `<div class="summary adm-summary">${sum.map(([k, v]) => `<div>${k}<b>${v}</b></div>`).join('')}</div>
+    <div class="adm-editor">
+      <div><div class="panel"><h3>Trader</h3><div class="adm-fields">
+        ${f('Money', `<input class="input" type="number" data-f="money" min="0" step="0.01" value="${esc(String(Math.round((+st.money || 0) * 100) / 100))}">`)}
+        ${f('Mood (0-1)', `<input class="input" type="number" data-f="mood" min="0" max="1" step="0.05" value="${esc(mood == null ? '' : String(mood))}">`)}
+        ${f('Friend', `<select class="input" data-f="friend">${FRIENDS.map((t, i) => `<option value="${i}" ${(n.friend === true ? 1 : n.friend | 0) === i ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
+      </div></div></div>
+      <div><div class="panel"><h3>Who they are</h3><dl class="kv">${who.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></div></div>
+    </div>
+    <div class="actions adm-save"><button class="btn primary" data-save disabled>Save changes</button><button class="btn ghost" data-undo disabled>Undo changes</button>
+      <span class="muted adm-note">Mood: how likely they are to take your friend request (each trade with you raises it). Only what you change is sent.</span></div>`;
+  const inputs = [...el.querySelectorAll('[data-f]')], save = el.querySelector('[data-save]'), undo = el.querySelector('[data-undo]');
+  inputs.forEach((i) => { i.dataset.was = i.value; });
+  const changed = () => inputs.filter((i) => i.value !== i.dataset.was);
+  const update = () => {
+    inputs.forEach((i) => i.classList.toggle('changed', i.value !== i.dataset.was));
+    const k = changed().length;
+    save.disabled = undo.disabled = !k;
+    save.textContent = k ? `Save ${plural(k, 'change')}` : 'Save changes';
+  };
+  inputs.forEach((i) => i.addEventListener(i.tagName === 'SELECT' ? 'change' : 'input', update));
+  undo.addEventListener('click', () => { inputs.forEach((i) => { i.value = i.dataset.was; }); update(); });
+  save.addEventListener('click', async () => {
+    const set = {};
+    for (const i of changed()) {
+      const v = Number(i.value), k = i.dataset.f;
+      if (i.value.trim() === '' || !Number.isFinite(v) || v < 0 || (k === 'mood' && v > 1)) {
+        sfx.error(); toast(k === 'mood' ? 'Mood is a number from 0 to 1' : 'Money is a number from 0 up', 'bad'); i.focus(); return;
+      }
+      set[k] = k === 'money' ? Math.round(v * 100) / 100 : v;
+    }
+    const k = changed().length;
+    if (await run([save, undo], 'edit', { id: u.id, ...set }, `Saved ${plural(k, 'change')} to <b>${esc(u.name)}</b>`)) afterChange();
+  });
 }
 
 // Every top-level part of the state but the inventory and the (offline-only) NPC world, as JSON to edit by hand.
 function rawModal(p) {
   const u = p.user, restOf = (st) => { const { inv, social, ...rest } = st || {}; return rest; };
+  // (Offline it's your own save.)
+  const own = !online() && isSelf(u), whoseSave = own ? 'your save' : `<b>${esc(u.name)}</b>'s save`;
   // (The save this JSON was made from: the server refuses it when the account has changed since, a sale or a claimed
   // reward that the old copy would undo.)
   let base = p.rev;
   const m = formModal({
-    title: `Raw JSON: ${esc(u.name)}`, ok: 'Save JSON', danger: true, cls: 'wide',
-    body: `<div class="muted adm-note">Everything in ${esc(u.name)}'s save except the inventory and the NPC world. Keys you leave out are reset to a new account's; an auto snapshot is saved first.</div>
+    title: `Raw JSON: ${own ? 'your save' : esc(u.name)}`, ok: 'Save JSON', danger: true, cls: 'wide',
+    body: `<div class="muted adm-note">Everything in ${own ? 'your' : `${esc(u.name)}'s`} save except the inventory and the NPC world. Keys you leave out are reset to a new account's; an auto snapshot is saved first.</div>
       <textarea class="input adm-json" data-json spellcheck="false">${esc(JSON.stringify(restOf(p.state), null, 2))}</textarea>
       <div class="adm-json-bar"><span class="muted" data-size></span><span class="spacer"></span><button class="btn ghost sm" data-fmt>Format</button></div>`,
     submit: async ($, err) => {
@@ -673,8 +925,8 @@ function rawModal(p) {
       try { state = JSON.parse($('[data-json]').value); } catch (e) { err('That isn\'t valid JSON: ' + e.message); return false; }
       if (!state || typeof state !== 'object' || Array.isArray(state)) { err('The state must be a JSON object { … }.'); return false; }
       if (jsonSize(state) > MAX_JSON) { err('That is over 48 KB.'); return false; }
-      if (!(await confirmDialog(`Replace <b>${esc(u.name)}</b>'s save (all but the inventory) with this JSON?`, { ok: 'Replace', danger: true }))) return false;
-      const r = await run(null, 'edit.raw', { id: u.id, state, base }, `Saved <b>${esc(u.name)}</b>'s JSON`, (e) => {
+      if (!(await confirmDialog(`Replace ${whoseSave} (all but the inventory) with this JSON?`, { ok: 'Replace', danger: true }))) return false;
+      const r = await run(null, 'edit.raw', { id: u.id, state, base }, own ? 'Saved the JSON to your save' : `Saved <b>${esc(u.name)}</b>'s JSON`, (e) => {
         if (e.code !== 'stale') return false;
         stale(e.message);
         return true;
@@ -700,7 +952,7 @@ function rawModal(p) {
       base = fresh.rev;
       ta.value = JSON.stringify(restOf(fresh.state), null, 2);
       showSize();
-      errEl.textContent = 'Reloaded: this is their save as it is now. Make your change again, then save.';
+      errEl.textContent = `Reloaded: this is ${own ? 'your' : 'their'} save as it is now. Make your change again, then save.`;
       // (The page behind shows it too.)
       const s = store.player;
       if (s && 'data' in s && s.args === JSON.stringify({ id: u.id })) { s.data = fresh; drawBody(); }
@@ -711,10 +963,12 @@ function rawModal(p) {
 }
 
 // ---- a player: Inventory -------------------------------------------------------------------------------
-// Items offered in their open trades: the server won't remove those.
+// Items offered in their open trades: the server won't remove those. (Offline your items an NPC's open offer asks for
+// are held for it the same way.)
 function reservedUids(p) {
   const s = new Set();
   for (const t of p.trades || []) if (t.status === 'open' && t.from?.id === p.user.id) for (const i of t.give?.items || []) s.add(i.uid);
+  if (!online()) for (const t of p.trades || []) if (t.status === 'open' && t.to?.id === p.user.id) for (const i of t.get?.items || []) s.add(i.uid);
   return s;
 }
 const INSPECTABLE = new Set(['skin', 'sticker', 'agent', 'charm']);
@@ -791,8 +1045,10 @@ async function removeItems(p, btn) {
   if (!items.length) return;
   const worth = items.reduce((s, i) => s + itemValue(i), 0);
   const what = items.length === 1 ? `<b>${esc(itemName(items[0]))}</b>` : `<b>${plural(items.length, 'item')}</b>`;
-  if (!(await confirmDialog(`Remove ${what} (worth ${money(worth)}) from <b>${esc(u.name)}</b>'s inventory? An auto snapshot is saved first.`, { ok: 'Remove', danger: true }))) return;
-  const r = await run(btn, 'items.remove', { id: u.id, uids: items.map((i) => i.uid) }, (x) => `Removed ${plural(x.removed ?? items.length, 'item')} from <b>${esc(u.name)}</b>`);
+  // (Offline: your own inventory, or an NPC trader's, which isn't snapshotted.)
+  const own = !online() && isSelf(u);
+  if (!(await confirmDialog(`Remove ${what} (worth ${money(worth)}) from ${own ? 'your' : `<b>${esc(u.name)}</b>'s`} inventory?${online() || own ? ' An auto snapshot is saved first.' : ''}`, { ok: 'Remove', danger: true }))) return;
+  const r = await run(btn, 'items.remove', { id: u.id, uids: items.map((i) => i.uid) }, (x) => `Removed ${plural(x.removed ?? items.length, 'item')} from ${own ? 'your inventory' : `<b>${esc(u.name)}</b>`}`);
   if (r) { sel.clear(); afterChange(); }
 }
 
@@ -811,10 +1067,10 @@ function giveList(kind) {
   return (giveLists[kind] = list.sort((a, b) => a.n.localeCompare(b.n)));
 }
 function giveModal(p) {
-  const u = p.user;
+  const u = p.user, own = !online() && isSelf(u);
   let kind = 'skin', pick = null;
   const m = formModal({
-    title: `Give items to ${esc(u.name)}`, ok: 'Give', cls: 'wide',
+    title: `Give items to ${own ? 'yourself' : esc(u.name)}`, ok: 'Give', cls: 'wide',
     body: `<div class="adm-give">
       <div class="adm-give-pick">
         <div class="toolbar adm-bar"><select class="input" data-gkind>${GIVE_KINDS.map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select>
@@ -852,7 +1108,7 @@ function giveModal(p) {
         if (!Number.isInteger(pt) || pt < 1 || pt > 100000) { err('The pattern is a whole number from 1 to 100000.'); return false; }
         entry.pat = pt;
       }
-      const r = await run(null, 'items.give', { id: u.id, items: [entry] }, (x) => `Gave <b>${esc(u.name)}</b> ${num(x.added ?? n)}× ${esc(pick.n)}`);
+      const r = await run(null, 'items.give', { id: u.id, items: [entry] }, (x) => `Gave ${own ? 'yourself' : `<b>${esc(u.name)}</b>`} ${num(x.added ?? n)}× ${esc(pick.n)}`);
       if (r) afterChange();
       return !!r;
     },
@@ -978,8 +1234,10 @@ function drawConfigs(el, p) {
   const c = p.config && typeof p.config === 'object' ? p.config : null;
   if (!c) { el.innerHTML = '<div class="empty adm-empty">No configs synced yet. A player\'s game syncs its settings while they\'re online (from this version of the game on).</div>'; return; }
   const pl = obj(c.play), g = obj(c.game);
-  el.innerHTML = `<div class="toolbar adm-bar"><span class="muted">Synced ${when(p.configAt)}</span><span class="spacer"></span>
-      <button class="btn" data-dl>Download JSON</button>${Object.keys(pl).length ? '<button class="btn primary" data-use>Use this Play config</button>' : ''}</div>
+  // (Offline these are your own settings: a config file can be imported instead.)
+  el.innerHTML = `<div class="toolbar adm-bar"><span class="muted">${online() ? `Synced ${when(p.configAt)}` : 'Your settings on this PC'}</span><span class="spacer"></span>
+      <button class="btn" data-dl>Download JSON</button>${!online() ? '<button class="btn primary" data-import>Import config file</button>'
+        : Object.keys(pl).length ? '<button class="btn primary" data-use>Use this Play config</button>' : ''}</div>
     <div class="adm-cols">
       <div class="panel"><h3>Play: aim and crosshair</h3>${playMainHtml(pl)}</div>
       <div class="panel"><h3>Play: video and sound</h3>${playVideoHtml(pl)}</div>
@@ -993,6 +1251,29 @@ function drawConfigs(el, p) {
     sfx.coin();
     toast(`Using <b>${esc(p.user.name)}</b>'s Play config (${plural(n, 'setting')})`, 'good');
   });
+  el.querySelector('[data-import]')?.addEventListener('click', importConfig);
+}
+// Offline: a config file (one downloaded here or from the online panel, or a snapshot's download with its config) made
+// your settings, as a player's config is taken above.
+async function importConfig() {
+  const f = await pickFile('.json,application/json');
+  if (!f) return;
+  let c;
+  try {
+    if (f.size > 1024 * 1024) throw new Error('That file is too big for a config.');
+    const j = JSON.parse(await f.text());
+    c = obj(obj(j).config && typeof j.config === 'object' ? j.config : j);
+    if (!Object.keys(obj(c.play)).length && !Object.keys(obj(c.game)).length) throw new Error('That file has no game or Play settings in it.');
+  } catch (e) {
+    sfx.error();
+    toast(esc(e instanceof SyntaxError ? "That file isn't a config (it isn't valid JSON)." : e.message), 'bad');
+    return;
+  }
+  if (!(await confirmDialog(`Use the settings in <b>${esc(f.name)}</b> as yours? Only what the settings offer is taken (a number outside its range is brought into it), and your lobby choices (map, mode, bots) stay.`, { ok: 'Use these settings' }))) return;
+  const n = (Object.keys(obj(c.play)).length ? adoptPlay(obj(c.play)) : 0) + adoptGame(obj(c.game));
+  sfx.coin();
+  toast(`Imported ${plural(n, 'setting')} from <b>${esc(f.name)}</b>`, 'good');
+  refresh('player', drawBody);
 }
 // Someone else's Play settings made yours: only the settings the settings panel has (not the lobby's choices), each
 // one of the values it offers (a number clamped into its range: an fps_max of 0.001 would freeze your matches, a
@@ -1012,6 +1293,36 @@ const ADOPT = {
   renderScale: clampTo(RANGES.renderScale), fpsMax: oneOf(...FPS_CAPS), aspect: oneOf('native', ...Object.keys(ASPECTS)), scaling: oneOf('stretched', 'bars'),
   resolution: (v) => (v === 'native' || RES.has(v) ? v : undefined),
 };
+// Game settings from a config file, taken the same way: each one the settings pages have, as they offer it. (A
+// background is a map's id, checked against the maps there are when its picker is drawn.)
+const mapId = (v) => (typeof v === 'string' && /^[\w.-]{1,64}$/.test(v) ? v : undefined);
+const ADOPT_GAME = {
+  volume: clampTo([0, 1]), fast: isBool, caseIntro: isBool, confirmSellAbove: clampTo([0, 1e9]), showOdds: isBool, keepPrepared: isBool,
+  menuBg: mapId, inspectBg: mapId,
+  autoSell: {
+    on: isBool, below: clampTo([0, 1e9]), keepStt: isBool, keepRare: isBool,
+    ranks: (v) => (Array.isArray(v) && v.length <= 6 && v.every((x) => Number.isInteger(x) && x >= 0 && x <= 5) ? [...new Set(v)] : undefined),
+  },
+};
+// One setting as its rule takes it: a rule, or rules for an object's fields (merged into yours). undefined: yours stays.
+function adoptOne(rule, mine, v) {
+  if (typeof rule === 'function') return rule(v);
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out = { ...obj(mine) };
+  for (const [k, x] of Object.entries(v)) { const y = Object.hasOwn(rule, k) ? rule[k](x) : undefined; if (y !== undefined) out[k] = y; }
+  return out;
+}
+function adoptGame(theirs) {
+  let n = 0;
+  for (const [k, v] of Object.entries(theirs)) {
+    const out = Object.hasOwn(ADOPT_GAME, k) ? adoptOne(ADOPT_GAME[k], S.settings[k], v) : undefined;
+    if (out === undefined) continue;
+    S.settings[k] = out;
+    n++;
+  }
+  if (n) saveState();
+  return n;
+}
 function cleanBinds(b) {
   if (!b || typeof b !== 'object' || Array.isArray(b)) return undefined;
   const out = {};
@@ -1031,11 +1342,7 @@ function adoptPlay(theirs) {
       if (out) next.bindsVersion = Math.min(BINDS_VERSION, Math.max(1, Math.floor(theirs.bindsVersion) || 1));
     } else if (k === 'binds') out = cleanBinds(v);
     else if (!Object.hasOwn(ADOPT, k)) continue;
-    else if (typeof ADOPT[k] === 'object') {
-      if (!v || typeof v !== 'object' || Array.isArray(v)) continue;
-      out = { ...obj(mine[k]) };
-      for (const [kk, vv] of Object.entries(v)) { const x = Object.hasOwn(ADOPT[k], kk) ? ADOPT[k][kk](vv) : undefined; if (x !== undefined) out[kk] = x; }
-    } else out = ADOPT[k](v);
+    else out = adoptOne(ADOPT[k], mine[k], v);
     if (out === undefined) continue;
     next[k] = out;
     n++;
@@ -1049,17 +1356,18 @@ function drawSnapshots(el, p) {
   const u = p.user, edit = canChange(u), snaps = p.snapshots || [];
   el.innerHTML = `<div class="toolbar adm-bar"><input class="input adm-label" data-label maxlength="80" placeholder="Label, e.g. Before the trade dispute">
       <button class="btn primary" data-snap>Save snapshot</button><span class="spacer"></span>
-      <span class="muted">Auto snapshots are saved before every edit, restore and reset (the newest 20 are kept).</span></div>
+      <span class="muted">${online() ? 'Auto snapshots are saved before every edit, restore and reset (the newest 20 are kept).'
+        : 'Auto snapshots are saved before every change to your save (the newest 20 are kept). They stay on this PC, outside the save.'}</span></div>
     ${snaps.length ? `<div class="db-table-wrap"><table class="price-table adm-table"><thead><tr><th>Label</th><th>Kind</th><th>By</th><th>When</th><th class="num">Size</th><th></th></tr></thead><tbody>
       ${snaps.map((s, i) => `<tr><td><b>${esc(s.label)}</b></td><td><span class="chip ${s.kind === 'auto' ? '' : 'gold'}">${s.kind === 'auto' ? 'Auto' : 'Manual'}</span></td>
         <td class="nw">${esc(s.by)}</td><td class="nw">${esc(fmtDate(s.created))} <span class="dim">· ${when(s.created)}</span></td><td class="num">${kb(s.size)}</td>
         <td class="nw adm-rowbtns"><button class="btn ghost sm" data-sdl="${i}">Download JSON</button>${edit ? `<button class="btn sm" data-srestore="${i}">Restore</button><button class="btn ghost sm" data-sdel="${i}">Delete</button>` : ''}</td></tr>`).join('')}
-      </tbody></table></div>` : '<div class="empty adm-empty">No snapshots of this account yet.</div>'}`;
+      </tbody></table></div>` : `<div class="empty adm-empty">${online() ? 'No snapshots of this account yet.' : 'No snapshots of your save yet.'}</div>`}`;
   const label = el.querySelector('[data-label]'), btn = el.querySelector('[data-snap]');
   // (Without a label the server names it "Saved by <you>".)
   const save = async () => {
     if (btn.disabled) return; // (Enter, or a held Enter's repeats, while one is being saved)
-    if (await run(btn, 'snapshot.save', { id: u.id, label: label.value.trim() }, `Saved a snapshot of <b>${esc(u.name)}</b>`)) afterChange();
+    if (await run(btn, 'snapshot.save', { id: u.id, label: label.value.trim() }, `Saved a snapshot of ${whose(u)}`)) afterChange();
   };
   btn.addEventListener('click', save);
   label.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
@@ -1069,9 +1377,11 @@ function drawSnapshots(el, p) {
   }));
   el.querySelectorAll('[data-srestore]').forEach((b) => b.addEventListener('click', async () => {
     const s = snaps[+b.dataset.srestore];
-    if (!(await confirmDialog(`Restore <b>${esc(u.name)}</b> to “${esc(s.label)}” from ${esc(fmtDate(s.created))}? Their current save is replaced (an auto snapshot of it is saved first) and their open trade offers are cancelled.
-      Items they've traded or sold to someone since are left out.`, { ok: 'Restore', danger: true }))) return;
-    const r = await run(b, 'snapshot.restore', { snap: s.id }, (x) => (x.dropped ? `Restored <b>${esc(u.name)}</b>. Left out: ${[x.dropped - (x.rewards || 0) && `${plural(x.dropped - (x.rewards || 0), 'item')} now owned by someone else`, x.rewards && `${plural(x.rewards, 'level-up reward')} claimed since`].filter(Boolean).join(', ')}.` : `Restored <b>${esc(u.name)}</b>`));
+    const ask = online() ? `Restore <b>${esc(u.name)}</b> to “${esc(s.label)}” from ${esc(fmtDate(s.created))}? Their current save is replaced (an auto snapshot of it is saved first) and their open trade offers are cancelled.
+      Items they've traded or sold to someone since are left out.`
+      : `Restore your save to “${esc(s.label)}” from ${esc(fmtDate(s.created))}? Your save as it is now is replaced (an auto snapshot of it is saved first); your settings stay.`;
+    if (!(await confirmDialog(ask, { ok: 'Restore', danger: true }))) return;
+    const r = await run(b, 'snapshot.restore', { snap: s.id }, (x) => (x.dropped ? `Restored ${whose(u)}. Left out: ${[x.dropped - (x.rewards || 0) && `${plural(x.dropped - (x.rewards || 0), 'item')} now owned by someone else`, x.rewards && `${plural(x.rewards, 'level-up reward')} claimed since`].filter(Boolean).join(', ')}.` : `Restored ${whose(u)}`));
     if (r) afterChange();
   }));
   el.querySelectorAll('[data-sdel]').forEach((b) => b.addEventListener('click', async () => {
@@ -1091,30 +1401,32 @@ function tradeSide(side) {
 }
 function drawHistory(el, p) {
   const u = p.user, bans = (p.bans || []).map(normBan), notes = p.notes || [], trades = p.trades || [], audit = p.audit || [];
+  // (Offline: no bans of your own save, an NPC's are its blocks; the trades are the open NPC offers, to you or from them.)
+  const off = !online(), showBans = !off || !!u.npc, showTrades = !off || Array.isArray(p.trades);
   el.innerHTML = `<div class="adm-hist">
     <div>
       <div class="section-title">Notes <span class="adm-count">${notes.length}</span></div>
       <div class="panel adm-notes">
-        <div class="adm-note-add"><textarea class="input" data-note maxlength="1000" rows="2" placeholder="A note for the staff (players never see it)…"></textarea><button class="btn primary" data-addnote>Add note</button></div>
+        <div class="adm-note-add"><textarea class="input" data-note maxlength="1000" rows="2" placeholder="${off ? 'A note (kept on this PC only)…' : 'A note for the staff (players never see it)…'}"></textarea><button class="btn primary" data-addnote>Add note</button></div>
         ${notes.length ? notes.map((n) => `<div class="adm-noterow"><div class="adm-notehead"><b>${esc(n.by ?? n.by_name ?? '')}</b> ${when(n.created)}</div><div class="adm-notetext">${esc(n.text)}</div></div>`).join('')
           : '<div class="muted adm-note">No notes yet.</div>'}
       </div>
-      <div class="section-title">Bans <span class="adm-count">${bans.length}</span></div>
+      ${showBans ? `<div class="section-title">${off ? 'Blocks' : 'Bans'} <span class="adm-count">${bans.length}</span></div>
       ${bans.length ? `<div class="db-table-wrap"><table class="price-table adm-table"><thead><tr><th>Reason</th><th>By</th><th>When</th><th>Length</th><th>Status</th></tr></thead><tbody>
         ${bans.map((b) => `<tr><td>${esc(b.reason)}${b.network ? ' <span class="chip">Network</span>' : ''}</td><td class="nw">${esc(b.by)}</td><td class="nw">${when(b.created)}</td>
           <td class="nw">${b.expires ? esc(fmtDate(b.expires)) : 'Permanent'}</td><td class="nw">${banStatus(b)}</td></tr>`).join('')}</tbody></table></div>`
-        : '<div class="muted adm-note">Never banned.</div>'}
+        : `<div class="muted adm-note">${off ? 'Never blocked.' : 'Never banned.'}</div>`}` : ''}
     </div>
     <div>
-      <div class="section-title">Recent trades <span class="adm-count">${trades.length}</span></div>
+      ${showTrades ? `<div class="section-title">${off ? 'Open offers' : 'Recent trades'} <span class="adm-count">${trades.length}</span></div>
       ${trades.length ? `<div class="db-table-wrap"><table class="price-table adm-table"><thead><tr><th>When</th><th>With</th><th>Gave</th><th>Got</th><th>Status</th></tr></thead><tbody>
         ${trades.map((t) => {
           const out = t.from?.id === u.id, other = out ? t.to : t.from;
           return `<tr><td class="nw">${when(t.updated || t.created)}</td><td class="nw">${out ? '→' : '←'} ${playerLink(other)}</td>
             <td>${tradeSide(out ? t.give : t.get)}</td><td>${tradeSide(out ? t.get : t.give)}</td>
             <td class="nw"><span class="chip ${t.status === 'accepted' ? 'green' : t.status === 'open' ? 'gold' : ''}">${esc(t.status)}</span></td></tr>`;
-        }).join('')}</tbody></table></div>` : '<div class="muted adm-note">No trades.</div>'}
-      <div class="section-title">Staff actions on ${esc(u.name)} <span class="adm-count">${audit.length}</span></div>
+        }).join('')}</tbody></table></div>` : `<div class="muted adm-note">${off ? 'No open offers.' : 'No trades.'}</div>`}` : ''}
+      <div class="section-title">${off ? (isSelf(u) ? 'Changes to your save' : `Changes to ${esc(u.name)}`) : `Staff actions on ${esc(u.name)}`} <span class="adm-count">${audit.length}</span></div>
       ${auditTableHtml(audit, { target: false })}
     </div></div>`;
   wireOpen(el);
@@ -1143,19 +1455,25 @@ function drawBanList() {
   if (!el) return;
   const d = need('bans', 'bans', { active: view.bansActive }, el, drawBanList);
   if (!d) return;
-  const rows = (Array.isArray(d) ? d : Array.isArray(d.rows) ? d.rows : []).map(normBan);
-  root.querySelector('[data-bcount]').textContent = plural(rows.length, 'ban');
-  if (!rows.length) { el.innerHTML = `<div class="empty adm-empty">${view.bansActive ? 'Nobody is banned right now.' : 'No bans yet.'}</div>`; return; }
-  el.innerHTML = `<div class="db-table-wrap"><table class="price-table adm-table"><thead><tr><th>Player</th><th>Reason</th><th>By</th><th>When</th><th>Until</th><th>Status</th><th></th></tr></thead><tbody>
+  // (Offline these are the NPC traders you've blocked: `bans`, the same rows.)
+  const off = !online(), rows = (Array.isArray(d) ? d : Array.isArray(d.rows) ? d.rows : Array.isArray(d.bans) ? d.bans : []).map(normBan);
+  root.querySelector('[data-bcount]').textContent = plural(rows.length, off ? 'block' : 'ban');
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty adm-empty">${off ? (view.bansActive ? 'No trader is blocked right now.' : 'No blocks yet.') : view.bansActive ? 'Nobody is banned right now.' : 'No bans yet.'}</div>`;
+    return;
+  }
+  el.innerHTML = `<div class="db-table-wrap"><table class="price-table adm-table"><thead><tr><th>${off ? 'Trader' : 'Player'}</th><th>Reason</th><th>By</th><th>When</th><th>Until</th><th>Status</th><th></th></tr></thead><tbody>
     ${rows.map((b, i) => `<tr><td class="nw">${b.user ? playerLink(b.user) : ''}${b.network ? ' <span class="chip" title="Blocks the network it was made from">Network</span>' : ''}</td>
       <td class="adm-detail">${esc(b.reason)}</td><td class="nw">${esc(b.by)}</td><td class="nw">${when(b.created)}</td><td class="nw">${b.expires ? esc(fmtDate(b.expires)) : 'Permanent'}</td>
-      <td class="nw">${banStatus(b)}</td><td>${b.user && banActive(b) ? `<button class="btn sm" data-unban="${i}">Unban</button>` : ''}</td></tr>`).join('')}
+      <td class="nw">${banStatus(b)}</td><td>${b.user && banActive(b) ? `<button class="btn sm" data-unban="${i}">${off ? 'Unblock' : 'Unban'}</button>` : ''}</td></tr>`).join('')}
     </tbody></table></div>`;
   wireOpen(el);
   el.querySelectorAll('[data-unban]').forEach((btn) => btn.addEventListener('click', async () => {
     const b = rows[+btn.dataset.unban];
-    if (!(await confirmDialog(`Lift every active ban of <b>${esc(b.user.name)}</b>, and the network bans made with them?`, { ok: 'Unban' }))) return;
-    if (await run(btn, 'unban', { id: b.user.id }, (x) => `Lifted ${plural(x.lifted ?? 1, 'ban')} of <b>${esc(b.user.name)}</b>`)) {
+    const ask = off ? `Unblock <b>${esc(b.user.name)}</b>? They can send you offers and messages and buy from your listings again.`
+      : `Lift every active ban of <b>${esc(b.user.name)}</b>, and the network bans made with them?`;
+    if (!(await confirmDialog(ask, { ok: off ? 'Unblock' : 'Unban' }))) return;
+    if (await run(btn, 'unban', { id: b.user.id }, (x) => (off ? `Unblocked <b>${esc(b.user.name)}</b>` : `Lifted ${plural(x.lifted ?? 1, 'ban')} of <b>${esc(b.user.name)}</b>`))) {
       invalidate('players', 'overview', 'player', 'audit');
       refresh('bans', drawBanList);
     }
@@ -1175,6 +1493,7 @@ const SERVER_ROWS = [
 function drawServer(el) {
   const s = need('settings', 'settings.get', {}, el, drawBody);
   if (!s) return;
+  if (!online()) return drawWorld(el, s);
   const ro = !isAdmin(), dis = ro ? 'disabled' : '';
   const control = ([k, type, , , ph]) => (type === 'bool'
     ? `<input type="checkbox" data-s="${k}" ${(k === 'maintenance' ? !!s[k] : s[k] !== false) ? 'checked' : ''} ${dis}>`
@@ -1202,6 +1521,11 @@ function drawServer(el) {
     const r = await run(send, 'broadcast', { msg }, (x) => `Sent to ${plural(x.sent ?? 0, 'player')}`);
     if (r) { cast.value = ''; cast.dispatchEvent(new Event('input')); invalidate('audit', 'overview'); }
   });
+  wireSettings(el, 'Server settings saved', (part) => part.maintenance !== true
+    || confirmDialog('Turn maintenance on? Everyone online who isn\'t staff is disconnected, and they can\'t connect until it\'s off.', { ok: 'Turn maintenance on', danger: true }));
+}
+// The settings rows' Save and Undo (a changed row is marked): settings.set with the changed ones, once ask(part) says yes.
+function wireSettings(el, ok, ask) {
   const inputs = [...el.querySelectorAll('[data-s]')], save = el.querySelector('[data-save]'), undo = el.querySelector('[data-undo]');
   const valueOf = (i) => (i.type === 'checkbox' ? i.checked : i.value.trim());
   const was = (i) => (i.type === 'checkbox' ? i.defaultChecked : i.defaultValue.trim());
@@ -1211,11 +1535,66 @@ function drawServer(el) {
   undo.addEventListener('click', () => { inputs.forEach((i) => { if (i.type === 'checkbox') i.checked = i.defaultChecked; else i.value = i.defaultValue; }); update(); });
   save.addEventListener('click', async () => {
     const part = Object.fromEntries(changed().map((i) => [i.dataset.s, valueOf(i)]));
-    if (part.maintenance === true && !(await confirmDialog('Turn maintenance on? Everyone online who isn\'t staff is disconnected, and they can\'t connect until it\'s off.', { ok: 'Turn maintenance on', danger: true }))) return;
-    const r = await run([save, undo], 'settings.set', { settings: part }, 'Server settings saved');
+    if (ask && !(await ask(part))) return;
+    const r = await run([save, undo], 'settings.set', { settings: part }, ok);
     if (!r) return;
     if (store.settings) store.settings.data = r;
     invalidate('overview', 'audit');
     drawBody();
   });
+}
+
+// ---- Save & world (offline) ----------------------------------------------------------------------------------------
+// What the NPC traders do, each on unless switched off: [key, name, what it does].
+const NPC_ROWS = [
+  ['npcTrading', 'Trade offers', 'NPC traders message you with cash and trade offers for your items.'],
+  ['npcMarket', 'Market buyers', 'NPC traders buy from your market listings.'],
+  ['npcChat', 'Chat and friend requests', 'NPC traders chat with you and send you friend requests.'],
+];
+function drawWorld(el, s) {
+  el.innerHTML = `<div class="adm-server">
+    <div>
+      <div class="section-title" style="margin-top:0">NPC traders</div>
+      <div class="settings adm-settings">${NPC_ROWS.map(([k, name, what]) => `<div class="setting"><div>${name}<p>${what}</p></div><input type="checkbox" data-s="${k}" ${s[k] !== false ? 'checked' : ''}></div>`).join('')}</div>
+      <div class="actions"><button class="btn primary" data-save disabled>Save settings</button><button class="btn ghost" data-undo disabled>Undo changes</button></div>
+    </div>
+    <div>
+      <div class="section-title" style="margin-top:0">Your save</div>
+      <div class="settings adm-settings">
+        <div class="setting"><div>Export save<p>Your whole save as a file: a backup, or to take to another PC.</p></div><button class="btn" data-export>Export save</button></div>
+        <div class="setting"><div>Import save<p>This save replaced by one from a file (an auto snapshot is saved first). Your settings on this PC stay.</p></div><button class="btn" data-import>Import save</button></div>
+        <div class="setting"><div>New NPC world<p>2,000 new traders from a new seed: their money, items, chats, offers and blocks start over. Your profile stays.</p></div><button class="btn" data-world>New NPC world</button></div>
+        <div class="setting"><div>Reset save<p>Start over as a new player (an auto snapshot is saved first). Your settings stay.</p></div><button class="btn danger" data-reset>Reset save</button></div>
+      </div>
+    </div></div>`;
+  wireSettings(el, 'NPC settings saved');
+  // After the save is replaced: every answer may have changed.
+  const again = () => { invalidate(...Object.keys(store)); drawBody(); };
+  el.querySelector('[data-export]').addEventListener('click', async (e) => {
+    const r = await run(e.currentTarget, 'save.export', {});
+    if (r?.json) downloadText(r.name || `cs2-save-${today()}.json`, r.json);
+  });
+  el.querySelector('[data-import]').addEventListener('click', async (e) => {
+    const btn = e.currentTarget, f = await pickFile('.json,application/json');
+    if (!f) return;
+    let json;
+    try {
+      if (f.size > MAX_SAVE) throw new Error(`That file is over ${kb(MAX_SAVE)}: it isn't a save.`);
+      json = await f.text();
+      JSON.parse(json);
+    } catch (err) {
+      sfx.error();
+      toast(esc(err instanceof SyntaxError ? "That file isn't a save (it isn't valid JSON)." : err.message), 'bad');
+      return;
+    }
+    if (!(await confirmDialog(`Replace your offline save with <b>${esc(f.name)}</b> (${kb(f.size)})? Your save as it is now is replaced (an auto snapshot of it is saved first); your settings on this PC stay.`, { ok: 'Import save', danger: true }))) return;
+    if (await run(btn, 'save.import', { json }, `Imported <b>${esc(f.name)}</b>`)) again();
+  });
+  el.querySelector('[data-world]').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    if (!(await confirmDialog(`Make a new world of 2,000 NPC traders? Every trader's money, items and friendship, your chats, their offers and your blocks start over; your profile stays.
+      An auto snapshot is saved first.`, { ok: 'New NPC world', danger: true }))) return;
+    if (await run(btn, 'world.reset', {}, 'A new world of NPC traders')) again();
+  });
+  el.querySelector('[data-reset]').addEventListener('click', async (e) => { if (await resetSave(e.currentTarget)) again(); });
 }

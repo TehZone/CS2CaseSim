@@ -1,15 +1,54 @@
 // Your online account beyond logging in: linking it to your Discord account (a code you paste into the bot's /link),
-// resetting a forgotten password with a code from the bot's /resetpassword, your configs kept on the server, and what
-// the server tells you (bans, kicks, maintenance, a moderator's warning, broadcasts and the message of the day).
+// resetting a forgotten password with a code from the bot's /resetpassword, your configs kept on the server, what
+// the server tells you (bans, kicks, maintenance, a moderator's warning, broadcasts and the message of the day), and
+// the staff accounts this PC has signed in with (they unlock the admin panel offline).
 import { esc } from './util.js';
 import { S } from './state.js';
 import { sfx } from './audio.js';
 import { toast, openModal, confirmDialog } from './ui.js';
+import { online } from './backend.js';
 import { net, normalizeUrl } from './net/online.js';
 import { playPrefs } from './pages/play-settings.js';
 
 export const LEVEL_NAMES = ['Player', 'Moderator', 'Admin', 'Owner'];
 const fmtDate = (ts) => new Date(ts).toLocaleString();
+
+// ---- the staff PC ---------------------------------------------------------------------------------
+// Every online account seen on this PC with its staff level: { accounts: { "<server>|<name>": { level, name, server,
+// at } } }. While one of them is staff (moderator or above) the admin panel works offline too, on this PC's save.
+const PC = 'cs2-admin-pc';
+const pcAccounts = () => {
+  try {
+    const a = JSON.parse(localStorage.getItem(PC) || '{}')?.accounts;
+    return a && typeof a === 'object' && !Array.isArray(a) ? a : {};
+  } catch { return {}; }
+};
+// (A role taken away locks it again: the same account seen at level 0. Another account changes nothing of this one's.
+// The same account under a name it had before, renamed since, is this entry now: by the server's id for it.)
+function notePc(a) {
+  const me = net.me(), name = me?.name, id = me?.id ?? null, server = net.serverUrl();
+  if (!a || typeof a !== 'object' || typeof name !== 'string' || !name || !server) return;
+  const level = Math.max(0, Math.min(3, a.staff | 0));
+  try {
+    const accounts = pcAccounts(), key = `${server}|${name.toLowerCase()}`;
+    if (id != null) for (const [k, e] of Object.entries(accounts)) if (k !== key && e?.server === server && e?.id === id) delete accounts[k];
+    accounts[key] = { level, name, server, at: Date.now(), id };
+    localStorage.setItem(PC, JSON.stringify({ accounts }));
+  } catch {}
+}
+// The staff account that unlocks this PC (the highest level, then the latest seen), or null: { name, server, level, at }.
+export function staffPc() {
+  let best = null;
+  for (const e of Object.values(pcAccounts())) {
+    if (!e || typeof e !== 'object' || !(e.level >= 1)) continue;
+    if (!best || e.level > best.level || (e.level === best.level && (+e.at || 0) > (+best.at || 0))) best = e;
+  }
+  return best && { name: String(best.name || ''), server: String(best.server || ''), level: Math.min(3, best.level | 0), at: +best.at || 0 };
+}
+// More → Admin: online, for your account's live staff level (online.js sets it); offline, on a staff PC.
+function staffClass() {
+  if (!online()) document.body.classList.toggle('is-staff', !!staffPc());
+}
 
 // A toast that stays longer than ui.js's (3.2 s): broadcasts and the message of the day.
 function longToast(html, type, ms = 10000) {
@@ -242,9 +281,13 @@ function adminMessage({ kind, msg, from }) {
 export function initAccount() {
   net.on('fatal', fatalModal);
   net.on('admin.msg', adminMessage);
+  // (Your account as the welcome, a push or accountRpc('info') tells it; null when you leave.)
+  net.on('account', (a) => { notePc(a); staffClass(); });
+  staffClass();
   let shownMotd = '';
   net.on('status', ({ status }) => {
-    if (status === 'offline') { shownMotd = ''; lastSent = ''; return; }
+    // (Leaving takes is-staff off with the account: offline it's this PC's again.)
+    if (status === 'offline') { shownMotd = ''; lastSent = ''; staffClass(); return; }
     if (status !== 'online') return;
     // The message of the day once per login (not again on a reconnect, unless it changed).
     const motd = net.motd();

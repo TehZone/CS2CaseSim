@@ -23,7 +23,7 @@ import * as admin from './pages/admin.js';
 import { npcOf, crowd, inventoryOf } from './engine/npcs.js';
 import { initMatchmaking } from './matchmaking.js';
 import { initProfile } from './profile.js';
-import { initAccount, discordSection, bindDiscordSection, openResetModal } from './account.js';
+import { initAccount, discordSection, bindDiscordSection, openResetModal, staffPc } from './account.js';
 
 const PAGES = { play, cases, inventory, tradeup, armory, market, database, gamble, trade, stats, community, admin };
 let current = null, currentName = 'cases';
@@ -115,7 +115,7 @@ function accountModal() {
       foot: '<button class="btn danger" data-out>Log out (play offline)</button><button class="btn ghost" data-close>Close</button>',
     });
     bindDiscordSection(m);
-    m.el.querySelector('[data-out]').addEventListener('click', () => { net.logout(); m.close(); toast('Back to your offline save.', ''); go(currentName === 'trade' || currentName === 'admin' ? 'cases' : currentName); });
+    m.el.querySelector('[data-out]').addEventListener('click', () => { net.logout(); m.close(); toast('Back to your offline save.', ''); go(currentName === 'trade' || (currentName === 'admin' && !staffPc()) ? 'cases' : currentName); });
     return;
   }
   const m = openModal({

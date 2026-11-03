@@ -71,6 +71,14 @@ export async function resetSave() {
   else S = { ...E.freshState(), settings };
   announceAll();
 }
+// The offline save replaced as a whole (the admin panel's restore, reset and import): this device's settings stay.
+export function replaceState(next) {
+  const settings = (offlineS || S).settings;
+  if (offlineS) offlineS = { ...next, settings };
+  else S = { ...next, settings };
+  announceAll();
+  save();
+}
 
 // Switch the UI to an online account's state (from the server) and back.
 export function enterOnline(serverState) {
