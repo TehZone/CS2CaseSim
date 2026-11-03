@@ -2,6 +2,16 @@
   "$comment": "The Discord server for CS2 Case Simulator, applied by scripts/discord-setup.mjs. Edit and run it again to change the server. {{channel:key}} and {{role:key}} become mentions, {{download}} the download link (downloadUrl or --download; lines with it are dropped while there is none), {{icon}} the app icon.",
   "downloadUrl": "",
   "ownerRoleKey": "developer",
+  "updateLog": {
+    "$comment": "Every commit on the branch is an update: a message a day in the channel, each update with its time. {{count}} becomes the number of updates, {{latest}} when the last one landed.",
+    "channelKey": "update_log",
+    "branch": "main",
+    "color": "#f5a524",
+    "intro": {
+      "title": "📝 Update log",
+      "description": "Every update to CS2 Case Simulator since the first build, oldest at the top and newest at the bottom. Each message below is a day of updates (the developer's day), and each update shows the time it landed in your own time zone.\n\n**{{count}} updates** so far, the latest {{latest}}. New builds to download go up in {{channel:releases}}."
+    }
+  },
   "serverDescription": "Fan-made CS2 case opening game for Windows: unbox, trade, play vs bots. Virtual money only. Not affiliated with Valve.",
   "roles": [
     {
@@ -199,6 +209,14 @@
           "type": "announcement",
           "name": "💾・releases",
           "topic": "New builds and patch notes. The only official place to download the game. Pick New releases in Channels & Roles for a ping.",
+          "postingPolicy": "readOnly",
+          "slowmodeSeconds": 0
+        },
+        {
+          "key": "update_log",
+          "type": "text",
+          "name": "📝・update-log",
+          "topic": "Every update to the game since the first build and when it landed, newest at the bottom. Times show in your own time zone.",
           "postingPolicy": "readOnly",
           "slowmodeSeconds": 0
         }
@@ -548,6 +566,7 @@
       "how_to_play",
       "announcements",
       "releases",
+      "update_log",
       "general",
       "unboxings",
       "loadouts",
@@ -731,7 +750,7 @@
             },
             {
               "name": "🗺️ Where things are",
-              "value": "{{channel:rules}} · a short read that keeps you safe\n{{channel:how_to_play}} · getting started, features and the FAQ\n{{channel:general}} · chat about the game\n{{channel:unboxings}} · post your pulls\n{{channel:loadouts}} · loadouts and crafts\n{{channel:play_mode}} · matches against bots\n{{channel:help}} · stuck? Ask here\n{{channel:bug_reports}} · report a bug\n{{channel:suggestions}} · share an idea",
+              "value": "{{channel:rules}} · a short read that keeps you safe\n{{channel:how_to_play}} · getting started, features and the FAQ\n{{channel:update_log}} · every update and when it landed\n{{channel:general}} · chat about the game\n{{channel:unboxings}} · post your pulls\n{{channel:loadouts}} · loadouts and crafts\n{{channel:play_mode}} · matches against bots\n{{channel:help}} · stuck? Ask here\n{{channel:bug_reports}} · report a bug\n{{channel:suggestions}} · share an idea",
               "inline": false
             },
             {

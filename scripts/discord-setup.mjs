@@ -6,10 +6,12 @@
 //   node scripts/discord-setup.mjs                    dry run: what would change, nothing is touched
 //   node scripts/discord-setup.mjs --apply            create and update what's in the config (deletes nothing)
 //   node scripts/discord-setup.mjs --apply --replace  also delete the channels, roles and AutoMod rules not in it
+//   node scripts/discord-setup.mjs update-log [--apply]  only bring the update log up to date (--apply does it too)
 // Options: --guild <id> (the bot is in more than one server), --download <url> (the download link in the messages),
 // --name <name> (rename the server; by default its name is kept).
 // Run again after changing the config: channels and roles are matched by name and updated in place, and the bot edits
 // its own messages rather than posting them again.
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -140,6 +142,65 @@ function fill(text, ids) {
     .replace(/\{\{role:([\w-]+)\}\}/g, (m, k) => (ids.roles.get(k) ? `<@&${ids.roles.get(k)}>` : `@${roleByKey.get(k)?.name || k}`));
 }
 
+// ---- the update log ----------------------------------------------------------------------------------------------
+// Every commit on the config's branch is an update: an intro, then a message a day (the day where the commit was made),
+// each line a commit's subject after a Discord timestamp, which shows in the reader's own time zone.
+function updateLogMessages(ids) {
+  const U = CONFIG.updateLog;
+  const log = execFileSync('git', ['log', '--reverse', '--format=%at%x1f%ad%x1f%s', '--date=format:%Y-%m-%d', U.branch || 'HEAD', '--'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 26 });
+  const commits = log.split('\n').filter(Boolean).map((l) => { const [at, day, subject] = l.split('\x1f'); return { at: +at, day, subject }; })
+    .sort((a, b) => a.at - b.at);
+  const escape = (s) => s.replace(/[\\*_~`|[\]<>]/g, '\\$&'); // (a subject is text, not markdown or a mention)
+  const days = [];
+  commits.forEach((c, i) => {
+    const line = `<t:${c.at}:t> — ${escape(c.subject)}`;
+    let d = days.at(-1);
+    if (!d || d.day !== c.day || d.text.length + line.length + 1 > 4096) days.push(d = { day: c.day, more: d?.day === c.day, text: '', first: i + 1 });
+    d.text += (d.text ? '\n' : '') + line;
+    d.last = i + 1;
+  });
+  const dateOf = (day) => new Date(`${day}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const latest = commits.at(-1);
+  const intro = {
+    title: fill(U.intro.title, ids).slice(0, 256),
+    description: fill(U.intro.description, ids).replaceAll('{{count}}', commits.length.toLocaleString('en-US')).replaceAll('{{latest}}', latest ? `<t:${latest.at}:R>` : 'not yet').slice(0, 4096),
+    color: color(U.color),
+  };
+  return {
+    count: commits.length,
+    embeds: [intro, ...days.map((d) => ({
+      title: dateOf(d.day) + (d.more ? ' (continued)' : ''), description: d.text, color: color(U.color),
+      footer: { text: d.first === d.last ? `Update ${d.first}` : `Updates ${d.first}–${d.last}` },
+    }))],
+  };
+}
+
+// The log's channel is the bot's: its messages there, oldest first, are the intro and the days in order. Each is edited
+// only when it differs, new days are posted below, and with history rewritten to fewer days the extras go.
+async function syncUpdateLog(cid, ids, me, apply) {
+  const { count, embeds } = updateLogMessages(ids);
+  const old = [];
+  for (let after = '0'; ;) {
+    const got = await api('GET', `/channels/${cid}/messages?limit=100&after=${after}`);
+    old.push(...got.filter((m) => m.author?.id === me.id && m.type === 0));
+    if (got.length < 100) break;
+    after = got.reduce((a, m) => (BigInt(m.id) > BigInt(a) ? m.id : a), after);
+  }
+  old.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+  const same = (m, e) => !m.content && m.embeds?.length === 1 && m.embeds[0].title === e.title && m.embeds[0].description === e.description
+    && (m.embeds[0].color ?? 0) === e.color && (m.embeds[0].footer?.text ?? '') === (e.footer?.text ?? '');
+  const todo = { post: Math.max(0, embeds.length - old.length), edit: embeds.filter((e, i) => old[i] && !same(old[i], e)).length, delete: Math.max(0, old.length - embeds.length) };
+  const summary = `${todo.post} to post, ${todo.edit} to edit${todo.delete ? `, ${todo.delete} to delete` : ''}`;
+  if (!apply) { console.log(`update log: ${count} updates in ${embeds.length} messages (the intro, then one a day); ${summary}`); return; }
+  for (let i = 0; i < Math.max(old.length, embeds.length); i++) {
+    if (i >= embeds.length) { await api('DELETE', `/channels/${cid}/messages/${old[i].id}`); continue; }
+    const body = { content: '', embeds: [embeds[i]], allowed_mentions: { parse: [] } };
+    if (!old[i]) await api('POST', `/channels/${cid}/messages`, { ...body, flags: 4096 }); // (silent: no ping per day)
+    else if (!same(old[i], embeds[i])) await api('PATCH', `/channels/${cid}/messages/${old[i].id}`, body);
+  }
+  console.log(`update log: ${count} updates; ${todo.post} posted, ${todo.edit} edited${todo.delete ? `, ${todo.delete} deleted` : ''}`);
+}
+
 // ---- the plan ----------------------------------------------------------------------------------------------------
 function overwritesFor(ch, ids, everyoneId) {
   // The category's access, then the channel's posting policy, as explicit overwrites (so each channel stands alone and
@@ -240,6 +301,13 @@ async function main() {
       plan.push(`  ${exc ? 'update' : 'create'} ${ch.type.padEnd(12)} ${ch.name}`);
     }
   }
+  if (args[0] === 'update-log') {
+    const cid = ids.channels.get(CONFIG.updateLog.channelKey);
+    if (!cid) { console.log(`There's no #${chanByKey.get(CONFIG.updateLog.channelKey).name} yet: run "node scripts/discord-setup.mjs --apply" to make it.`); process.exit(1); }
+    await syncUpdateLog(cid, ids, me, APPLY);
+    if (!APPLY) console.log('\nNothing was changed. Run again with --apply to post it.');
+    return;
+  }
   const ourChanIds = new Set([...chMatch.values(), ...catMatch.values()].map((c) => c.id));
   const staleChannels = channels.filter((c) => !ourChanIds.has(c.id));
   if (REPLACE) for (const c of staleChannels) plan.push(`delete channel  ${c.type === 4 ? '[category] ' : '#'}${c.name}${c.last_message_id ? '  (has messages)' : ''}`);
@@ -255,6 +323,7 @@ async function main() {
   if (CONFIG.ownerRoleKey) plan.push(`give the server owner the ${roleByKey.get(CONFIG.ownerRoleKey).name} role`);
   plan.push(`${community ? 'keep' : 'turn on'} Community; set the server's icon, description, rules and updates channels, welcome screen and onboarding`);
   plan.push(`post or edit the bot's messages in ${[...new Set(CONFIG.messages.map((m) => '#' + chanByKey.get(m.channelKey).name))].join(', ')}`);
+  if (CONFIG.updateLog) plan.push(`bring the update log in #${chanByKey.get(CONFIG.updateLog.channelKey).name} up to date (${updateLogMessages(ids).count} updates)`);
   console.log(plan.join('\n'));
   if (stuckRoles.length) {
     console.log(`\n! ${stuckRoles.map((r) => r.name).join(', ')} ${stuckRoles.length > 1 ? 'are' : 'is'} above the bot's role, so the bot can't touch ${stuckRoles.length > 1 ? 'them' : 'it'}. In Server Settings → Roles, drag the bot's role (${roles.find((r) => r.managed && member.roles.includes(r.id))?.name || me.username}) to the top, then run this again.`);
@@ -476,6 +545,7 @@ async function main() {
     }
     console.log(`messages ${mine.length ? 'updated' : 'posted'}: #${chanByKey.get(key).name}`);
   }
+  if (CONFIG.updateLog) await syncUpdateLog(ids.channels.get(CONFIG.updateLog.channelKey), ids, me, true);
 
   // 9. With --replace the old invite links went with their channels: a permanent one to the welcome channel.
   if (REPLACE) {
