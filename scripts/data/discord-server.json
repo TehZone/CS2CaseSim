@@ -1,0 +1,1504 @@
+{
+  "$comment": "The Discord server for CS2 Case Simulator, applied by scripts/discord-setup.mjs. Edit and run it again to change the server. {{channel:key}} and {{role:key}} become mentions, {{download}} the download link (downloadUrl or --download; lines with it are dropped while there is none), {{icon}} the app icon.",
+  "downloadUrl": "",
+  "ownerRoleKey": "developer",
+  "serverDescription": "Fan-made CS2 case opening game for Windows: unbox, trade, play vs bots. Virtual money only. Not affiliated with Valve.",
+  "roles": [
+    {
+      "key": "developer",
+      "name": "★ Developer",
+      "color": "#e4ae39",
+      "hoist": true,
+      "mentionable": false,
+      "permissions": [
+        "ADMINISTRATOR"
+      ],
+      "selfAssignable": false,
+      "purpose": "The game's developer and server owner. Gold like a ★ item, at the top of the member list."
+    },
+    {
+      "key": "moderator",
+      "name": "Moderator",
+      "color": "#eb4b4b",
+      "hoist": true,
+      "mentionable": true,
+      "permissions": [
+        "KICK_MEMBERS",
+        "BAN_MEMBERS",
+        "MODERATE_MEMBERS",
+        "MANAGE_MESSAGES",
+        "PIN_MESSAGES",
+        "MANAGE_THREADS",
+        "MANAGE_NICKNAMES",
+        "VIEW_AUDIT_LOG",
+        "MUTE_MEMBERS",
+        "DEAFEN_MEMBERS",
+        "MOVE_MEMBERS",
+        "PRIORITY_SPEAKER",
+        "MENTION_EVERYONE",
+        "CREATE_EVENTS",
+        "MANAGE_EVENTS",
+        "BYPASS_SLOWMODE"
+      ],
+      "selfAssignable": false,
+      "purpose": "Keeps the server safe. Covert red. Mentionable so members can ping a mod the moment they spot a scam. No Manage Server, Roles or Channels."
+    },
+    {
+      "key": "bug_hunter",
+      "name": "Bug Hunter",
+      "color": "",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [],
+      "selfAssignable": false,
+      "purpose": "A thank-you from staff to members whose bug reports helped fix real bugs. No color, so it never overrides the name color a member picked."
+    },
+    {
+      "key": "classified",
+      "name": "Classified",
+      "color": "#d32ce6",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [],
+      "selfAssignable": true,
+      "purpose": "Name color picked in Onboarding (Classified pink)."
+    },
+    {
+      "key": "restricted",
+      "name": "Restricted",
+      "color": "#8847ff",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [],
+      "selfAssignable": true,
+      "purpose": "Name color picked in Onboarding (Restricted purple)."
+    },
+    {
+      "key": "milspec",
+      "name": "Mil-Spec Grade",
+      "color": "#4b69ff",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [],
+      "selfAssignable": true,
+      "purpose": "Name color picked in Onboarding (Mil-Spec blue)."
+    },
+    {
+      "key": "industrial",
+      "name": "Industrial Grade",
+      "color": "#5e98d9",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [],
+      "selfAssignable": true,
+      "purpose": "Name color picked in Onboarding (Industrial light blue)."
+    },
+    {
+      "key": "consumer",
+      "name": "Consumer Grade",
+      "color": "#b0c3d9",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [],
+      "selfAssignable": true,
+      "purpose": "Name color picked in Onboarding (Consumer grey-blue)."
+    },
+    {
+      "key": "release_pings",
+      "name": "Release Pings",
+      "color": "",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [],
+      "selfAssignable": true,
+      "purpose": "Pinged when a new build and its patch notes go up in releases. Not mentionable, so only staff can ping it."
+    },
+    {
+      "key": "news_pings",
+      "name": "News Pings",
+      "color": "",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [],
+      "selfAssignable": true,
+      "purpose": "Pinged for dev news and server updates in announcements. Not mentionable, so only staff can ping it."
+    },
+    {
+      "key": "event_pings",
+      "name": "Event Pings",
+      "color": "",
+      "hoist": false,
+      "mentionable": false,
+      "permissions": [],
+      "selfAssignable": true,
+      "purpose": "Pinged for community events like case battle nights. Not mentionable, so only staff can ping it."
+    }
+  ],
+  "everyonePermissions": [
+    "VIEW_CHANNEL",
+    "READ_MESSAGE_HISTORY",
+    "SEND_MESSAGES",
+    "SEND_MESSAGES_IN_THREADS",
+    "CREATE_PUBLIC_THREADS",
+    "EMBED_LINKS",
+    "ATTACH_FILES",
+    "ADD_REACTIONS",
+    "USE_EXTERNAL_EMOJIS",
+    "USE_EXTERNAL_STICKERS",
+    "SEND_VOICE_MESSAGES",
+    "SEND_POLLS",
+    "USE_APPLICATION_COMMANDS",
+    "CONNECT",
+    "SPEAK",
+    "STREAM",
+    "USE_VAD",
+    "USE_SOUNDBOARD",
+    "USE_EMBEDDED_ACTIVITIES",
+    "CHANGE_NICKNAME",
+    "CREATE_INSTANT_INVITE"
+  ],
+  "categories": [
+    {
+      "name": "Start Here",
+      "access": "public",
+      "channels": [
+        {
+          "key": "welcome",
+          "type": "text",
+          "name": "👋・welcome",
+          "topic": "What CS2 Case Simulator is and where everything lives. Fan-made, virtual money only, not affiliated with Valve.",
+          "postingPolicy": "readOnly",
+          "slowmodeSeconds": 0
+        },
+        {
+          "key": "rules",
+          "type": "text",
+          "name": "📜・rules",
+          "topic": "The server rules and how to stay safe from scams. A short read, promise.",
+          "postingPolicy": "readOnly",
+          "slowmodeSeconds": 0
+        },
+        {
+          "key": "how_to_play",
+          "type": "text",
+          "name": "📖・how-to-play",
+          "topic": "Getting started, every feature in a nutshell, and the FAQ.",
+          "postingPolicy": "readOnly",
+          "slowmodeSeconds": 0
+        },
+        {
+          "key": "announcements",
+          "type": "announcement",
+          "name": "📢・announcements",
+          "topic": "Dev news, server updates and events. Pick News & updates in Channels & Roles for a ping, or hit Follow to get them in your own server.",
+          "postingPolicy": "readOnly",
+          "slowmodeSeconds": 0
+        },
+        {
+          "key": "releases",
+          "type": "announcement",
+          "name": "💾・releases",
+          "topic": "New builds and patch notes. The only official place to download the game. Pick New releases in Channels & Roles for a ping.",
+          "postingPolicy": "readOnly",
+          "slowmodeSeconds": 0
+        }
+      ]
+    },
+    {
+      "name": "Community",
+      "access": "public",
+      "channels": [
+        {
+          "key": "general",
+          "type": "text",
+          "name": "💬・general",
+          "topic": "Talk about CS2 Case Simulator or just hang out. Keep it friendly.",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 0
+        },
+        {
+          "key": "unboxings",
+          "type": "text",
+          "name": "📦・unboxings",
+          "topic": "Your best pulls from cases, capsules, souvenir packages, the Armory and trade ups. Blue gems, low floats and lucky serials welcome. Bragging encouraged.",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 5
+        },
+        {
+          "key": "loadouts",
+          "type": "text",
+          "name": "🎨・loadouts",
+          "topic": "Show off your loadout, sticker crafts, charms, rare patterns and profile showcase.",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 5
+        }
+      ]
+    },
+    {
+      "name": "Play Mode",
+      "access": "public",
+      "channels": [
+        {
+          "key": "play_mode",
+          "type": "text",
+          "name": "🎯・play-mode",
+          "topic": "Offline matches vs bots on real CS2 maps: modes, ranks, CS Rating, lineups, settings and tips.",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 0
+        },
+        {
+          "key": "clips",
+          "type": "text",
+          "name": "🎬・clips",
+          "topic": "Aces, clutches, lineups and funny bot moments from Play mode.",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 10
+        }
+      ]
+    },
+    {
+      "name": "Trading & Battles",
+      "access": "public",
+      "channels": [
+        {
+          "key": "trade_offers",
+          "type": "forum",
+          "name": "🤝・trade-offers",
+          "topic": "Trades between players in online mode. Virtual items and virtual money only.\n\n• Title it like: [H] AK-47 Redline FT [W] offers\n• Add your online username, plus the float, pattern seed or stickers if they matter\n• Pick a tag: Buying, Selling, Trading or Price Check\n• Tag it Completed when you're done\n\nNo real-money deals, no account trades, no real CS2 or Steam items. Trades happen inside the game, so you never need a link or a middleman. If someone DMs you a link to \"confirm\" a trade, it's a scam. Report it to a mod.",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 300,
+          "forumGuidelines": "Trades between players in online mode. Virtual items and virtual money only.\n\n• Title it like: [H] AK-47 Redline FT [W] offers\n• Add your online username, plus the float, pattern seed or stickers if they matter\n• Pick a tag: Buying, Selling, Trading or Price Check\n• Tag it Completed when you're done\n\nNo real-money deals, no account trades, no real CS2 or Steam items. Trades happen inside the game, so you never need a link or a middleman. If someone DMs you a link to \"confirm\" a trade, it's a scam. Report it to a mod.",
+          "forumDefaultReaction": "🤝",
+          "forumTags": [
+            {
+              "name": "Buying",
+              "emoji": "🛒",
+              "moderated": false
+            },
+            {
+              "name": "Selling",
+              "emoji": "💰",
+              "moderated": false
+            },
+            {
+              "name": "Trading",
+              "emoji": "🔁",
+              "moderated": false
+            },
+            {
+              "name": "Price Check",
+              "emoji": "💲",
+              "moderated": false
+            },
+            {
+              "name": "Knife & Gloves",
+              "emoji": "🔪",
+              "moderated": false
+            },
+            {
+              "name": "Rare Pattern",
+              "emoji": "💎",
+              "moderated": false
+            },
+            {
+              "name": "Low Float",
+              "emoji": "📉",
+              "moderated": false
+            },
+            {
+              "name": "Completed",
+              "emoji": "✅",
+              "moderated": false
+            }
+          ]
+        },
+        {
+          "key": "case_battles",
+          "type": "text",
+          "name": "🎲・case-battles",
+          "topic": "Find online opponents for case battles (1v1 to 2v2), coinflip and jackpot. Post your mode, the cases (or your coinflip stake) and your username. Virtual money only, provably fair.",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 15
+        }
+      ]
+    },
+    {
+      "name": "Support",
+      "access": "public",
+      "channels": [
+        {
+          "key": "help",
+          "type": "text",
+          "name": "❓・help",
+          "topic": "Questions about installing or playing. The FAQ in how-to-play covers the common ones.",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 0
+        },
+        {
+          "key": "bug_reports",
+          "type": "forum",
+          "name": "🐛・bug-reports",
+          "topic": "One bug per post, please. Search first: if it's already here, react ➕ and add your details to that post.\n\nInclude:\n• Installer or portable, and which build from releases you're on (its date)\n• What you did, step by step\n• What you expected\n• What happened instead\n\nScreenshots, a short clip or the exact error text make a bug much easier to fix. Staff tag posts Needs Info, Known Issue or Fixed.",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 60,
+          "forumGuidelines": "One bug per post, please. Search first: if it's already here, react ➕ and add your details to that post.\n\nInclude:\n• Installer or portable, and which build from releases you're on (its date)\n• What you did, step by step\n• What you expected\n• What happened instead\n\nScreenshots, a short clip or the exact error text make a bug much easier to fix. Staff tag posts Needs Info, Known Issue or Fixed.",
+          "forumDefaultReaction": "➕",
+          "forumTags": [
+            {
+              "name": "Cases",
+              "emoji": "📦",
+              "moderated": false
+            },
+            {
+              "name": "Inventory",
+              "emoji": "🎒",
+              "moderated": false
+            },
+            {
+              "name": "3D Inspect",
+              "emoji": "🔍",
+              "moderated": false
+            },
+            {
+              "name": "Trade Ups & Armory",
+              "emoji": "🔄",
+              "moderated": false
+            },
+            {
+              "name": "Market & Trading",
+              "emoji": "📈",
+              "moderated": false
+            },
+            {
+              "name": "Gambling",
+              "emoji": "🎲",
+              "moderated": false
+            },
+            {
+              "name": "Play Mode",
+              "emoji": "🎯",
+              "moderated": false
+            },
+            {
+              "name": "Online Mode",
+              "emoji": "🌐",
+              "moderated": false
+            },
+            {
+              "name": "Install & Startup",
+              "emoji": "💿",
+              "moderated": false
+            },
+            {
+              "name": "Crash",
+              "emoji": "💥",
+              "moderated": false
+            },
+            {
+              "name": "Needs Info",
+              "emoji": "❔",
+              "moderated": true
+            },
+            {
+              "name": "Known Issue",
+              "emoji": "📌",
+              "moderated": true
+            },
+            {
+              "name": "Fixed",
+              "emoji": "✅",
+              "moderated": true
+            }
+          ]
+        },
+        {
+          "key": "suggestions",
+          "type": "forum",
+          "name": "💡・suggestions",
+          "topic": "Got an idea? One per post, with a title that sums it up. Say what you'd add or change and why it would make the game better.\n\nSearch first and react 👍 on the ideas you want most instead of reposting them. Staff tag posts Under Review, Planned, Added or Not Planned so you can see where things stand.",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 120,
+          "forumGuidelines": "Got an idea? One per post, with a title that sums it up. Say what you'd add or change and why it would make the game better.\n\nSearch first and react 👍 on the ideas you want most instead of reposting them. Staff tag posts Under Review, Planned, Added or Not Planned so you can see where things stand.",
+          "forumDefaultReaction": "👍",
+          "forumTags": [
+            {
+              "name": "Cases & Items",
+              "emoji": "📦",
+              "moderated": false
+            },
+            {
+              "name": "Inventory & Loadout",
+              "emoji": "🎒",
+              "moderated": false
+            },
+            {
+              "name": "Trading & Market",
+              "emoji": "🤝",
+              "moderated": false
+            },
+            {
+              "name": "Gambling",
+              "emoji": "🎲",
+              "moderated": false
+            },
+            {
+              "name": "Play Mode",
+              "emoji": "🎯",
+              "moderated": false
+            },
+            {
+              "name": "Online Mode",
+              "emoji": "🌐",
+              "moderated": false
+            },
+            {
+              "name": "UI & QoL",
+              "emoji": "🎨",
+              "moderated": false
+            },
+            {
+              "name": "Under Review",
+              "emoji": "👀",
+              "moderated": true
+            },
+            {
+              "name": "Planned",
+              "emoji": "📅",
+              "moderated": true
+            },
+            {
+              "name": "Added",
+              "emoji": "✅",
+              "moderated": true
+            },
+            {
+              "name": "Not Planned",
+              "emoji": "🚫",
+              "moderated": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Voice",
+      "access": "public",
+      "channels": [
+        {
+          "key": "lounge",
+          "type": "voice",
+          "name": "🔊 Lounge",
+          "topic": "",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 0,
+          "userLimit": 0
+        },
+        {
+          "key": "live_unboxings",
+          "type": "voice",
+          "name": "📺 Live Unboxings",
+          "topic": "",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 0,
+          "userLimit": 0
+        }
+      ]
+    },
+    {
+      "name": "Staff",
+      "access": "staff",
+      "channels": [
+        {
+          "key": "staff_chat",
+          "type": "text",
+          "name": "🛡️・staff-chat",
+          "topic": "Staff talk. Members can't see this.",
+          "postingPolicy": "everyone",
+          "slowmodeSeconds": 0
+        },
+        {
+          "key": "mod_log",
+          "type": "text",
+          "name": "📋・mod-log",
+          "topic": "AutoMod alerts and Discord safety alerts. Discuss them in staff-chat.",
+          "postingPolicy": "readOnly",
+          "slowmodeSeconds": 0
+        },
+        {
+          "key": "discord_updates",
+          "type": "text",
+          "name": "📨・discord-updates",
+          "topic": "Community updates from Discord. Staff only.",
+          "postingPolicy": "readOnly",
+          "slowmodeSeconds": 0
+        }
+      ]
+    }
+  ],
+  "special": {
+    "rulesChannelKey": "rules",
+    "publicUpdatesChannelKey": "discord_updates",
+    "systemChannelKey": "general",
+    "safetyAlertsChannelKey": "mod_log"
+  },
+  "onboarding": {
+    "defaultChannelKeys": [
+      "welcome",
+      "rules",
+      "how_to_play",
+      "announcements",
+      "releases",
+      "general",
+      "unboxings",
+      "loadouts",
+      "play_mode",
+      "clips",
+      "help",
+      "bug_reports",
+      "suggestions"
+    ],
+    "prompts": [
+      {
+        "title": "What else are you into?",
+        "singleSelect": false,
+        "required": false,
+        "inOnboarding": true,
+        "options": [
+          {
+            "title": "Trading",
+            "description": "Trade offers and price checks with other players in online mode",
+            "emoji": "🤝",
+            "roleKeys": [],
+            "channelKeys": [
+              "trade_offers"
+            ]
+          },
+          {
+            "title": "Case battles & coinflip",
+            "description": "Find online opponents for battles, coinflip and jackpot. Virtual money only",
+            "emoji": "🎲",
+            "roleKeys": [],
+            "channelKeys": [
+              "case_battles"
+            ]
+          },
+          {
+            "title": "Voice chat",
+            "description": "Hang out, or stream your openings with Go Live",
+            "emoji": "🔊",
+            "roleKeys": [],
+            "channelKeys": [
+              "lounge",
+              "live_unboxings"
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Pick a name color",
+        "singleSelect": true,
+        "required": false,
+        "inOnboarding": true,
+        "options": [
+          {
+            "title": "Consumer Grade",
+            "description": "Grey-blue. Humble beginnings",
+            "emoji": "⚪",
+            "roleKeys": [
+              "consumer"
+            ],
+            "channelKeys": []
+          },
+          {
+            "title": "Industrial Grade",
+            "description": "Light blue. A step up",
+            "emoji": "🔹",
+            "roleKeys": [
+              "industrial"
+            ],
+            "channelKeys": []
+          },
+          {
+            "title": "Mil-Spec Grade",
+            "description": "Blue, the most common case drop",
+            "emoji": "🔷",
+            "roleKeys": [
+              "milspec"
+            ],
+            "channelKeys": []
+          },
+          {
+            "title": "Restricted",
+            "description": "Purple. A nice hit",
+            "emoji": "🟣",
+            "roleKeys": [
+              "restricted"
+            ],
+            "channelKeys": []
+          },
+          {
+            "title": "Classified",
+            "description": "Pink. The one that makes you lean in",
+            "emoji": "💗",
+            "roleKeys": [
+              "classified"
+            ],
+            "channelKeys": []
+          }
+        ]
+      },
+      {
+        "title": "Which pings do you want?",
+        "singleSelect": false,
+        "required": false,
+        "inOnboarding": true,
+        "options": [
+          {
+            "title": "New releases",
+            "description": "A ping when a new build and its patch notes go up",
+            "emoji": "💾",
+            "roleKeys": [
+              "release_pings"
+            ],
+            "channelKeys": []
+          },
+          {
+            "title": "News & updates",
+            "description": "Dev news and server updates",
+            "emoji": "📢",
+            "roleKeys": [
+              "news_pings"
+            ],
+            "channelKeys": []
+          },
+          {
+            "title": "Community events",
+            "description": "Case battle nights and other get-togethers",
+            "emoji": "🎉",
+            "roleKeys": [
+              "event_pings"
+            ],
+            "channelKeys": []
+          }
+        ]
+      }
+    ]
+  },
+  "welcomeScreen": {
+    "description": "Fan-made CS2 case opening game for Windows. Virtual money only, not affiliated with Valve. Read the rules, then come say hi!",
+    "channels": [
+      {
+        "channelKey": "how_to_play",
+        "description": "New? Start with the basics",
+        "emoji": "📖"
+      },
+      {
+        "channelKey": "releases",
+        "description": "Download the game and patch notes",
+        "emoji": "💾"
+      },
+      {
+        "channelKey": "unboxings",
+        "description": "Show off your best pulls",
+        "emoji": "📦"
+      },
+      {
+        "channelKey": "general",
+        "description": "Come say hi",
+        "emoji": "💬"
+      },
+      {
+        "channelKey": "help",
+        "description": "Questions and install help",
+        "emoji": "❓"
+      }
+    ]
+  },
+  "messages": [
+    {
+      "channelKey": "welcome",
+      "embeds": [
+        {
+          "title": "Welcome to CS2 Case Simulator",
+          "description": "A fan-made CS2 case opening game for Windows. Open real CS2 cases with CS2's own unlock reel, build your inventory, trade with 2,000 NPC players, and play offline matches against bots on real CS2 maps.\n\n**Virtual money only.** There's nothing to buy and nothing to cash out.\n**Fan-made.** Not affiliated with or endorsed by Valve.",
+          "color": "#f5a524",
+          "thumbnail": "{{icon}}",
+          "fields": [
+            {
+              "name": "💾 Get the game",
+              "value": "New builds and patch notes go up in {{channel:releases}}, the only official download.\nLatest build: {{download}}",
+              "inline": false
+            },
+            {
+              "name": "🗺️ Where things are",
+              "value": "{{channel:rules}} · a short read that keeps you safe\n{{channel:how_to_play}} · getting started, features and the FAQ\n{{channel:general}} · chat about the game\n{{channel:unboxings}} · post your pulls\n{{channel:loadouts}} · loadouts and crafts\n{{channel:play_mode}} · matches against bots\n{{channel:help}} · stuck? Ask here\n{{channel:bug_reports}} · report a bug\n{{channel:suggestions}} · share an idea",
+              "inline": false
+            },
+            {
+              "name": "➕ Want more?",
+              "value": "Trading, case battles and voice are opt-in. Add them, pick a name color and choose your pings in **Channels & Roles** at the top of the channel list.",
+              "inline": false
+            },
+            {
+              "name": "🛡️ Who's staff?",
+              "value": "Name colors follow CS2's rarities. Covert red and ★ gold are kept for staff: gold ★ is the developer, red names are moderators. Staff will never DM you a download link or ask for a password or code.",
+              "inline": false
+            }
+          ],
+          "footer": "CS2 Case Simulator · Fan-made · Virtual money only"
+        }
+      ]
+    },
+    {
+      "channelKey": "rules",
+      "embeds": [
+        {
+          "title": "📜 Server Rules",
+          "description": "Short and simple. Break a rule and you'll get a warning, a timeout or a ban, depending on how bad it is.",
+          "color": "#eb4b4b",
+          "thumbnail": "{{icon}}",
+          "fields": [
+            {
+              "name": "1. Be kind",
+              "value": "No harassment, hate speech, slurs or pile-ons. Banter is fine, bullying isn't.",
+              "inline": false
+            },
+            {
+              "name": "2. Virtual money only",
+              "value": "Everything in CS2 Case Simulator is virtual. No buying, selling or trading items, accounts or in-game money for real money, here or in DMs, and no links to real-money trading or gambling sites.",
+              "inline": false
+            },
+            {
+              "name": "3. No scams or sketchy links",
+              "value": "No phishing, fake giveaways, \"free skins\", IP loggers or link shorteners, and no pretending to be staff, Steam or Valve. Scams get an instant ban.",
+              "inline": false
+            },
+            {
+              "name": "4. Keep it SFW",
+              "value": "No NSFW, gore or shock content. That includes names and profile pictures.",
+              "inline": false
+            },
+            {
+              "name": "5. No spam or self-promo",
+              "value": "No ads, server invites or DM advertising. Want to share something? Ask a mod first.",
+              "inline": false
+            },
+            {
+              "name": "6. Right channel, right post",
+              "value": "Pulls go in {{channel:unboxings}}, questions in {{channel:help}}, bugs in {{channel:bug_reports}}, ideas in {{channel:suggestions}} and trades in {{channel:trade_offers}}.",
+              "inline": false
+            },
+            {
+              "name": "7. No cheats or ripped files",
+              "value": "Don't share cheats for real CS2, pirated software or files taken from CS2's install. The game reads your own copy, so there's never a reason to.",
+              "inline": false
+            },
+            {
+              "name": "8. Listen to the mods",
+              "value": "If a mod asks you to stop, stop. Disagree? Message a mod calmly and we'll talk it through. Discord's Terms of Service and Community Guidelines apply here too.",
+              "inline": false
+            }
+          ],
+          "footer": "Fan-made, not affiliated with Valve. Thanks for keeping this place friendly."
+        },
+        {
+          "title": "🔒 Stay safe from scams",
+          "description": "CS2 scammers love servers like this one. These are always true here:\n\n• **Nobody will ask for your Steam or Discord login,** or your Steam Guard code. Not staff, not the developer, not \"Valve\".\n• **\"I accidentally reported you\" is always a scam.** So is anyone sending you to a \"Steam admin\" to sort it out.\n• **Nobody is giving away real CS2 skins.** Giveaway links, QR codes and \"claim your knife\" sites are phishing.\n• **The game is only posted in {{channel:releases}}.** A \"new version\" or \"beta\" sent to you in DMs is not from us. Don't run it.\n• **Check every link.** Real Steam lives at steamcommunity.com and store.steampowered.com. One wrong letter means it's fake.\n\nGot a weird DM or link? Don't click it. Screenshot it and ping a {{role:moderator}}.",
+          "color": "#e4ae39",
+          "thumbnail": "",
+          "fields": [],
+          "footer": "When in doubt, ask a mod first."
+        }
+      ]
+    },
+    {
+      "channelKey": "how_to_play",
+      "embeds": [
+        {
+          "title": "🚀 Getting started",
+          "description": "**1. Download** the latest build from {{channel:releases}}. The **installer** sets up for your user (no admin needed) and starts fast. The **portable exe** needs no install but starts slower.\n**2. Run it.** Windows SmartScreen may warn you because the exe isn't signed. Click **More info**, then **Run anyway**.\n**3. Got CS2 installed?** You'll want it: Play mode, the only way to earn money, needs it, and so do inspect on real CS2 models and the 3D crate drop. Cases, inventory, trading and the Market work without it, starting from $10.\n**4. Be online the first time.** Item images download the first time you see them, then they're cached.",
+          "color": "#b0c3d9",
+          "thumbnail": "{{icon}}",
+          "fields": [],
+          "footer": ""
+        },
+        {
+          "title": "📦 Open cases",
+          "description": "42 real weapon cases, 150 souvenir packages, the X-Ray, Anubis and Terminal packages, 229 sticker and autograph capsules and an Agent Locker. Each one opens with CS2's own unlock reel, and with CS2 installed, weapon cases and recent souvenir packages drop in as CS2's 3D crate first. Keys are bought separately, just like in CS2.\n\nEvery skin you unbox gets its own float and pattern seed, and everything you unbox gets a serial number, so blue gems, fades and Doppler phases are all out there.",
+          "color": "#5e98d9",
+          "thumbnail": "",
+          "fields": [],
+          "footer": ""
+        },
+        {
+          "title": "🎒 Your inventory",
+          "description": "Sort by Quality like CS2 and equip a loadout: gloves, knife, agents and one skin per gun. Inspect in 3D on real CS2 models, apply stickers, hang any of the 78 charms and watch your StatTrak counters climb. The **Item Database** works like CSFloat's, with float ranks.",
+          "color": "#4b69ff",
+          "thumbnail": "",
+          "fields": [],
+          "footer": ""
+        },
+        {
+          "title": "🔄 Trade ups, the Armory and the Market",
+          "description": "**Trade Up Contracts** follow CS2's rules.\n**The Armory** rotates its featured collections every 10 to 15 minutes. Spend Armory Stars on its drops.\n**The Market** uses prices blended from Skinport, CSFloat, Buff163 and YouPin.",
+          "color": "#8847ff",
+          "thumbnail": "",
+          "fields": [],
+          "footer": ""
+        },
+        {
+          "title": "🤝 Traders, friends and battles",
+          "description": "**2,000 NPC players** live in the game. They trade with you, message you offers and haggle, and collectors chase blue gems, low floats and more.\n**Friends and chat** work like Steam's, with profiles and an item showcase.\n**Case battles** (1v1 to 2v2), **coinflip** and **jackpot** use virtual money and are provably fair. Play them against bots, or online against other players.",
+          "color": "#d32ce6",
+          "thumbnail": "",
+          "fields": [],
+          "footer": ""
+        },
+        {
+          "title": "🎯 Play mode",
+          "description": "Offline CS2 matches against bots on real maps from your CS2 install (Dust II, Mirage, Inferno, Nuke, Ancient, Anubis, Overpass, Train, Vertigo, Cache and more), with your equipped skins. Queue **Premier, Competitive, Wingman, Deathmatch or Arms Race** and climb ranks and CS Rating against bots, or set up a **private match**.\n\n**This is how you earn money:** $250 for a win or draw, $100 for a loss, $20 per kill and $10 per assist. Matches also give XP toward profile levels 1 to 40, Service Medals, and a care package every level up.",
+          "color": "#eb4b4b",
+          "thumbnail": "",
+          "fields": [],
+          "footer": ""
+        },
+        {
+          "title": "🌐 Online mode (optional)",
+          "description": "Make an account on a server to trade with real players and join live case battle, coinflip and jackpot lobbies. Online accounts start fresh and stay separate from your offline save. Click **Offline** at the top right of the game to connect.\n\nWhen there's a community server to join, its address goes up in {{channel:announcements}}.",
+          "color": "#e4ae39",
+          "thumbnail": "",
+          "fields": [],
+          "footer": "More questions? The FAQ is right below."
+        }
+      ]
+    },
+    {
+      "channelKey": "how_to_play",
+      "embeds": [
+        {
+          "title": "❓ FAQ",
+          "description": "The questions we get most.",
+          "color": "#f5a524",
+          "thumbnail": "",
+          "fields": [
+            {
+              "name": "Is this real money?",
+              "value": "No. Money, keys, items and gambling are all virtual. There are no real-money purchases, and nothing can be cashed out or sold for real money.",
+              "inline": false
+            },
+            {
+              "name": "Is this made by Valve?",
+              "value": "No. It's a fan-made game, not affiliated with or endorsed by Valve.",
+              "inline": false
+            },
+            {
+              "name": "Do I need CS2 installed?",
+              "value": "For most of it, no: cases, inventory, trading and the Market work without it. But Play mode, where you earn money, needs it, and so do inspect on real CS2 models and the 3D crate drop. Nothing from CS2 comes bundled with the game. It reads your own install.",
+              "inline": false
+            },
+            {
+              "name": "Why does Windows warn me?",
+              "value": "The exe isn't code-signed, so SmartScreen flags it. Click **More info**, then **Run anyway**. Only do this for builds from {{channel:releases}}.",
+              "inline": false
+            },
+            {
+              "name": "How do I earn money?",
+              "value": "Play matches in Play mode (needs CS2 installed): $250 for a win or draw, $100 for a loss, $20 per kill and $10 per assist. Each level up brings a care package, and selling on the Market or trading with NPCs helps too.",
+              "inline": false
+            },
+            {
+              "name": "Is Play mode online multiplayer?",
+              "value": "No. Play mode is offline matches against bots, with your equipped skins. Online mode is for trading and live case battle, coinflip and jackpot lobbies.",
+              "inline": false
+            },
+            {
+              "name": "Do I have to go online?",
+              "value": "No, online mode is optional. Offline you still have 2,000 NPC players who trade with you, send you offers and haggle.",
+              "inline": false
+            },
+            {
+              "name": "Mac, Linux or mobile?",
+              "value": "No, the game is Windows only.",
+              "inline": false
+            },
+            {
+              "name": "Where's my save?",
+              "value": "`%APPDATA%/cs2-case-sim/save.json`. Copy it somewhere safe if you want a backup.",
+              "inline": false
+            },
+            {
+              "name": "Found a bug or have an idea?",
+              "value": "Bugs go in {{channel:bug_reports}}, ideas in {{channel:suggestions}}. Screenshots help!",
+              "inline": false
+            }
+          ],
+          "footer": "Still stuck? Ask in the help channel."
+        }
+      ]
+    },
+    {
+      "channelKey": "announcements",
+      "embeds": [
+        {
+          "title": "📢 The server is open",
+          "description": "Welcome to the CS2 Case Simulator Discord! Dev news and server updates go here. New builds and patch notes have their own channel: {{channel:releases}}.\n\n• Bugs: {{channel:bug_reports}}\n• Ideas: {{channel:suggestions}}\n\nWant a ping when something is posted? Pick **News & updates** or **New releases** in **Channels & Roles**.",
+          "color": "#f5a524",
+          "thumbnail": "{{icon}}",
+          "fields": [],
+          "footer": "Fan-made · Not affiliated with Valve"
+        }
+      ]
+    },
+    {
+      "channelKey": "releases",
+      "embeds": [
+        {
+          "title": "💾 Releases",
+          "description": "Every new build of CS2 Case Simulator goes up here with its patch notes.\n\nLatest build: {{download}}",
+          "color": "#f5a524",
+          "thumbnail": "{{icon}}",
+          "fields": [
+            {
+              "name": "Installer or portable?",
+              "value": "**Installer:** sets up for your user, no admin needed, starts fast.\n**Portable:** one exe, no install, slower to start.",
+              "inline": true
+            },
+            {
+              "name": "SmartScreen warning?",
+              "value": "The exe isn't signed yet, so Windows may warn you. Click **More info**, then **Run anyway**.",
+              "inline": true
+            },
+            {
+              "name": "🔒 Download safely",
+              "value": "This channel is the only official source. If someone DMs you a \"new version\" or a \"beta build\", don't run it. Report them to a mod.",
+              "inline": false
+            },
+            {
+              "name": "🔔 Get pinged",
+              "value": "Pick **New releases** in **Channels & Roles** to get a ping for every build.",
+              "inline": false
+            }
+          ],
+          "footer": "Windows only · Fan-made · Not affiliated with Valve"
+        }
+      ]
+    },
+    {
+      "channelKey": "help",
+      "embeds": [
+        {
+          "title": "❓ Before you ask",
+          "description": "Quick questions are welcome here. The FAQ in {{channel:how_to_play}} covers SmartScreen, CS2 installs, saves and virtual money.\n\nTo get help faster, tell us:\n• Installer or portable, and which build from releases you're on\n• Whether CS2 is installed\n• What you were doing and what you already tried\n\nScreenshots help a lot. If something is actually broken, open a post in {{channel:bug_reports}} so it doesn't get lost in chat.",
+          "color": "#5e98d9",
+          "thumbnail": "",
+          "fields": [],
+          "footer": ""
+        }
+      ]
+    },
+    {
+      "channelKey": "play_mode",
+      "embeds": [
+        {
+          "title": "🎯 Play mode",
+          "description": "Offline CS2 matches against bots on real maps from your CS2 install, with your equipped skins. Talk modes, maps, lineups, settings and your CS Rating here. Clips go in {{channel:clips}}.",
+          "color": "#eb4b4b",
+          "thumbnail": "",
+          "fields": [
+            {
+              "name": "Modes",
+              "value": "Premier, Competitive, Wingman, Deathmatch, Arms Race and private matches",
+              "inline": true
+            },
+            {
+              "name": "Maps",
+              "value": "Dust II, Mirage, Inferno, Nuke, Ancient, Anubis, Overpass, Train, Vertigo, Cache and more",
+              "inline": true
+            },
+            {
+              "name": "Earnings",
+              "value": "$250 per win or draw, $100 per loss, $20 per kill, $10 per assist (virtual)",
+              "inline": true
+            },
+            {
+              "name": "Found a Play mode bug?",
+              "value": "Post it in {{channel:bug_reports}} with the **Play Mode** tag, plus the map and mode.",
+              "inline": false
+            }
+          ],
+          "footer": ""
+        }
+      ]
+    },
+    {
+      "channelKey": "case_battles",
+      "embeds": [
+        {
+          "title": "🎲 Find a lobby",
+          "description": "Looking for an online case battle, coinflip or jackpot? Post here. Copy this to get started:\n```\nMode: 2v2 case battle\nCases: 3x Kilowatt Case\nUsername: yourname\n```\nThe game works out what each player pays from the cases. Nobody around? You can always play against bots in the game.",
+          "color": "#d32ce6",
+          "thumbnail": "",
+          "fields": [
+            {
+              "name": "Virtual money only",
+              "value": "Every round is provably fair, and you can check it with the **Verify fairness** button in the game. It's all in-game money, just for fun. Never send anyone real money, gift cards or Steam items.",
+              "inline": false
+            }
+          ],
+          "footer": "Keep it friendly, win or lose."
+        }
+      ]
+    },
+    {
+      "channelKey": "staff_chat",
+      "embeds": [
+        {
+          "title": "🛡️ Staff quick guide",
+          "description": "The short version of how we run things.",
+          "color": "#eb4b4b",
+          "thumbnail": "",
+          "fields": [
+            {
+              "name": "Where things land",
+              "value": "AutoMod alerts and Discord safety alerts go to {{channel:mod_log}}. Discord's community updates go to {{channel:discord_updates}}.",
+              "inline": false
+            },
+            {
+              "name": "Warn, timeout, ban",
+              "value": "Warn first for normal rule breaks, then time out, then ban. Scams, malware and real-money deals go straight to a ban.",
+              "inline": false
+            },
+            {
+              "name": "Hacked accounts",
+              "value": "Most scam posts come from hacked accounts. Ban with message deletion to clear the spam, then unban so they can come back once they've secured their account, and tell them why.",
+              "inline": false
+            },
+            {
+              "name": "AutoMod",
+              "value": "Fake Steam and Discord links are blocked for mods too, and the sender gets a 1 hour timeout. The alert-only rule flags things like \"free skins\", \"Steam admin\" or crypto for a human to check, so look before you act.",
+              "inline": false
+            },
+            {
+              "name": "Forums",
+              "value": "Tag bug reports Needs Info, Known Issue or Fixed. Tag suggestions Under Review, Planned, Added or Not Planned.",
+              "inline": false
+            },
+            {
+              "name": "Say thanks",
+              "value": "Tell the developer who should get {{role:bug_hunter}} (people whose reports helped fix real bugs).",
+              "inline": false
+            }
+          ],
+          "footer": "Staff only"
+        }
+      ]
+    },
+    {
+      "channelKey": "mod_log",
+      "embeds": [
+        {
+          "title": "📋 Mod log",
+          "description": "AutoMod and Discord safety alerts post here. Talk about them in {{channel:staff_chat}} so this channel stays easy to scan.",
+          "color": "#8847ff",
+          "thumbnail": "",
+          "fields": [],
+          "footer": ""
+        }
+      ]
+    }
+  ],
+  "automod": [
+    {
+      "name": "Fake Steam & Discord links",
+      "trigger": "keyword",
+      "keywords": [
+        "*steamcomunity*",
+        "*steamcommunlty*",
+        "*stearncommunity*",
+        "*steamcommnuity*",
+        "*steamcommuntiy*",
+        "*steamcommunitty*",
+        "*steamcommuniity*",
+        "*steamcommunuty*",
+        "*steamcommunyti*",
+        "*steamcommunitiy*",
+        "*steamcommynity*",
+        "*steamcommunjty*",
+        "*steamcommurity*",
+        "*steamcomminity*",
+        "*steamcomrnunity*",
+        "*steamconmunity*",
+        "*steamcornmunity*",
+        "*steancommunity*",
+        "*stemcommunity*",
+        "*steamcomunnity*",
+        "*steamcommmunity*",
+        "*steamcommunitu*",
+        "*sleamcommunity*",
+        "*steamcammunity*",
+        "*steamcommunnity*",
+        "*steamcommunlity*",
+        "*stteamcommunity*",
+        "*steaamcommunity*",
+        "*steeamcommunity*",
+        "*steamcomnunity*",
+        "*steamcummunity*",
+        "*steamcommuinty*",
+        "*stearmcommunity*",
+        "*steamcommuity*",
+        "*steamcommnity*",
+        "*steamcomminuty*",
+        "*steamcommunitey*",
+        "*steamcommunity-*",
+        "*steamcommunity.ru*",
+        "*steampowerd*",
+        "*stearnpowered*",
+        "*steampovvered*",
+        "*steamp0wered*",
+        "*steempowered*",
+        "*steampowereed*",
+        "*store-steampowered*",
+        "*steampowered-*",
+        "*steampowered.ru*",
+        "*dlscord*",
+        "*d1scord*",
+        "*disc0rd*",
+        "*discorcl*",
+        "*discord-gift*",
+        "*discordgift*",
+        "*discord.gifts*",
+        "*discords.gift*",
+        "*discordapp.gift*",
+        "*discord-nitro*",
+        "*discordnitro*",
+        "*nitro-discord*"
+      ],
+      "regexPatterns": [
+        "(?i)steam[._-]?c(?:0m+unit[yi]|om?unity|omm?un[l1]ty|omm?unt[yi]|ommu?in[it]?ty|ommin?uty|ommnuity|o(?:rn|nn)m?unity|omrnunity|[ae]mmunity|onmunity|ommun[il]t[il]y|ommuniity|ommunitty|ommmunity)",
+        "(?i)\\b(?:st(?:ea|ae|e|a)(?:rn|nn|n)|staem|stem|steem|sleam|st3am|5team|steamm|steeam)[._-]?(?:c[o0](?:m|rn)+[uv]n[il1]t[yi]|p[o0]wered)",
+        "(?i)steamp(?:[o0]vered|owerd|owred|0wered|owerred|owerde)",
+        "(?i)(steamcommunity|steampowered)\\.(ru|su|co|net|org|io|xyz|me|cc|ws|pl|info|link|site|online|top|fun|shop|store|icu|click|gift|gifts|pw|ink|cyou|cfd|sbs|monster|rest|live|club|vip|biz|best|life|world|today|space|website|trade|market)\\b",
+        "(?i)(steamcommunity|steampowered)(\\.com[a-z0-9-]|[-_][a-z0-9])|[a-z0-9]-(steamcommunity|steampowered)",
+        "(?i)https?://[a-z0-9.-]{0,30}\\bst[e3]a?m[a-z0-9-]{0,24}\\.(ru|su|ink|pw|gift|gifts|xyz|link|site|online|top|fun|shop|store|icu|cc|click|live|club|tk|ml|ga|cf|gq|cyou|monster|rest|cfd|sbs|trade|market|vip|biz|best|life|world|today|space|website|ws)\\b",
+        "(?i)https?://[a-z0-9.-]{0,30}c[o0]mm?[uy]n[il1]t[yi][a-z0-9-]{0,30}\\.(ru|su|xyz|link|site|online|top|fun|shop|store|icu|cc|click|ink|pw|gift|gifts|cyou|cfd|sbs|monster|rest)\\b",
+        "(?i)https?://[a-z0-9.-]{0,30}(skin|knife|knives|csgo|cs2|nitro|giveaway)[a-z0-9-]{0,30}\\.(ru|su|xyz|link|site|online|top|fun|shop|icu|click|ink|pw|gift|gifts|cyou|cfd|sbs|monster|rest|life)\\b",
+        "(?i)https?://[a-z0-9.-]{0,30}(?:steam-(?:community|trade)|discord-app)"
+      ],
+      "allowList": [],
+      "exemptRoleKeys": [],
+      "actions": [
+        {
+          "type": "block",
+          "customMessage": "Blocked: that looks like a fake Steam or Discord link, so you're timed out for an hour. If it was a typo, a mod will lift it."
+        },
+        {
+          "type": "alert",
+          "alertChannelKey": "mod_log"
+        },
+        {
+          "type": "timeout",
+          "timeoutSeconds": 3600
+        }
+      ]
+    },
+    {
+      "name": "Scam messages",
+      "trigger": "keyword",
+      "keywords": [
+        "free skins giveaway",
+        "claim free skins",
+        "free skins here",
+        "giveaway link",
+        "claim your skin*",
+        "claim your knife",
+        "claim your prize",
+        "claim your gift",
+        "*claim your free*",
+        "*claim your nitro*",
+        "skin airdrop",
+        "cs2 airdrop",
+        "*giving away my inventory*",
+        "*giving away my whole inventory*",
+        "*giving away my skins*",
+        "*giving away my knife*",
+        "*quitting cs2 and giving*",
+        "*leaving cs2 and giving*",
+        "*vote for my team*",
+        "*vote for our team*",
+        "*vote for my clan*",
+        "*vote for my cs*",
+        "esports team vote",
+        "*your steam account will be*",
+        "*your account will be banned*",
+        "*your account will be suspended*",
+        "*your account has been flagged*",
+        "*account will be permanently*",
+        "beta test my game",
+        "*free nitro*",
+        "*nitro for free*",
+        "free discord nitro",
+        "nitro giveaway",
+        "steam gift card*",
+        "free gift card*",
+        "check my bio",
+        "link in my bio",
+        "link in bio",
+        "dm me to claim",
+        "dm me for free",
+        "send me your code",
+        "send me your password",
+        "give me your password",
+        "send your password",
+        "*scan the qr*",
+        "*scan this qr*",
+        "*scan my qr*",
+        "qr code login"
+      ],
+      "regexPatterns": [
+        "(?i)@(?:everyone|here)\\b"
+      ],
+      "allowList": [],
+      "exemptRoleKeys": [
+        "developer",
+        "moderator"
+      ],
+      "actions": [
+        {
+          "type": "block",
+          "customMessage": "Blocked: that looks like a common scam message. Nobody here gives away real skins or needs your login or codes."
+        },
+        {
+          "type": "alert",
+          "alertChannelKey": "mod_log"
+        }
+      ]
+    },
+    {
+      "name": "Real-money trading & gambling sites",
+      "trigger": "keyword",
+      "keywords": [
+        "*paypal*",
+        "*cashapp*",
+        "cash app",
+        "*cash.app*",
+        "*venmo*",
+        "zelle",
+        "skrill",
+        "revolut",
+        "western union",
+        "rmt",
+        "sell my account",
+        "selling my account",
+        "selling account*",
+        "buying account*",
+        "buy your account",
+        "buy my account",
+        "account for sale",
+        "accounts for sale",
+        "selling acc",
+        "buying acc",
+        "promo code",
+        "referral code",
+        "affiliate code",
+        "use my code",
+        "*skin.club*"
+      ],
+      "regexPatterns": [
+        "(?i)\\b(csgoroll|csgoempire|hellcase|clash|key-?drop|gamdom|rollbit|stake|duelbits|farmskins|skinclub|datdrop|csgo500|csgofast|hypedrop|ggdrop|csgoluck|csgobig|bloodycase)\\.(com|gg|io|net|org|tv|us|bet|win|ru|pro|club)\\b"
+      ],
+      "allowList": [],
+      "exemptRoleKeys": [
+        "developer",
+        "moderator"
+      ],
+      "actions": [
+        {
+          "type": "block",
+          "customMessage": "Blocked: no real-money deals, account sales or gambling sites here. Everything in CS2 Case Simulator is virtual."
+        },
+        {
+          "type": "alert",
+          "alertChannelKey": "mod_log"
+        }
+      ]
+    },
+    {
+      "name": "Invites, short links & IP loggers",
+      "trigger": "keyword",
+      "keywords": [
+        "*grabify*",
+        "*iplogger*",
+        "*2no.co*",
+        "*yip.su*",
+        "*ps3cfw*",
+        "*blasze*",
+        "*iplis.ru*",
+        "*02ip.ru*",
+        "*ezstat.ru*",
+        "*mediafire.com*",
+        "*mega.nz*",
+        "*gofile.io*",
+        "*anonfiles*",
+        "*pixeldrain*",
+        "*sendspace*"
+      ],
+      "regexPatterns": [
+        "(?i)(?:discord(?:app)?\\.com/invite|discord\\.(?:gg|io|me|li)|dsc\\.gg|invite\\.gg)/[a-z0-9-]+",
+        "(?i)\\b(?:bit\\.ly|tinyurl\\.com|t\\.ly|cutt\\.ly|is\\.gd|v\\.gd|rb\\.gy|shorturl\\.at|tiny\\.cc|ow\\.ly|rebrand\\.ly|goo\\.su|clck\\.ru)/"
+      ],
+      "allowList": [],
+      "exemptRoleKeys": [
+        "developer",
+        "moderator"
+      ],
+      "actions": [
+        {
+          "type": "block",
+          "customMessage": "Blocked: invites, short links, IP loggers and file-host links aren't allowed. Attach files directly or ask a mod."
+        },
+        {
+          "type": "alert",
+          "alertChannelKey": "mod_log"
+        }
+      ]
+    },
+    {
+      "name": "Flag for review (alert only)",
+      "trigger": "keyword",
+      "keywords": [
+        "*free skin*",
+        "*free knife*",
+        "*free knives*",
+        "*free cs2*",
+        "*free csgo*",
+        "*skin giveaway*",
+        "*skins giveaway*",
+        "*knife giveaway*",
+        "*cs2 giveaway*",
+        "*csgo giveaway*",
+        "*valve staff*",
+        "*valve employee*",
+        "*valve admin*",
+        "*valve support*",
+        "*valve moderator*",
+        "*steam staff*",
+        "*steam employee*",
+        "*steam admin*",
+        "*steam support*",
+        "*steam moderator*",
+        "*steam security*",
+        "*for real money*",
+        "*irl money*",
+        "*real cash*",
+        "*gift card*",
+        "*telegram*",
+        "*whatsapp*",
+        "*bitcoin*",
+        "*crypto*",
+        "*usdt*",
+        "*ethereum*",
+        "btc",
+        "*accidentally report*",
+        "*accidently report*",
+        "*accidentaly report*",
+        "*reported you by mistake*",
+        "*reported you by accident*",
+        "*reported your account by*",
+        "*mistakenly reported*",
+        "*falsely reported*",
+        "*mass reported*",
+        "get free skins",
+        "free cs2 skins",
+        "free csgo skins",
+        "claim your reward",
+        "steam guard code",
+        "your steam guard",
+        "test my game",
+        "try my game"
+      ],
+      "regexPatterns": [],
+      "allowList": [],
+      "exemptRoleKeys": [
+        "developer",
+        "moderator"
+      ],
+      "actions": [
+        {
+          "type": "alert",
+          "alertChannelKey": "mod_log"
+        }
+      ]
+    },
+    {
+      "name": "Spam filter",
+      "trigger": "spam",
+      "exemptRoleKeys": [
+        "developer",
+        "moderator"
+      ],
+      "actions": [
+        {
+          "type": "block",
+          "customMessage": "Blocked: that looked like spam. If it wasn't, try rephrasing or ask a mod."
+        },
+        {
+          "type": "alert",
+          "alertChannelKey": "mod_log"
+        }
+      ]
+    },
+    {
+      "name": "Slurs & sexual content",
+      "trigger": "keyword_preset",
+      "presets": [
+        "SLURS",
+        "SEXUAL_CONTENT"
+      ],
+      "allowList": [],
+      "exemptRoleKeys": [
+        "developer",
+        "moderator"
+      ],
+      "actions": [
+        {
+          "type": "block",
+          "customMessage": "Blocked: keep it respectful and SFW, please."
+        },
+        {
+          "type": "alert",
+          "alertChannelKey": "mod_log"
+        }
+      ]
+    },
+    {
+      "name": "Mention spam & raids",
+      "trigger": "mention_spam",
+      "mentionLimit": 5,
+      "raidProtection": true,
+      "exemptRoleKeys": [
+        "developer",
+        "moderator"
+      ],
+      "actions": [
+        {
+          "type": "block",
+          "customMessage": "Blocked: too many mentions in one message, so you're timed out for an hour. Ask a mod if it was a mistake."
+        },
+        {
+          "type": "alert",
+          "alertChannelKey": "mod_log"
+        },
+        {
+          "type": "timeout",
+          "timeoutSeconds": 3600
+        }
+      ]
+    }
+  ],
+  "settings": {
+    "verificationLevel": 2,
+    "explicitContentFilter": 2,
+    "defaultNotifications": 1,
+    "systemChannelFlags": 52
+  }
+}

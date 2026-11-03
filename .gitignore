@@ -7,3 +7,5 @@ server/node_modules/
 server/.data/
 *.log
 .claude/settings.local.json
+.discord-token
+.discord-token.txt
