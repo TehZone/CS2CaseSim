@@ -761,6 +761,57 @@ function fakeGame() {
   ok(me.modelSrc === pool.T[1], 'your body on a side with no agent is the same default as before');
 }
 
+// ---- the console: cheats and server commands in private matches only ----------------------------------------------------
+{
+  const { commands, DevConsole } = await import('../src/js/play/console.js');
+  const fresh = (cheatsAllowed) => {
+    const out = [], g = { cheatsAllowed, cv: { sv_cheats: 0, host_timescale: 1, sv_infinite_ammo: 0, bot_stop: 0, bot_dont_shoot: 0, mp_buy_anywhere: 0 }, god: false, noclip: false, rules: { startMoney: 800, freeze: 15 }, bots: [],
+      combatants: [], me: { team: 'T' }, player: { velocity: [0, 0, 0] } };
+    const con = Object.assign(Object.create(DevConsole.prototype), { game: g, print: (t) => out.push(t) });
+    con.cmds = commands(g, con);
+    return { g, con, out };
+  };
+  const m = fresh(false);
+  for (const line of ['sv_cheats 1', 'god', 'noclip', 'host_timescale 4', 'sv_infinite_ammo 1', 'sv_gravity 100', 'bot_stop 1', 'bot_dont_shoot 1', 'mp_startmoney 16000', 'mp_buy_anywhere 1', 'mp_freezetime 0', 'bot_kill', 'mp_restartgame 1', 'impulse 101']) m.con.run(line);
+  const { MOVE } = await import('../src/js/play/movement.js');
+  ok(m.g.cv.sv_cheats === 0 && !m.g.god && !m.g.noclip && m.g.cv.host_timescale === 1 && m.g.cv.sv_infinite_ammo === 0 && m.g.cv.bot_stop === 0 && m.g.rules.startMoney === 800 && m.g.rules.freeze === 15 && m.g.cv.mp_buy_anywhere === 0 && MOVE.gravity === 800 && m.g.restartAt === undefined
+    && m.out.length === 14 && m.out.every((t) => /only work in private matches/.test(t)), 'console: in a matchmaking match every cheat and server command is refused, sv_cheats 1 too: ' + m.out.length);
+  m.g.cv.sv_cheats = 1; m.out.length = 0;
+  m.con.run('god'); m.con.run('noclip; host_timescale 4');
+  ok(!m.g.god && !m.g.noclip && m.g.cv.host_timescale === 1 && m.out.length === 3, "console: sv_cheats set some other way changes nothing in a matchmaking match, nor does a chain of commands (a bind's)");
+  m.out.length = 0;
+  m.con.run('mp_startmoney');
+  ok(m.out.length === 1 && /^mp_startmoney = 800/.test(m.out[0]), 'console: a server variable can still be read');
+  const p = fresh(true);
+  for (const line of ['sv_cheats 1', 'god', 'host_timescale 4', 'bot_stop 1', 'sv_gravity 100', 'mp_startmoney 16000', 'mp_buy_anywhere 1']) p.con.run(line);
+  const on = p.g.cv.sv_cheats === 1 && p.g.god && p.g.cv.host_timescale === 4 && p.g.cv.bot_stop === 1 && MOVE.gravity === 100 && p.g.rules.startMoney === 16000 && p.g.cv.mp_buy_anywhere === 1;
+  p.con.run('sv_cheats 0');
+  ok(on && !p.g.god && p.g.cv.host_timescale === 1 && p.g.cv.bot_stop === 0 && MOVE.gravity === 800, 'console: a private match keeps its cheats and server commands, and sv_cheats 0 turns them off');
+  p.con.run('sv_cheats 1'); p.con.run('sv_gravity 100'); p.con.run('god');
+  const next = fresh(false);
+  next.g.god = true; next.con.noCheats();
+  ok(MOVE.gravity === 800 && !next.g.god && next.g.cv.sv_cheats === 0, "console: a matchmaking match starts with everything normal, whatever a private match left (how you move is shared between matches)");
+  // Other ways to the same thing: fps_max slowing the match as host_timescale does, the HUD off seeing through a flash.
+  const hud = () => ({ el: { style: { display: '' } } });
+  const a = fresh(false), b = fresh(true);
+  a.g.hud = hud(); b.g.hud = hud();
+  for (const t of [a, b]) { t.con.cmds = commands(t.g, t.con); t.con.run('fps_max 1'); }
+  const slow = [a.g.cv.fps_max, b.g.cv.fps_max];
+  a.con.run('fps_max 0'); const none = a.g.cv.fps_max;
+  a.con.run('fps_max 144');
+  ok(slow.join() === '30,1' && none === 0 && a.g.cv.fps_max === 144, 'console: in a matchmaking match fps_max stops at 30 (lower, the match itself slows down); uncapped and normal caps are fine, and a private match can go lower: ' + slow);
+  for (const t of [a, b]) { t.con.run('cl_drawhud 0'); t.con.run('r_drawviewmodel 0'); }
+  ok(a.g.hud.el.style.display === '' && a.g.cv.r_drawviewmodel === 1 && b.g.hud.el.style.display === 'none' && b.g.cv.r_drawviewmodel === 0, "console: no turning the HUD or your weapon off in a matchmaking match (the HUD holds a flashbang's white), as in a private match you can");
+  a.out.length = 0; a.con.run('cl_drawhud');
+  ok(/^cl_drawhud = 1/.test(a.out[0]), 'console: and reading them still works');
+  const c = (name, team, alive = true) => ({ name, team, alive, health: 77, money: 4200, kills: 1, deaths: 2 });
+  const look = fresh(false), me = c('You', 'T'), mate = c('Mate', 'T'), foe = c('Foe', 'CT');
+  Object.assign(look.g, { me, combatants: [me, mate, foe] });
+  look.con.cmds = commands(look.g, look.con);
+  look.con.run('status');
+  ok(/77 hp/.test(look.out[0]) && /4200/.test(look.out[1]) && !/hp|4200/.test(look.out[2]) && /Foe/.test(look.out[2]), "console: status doesn't show enemies' health and money in a matchmaking match");
+}
+
 // ---- H switches hands (CS2's switchhands, cl_prefer_lefthanded): bound for older saved binds too, saved -------------------
 {
   const { bindTable, BINDS_VERSION, DEFAULT_BINDS, Input } = await import('../src/js/play/input.js');

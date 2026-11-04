@@ -12,9 +12,23 @@ const BOT_TIERS_BY_LEVEL = ['silver', 'gold', 'eagle', 'global'];
 // cl_crosshaircolor 0-4 (5: cl_crosshaircolor_r/g/b).
 const XHAIR_COLORS = ['#fa3232', '#32fa32', '#fafa32', '#3232fa', '#32fafa'];
 const CHEAT_MSG = (name) => `Can't use cheat command ${name} in multiplayer, unless the server has sv_cheats set to 1.`;
+// A match found through matchmaking is CS2's server, not yours (Game: cheats, on for private matches only): no cheats, and
+// none of the server's own commands that change the match (mp_..., bot_...) or commands that see past what a player is
+// meant to see (locked: the HUD off takes a flashbang's white and the scope's mask with it). A value can still be read.
+const LOCKED_MSG = (name) => `Can't use ${name} in a matchmaking match: cheats and server commands only work in private matches.`;
+const SERVER_COMMAND = /^(mp|bot)_/;
+// (Slower than 10 frames a second the match itself slows down, the frame time being capped: fps_max as host_timescale.)
+const MIN_FPS = 30;
+
+// Every cheat setting back to normal. A match starts with its own, but for how you move, which every match shares.
+function resetCheats(g) {
+  g.god = false; g.noclip = false;
+  Object.assign(g.cv, { host_timescale: 1, sv_infinite_ammo: 0, bot_stop: 0, bot_dont_shoot: 0 });
+  Object.assign(MOVE, MOVE_DEFAULTS);
+}
 
 // Every command and variable: { help, cheat, get?() (variables), set?(value), run?(args) }.
-function commands(g, con) {
+export function commands(g, con) {
   const num = (v, lo = -Infinity, hi = Infinity) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : null; };
   const rules = () => g.match?.rules || g.rules;
   // A console variable kept on the game (g.cv) or wherever get/set point.
@@ -49,7 +63,11 @@ function commands(g, con) {
     clear: { help: 'Clears the console', run: () => con.clear() },
     echo: { help: 'Prints text: echo <text>', run: (a) => con.print(a.join(' ')) },
     status: { help: 'Lists the players', run: () => {
-      for (const c of g.combatants) con.print(`${c.team.padEnd(3)} ${c.name.padEnd(16)} ${c.alive ? String(Math.max(0, Math.round(c.health))).padStart(3) + ' hp' : ' dead '}  $${c.money}  ${c.kills} / ${c.deaths}`);
+      for (const c of g.combatants) {
+        // (In a matchmaking match, not your enemies' health and money: CS2's status doesn't show them.)
+        const hidden = !g.cheatsAllowed && c !== me() && (g.ffa || c.team !== me().team);
+        con.print(`${c.team.padEnd(3)} ${c.name.padEnd(16)} ${hidden ? '' : `${c.alive ? String(Math.max(0, Math.round(c.health))).padStart(3) + ' hp' : ' dead '}  $${c.money}  `}${c.kills} / ${c.deaths}`);
+      }
     } },
     // ---- binds (saved with your settings) -------------------------------------------------------------------------
     bind: { help: 'Binds a key to a command: bind <key> <command> (e.g. bind mwheeldown +jump); bind <key> shows its bind', run: (a) => {
@@ -72,8 +90,9 @@ function commands(g, con) {
     // ---- the server -----------------------------------------------------------------------------------------------
     sv_cheats: { help: 'Allows cheat commands (1) or not (0)', get: () => g.cv.sv_cheats, set: (v) => {
       const n = num(v, 0, 1); if (n == null) return false;
+      if (n && !g.cheatsAllowed) { con.print(LOCKED_MSG('sv_cheats'), 'err'); return true; }
       g.cv.sv_cheats = n ? 1 : 0;
-      if (!n) { g.god = false; g.noclip = false; g.cv.host_timescale = 1; g.cv.sv_infinite_ammo = 0; g.cv.bot_stop = 0; g.cv.bot_dont_shoot = 0; Object.assign(MOVE, MOVE_DEFAULTS); }
+      if (!n) resetCheats(g);
       return true;
     } },
     host_timescale: cv('host_timescale', 'How fast the game runs (1 = real time)', 1, { cheat: true, lo: 0.1, hi: 10 }),
@@ -124,7 +143,9 @@ function commands(g, con) {
     sensitivity: { help: 'Mouse sensitivity (CS2 units)', get: () => g.baseSensitivity, set: (v) => { const n = num(v, 0.05, 20); if (n == null) return false; g.setSensitivity(n); return true; } },
     volume: { help: 'Master volume (0-1)', get: () => +g.sounds.out.gain.value.toFixed(2), set: (v) => { const n = num(v, 0, 1); if (n == null) return false; g.sounds.out.gain.value = n; return true; } },
     snd_musicvolume: { help: 'Music volume (0-1)', get: () => g.musicVolume, set: (v) => { const n = num(v, 0, 1); if (n == null) return false; g.musicVolume = n; return true; } },
-    fps_max: cv('fps_max', 'Frame rate cap (0 = none)', 0, { lo: 0, hi: 1000 }),
+    fps_max: cv('fps_max', 'Frame rate cap (0 = none)', 0, { lo: 0, hi: 1000, apply: (n) => {
+      if (n > 0 && n < MIN_FPS && !g.cheatsAllowed) { g.cv.fps_max = MIN_FPS; con.print(`fps_max is at least ${MIN_FPS} in a matchmaking match`, 'dim'); }
+    } }),
     cl_showfps: { help: 'Shows the frame rate (1), with a graph of each frame\'s time (2: a stutter shows as a red spike), or not (0)', get: () => (g.settings.showFps === false ? 0 : g.settings.showFps === 2 ? 2 : 1), set: (v) => { const n = num(v, 0, 2); if (n == null) return false; g.settings.showFps = n === 2 ? 2 : !!n; return true; } },
     net_graph: { help: 'Shows the frame time graph, the simulation and drawing times and the draws (1), also where the frame goes and what the match holds (2), or not (0)', get: () => (g.settings.netGraph === 2 ? 2 : g.settings.netGraph ? 1 : 0), set: (v) => { const n = num(v, 0, 2); if (n == null) return false; g.settings.netGraph = n === 2 ? 2 : !!n; if (!n) { g.hud.netGraph(null); g.renderer.info.autoReset = true; }
       g.settings.onNetGraph?.(g.settings.netGraph); // (kept for your next matches too)
@@ -135,8 +156,8 @@ function commands(g, con) {
       if (!g.log) { con.print('Nothing logged yet: net_graph 2 logs the match', 'err'); return; }
       g.log.save(true).then((file) => con.print('Saved ' + file)).catch((e) => con.print("Couldn't save the log: " + e.message, 'err'));
     } },
-    cl_drawhud: { help: 'Shows the HUD (1) or not (0)', get: () => (g.hud.el.style.display === 'none' ? 0 : 1), set: (v) => { const n = num(v, 0, 1); if (n == null) return false; g.hud.el.style.display = n ? '' : 'none'; return true; } },
-    r_drawviewmodel: cv('r_drawviewmodel', 'Draws your weapon (1) or not (0)', 1, { lo: 0, hi: 1 }),
+    cl_drawhud: { help: 'Shows the HUD (1) or not (0)', locked: true, get: () => (g.hud.el.style.display === 'none' ? 0 : 1), set: (v) => { const n = num(v, 0, 1); if (n == null) return false; g.hud.el.style.display = n ? '' : 'none'; return true; } },
+    r_drawviewmodel: { ...cv('r_drawviewmodel', 'Draws your weapon (1) or not (0)', 1, { lo: 0, hi: 1 }), locked: true },
     cl_inspect_rare: cv('cl_inspect_rare', "CS2's special inspects and draws: 0 now and then, 1 always, -1 never", 0, { lo: -1, hi: 1 }),
     cl_prefer_lefthanded: { help: 'Your weapon in your left hand (1) or your right (0); switchhands (H) swaps it', get: () => (g.leftHanded ? 1 : 0),
       set: (v) => { const n = num(v, 0, 1); if (n == null) return false; g.setLeftHanded(n >= 0.5); return true; } },
@@ -177,7 +198,7 @@ export class DevConsole {
     this.el.innerHTML = `<div class="con-head"><b>Console</b><button type="button" class="con-x" data-con-close title="Close (~)">✕</button></div>
       <div class="con-log"></div>
       <div class="con-suggest hidden"></div>
-      <form class="con-row"><input class="con-input" spellcheck="false" autocomplete="off" placeholder="Type a command (help, find, sv_cheats 1, give weapon_awp…)"><button class="con-go" type="submit">Submit</button></form>`;
+      <form class="con-row"><input class="con-input" spellcheck="false" autocomplete="off" placeholder="Type a command (help, find, ${game.cheatsAllowed ? 'sv_cheats 1, give weapon_awp' : 'bind, sensitivity'}…)"><button class="con-go" type="submit">Submit</button></form>`;
     root.appendChild(this.el);
     this.log = this.el.querySelector('.con-log');
     this.input = this.el.querySelector('.con-input');
@@ -240,6 +261,7 @@ export class DevConsole {
     const [name, ...args] = parts[0].split(/\s+/);
     const c = this.cmds[name.toLowerCase()];
     if (!c) { this.print(`Unknown command "${name}"`, 'err'); return; }
+    if (!this.game.cheatsAllowed && (c.cheat || ((c.locked || SERVER_COMMAND.test(name.toLowerCase())) && (c.run || args.length)))) { this.print(LOCKED_MSG(name), 'err'); return; }
     if (c.cheat && !this.game.cv.sv_cheats) { this.print(CHEAT_MSG(name), 'err'); return; }
     if (c.run) { try { c.run(args); } catch (e) { this.print(String(e.message || e), 'err'); } return; }
     if (!args.length) { this.print(`${name} = ${c.get()}  - ${c.help}`); return; }
@@ -255,6 +277,9 @@ export class DevConsole {
     this.log.scrollTop = this.log.scrollHeight;
   }
   clear() { this.log.innerHTML = ''; }
+
+  // A matchmaking match starts with everything normal, whatever a private match before it left.
+  noCheats() { this.game.cv.sv_cheats = 0; resetCheats(this.game); }
 
   dispose() { Object.assign(MOVE, MOVE_DEFAULTS); this.el.remove(); }
 }

@@ -129,10 +129,11 @@ export class Game {
   // difficulty: the bots' rank tier (skill.js: silver .. global; the old easy .. expert work too). roster (matchmaking,
   // a private match, Premier's veto): { A: your teammates, B: the other team (everyone in free for all) } as
   // [{ identity?, skill }] (else they're picked here, from the tier). ranked: matchmade Premier, Competitive or Wingman
-  // (the result moves your rank). quiet: no sound until it's shown (loading behind the menu while you search).
+  // (the result moves your rank). quiet: no sound until it's shown (loading behind the menu while you search). cheats: the
+  // console's cheats and server commands work (a private match; never one found through matchmaking).
   constructor(root, { map = 'de_dust2', mode = 'competitive', team = 'CT', teamSize = 5, difficulty = 'gold', length = 'short', overtime = true, friendlyFire = false,
-    site = 'A', minutes = 10, ffa = true, sensitivity = 1.25, quality = 'balanced', settings = {}, roster = null, ranked = false, quiet = false, onStatus = () => {} } = {}) {
-    Object.assign(this, { root, mapId: map, team, onStatus, ranked: !!ranked, quiet: !!quiet });
+    site = 'A', minutes = 10, ffa = true, sensitivity = 1.25, quality = 'balanced', settings = {}, roster = null, ranked = false, quiet = false, cheats = false, onStatus = () => {} } = {}) {
+    Object.assign(this, { root, mapId: map, team, onStatus, ranked: !!ranked, quiet: !!quiet, cheatsAllowed: !!cheats });
     quietKeyframes(); // (the bots' animation: see keyframes.js)
     this.enemyTeam = team === 'T' ? 'CT' : 'T';
     this.mode = MODES[mode] ? mode : 'competitive';
@@ -1378,6 +1379,7 @@ export class Game {
     this.acc = 0;
     this.paused = false; // (from now on it never stops: Esc opens the menu over it, like CS2's)
     this.setQuiet(false);
+    if (!this.cheatsAllowed) this.console.noCheats();
     const frame = (now) => {
       if (this.disposed) return;
       this.raf = requestAnimationFrame(frame);

@@ -259,7 +259,7 @@ async function beginPrivate() {
   const status = overlay.querySelector('[data-status]');
   const game = new Game(overlay, gameOptions(p, {
     map: p.map, mode, site: p.site, ffa, minutes: p.minutes, team: p.team, teamSize: p.teamSize, roster: privateRoster({ ...p, mode }, ffa),
-    length: p.length, overtime: p.overtime !== 'off', friendlyFire: p.friendlyFire === 'on', onStatus: (m) => { status.textContent = m; },
+    length: p.length, overtime: p.overtime !== 'off', friendlyFire: p.friendlyFire === 'on', cheats: true, onStatus: (m) => { status.textContent = m; },
   }));
   const pending = live = { game, overlay, mode, ranked: false, map: p.map, private: true, loading: true, menu: false, away: null };
   overlay.querySelector('[data-cancel]').addEventListener('click', () => { if (live === pending) end(); });

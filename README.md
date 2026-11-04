@@ -263,10 +263,13 @@ What's in a match:
 - CS2's special inspects and draws come up now and then in matches too, as in CS2 (about one in nine, never twice
   running; the console's cl_inspect_rare 1 always, -1 never).
 - The developer console (~): CS2's console commands and variables, with completion (Tab), history and find/help.
-  sv_cheats 1 unlocks the cheats (god, noclip, give, impulse 101, host_timescale, sv_gravity, sv_infinite_ammo,
-  bot_stop, bot_dont_shoot); the rest work anyway (mp_restartgame, mp_roundtime, mp_freezetime, mp_buytime,
-  mp_buy_anywhere, mp_startmoney, mp_maxmoney, bot_difficulty, bot_kill, viewmodel_*, cl_crosshair*, sensitivity,
-  volume, fps_max, cl_showfps, net_graph, cl_drawhud, r_drawviewmodel, status...), and CS2's binds: bind <key> <command> (bind key alone
+  In a private match sv_cheats 1 unlocks the cheats (god, noclip, give, impulse 101, host_timescale, sv_gravity,
+  sv_infinite_ammo, bot_stop, bot_dont_shoot), and the server's commands work anyway (mp_restartgame, mp_roundtime,
+  mp_freezetime, mp_buytime, mp_buy_anywhere, mp_startmoney, mp_maxmoney, bot_difficulty, bot_kill). A match found through
+  matchmaking, ranked or not, refuses all of those and cl_drawhud and r_drawviewmodel too (their values can still be read),
+  holds fps_max to 30 or more, starts with everything normal whatever a private match left, and status there doesn't show
+  your enemies' health and money. The rest work anywhere (viewmodel_*, cl_crosshair*, sensitivity, volume, fps_max,
+  cl_showfps, net_graph, status...), and CS2's binds: bind <key> <command> (bind key alone
   shows it), unbind, unbindall, binddefaults, key_listboundkeys. Any key, mouse button or the mouse wheel; a wheel
   notch on a + command presses and releases it in one tick, so `bind mwheeldown +jump` scroll-jumps (bunny hops) like
   CS2. Binds are saved with your settings.
