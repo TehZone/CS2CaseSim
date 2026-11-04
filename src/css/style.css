@@ -419,7 +419,7 @@ input[type=range]:focus { outline: none; }
 .modal-head { display: flex; align-items: center; gap: 12px; padding: 13px 18px; border-bottom: 1px solid rgba(255, 255, 255, .08); position: sticky; top: 0; background: linear-gradient(180deg, rgba(50, 58, 68, .97), rgba(36, 42, 50, .97)); z-index: 4; }
 .modal-head h2 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; flex: 1; color: var(--hi); }
 .modal-body { padding: 18px 20px; }
-.modal-foot { display: flex; gap: 10px; justify-content: flex-end; padding: 12px 18px; border-top: 1px solid rgba(255, 255, 255, .08); position: sticky; bottom: 0; background: linear-gradient(180deg, rgba(30, 35, 42, .97), rgba(22, 26, 31, .98)); }
+.modal-foot { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; padding: 12px 18px; border-top: 1px solid rgba(255, 255, 255, .08); position: sticky; bottom: 0; background: linear-gradient(180deg, rgba(30, 35, 42, .97), rgba(22, 26, 31, .98)); }
 .x { background: none; border: 0; color: var(--muted); font-size: 24px; line-height: 1; padding: 2px 8px; border-radius: var(--radius); }
 .x:hover { color: #fff; background: rgba(255, 255, 255, .08); }
 
@@ -431,7 +431,8 @@ input[type=range]:focus { outline: none; }
   border: 1px solid var(--line); box-shadow: inset 0 -4px 0 var(--rc);
 }
 .detail .big img, .detail .big canvas { width: 96%; height: 96%; object-fit: contain; filter: drop-shadow(0 12px 16px rgba(0, 0, 0, .55)); }
-.detail h3 { margin: 0; font-size: 24px; font-weight: 700; color: var(--hi); line-height: 1.2; }
+.detail > div { min-width: 0; }
+.detail h3 { margin: 0; font-size: 24px; font-weight: 700; color: var(--hi); line-height: 1.2; overflow-wrap: anywhere; }
 .detail .rar { font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--rc); margin: 4px 0 14px; font-weight: 600; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 0; font-size: 13px; margin: 0; }
 .kv dt, .kv dd { padding: 5px 0; border-bottom: 1px solid rgba(255, 255, 255, .05); }
@@ -472,9 +473,9 @@ input[type=range]:focus { outline: none; }
 /* ---------- inspect overlay ---------- */
 .inspect { position: fixed; inset: 0; z-index: 70; background: radial-gradient(ellipse at 50% 42%, #4b535e 0%, #282e36 45%, #0d1014 100%); animation: fade .2s ease; }
 .inspect .stage { position: absolute; inset: 0; }
-.inspect .hud { position: absolute; left: 36px; bottom: 32px; max-width: 540px; pointer-events: none; text-shadow: 0 2px 8px rgba(0, 0, 0, .8); }
+.inspect .hud { position: absolute; left: 36px; bottom: 32px; max-width: min(540px, calc(100vw - 48px)); pointer-events: none; text-shadow: 0 2px 8px rgba(0, 0, 0, .8); }
 .inspect .hud .rn { color: var(--rc); text-transform: uppercase; letter-spacing: .16em; font-size: 13px; font-weight: 600; }
-.inspect .hud h2 { margin: 2px 0 6px; font-size: 34px; font-weight: 700; color: #fff; font-family: var(--font-cond); letter-spacing: .01em; line-height: 1.1; }
+.inspect .hud h2 { margin: 2px 0 6px; font-size: 34px; font-weight: 700; color: #fff; font-family: var(--font-cond); letter-spacing: .01em; line-height: 1.1; overflow-wrap: anywhere; }
 .inspect .hud .sub { color: #ccd3db; font-size: 14px; font-variant-numeric: tabular-nums; }
 .inspect .hud .pattern { margin-top: 8px; display: inline-block; }
 .inspect .hud .floatwrap { width: 340px; margin-top: 14px; }

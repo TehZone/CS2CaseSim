@@ -15,6 +15,7 @@ import * as MM from './matchmaking.js';
 import * as L from './levels.js';
 import * as N from './npcs.js';
 import * as SU from './storage.js';
+import * as T from './tools.js';
 import * as IX from './itemindex.js';
 import { rand, round2, clamp, pick, pickWeighted, uid as newUid } from './util.js';
 
@@ -56,7 +57,7 @@ function abandonMatch(ctx, { roundsFor = 0, roundsAgainst = 0 } = {}) {
 export function makeCtx(st, opts = {}) {
   return {
     st, rng: opts.rng || rand, now: opts.now || Date.now(), online: !!opts.online,
-    invCap: opts.invCap || Infinity, reserved: opts.reserved || null,
+    invCap: opts.invCap || Infinity, reserved: opts.reserved || null, asked: opts.asked || null,
     add: [], del: [], upd: new Map(), dirty: new Set(), sto: { add: [], del: [] }, ix: null,
   };
 }
@@ -150,6 +151,16 @@ export function takeForStaff(ctx, uids) {
     ctx.sto.del.push(...out.map((it) => it.uid));
   }
   return [...items, ...out];
+}
+// Staff taking a bad name off an item (the admin panels), in the inventory or in a Storage Unit. → { item, name }
+export function clearNameForStaff(ctx, uid) {
+  const stored = SU.storedItem(ctx.st, uid), item = stored || ctx.st.inv.find((i) => i.uid === uid);
+  if (!item) fail('Item not found (it may have been sold or traded)', 'missing');
+  const name = I.customName(item);
+  if (!name) fail(`${I.itemName(item)} has no custom name`);
+  delete item.name;
+  if (stored) { ctx.sto.del.push(uid); ctx.sto.add.push(item); } else touch(ctx, item);
+  return { item, name };
 }
 // Clears loadout slots holding any of these uids (the items left the inventory or were unequipped).
 function unequip(ctx, uids) {
@@ -302,6 +313,29 @@ function unitChanged(ctx, unit) {
   touch(ctx, unit);
 }
 
+// ---- tools (see tools.js) ---------------------------------------------------------------------------
+// In a trade offer that's still open: one you made (reserved) or were sent (asked) online, a trader's offline.
+const inOffer = (ctx, uid) => !!(ctx.reserved?.has(uid) || ctx.asked?.has(uid)) || T.heldByTraders(ctx.st, ctx.now).has(uid);
+// Items a tool changes, and the tool itself: not locked (CS2 has no locks; this is as take() treats them) and not in an offer.
+// What's in a Storage Unit or staked isn't in the inventory, so findOwned() has refused that already.
+function usable(ctx, it) {
+  if (it.lk) fail(`${I.itemName(it)} is locked. Unlock it first.`, 'locked');
+  if (inOffer(ctx, it.uid)) fail(`${I.itemName(it)} is in a pending trade offer`, 'reserved');
+}
+// The tool that gets used up: the one you picked, else your oldest that's free.
+function toolToUse(ctx, id, uid) {
+  if (uid != null) {
+    const it = findOwned(ctx, String(uid));
+    if (!I.isTool(it) || it.id !== id) fail(`That isn't a ${I.TOOLS[id].n}`);
+    usable(ctx, it);
+    return it;
+  }
+  const own = ctx.st.inv.filter((it) => I.isTool(it) && it.id === id), n = I.TOOLS[id].n;
+  const free = own.filter((it) => !it.lk && !inOffer(ctx, it.uid)).sort((a, b) => (a.at || 0) - (b.at || 0));
+  if (free[0]) return free[0];
+  fail(!own.length ? `You need a ${n} for that` : own.length === 1 ? `Your ${n} is locked or in a pending trade offer` : `Your ${n}s are locked or in pending trade offers`, 'notool');
+}
+
 // ---- the actions -----------------------------------------------------------------------------------
 export const ACTIONS = {
   // Buying cases (and capsules, packages...): they go to your inventory, like CS2's store. A case that takes a key opens
@@ -405,6 +439,54 @@ export const ACTIONS = {
     const u = ownedUnit(ctx, unit), n = SU.unitCount(ctx.st, u.uid);
     if (n) fail(`Retrieve the ${n} item${n === 1 ? '' : 's'} in it first`, 'unit');
     take(ctx, [u.uid], { allowLocked: true, allowUnit: true });
+  },
+
+  // Tools from the store, to your inventory. One sells again for what it cost, so unlike cases and keys they earn no Armory
+  // Stars. Everything that uses one changes the item last, after every check: a failed action doesn't put items back.
+  'tools.buy'(ctx, { id, n = 1 }) {
+    n = int(n, 1, 100, 'count');
+    const d = Object.hasOwn(I.TOOLS, id) ? I.TOOLS[id] : fail('Unknown tool');
+    const cost = round2(d.p * n);
+    spend(ctx, cost);
+    const items = Array.from({ length: n }, () => ({ ...I.makeToolItem(d.id, 'Store'), nw: true }));
+    give(ctx, items);
+    return { items, cost };
+  },
+  // A Name Tag on an item: the name goes on, the tag is used up (a new name takes a new tag). A refused name costs nothing.
+  'tools.name'(ctx, { uid, tool = null, name }) {
+    const item = findOwned(ctx, String(uid));
+    if (!T.nameable(item)) fail(`${I.itemName(item)} can't take a Name Tag`, 'nameable');
+    usable(ctx, item);
+    const why = T.nameProblem(name);
+    if (why) fail(why, 'name');
+    if (item.name === name) fail('It already has that name', 'name');
+    take(ctx, [toolToUse(ctx, I.NAME_TAG, tool).uid]);
+    item.name = name;
+    touch(ctx, item);
+    return { item };
+  },
+  // CS2's Remove Name Tag: free, needs no tag, and the old tag is gone for good.
+  'tools.unname'(ctx, { uid }) {
+    const item = findOwned(ctx, String(uid));
+    if (!I.customName(item)) fail(`${I.itemName(item)} has no Name Tag`, 'nameable');
+    usable(ctx, item);
+    delete item.name;
+    touch(ctx, item);
+    return { item };
+  },
+  // A StatTrak™ Swap Tool on two items: their two counters change places, nothing else about them does, and the tool is used
+  // up. Equal counters are refused (CS2 does), so a tool is never wasted.
+  'tools.swap'(ctx, { a, b, tool = null }) {
+    const x = findOwned(ctx, String(a)), y = findOwned(ctx, String(b));
+    usable(ctx, x);
+    usable(ctx, y);
+    const why = T.swapRefusal(x, y);
+    if (why) fail(why, 'swap');
+    take(ctx, [toolToUse(ctx, I.SWAP_TOOL, tool).uid]);
+    [x.kills, y.kills] = [y.kills || 0, x.kills || 0];
+    touch(ctx, x);
+    touch(ctx, y);
+    return { a: x, b: y };
   },
 
   'item.sell'(ctx, { uids }) {
@@ -603,11 +685,21 @@ export const ACTIONS = {
     finishMatch(ctx);
     return { delta: r.delta, before: r.before, after: r.after, placed: r.placed, premier: r.premier };
   },
-  // A kill in Play with a StatTrak™ gun or knife counts on its counter (online too: it changes nothing but the count).
-  'play.stattrak'(ctx, { uid, kills = 1 }) {
+  // A kill in Play with a StatTrak™ gun or knife counts on its counter, one at a time. Online the server can't see the match,
+  // so it counts a kill only in a match it saw start, and no faster than that match's clock: play.reward's pace, a kill every
+  // 1.5 seconds. (Starting another match starts the clock again, so that gains nothing.)
+  'play.stattrak'(ctx, { uid }) {
     const it = findOwned(ctx, String(uid));
     if (!it.stt) fail(`${I.itemName(it)} isn't StatTrak™`);
-    it.kills = Math.min(999999, (it.kills || 0) + int(kills, 1, 50, 'kills'));
+    if (ctx.online) {
+      const cur = ctx.st.play, n = (cur?.kills || 0) + 1;
+      if (!cur?.run) fail("The server didn't see that match start, so it can't count that kill", 'match');
+      const secs = (ctx.now - cur.at) / 1000;
+      if (secs > 6 * 3600 || n > secs / 1.5) fail("That's more kills than that match has had time for", 'match');
+      ctx.st.play = { ...cur, kills: n };
+      ctx.dirty.add('play');
+    }
+    it.kills = Math.min(T.MAX_KILLS, (it.kills || 0) + 1);
     touch(ctx, it);
     return { kills: it.kills };
   },
@@ -899,7 +991,8 @@ export const ACTIONS = {
       const out = swapWithNpc(ctx, so, n, { mine, theirs, myMoney, theirMoney });
       N.post(so, n.id, 'npc', N.voice(n, 'accepted', ctx.rng), {}, ctx.now);
       result = { result: 'accepted', ...out };
-    } else if (j.more && j.more <= Math.max(5, (theirMoney + their.reduce((t, x) => t + I.itemValue(x), 0)) * 0.25)) {
+    } else if (j.more && ![...yours, ...their].some(I.isTool) && j.more <= Math.max(5, (theirMoney + their.reduce((t, x) => t + I.itemValue(x), 0)) * 0.25)) {
+      // (Not over tools: their price is the store's, and haggling could beat it. They take an offer for one or they don't.)
       const o = { id: newUid(), npc: n.id, kind: 'trade', at: ctx.now, exp: ctx.now + N.OFFER_LIFE, status: 'open', want: { uids: mine, money: myMoney }, give: { uids: theirs, money: theirMoney },
         max: 0, patience: n.patience, annoy: 0, args: [], agreed: true };
       const netNow = round2(theirMoney - myMoney - j.more);

@@ -14,7 +14,8 @@ import { TIER_LABEL } from './patterns.js';
 import { isEquipped, slotName } from './loadout.js';
 import { floatRankOf } from './floatranks.js';
 import { CATEGORY_NAME } from './engine/database.js';
-import { UNIT_CAP, unitCount, unitValue } from './engine/storage.js';
+import { UNIT_CAP, unitCount, unitValue, viewItems } from './engine/storage.js';
+import { nameable } from './engine/tools.js';
 import { iconHtml } from './menu.js';
 
 // ---- toasts --------------------------------------------------------------------------------
@@ -145,11 +146,11 @@ export function openModal({ title = '', body = '', foot = '', cls = '', onClose 
 }
 export const topModal = () => modalStack[modalStack.length - 1];
 
-export function confirmDialog(text, { ok = 'Confirm', danger = false } = {}) {
+export function confirmDialog(text, { title = 'Confirm', ok = 'Confirm', danger = false } = {}) {
   return new Promise((resolve) => {
     let answered = false;
     const m = openModal({
-      title: 'Confirm', body: `<p style="margin:0;line-height:1.5">${text}</p>`,
+      title, body: `<p style="margin:0;line-height:1.5">${text}</p>`,
       foot: `<button class="btn ghost" data-close>Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" data-ok>${ok}</button>`,
       onClose: () => { if (!answered) resolve(false); },
     });
@@ -208,7 +209,7 @@ function unitCard(item, { extra = '' } = {}) {
   </div>`;
 }
 
-export function itemCard(item, { selectable = false, selected = false, extra = '' } = {}) {
+export function itemCard(item, { selectable = false, selected = false, extra = '', line = '' } = {}) {
   if (I.isUnit(item)) return unitCard(item, { extra });
   const r = I.rarityInfo(item);
   const np = I.nameParts(item);
@@ -228,7 +229,9 @@ export function itemCard(item, { selectable = false, selected = false, extra = '
     <div class="meta">
       <div class="n1 ${item.stt ? 'stt' : item.sv ? 'sv' : ''}">${esc(np.top)}</div>
       <div class="n2">${esc(np.bottom)}</div>
+      ${I.nameTagHtml(item)}
       <div class="row"><span class="wear">${wear}</span><span class="val">${money(I.itemValue(item))}</span></div>
+      ${line ? `<div class="row"><span class="wear">${line}</span></div>` : ''}
     </div>
   </div>`;
 }
@@ -251,9 +254,10 @@ export async function sellItems(items, { ask = true } = {}) {
 }
 
 // ---- item actions --------------------------------------------------------------------------
-// Cases and keys in your inventory have no 3D model to inspect; a case opens instead (with one of your keys for it).
-export const canInspect = (item) => item.t !== 'crate' && item.t !== 'key' && item.t !== 'unit';
+// Cases, keys and tools in your inventory have no 3D model to inspect; a case opens instead (with one of your keys for it).
+export const canInspect = (item) => item.t !== 'crate' && item.t !== 'key' && item.t !== 'unit' && item.t !== 'tool';
 const storage = () => import('./pages/storage.js');
+const tools = () => import('./pages/tools.js');
 async function openCrateItem(item) {
   const { openCrate } = await import('./pages/cases.js');
   return openCrate(item);
@@ -313,6 +317,8 @@ export function itemContextMenu(e, item, { onChange } = {}) {
   }
   if (item.t === 'charm') items.push({ label: 'Attach to a gun', icon: 'move_keychain', action: async () => done(await hangCharm(item)) });
   if (item.t === 'sticker' && D.slab) items.push({ label: 'Sticker Slab', icon: 'sticker', hint: money(D.slab.p), action: async () => done(await slabSticker(item)) });
+  if (nameable(item)) items.push({ label: 'Apply Name Tag', icon: 'edit', action: async () => (await tools()).openNameTag(item, { onDone: () => done(true) }) });
+  if (I.isTool(item)) items.push({ label: I.TOOLS[item.id].use, icon: item.id === I.NAME_TAG ? 'edit' : 'refresh', action: async () => (await tools()).useTool(item) });
   items.push({ label: 'Move To Storage Unit', icon: 'crate', action: async () => done(await (await storage()).moveToUnit([item])) });
   items.push({ label: item.lk ? 'Unlock' : 'Lock', icon: item.lk ? 'unlocked' : 'locked', action: async () => done(await tryAct('item.lock', { uid: item.uid, lk: !item.lk })) });
   items.push('-', { label: 'Sell', icon: 'dollar_sign', hint: money(I.itemValue(item)), disabled: !!item.lk, action: async () => done(await sellItems([item])) });
@@ -320,17 +326,35 @@ export function itemContextMenu(e, item, { onChange } = {}) {
 }
 
 // ---- charms --------------------------------------------------------------------------------
-// One item picked from a grid (null if the window is closed).
-export function chooseItem(title, items, { empty = 'Nothing to choose from.', note = '' } = {}) {
+const CHOOSE_SORTS = [['vdesc', 'Value: high → low'], ['vasc', 'Value: low → high'], ['new', 'Newest'], ['old', 'Oldest'], ['quality', 'Quality'], ['float', 'Float: low → high'], ['name', 'Name']];
+// One item picked from a grid, searched and sorted like CS2's list (null if the window is closed). line(item): one more line
+// on its card.
+export function chooseItem(title, items, { empty = 'Nothing to choose from.', note = '', line } = {}) {
   return new Promise((resolve) => {
     let picked = null;
+    const v = { q: '', sort: 'vdesc' };
     const m = openModal({
       title, cls: 'wide',
-      body: `${note ? `<p class="muted" style="margin:0 0 12px">${note}</p>` : ''}${items.length ? `<div class="grid">${items.map((it) => itemCard(it)).join('')}</div>` : `<div class="empty">${empty}</div>`}`,
+      body: `${note ? `<p class="muted" style="margin:0 0 12px">${note}</p>` : ''}${items.length ? `<div class="toolbar choose-bar">
+          <input class="input" type="search" data-q placeholder="Search items…" spellcheck="false" autocomplete="off">
+          <select class="input" data-sort>${CHOOSE_SORTS.map(([k, t]) => `<option value="${k}">${esc(t)}</option>`).join('')}</select>
+        </div><div class="grid" data-grid></div>` : `<div class="empty">${empty}</div>`}`,
       foot: '<button class="btn ghost" data-close>Cancel</button>',
       onClose: () => resolve(picked),
     });
-    m.el.querySelectorAll('.card[data-uid]').forEach((c) => c.addEventListener('click', () => { picked = items.find((it) => it.uid === c.dataset.uid); m.close(); }));
+    const grid = m.el.querySelector('[data-grid]');
+    if (!grid) return;
+    const draw = () => {
+      const list = viewItems(items, v);
+      grid.innerHTML = list.length ? list.map((it) => itemCard(it, { line: line?.(it) })).join('') : '<div class="empty" style="grid-column:1/-1">Nothing matches your search.</div>';
+    };
+    grid.addEventListener('click', (e) => {
+      const c = e.target.closest('.card[data-uid]');
+      if (c) { picked = items.find((it) => it.uid === c.dataset.uid); m.close(); }
+    });
+    m.el.querySelector('[data-q]').addEventListener('input', (e) => { v.q = e.target.value; draw(); });
+    m.el.querySelector('[data-sort]').addEventListener('change', (e) => { v.sort = e.target.value; draw(); });
+    draw();
   });
 }
 const byValue = (a, b) => I.itemValue(b) - I.itemValue(a);
@@ -399,6 +423,7 @@ function detailBody(item) {
     kv.push(['Finish style', d.st || '—']);
     for (const [k, v] of vb.pat.info) kv.push([k, v]);
     if (item.stt) kv.push(['StatTrak™ kills', item.kills || 0]);
+    if (I.customName(item)) kv.push(['Name Tag', `"<bdi>${esc(item.name)}</bdi>"`]);
     if (item.kc) { const c = I.attachedCharm(item); kv.push(['Charm', `${charmBadge(c)} ${esc(I.itemName(c))} <span class="muted">· Pattern #${c.pat.toLocaleString()}</span>`]); }
   } else if (item.t === 'charm') {
     for (const [k, v] of vb.pat.info) kv.push([k, v]);
@@ -416,6 +441,8 @@ function detailBody(item) {
     kv.push(['Opens with', key ? `${esc(D.keys[key].n)} <span class="muted">· ${S.inv.filter((it) => it.t === 'key' && it.id === key && !it.lk).length} in your inventory</span>` : 'No key needed']);
   } else if (item.t === 'key') {
     kv.push(['Opens', d.cases.map((id) => esc(D.caseById[id]?.n || '?')).join(', ')]);
+  } else if (item.t === 'tool') {
+    kv.push(['Type', 'Tool']);
   }
   if (item.sn) kv.push(['Serial number', `#${item.sn.toLocaleString()}${I.serialLabel(item.sn) ? ` <span class="muted">· ${I.serialLabel(item.sn)}</span>` : ''}`]);
   else if (['skin', 'sticker', 'agent', 'charm'].includes(item.t)) kv.push(['Serial number', '<span class="muted">None (only unboxed items are numbered)</span>']);
@@ -443,8 +470,9 @@ function detailBody(item) {
       ${item.t === 'skin' ? floatBar(item) : ''}
     </div>
     <div>
-      <h3>${esc(I.itemName(item))}</h3>
+      <h3>${I.nameHtml(item)}</h3>
       <div class="rar">${esc(r.n)}${d.ph ? ' · ' + esc(d.ph) : ''}</div>
+      ${d.desc ? `<p class="muted" style="margin:-6px 0 12px;line-height:1.5">${esc(d.desc)}</p>` : ''}
       ${vb.pat.label ? `<div style="margin-bottom:10px">${patternTag(vb.pat)} ${vb.pat.tier ? `<span class="muted" style="font-size:12px">${TIER_LABEL[vb.pat.tier] || ''}</span>` : ''}</div>` : ''}
       <dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
       <div class="valbox">
@@ -457,6 +485,8 @@ function detailBody(item) {
         ${I.canHaveStickers(item) ? `<button class="btn" data-a="stickers">Stickers (${item.stk?.length || 0}/${I.MAX_STICKERS})</button>` : ''}
         ${I.canHaveCharm(item) ? (item.kc ? '<button class="btn" data-a="charm-move">Move charm</button><button class="btn" data-a="charm-off">Remove charm</button>' : '<button class="btn" data-a="charm-on">Attach charm</button>') : ''}
         ${item.t === 'charm' ? '<button class="btn" data-a="charm-hang">Attach to a gun</button>' : ''}
+        ${nameable(item) ? '<button class="btn" data-a="nametag">Apply Name Tag</button>' : ''}
+        ${I.isTool(item) ? `<button class="btn gold" data-a="usetool">${esc(d.use)}</button>` : ''}
         ${item.t === 'sticker' && D.slab ? `<button class="btn" data-a="slab" title="Seal it in a clear case: a charm you can hang on a gun">Sticker Slab (${money(D.slab.p)})</button>` : ''}
         ${I.loadoutSlot(item) ? (isEquipped(item)
           ? `<button class="btn" data-a="unequip" title="Equipped as your ${esc(slotName(I.loadoutSlot(item)))}">Unequip</button>`
@@ -523,6 +553,8 @@ export function showItemDetail(item, { onChange } = {}) {
       // The charm or sticker itself is used up: the details close.
       if (a === 'charm-hang' && await hangCharm(item)) m.close();
       if (a === 'slab' && await slabSticker(item)) m.close();
+      if (a === 'nametag') (await tools()).openNameTag(item, { onDone: refresh });
+      if (a === 'usetool') { m.close(); (await tools()).useTool(item); }
     }));
   };
   wire();
@@ -531,8 +563,9 @@ export function showItemDetail(item, { onChange } = {}) {
 }
 
 // ---- 3D inspect overlay --------------------------------------------------------------------
-// placeCharm: start with the gun's charm ready to move.
-export function openInspect(item, { placeCharm = false } = {}) {
+// placeCharm: start with the gun's charm ready to move. preview: a look at a copy that isn't in the inventory, so nothing on
+// it can be saved.
+export function openInspect(item, { placeCharm = false, preview = false } = {}) {
   const r = I.rarityInfo(item);
   const pat = I.patternInfo(item);
   const wrap = document.createElement('div');
@@ -555,7 +588,7 @@ export function openInspect(item, { placeCharm = false } = {}) {
     </div>
     <div class="hud">
       <div class="rn">${esc(r.n)}</div>
-      <h2>${esc(I.itemName(item))}</h2>
+      <h2>${I.nameHtml(item)}</h2>
       <div class="sub">${esc(sub)}</div>
       <div class="val">${money(I.itemValue(item))}</div>
       ${pat.label ? `<div class="pattern">${patternTag(pat)}</div>` : ''}
@@ -599,7 +632,7 @@ export function openInspect(item, { placeCharm = false } = {}) {
       // First person is available for real CS2 guns and knives.
       if (inspectView.model?.userData.weapon || inspectView.model?.userData.gloveItem) wrap.querySelector('[data-a=fp]').style.display = '';
       // A charm can be moved on a gun's real model.
-      if (item.kc && inspectView.model?.userData.root) {
+      if (item.kc && !preview && inspectView.model?.userData.root) {
         wrap.querySelector('[data-a=charm]').style.display = '';
         if (placeCharm) startPlacing();
       }
@@ -640,7 +673,7 @@ export function openInspect(item, { placeCharm = false } = {}) {
     if (placing) placing.busy = false;
   };
   const startPlacing = () => {
-    if (placing || !item.kc || !inspectView.model?.userData.root) return;
+    if (placing || !item.kc || preview || !inspectView.model?.userData.root) return;
     if (inspectView.fp) toggleFP();
     placing = { draft: item.kc.o || null, busy: false };
     wrap.classList.add('placing');

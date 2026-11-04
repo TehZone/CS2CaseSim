@@ -29,6 +29,7 @@ export const RARITY = {
   crate: ['Base Grade Container'],
   key: ['Base Grade Key'],
   unit: ['Base Grade Tool'],
+  tool: ['Base Grade Tool'],
 };
 export const rarityColor = (rank) => C[rank] ?? C[2];
 

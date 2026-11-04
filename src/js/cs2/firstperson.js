@@ -66,9 +66,9 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
   const fixes = retargetWeapon(root, bones); // e.g. the USP-S on the P2000's clips
   rebind(root, bones, weaponRoot || skel);
   view.add(root);
-  // A StatTrak™ counter moves onto the animated bone of the same name.
+  // A StatTrak™ counter and a name plate move onto the animated bone of the same name.
   const riders = [];
-  root.traverse((o) => { if (o.userData.statTrak && o.parent?.isBone) riders.push(o); });
+  root.traverse((o) => { if ((o.userData.statTrak || o.userData.namePlate) && o.parent?.isBone) riders.push(o); });
   for (const o of riders) {
     const b = bones[o.parent.name];
     if (!b) continue;

@@ -508,6 +508,67 @@ const declineAll = (w) => { for (const o of w.st.social.offers.filter((x) => x.s
   check('worthOf counts what you give it: the panels hand it everything owned', (() => { const { st, kept } = box(); return AD.worthOf(SU.ownedItems(st)) === SU.ownedValue(st) && SU.ownedValue(st) >= I.itemValue(kept); })());
 }
 
+// ---- tools: staff, and the paths into a save that don't go through an action ---------------------------------------------------
+{
+  const SU = await E('storage');
+  const TL = await E('tools');
+  const skins = Object.values(D.skins);
+  const ak = skins.find((s) => s.w === 'AK-47' && !s.v && s.stt), gloves = skins.find((s) => s.cat === 'gloves');
+  const sticker = Object.values(D.stickers)[0];
+  const spec = AD.itemSpec({ t: 'tool', id: I.NAME_TAG, n: 3 });
+  const built = AD.buildItems(AD.giveSpecs([{ t: 'tool', id: I.SWAP_TOOL, n: 2 }]).specs, () => 1);
+  check('items.give: staff can give tools, with no serial; another id is refused', spec.n === 3 && spec.make().t === 'tool' && spec.make().id === I.NAME_TAG && spec.make().src === 'Admin' && built.length === 2 && built.every((i) => i.sn === undefined && i.nw === true)
+    && refused(() => AD.itemSpec({ t: 'tool', id: 'nope' })) && refused(() => AD.itemSpec({ t: 'tool', id: '__proto__' })));
+  check('items.give: it can\'t name an item or set its counter', (() => { const it = AD.itemSpec({ t: 'skin', id: ak.id, name: 'x', kills: 9, stt: true }).make(); return it.name === undefined && it.kills === 0; })());
+
+  const gun = (x = {}) => ({ uid: 'g1', t: 'skin', id: ak.id, fl: 0.2, sd: 1, stt: true, kills: 42, stk: [], at: 1, ...x });
+  const save = (inv, extra = {}) => ({ ...freshState(), inv, ...extra });
+  const named = AD.saveFile(save([gun({ name: '<3 "my" gun' })]));
+  check('saveFile: a Name Tag\'s name comes through as it is, < > and quotes too', named.inv[0].name === '<3 "my" gun' && named.inv[0].kills === 42);
+  const stored = AD.saveFile(save([{ uid: 'u1', t: 'unit', id: I.UNIT_ID, name: 'box' }], { stored: [gun({ uid: 'g2', su: 'u1', name: '<x>', kills: 3 })] }));
+  check('saveFile: and from a Storage Unit', stored.stored[0].name === '<x>');
+  const elsewhere = AD.saveFile(save([], { stats: { ...freshState().stats, oddity: { t: 'skin', name: '<x>' } } }));
+  check('saveFile: anywhere else that text is still cleaned, whatever it calls itself', elsewhere.stats.oddity.name === 'x');
+  const toolSave = AD.saveFile(save([{ uid: 't1', t: 'tool', id: I.NAME_TAG, at: 1, src: 'Store' }, { uid: 't2', t: 'tool', id: I.SWAP_TOOL, at: 1, src: 'Store' }]));
+  check('saveFile: tools come through', toolSave.inv.length === 2 && I.itemValue(toolSave.inv[0]) === 4.47);
+  const noTool = refusal(() => AD.saveFile(save([{ uid: 't1', t: 'tool', id: 'nope' }])));
+  check('saveFile: a tool that doesn\'t exist is refused', noTool?.code === 'bad');
+  const badName = (name, it = gun()) => refusal(() => AD.saveFile(save([{ ...it, name }])));
+  check('saveFile: a name a Name Tag couldn\'t give is refused', ['x'.repeat(21), ' a', 'a\u0000b', 'a\u202eb', 'fuck', '', 5, {}].every((n) => badName(n)?.code === 'bad'));
+  check('saveFile: so is a name on what can\'t take one', badName('x', { uid: 'g9', t: 'skin', id: gloves.id, fl: 0.2, sd: 1 })?.code === 'bad' && badName('x', { uid: 's9', t: 'sticker', id: sticker.id })?.code === 'bad' && badName('x', { uid: 't9', t: 'tool', id: I.NAME_TAG })?.code === 'bad');
+  const badKills = (kills, x = {}) => refusal(() => AD.saveFile(save([gun({ kills, ...x })])));
+  check('saveFile: a counter that isn\'t one is refused', [-1, 1.5, 1e6, 1e300, '7', {}].every((k) => badKills(k)?.code === 'bad') && badKills(5, { stt: false })?.code === 'bad');
+  const noVersion = skins.find((s) => !s.stt && s.cat !== 'gloves');
+  check('saveFile: StatTrak™ is refused on what has no such version: gloves, a skin without one, a Souvenir, any other item', badKills(5, { id: gloves.id })?.code === 'bad' && badKills(5, { id: noVersion.id })?.code === 'bad' && badKills(5, { sv: true })?.code === 'bad'
+    && refusal(() => AD.saveFile(save([{ uid: 's8', t: 'sticker', id: sticker.id, stt: true }])))?.code === 'bad');
+  check('saveFile: every StatTrak™ the game can make still loads', Object.values(D.skins).filter((s) => s.stt && s.cat !== 'gloves').every((s) => !refusal(() => AD.saveFile(save([gun({ id: s.id })])))));
+  check('saveFile: older items load as they were', !badKills(0, { stt: false }) && !badKills(999999) && !refusal(() => AD.saveFile(save([gun({ kills: undefined })]))));
+
+  // Staff clearing a name
+  {
+    const unit = { uid: 'u1', t: 'unit', id: I.UNIT_ID, name: 'box' };
+    const a = gun({ name: 'bad' }), b = gun({ uid: 'g2', name: 'stored', su: 'u1', sat: 1 }), plain = gun({ uid: 'g3' });
+    const st = { ...freshState(), inv: [unit, a, plain], stored: [b] };
+    const ctx = ACT.makeCtx(st), r = ACT.clearNameForStaff(ctx, a.uid), d = ACT.delta(ctx);
+    check('clearNameForStaff: the name goes, nothing else, and the client hears of it', r.name === 'bad' && !('name' in a) && a.kills === 42 && d.upd.length === 1 && d.upd[0].uid === a.uid);
+    const ctx2 = ACT.makeCtx(st), r2 = ACT.clearNameForStaff(ctx2, b.uid), d2 = ACT.delta(ctx2);
+    check('clearNameForStaff: in a Storage Unit too, sent as a move in place', r2.name === 'stored' && !('name' in st.stored[0]) && st.stored[0].su === 'u1' && d2.sto.del[0] === b.uid && d2.sto.add[0] === st.stored[0]);
+    check('clearNameForStaff: nothing to clear, or nothing there, is refused', refused(() => ACT.clearNameForStaff(ACT.makeCtx(st), plain.uid)) && refused(() => ACT.clearNameForStaff(ACT.makeCtx(st), 'nope'), 'missing') && refused(() => ACT.clearNameForStaff(ACT.makeCtx(st), unit.uid)) && unit.name === 'box');
+    check('unnamedDetail: what the log keeps', JSON.stringify(AD.unnamedDetail(r)) === JSON.stringify({ uid: a.uid, item: 'StatTrak™ ' + ak.n, name: 'bad' }));
+  }
+
+  // Snapshots
+  {
+    const now = { ...freshState(), inv: [] };
+    const snap = upgradeState(JSON.parse(JSON.stringify({ ...freshState(), inv: [gun({ name: '<kept>' })] })));
+    AD.restoreMerge(now, snap, { keepRewards: true });
+    check('restoreMerge: a name comes back with its item', snap.inv[0].name === '<kept>' && snap.inv[0].kills === 42);
+  }
+  check('rawEdit: can\'t reach the items whatever it\'s sent', ['inv', 'stored', 'social'].every((k) => { const st = freshState(); return refused(() => AD.rawEdit(st, { [k]: [] }, AD.revOf(st))); }));
+  check('editPlan: nor can an edit', ['inv', 'stored', 'name', 'kills'].every((k) => refused(() => AD.editPlan(freshState(), { [k]: 1 }))));
+  check('tools: the name rule is one rule, here and for the actions', TL.nameProblem('x'.repeat(TL.NAME_MAX)) === '' && TL.NAME_MAX === SU.UNIT_NAME_MAX);
+}
+
 // ---- the Index in the admin rules --------------------------------------------------------------------------------------------
 {
   const IX = await E('itemindex');

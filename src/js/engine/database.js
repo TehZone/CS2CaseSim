@@ -2,7 +2,7 @@
 // those copies. Pure: the page (pages/database.js) and the server (its db.* requests) share it.
 
 // The kinds of item it covers, as inventory items' t.
-export const DB_TYPES = ['skin', 'sticker', 'charm', 'agent'];
+export const DB_TYPES = ['skin', 'sticker', 'charm', 'agent', 'tool'];
 export const itemKey = (item) => item.t + ':' + item.id;
 
 // A copy's category: float ranks are counted apart for normal, StatTrak™ and Souvenir copies (as CSFloat's are).
@@ -54,6 +54,6 @@ export function countCopies(copies) {
 
 // What the database shows of a copy (and the server sends): the item without what's only its owner's business.
 export function publicCopy(item) {
-  const { uid, t, id, fl, sd, stt, sv, stk, kills, sn, at } = item;
-  return { uid, t, id, fl, sd, stt, sv, stk, kills, sn, at };
+  const { uid, t, id, fl, sd, stt, sv, stk, kills, sn, at, name } = item;
+  return { uid, t, id, fl, sd, stt, sv, stk, kills, sn, at, name };
 }

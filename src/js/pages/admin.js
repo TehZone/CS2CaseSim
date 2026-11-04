@@ -33,8 +33,8 @@ const filters = () => (online() ? FILTERS : OFF_FILTERS);
 const SUBS = [['overview', 'Overview'], ['inventory', 'Inventory'], ['index', 'Index'], ['configs', 'Configs'], ['snapshots', 'Snapshots'], ['history', 'History']];
 // (An NPC trader has no configs or Index, and snapshots are of your own save only.)
 const NPC_SUBS = SUBS.filter(([k]) => k !== 'configs' && k !== 'index' && k !== 'snapshots');
-const KINDS = [['all', 'All items'], ['skin', 'Skins'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['charm', 'Charms'], ['crate', 'Cases'], ['key', 'Keys'], ['unit', 'Storage Units']];
-const GIVE_KINDS = [['skin', 'Skin'], ['crate', 'Case'], ['key', 'Key'], ['sticker', 'Sticker'], ['agent', 'Agent'], ['charm', 'Charm'], ['unit', 'Storage Unit']];
+const KINDS = [['all', 'All items'], ['skin', 'Skins'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['charm', 'Charms'], ['crate', 'Cases'], ['key', 'Keys'], ['unit', 'Storage Units'], ['tool', 'Tools']];
+const GIVE_KINDS = [['skin', 'Skin'], ['crate', 'Case'], ['key', 'Key'], ['sticker', 'Sticker'], ['agent', 'Agent'], ['charm', 'Charm'], ['unit', 'Storage Unit'], ['tool', 'Tool']];
 const DURATIONS = [['60', '1 hour'], ['1440', '1 day'], ['10080', '7 days'], ['43200', '30 days'], ['perm', 'Permanent'], ['custom', 'Custom (minutes)']];
 const PAGE = 50, INV_PAGE = 100, MAX_JSON = 48 * 1024, MAX_MINUTES = 5256000, MAX_SAVE = 64 * 1024 * 1024;
 const STAT_LABELS = {
@@ -83,6 +83,7 @@ const isAdmin = () => myLevel() >= 2;
 const isSelf = (u) => u?.id != null && (online() ? u.id === net.me()?.id : u.id === 'me');
 const canPunish = (u) => myLevel() >= 1 && !isSelf(u) && myLevel() > (u.staff || 0);
 const canChange = (u) => myLevel() >= 2 && (isSelf(u) || myLevel() > (u.staff || 0));
+const canTidy = (u) => myLevel() >= 1 && (isSelf(u) || myLevel() > (u.staff || 0));
 
 // ---- requests ----------------------------------------------------------------------------------
 // The server's answers online; offline this PC's (admin-local.js answers the same requests on the save).
@@ -1031,7 +1032,7 @@ function drawInvList(el, p) {
       <td class="nw">${i.sd != null ? +i.sd : i.pat != null ? '#' + (+i.pat) : '<span class="dim">—</span>'}</td>
       <td class="num green">${money(itemValue(i))}</td><td class="adm-tags">${tags}</td>
       <td class="adm-src" title="${esc(i.src || '')}">${esc(clip(i.src || '—', 32))}</td><td class="nw">${when(i.at)}</td>
-      <td>${INSPECTABLE.has(i.t) ? `<button class="btn ghost sm" data-insp="${n}">Inspect</button>` : ''}</td></tr>`;
+      <td class="adm-rowbtns">${INSPECTABLE.has(i.t) ? `<button class="btn ghost sm" data-insp="${n}">Inspect</button>` : ''}${I.customName(i) && canTidy(p.user) ? ` <button class="btn ghost sm" data-unname="${n}" title="Take this item's name off">Clear name</button>` : ''}</td></tr>`;
   };
   box.innerHTML = `<div class="db-table-wrap"><table class="price-table adm-table adm-inv"><thead><tr>
       ${edit ? '<th class="cb"><input type="checkbox" data-iall title="Select this page"></th>' : ''}<th></th><th>Item</th><th>Float</th><th>Seed</th><th class="num">Value</th><th>Tags</th><th>From</th><th>Got</th><th></th></tr></thead>
@@ -1047,7 +1048,14 @@ function drawInvList(el, p) {
   box.querySelectorAll('[data-insp]').forEach((b) => b.addEventListener('click', () => {
     try { openInspect(shown[+b.dataset.insp]); } catch (e) { toast(esc(e.message), 'bad'); }
   }));
+  box.querySelectorAll('[data-unname]').forEach((b) => b.addEventListener('click', () => clearItemName(p, shown[+b.dataset.unname], b)));
   wirePager(box, (i) => { v.page = i; drawInvList(el, p); });
+}
+// A name that shouldn't be there comes off (moderators can too; the item stays, and it's logged).
+async function clearItemName(p, item, btn) {
+  const u = p.user, own = !online() && isSelf(u), real = esc(I.realName(item));
+  if (!(await confirmDialog(`Clear the name "<b><bdi>${esc(I.customName(item))}</bdi></b>" from ${own ? 'your' : `<b>${esc(u.name)}</b>'s`} ${real}? The item stays as it is, and this goes in the audit log.`, { ok: 'Clear name', danger: true }))) return;
+  if (await run(btn, 'items.unname', { id: u.id, uid: item.uid }, `Cleared the name on ${real}`)) afterChange();
 }
 async function removeItems(p, btn) {
   const u = p.user, sel = view.inv.sel, items = ownedItems(p.state || {}).filter((i) => sel.has(i.uid));
@@ -1074,6 +1082,7 @@ function giveList(kind) {
   if (kind === 'agent') list = Object.entries(D.agents).map(([id, d]) => mk(id, d.n, { t: 'agent', id }));
   if (kind === 'charm') list = Object.entries(D.charms || {}).map(([id, d]) => mk(id, d.n, { t: 'charm', id, pat: 50000 }));
   if (kind === 'unit') list = [mk(I.UNIT_ID, 'Storage Unit', { t: 'unit', id: I.UNIT_ID })];
+  if (kind === 'tool') list = Object.values(I.TOOLS).map((d) => mk(d.id, d.n, { t: 'tool', id: d.id }));
   return (giveLists[kind] = list.sort((a, b) => a.n.localeCompare(b.n)));
 }
 function giveModal(p) {

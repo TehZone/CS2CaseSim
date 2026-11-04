@@ -308,6 +308,7 @@ async function bakeSkin(renderer, prep, item) {
   } finally {
     renderer.setRenderTarget(prev);
     mat.dispose();
+    for (const { value } of Object.values(uniforms)) if (value?.isTexture && value !== whiteTex()) value.dispose(); // (made for this bake)
   }
   if (globalThis.__cs2Debug) globalThis.__cs2LastBake = { colorRT, rmRT, params: p, rolled, renderer };
   return { colorRT, rmRT, params: p, rolled };
@@ -437,7 +438,8 @@ async function buildGloveModel(item, def, renderer) {
 }
 
 // Returns a THREE.Group with the item on its real model, centred, barrel along +X, or null if unsupported.
-// statTrak: false leaves a StatTrak™ item's counter off (the sticker editor's side view). quick: framed by its meshes'
+// statTrak: false leaves a StatTrak™ item's counter off (the sticker editor's side view). A named item (item.name) carries
+// CS2's name plate. quick: framed by its meshes'
 // bind-pose bounds, not by every vertex where the bones put it (Play mode's guns, built mid-match: that took tens of ms
 // for a gun and the framing is the inspect's).
 export async function buildCS2Model(item, def, renderer, { statTrak = true, quick = false } = {}) {
@@ -546,6 +548,10 @@ export async function buildCS2Model(item, def, renderer, { statTrak = true, quic
       if (b) o.userData.bone = { name: b.name, matrixWorld: b.matrixWorld.clone() };
     });
   }
+  // The plate goes on last: a sticker is placed on the gun itself, and the plate sits over one like it does in CS2.
+  if (item.name) {
+    try { wrap.userData.namePlate = await addNamePlate(root, wid, prep, item.name); } catch (e) { console.warn('Name plate failed', e); }
+  }
   return wrap;
 }
 
@@ -612,6 +618,101 @@ async function addStatTrak(root, wid, prep, kills) {
   const set = (n) => { for (const g of displays) showKills(g, n); };
   set(kills);
   return { set };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Name tags: CS2's name plate, one model for every gun and knife, at the model's "nametag" attachment. CS2 writes the name
+// into a copy of the plate's colour texture (the composite material nametag_default.vcompmat), so it's done the same way
+// here: any character the player's fonts have, not a fixed character set.
+// ---------------------------------------------------------------------------------------------
+const PLATE_SIZE = 512, PLATE_X = 0.04 * PLATE_SIZE, PLATE_Y = 0.038 * PLATE_SIZE; // the composite's resolution and text position
+const PLATE_INK = 'rgb(241, 241, 241)';
+// CS2 makes its font 64 tall (line height, about 1.15 em) and draws it at 90% of that, a name wider than the texture
+// shrunk to fit it first. (Its weight is 900, which on Arial Narrow is bold, its heaviest; on Arial it would be Arial Black.)
+const PLATE_EM = 64 / 1.15, PLATE_FIT = 0.9;
+
+// CS2 asks for Arial Narrow, which Windows doesn't always have (Office brings it). Chromium answers to that name with
+// plain Arial when it's missing, so the real one is told by its widths. Without it: Arial, squeezed to Arial Narrow's
+// widths (it's the same design at 82%).
+let plateFace = null;
+function plateFont(ctx) {
+  if (plateFace) return plateFace;
+  const width = (family) => { ctx.font = `bold 72px ${family}`; return ctx.measureText('Hamburgefonstiv 0123').width; };
+  const narrow = ['"Arial Narrow"', '"Liberation Sans Narrow"'].find((f) => width(`${f}, monospace`) < width('Arial') * 0.9);
+  plateFace = narrow ? { family: `${narrow}, Arial, sans-serif`, squeeze: 1 } : { family: 'Arial, sans-serif', squeeze: 0.82 };
+  return plateFace;
+}
+
+function drawPlate(ctx, base, name) {
+  const { family, squeeze } = plateFont(ctx);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(base, 0, 0, PLATE_SIZE, PLATE_SIZE);
+  ctx.font = `bold ${PLATE_EM}px ${family}`;
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = PLATE_INK;
+  const width = ctx.measureText(name).width * squeeze;
+  const scale = (width > PLATE_SIZE ? PLATE_SIZE / width : 1) * PLATE_FIT;
+  ctx.setTransform(scale * squeeze, 0, 0, scale, PLATE_X, PLATE_Y);
+  ctx.fillText(name, 0, 0);
+}
+
+// Puts the plate on its bone in a weapon model's scene (it rides along in first person, see assembleViewmodel). Returns
+// { set(name) } for writing another name on it, or null when the model has no plate attachment.
+async function addNamePlate(root, wid, prep, name) {
+  const st = await cs2StatTrak(wid);
+  const at = (/legacy/.test(prep.mesh) && st.nametagLegacy) || st.nametag;
+  if (!at || !st.plate) return null;
+  let bone = null;
+  root.traverse((o) => { if (!bone && o.isBone && o.name === at.bone) bone = o; });
+  if (!bone) return null;
+  let src = null;
+  (await loadGltf(st.plate)).scene.traverse((o) => { if (!src && o.isMesh) src = o; });
+  if (!src?.material?.map) return null;
+  // The model exports skinned to a bone of its own, its vertices already where they rest: a plain mesh of them, so a
+  // viewmodel's rebind leaves it alone.
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = PLATE_SIZE;
+  const ctx = canvas.getContext('2d');
+  const base = src.material.map;
+  const map = new THREE.CanvasTexture(canvas);
+  Object.assign(map, { colorSpace: THREE.SRGBColorSpace, flipY: false, wrapS: base.wrapS, wrapT: base.wrapT, anisotropy: 8 });
+  const material = src.material.clone();
+  material.map = map;
+  material.userData.dispose = () => map.dispose();
+  // Stickers are lifted off the gun to draw on it, by more than the plate stands proud of it. They write no depth, so the
+  // plate draws after them (they're renderOrder 2) and is on top from any side. Only its order is the blended pass's: it
+  // stays solid.
+  Object.assign(material, { transparent: true, blending: THREE.NoBlending });
+  const plate = new THREE.Mesh(src.geometry, material);
+  plate.renderOrder = 3;
+  plate.frustumCulled = false;
+  const holder = new THREE.Group();
+  holder.name = 'nametag';
+  holder.userData.namePlate = true;
+  holder.position.set(at.offset[0] * INCH, at.offset[1] * INCH, at.offset[2] * INCH);
+  holder.quaternion.set(...at.rotation).multiply(GLTF_TO_BONE);
+  holder.add(plate);
+  bone.add(holder);
+  const set = (text) => { drawPlate(ctx, base.image, String(text)); map.needsUpdate = true; };
+  set(name);
+  return { set };
+}
+
+// The plate's face on its own, for the window a name is typed in (CS2 shows it there, the name going on as it's typed).
+// → { canvas, set(name) }, or null when there's no plate model.
+const PLATE_FACE = 106; // (the top of the texture, in pixels)
+export async function namePlatePreview() {
+  const { plate } = await cs2StatTrak('weapon_ak47'); // (every weapon's is the same model)
+  if (!plate) return null;
+  let src = null;
+  (await loadGltf(plate)).scene.traverse((o) => { if (!src && o.isMesh) src = o; });
+  const base = src?.material?.map?.image;
+  if (!base) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = PLATE_SIZE;
+  canvas.height = PLATE_FACE;
+  const ctx = canvas.getContext('2d');
+  return { canvas, set: (text) => drawPlate(ctx, base, String(text)) };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -761,8 +862,8 @@ async function placeDecal(wrap, targets, ray, box, sd, s, x, y, width, hit = nul
 // Orthographic side view of the item on its real model, framed exactly to the model's visible bounding
 // box, so normalised image coordinates equal the model-space sticker coordinates used by decals.
 export async function renderSideView(item, def, renderer, env, size = 1400) {
-  // Without a charm, so the frame is the gun's alone (the one sticker decals are placed in).
-  const model = await buildCS2Model({ ...item, kc: undefined }, def, renderer, { statTrak: false });
+  // Without a charm or name plate, so the frame is the gun's alone (the one sticker decals are placed in).
+  const model = await buildCS2Model({ ...item, kc: undefined, name: undefined }, def, renderer, { statTrak: false });
   if (!model) return null;
   model.updateMatrixWorld(true);
   const box = new THREE.Box3();

@@ -12,7 +12,7 @@ import { round2 } from './util.js';
 
 export const UNIT_CAP = 1000; // CSGO_Tool_Casket_Tag_Desc: "store up to 1,000"
 export const UNIT_PRICE = 1.99; // what CS2's store charges, in USD
-export const UNIT_NAME_MAX = 20; // (CS2's name tags: it doesn't say so for units)
+export const UNIT_NAME_MAX = 20; // (CS2 labels units with its Name Tag window: 20 is that window's limit)
 export const MAX_UNITS = 20; // CS2 stops you at some number too ("You already own too many Storage Units"); it doesn't say which
 
 export const storedOf = (st) => st.stored || [];

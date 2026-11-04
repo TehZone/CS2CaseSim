@@ -11,11 +11,12 @@ import { indexProblem, mergeIndex } from './itemindex.js';
 import { MAX_LEVEL, MEDALS } from './levels.js';
 import * as N from './npcs.js';
 import { repairStorage, storedOf } from './storage.js';
+import { MAX_KILLS, nameable, nameProblem } from './tools.js';
 import { round2 } from './util.js';
 
 export const MAX_JSON = 48 * 1024, KEEP_AUTO = 20, MAX_MANUAL = 50, PAGE = 50;
 export const LEVEL_NAMES = ['Player', 'Moderator', 'Admin', 'Owner'];
-export const ITEM_KINDS = ['skin', 'crate', 'key', 'sticker', 'agent', 'charm', 'unit'];
+export const ITEM_KINDS = ['skin', 'crate', 'key', 'sticker', 'agent', 'charm', 'unit', 'tool'];
 // The objects of a raw edit whose fields the panel's editor shows by name: their field names must be plain identifiers.
 export const NAMED_FIELDS = new Set(['stats', 'rank', 'wingman', 'prof', 'mm', 'premier']);
 export const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -220,21 +221,32 @@ export function restoreMerge(cur, next, { elsewhere = new Set(), keepRewards = f
 // as it is (only the game wrote saves until now). Every text in it loses < and > (the game's own free text has none) and
 // its " (made '), keys named __proto__ go, its numbers are numbers, items and offers have plain ids, and its NPC world
 // is whole: traders of its seed, offers, chats and blocks as the game makes them, what's missing there filled in, a
-// blocked trader's open offers cancelled. A snapshot's download ({ state, config }) is taken too. → the save (a copy)
+// blocked trader's open offers cancelled. A snapshot's download ({ state, config }) is taken too. The one text left as it
+// is is the Name Tag name of a skin in one of the save's item lists, which may hold those characters: it has to pass a Name
+// Tag's rules instead, and a counter a counter's (on a skin with a StatTrak™ version), so a file can't put on an item what the
+// tools wouldn't have. → the save (a copy)
 const TOKEN = /^[A-Za-z0-9_-]{1,64}$/;
 const isToken = (v) => typeof v === 'string' && TOKEN.test(v);
 const cleanText = (s) => s.replace(/[<>]/g, '').replaceAll('"', "'");
 const cleanAll = (v) => (typeof v === 'string' ? cleanText(v) : Array.isArray(v) ? v.map(cleanAll)
   : isObj(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [cleanText(k), cleanAll(x)]).filter(([k]) => k !== '__proto__')) : v);
+// The Name Tag names of an item list, back as the file has them.
+const tagNames = (list, from) => {
+  if (Array.isArray(list)) list.forEach((it, i) => { if (isObj(it) && it.t === 'skin' && from?.[i]?.name !== undefined) it.name = from[i].name; });
+};
 // (of the type the game starts a field with; null: null or an object)
 const sameType = (d, v) => (d === null ? v === null || isObj(v) : typeof d === 'number' ? Number.isFinite(v)
   : Array.isArray(d) ? Array.isArray(v) : isObj(d) ? isObj(v) : typeof v === typeof d);
 const optNum = (v) => v == null || Number.isFinite(v);
 const defOf = (it) => { try { return I.itemDef(it); } catch { return null; } };
 export function saveFile(file, now = Date.now()) {
-  const st = cleanAll(isObj(file) && isObj(file.state) && !('inv' in file) ? file.state : file);
+  const raw = isObj(file) && isObj(file.state) && !('inv' in file) ? file.state : file, st = cleanAll(raw);
   const bad = (what) => fail(`That file isn't a save from this game${what ? ` (its ${what} isn't as the game writes it)` : ''}`);
   if (!isObj(st) || !Number.isFinite(st.money) || st.money < 0 || !Array.isArray(st.inv)) bad();
+  tagNames(st.inv, raw.inv);
+  tagNames(st.stored, raw.stored);
+  if (Array.isArray(st.prof?.drops)) st.prof.drops.forEach((d, i) => tagNames(d?.offers, raw.prof.drops[i]?.offers));
+  if (isObj(st.social?.npcs)) for (const [id, s] of Object.entries(st.social.npcs)) tagNames(s?.inv, raw.social.npcs[id]?.inv);
   // The fields a new save has, and their objects' fields (stats, prof, rank...), of the same types (not the settings:
   // this device's stay).
   for (const [k, d] of Object.entries(freshState())) {
@@ -244,7 +256,9 @@ export function saveFile(file, now = Date.now()) {
   }
   const item = (it, what) => {
     if (!isObj(it) || !isToken(it.uid) || !isObj(defOf(it)) || !['fl', 'sd', 'sn', 'pat', 'at', 'mod', 'sat'].every((f) => optNum(it[f]))
-      || (it.name != null && typeof it.name !== 'string')
+      || (it.name != null && !(I.isUnit(it) ? typeof it.name === 'string' : nameable(it) && !nameProblem(it.name)))
+      || (it.stt && !(it.t === 'skin' && defOf(it).stt && defOf(it).cat !== 'gloves' && !it.sv))
+      || (it.kills != null && !(Number.isInteger(it.kills) && it.kills >= 0 && it.kills <= MAX_KILLS && (it.stt || !it.kills)))
       || (it.stk != null && !(Array.isArray(it.stk) && it.stk.every((s) => isObj(s) && isObj(D.stickers[s.id]))))
       || (it.kc != null && !(isObj(it.kc) && isObj(defOf(I.attachedCharm(it)))))) bad(what);
   };
@@ -340,6 +354,10 @@ export function itemSpec(x) {
       if (id !== I.UNIT_ID) fail(`Unknown Storage Unit: ${id}`);
       return { n, unit: true, make: () => I.makeUnitItem(src) };
     }
+    case 'tool': {
+      if (!Object.hasOwn(I.TOOLS, id)) fail(`Unknown tool: ${id}`);
+      return { n, make: () => I.makeToolItem(id, src) };
+    }
     case 'charm': {
       const pat = x.pat == null ? undefined : int(x.pat, 'Charm pattern', 1, I.CHARM_PATTERNS);
       if (id === 'slab') {
@@ -384,3 +402,5 @@ export function givenDetail(items) {
   return { count: items.length, items: Object.entries(names).slice(0, 50).map(([name, n]) => ({ name, n })), uids: items.slice(0, 200).map((i) => i.uid) };
 }
 export const removedDetail = (items) => ({ count: items.length, items: items.slice(0, 100).map((it) => ({ uid: it.uid, name: I.itemName(it), value: I.itemValue(it) })) });
+// And about a name staff took off (actions.clearNameForStaff's answer).
+export const unnamedDetail = ({ item, name }) => ({ uid: item.uid, item: I.itemName(item), name });

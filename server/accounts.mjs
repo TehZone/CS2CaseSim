@@ -1,11 +1,10 @@
 // Accounts: username + password (scrypt hashes), 30-day session tokens (only their SHA-256 is stored).
 import crypto from 'node:crypto';
 import { freshState } from '../src/js/engine/economy.js';
+import { refusedWord } from '../src/js/engine/tools.js';
 
 const NAME_RE = /^[A-Za-z0-9_-]{3,20}$/;
 const SESSION_MS = 30 * 24 * 3600 * 1000;
-const BLOCKED = ['admin', 'moderator', 'server', 'system', 'valve', 'bot'];
-const RUDE = /(fuck|shit|cunt|nigg|fag|rape|hitler|nazi)/i;
 
 const scrypt = (pass, salt) => new Promise((res, rej) => crypto.scrypt(pass, salt, 64, { N: 16384, r: 8, p: 1 }, (e, k) => (e ? rej(e) : res(k))));
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -17,7 +16,7 @@ export class AuthError extends Error {
 
 export function validName(name) {
   if (typeof name !== 'string' || !NAME_RE.test(name)) return 'Username: 3-20 letters, numbers, _ or -';
-  if (BLOCKED.some((b) => name.toLowerCase() === b || name.toLowerCase().startsWith(b + '_')) || RUDE.test(name)) return 'Please pick another username';
+  if (refusedWord(name)) return 'Please pick another username';
   return '';
 }
 

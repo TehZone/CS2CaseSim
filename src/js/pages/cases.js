@@ -9,6 +9,7 @@ import { toast, openModal, itemCard, patternTag, sellItems, openInspect, showIte
 import { playCaseIntro } from '../caseintro.js';
 import { UNIT_CAP, UNIT_PRICE, unitsOf } from '../engine/storage.js';
 import { buyUnit } from './storage.js';
+import { buyTool } from './tools.js';
 
 const view = { mode: 'list', caseId: null, colId: null, filter: 'case', sort: 'new', q: '', qty: 1, major: 'all' };
 const SKIN_KINDS = new Set(['case', 'souvenir', 'package', 'collection']);
@@ -98,15 +99,31 @@ const FILTERS = [['case', 'Weapon Cases'], ['souvenir', 'Souvenir Packages'], ['
   ['capsule', 'Sticker Capsules'], ['autograph', 'Autograph Capsules'], ['special', 'Agents'], ['tools', 'Tools']];
 const majors = () => [...new Set(D.cases.filter((c) => c.kind === 'souvenir').map((c) => c.ev))].sort((a, b) => b - a);
 
-// The store's tools: the Storage Unit.
+// The store's tools: the Storage Unit, and the Name Tag and StatTrak™ Swap Tool, any number at a time. They're only sold here.
+const toolQty = {};
 function renderTools(root) {
-  const have = unitsOf(S).length;
+  const units = unitsOf(S).length;
+  const owned = (n) => (n ? `<div class="tags"><span class="tag own" title="In your inventory">×${n}</span></div>` : '');
+  const toolCard = (d) => {
+    const qty = toolQty[d.id] || 1, have = S.inv.filter((it) => I.isTool(it) && it.id === d.id).length;
+    return `<div class="card store-tool" data-tool="${d.id}" style="--rc:${rarityColor(0)}">
+      ${owned(have)}
+      <div class="img"><img src="${I.itemImage({ t: 'tool', id: d.id }, 'm')}" alt=""></div>
+      <div class="rbar"></div>
+      <div class="meta">
+        <div class="n2">${esc(d.n)}</div>
+        <div class="row"><span class="price">${money(d.p)}</span><span class="key">Base Grade Tool</span></div>
+        <div class="row"><span class="dim" style="font-size:11px">${esc(d.desc)}</span></div>
+        <div class="store-buy"><input class="input" type="number" min="1" max="100" step="1" value="${qty}" title="How many (1-100)" data-qty><button class="btn gold" data-buytool>Buy · ${money(d.p * qty)}</button></div>
+      </div>
+    </div>`;
+  };
   root.innerHTML = `<div class="page">
     <div class="page-head"><h1>Cases</h1><span class="sub">Tools from the store</span></div>
     <div class="toolbar"><div class="seg" data-k="filter">${FILTERS.map(([k, n]) => `<button data-v="${k}" class="${view.filter === k ? 'active' : ''}">${n}</button>`).join('')}</div></div>
     <div class="grid lg"><div class="card store-tool" style="--rc:${rarityColor(0)}">
-      ${have ? `<div class="tags"><span class="tag own" title="In your inventory">×${have}</span></div>` : ''}
-      <div class="img"><img src="img/storage-unit.svg" alt=""></div>
+      ${owned(units)}
+      <div class="img"><img src="${I.itemImage({ t: 'unit', id: I.UNIT_ID }, 'm')}" alt=""></div>
       <div class="rbar"></div>
       <div class="meta">
         <div class="n2">Storage Unit</div>
@@ -114,10 +131,17 @@ function renderTools(root) {
         <div class="row"><span class="dim" style="font-size:11px">Counts as one item. Can't be traded or sold.</span></div>
         <button class="btn gold" data-buyunit>Buy</button>
       </div>
-    </div></div>
+    </div>${Object.values(I.TOOLS).map(toolCard).join('')}</div>
   </div>`;
   root.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => { view.filter = b.dataset.v; renderList(root); }));
   root.querySelector('[data-buyunit]').addEventListener('click', async () => { if (await buyUnit()) renderTools(root); });
+  root.querySelectorAll('[data-tool]').forEach((c) => {
+    const d = I.TOOLS[c.dataset.tool], input = c.querySelector('[data-qty]'), buy = c.querySelector('[data-buytool]');
+    const qty = () => Math.max(1, Math.min(100, Math.floor(+input.value) || 1));
+    input.addEventListener('input', () => { toolQty[d.id] = qty(); buy.textContent = `Buy · ${money(d.p * qty())}`; });
+    input.addEventListener('change', () => { input.value = qty(); });
+    buy.addEventListener('click', async () => { if (await buyTool(d.id, qty())) renderTools(root); });
+  });
 }
 
 function renderList(root) {

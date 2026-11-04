@@ -5,14 +5,15 @@
 // The game's admin panel (ns 'admin' and 'account') and the bot's slash commands call the same methods, so every check,
 // audit row and mod-log message is the same whichever way a request comes in. Permissions are always checked here.
 import crypto from 'node:crypto';
-import { makeCtx, delta, takeForStaff, give, GameError } from '../src/js/engine/actions.js';
+import { makeCtx, delta, takeForStaff, clearNameForStaff, give, GameError } from '../src/js/engine/actions.js';
 import { upgradeState } from '../src/js/engine/economy.js';
+import { customName } from '../src/js/engine/items.js';
 import { ownedItems } from '../src/js/engine/storage.js';
 import { round2 } from '../src/js/engine/util.js';
 // (the checks and rules the offline panel shares)
 import {
   KEEP_AUTO, MAX_MANUAL, PAGE, LEVEL_NAMES, fail, isObj, pick, wellFormed, worthOf, replaceInPlace, revOf, rawView, text, int, bool, optBool,
-  jsonOf, editPlan, applyEdit, rawEdit, restoreUids, restoreMerge, giveSpecs, buildItems, removeUids, givenDetail, removedDetail,
+  jsonOf, editPlan, applyEdit, rawEdit, restoreUids, restoreMerge, giveSpecs, buildItems, removeUids, givenDetail, removedDetail, unnamedDetail,
 } from '../src/js/engine/admin.js';
 import * as A from './accounts.mjs';
 
@@ -25,7 +26,7 @@ const DURATIONS = { '1h': 60, '1d': 1440, '7d': 10080, '30d': 43200, perm: null 
 const FILTERS = ['all', 'online', 'banned', 'linked', 'staff'];
 const TITLES = {
   ban: 'Player banned', unban: 'Player unbanned', kick: 'Player kicked', warn: 'Player warned', signout: 'Player signed out everywhere',
-  edit: 'Account edited', 'edit.raw': 'Account edited (raw JSON)', 'items.give': 'Items given', 'items.remove': 'Items removed',
+  edit: 'Account edited', 'edit.raw': 'Account edited (raw JSON)', 'items.give': 'Items given', 'items.remove': 'Items removed', 'items.unname': 'Item name cleared',
   'snapshot.save': 'Snapshot saved', 'snapshot.restore': 'Snapshot restored', 'snapshot.delete': 'Snapshot deleted', 'note.add': 'Note added',
   rename: 'Player renamed', reset: 'Account reset', 'settings.set': 'Server settings changed', broadcast: 'Broadcast sent',
   link: 'Discord account linked', unlink: 'Discord account unlinked', resetpassword: 'Password reset through Discord',
@@ -37,7 +38,7 @@ const num = (v) => (v == null ? null : Number(v));
 const parse = (v) => (typeof v === 'string' && /^[[{]/.test(v) ? JSON.parse(v) : v); // (JSONB: objects, or their text)
 const like = (s) => '%' + s.replace(/[\\%_]/g, '\\$&') + '%';
 const clampLevel = (n) => Math.max(0, Math.min(3, Math.floor(Number(n) || 0)));
-const md = (s) => String(s).replace(/[\\*_~`|>]/g, '\\$&'); // (game and Discord names in Discord's markdown)
+const md = (s) => String(s).replace(/[\\*_~`|<>[\]()]/g, '\\$&'); // (game and Discord names in Discord's markdown: no styles, no masked links)
 const randomCode = (n) => Array.from({ length: n }, () => ABC[crypto.randomInt(ABC.length)]).join('');
 const showCode = (c) => (c.length === 6 ? c.slice(0, 3) + '-' + c.slice(3) : c.slice(0, 4) + '-' + c.slice(4));
 const cleanCode = (s) => String(s ?? '').toUpperCase().replace(/[\s-]/g, '').slice(0, 16);
@@ -230,6 +231,11 @@ export class Admin {
     this.need(actor, 2);
     if (!this.isSelf(actor, t) && actor.level <= await this.targetLevel(t)) fail(`${t.name} is staff at or above your level`, 'perm');
   }
+  // Taking down what a player put up: the same, for moderators too.
+  async canTidy(actor, t) {
+    this.need(actor, 1);
+    if (!this.isSelf(actor, t) && actor.level <= await this.targetLevel(t)) fail(`${t.name} is staff at or above your level`, 'perm');
+  }
 
   // ---- audit + mod log -----------------------------------------------------------------------------------------------
   async audit(actor, action, t, detail = {}) {
@@ -249,6 +255,7 @@ export class Admin {
     if (detail.count != null) fields.push({ name: 'Items', value: String(detail.count), inline: true });
     if (detail.dropped) fields.push({ name: 'Dropped', value: droppedText(detail), inline: true });
     if (action === 'rename') fields.push({ name: 'Name', value: `${md(detail.before)} → ${md(detail.after)}` });
+    if (action === 'items.unname') fields.push({ name: 'Name', value: `${md(detail.item)}: ${md(detail.name)}` });
     Promise.resolve()
       .then(() => this.discord.modLog({ title: TITLES[action] || action, description: t ? `**${md(t.name)}**` : '', fields, color: COLORS[action] ?? GOLD }))
       .catch((e) => this.log('[discord] mod log failed', e?.message || e));
@@ -361,7 +368,7 @@ export class Admin {
   get methods() {
     return {
       overview: this.overview, players: this.players, player: this.player, edit: this.edit, 'edit.raw': this.editRaw,
-      'items.give': this.itemsGive, 'items.remove': this.itemsRemove, 'snapshot.save': this.snapSave, 'snapshot.list': this.snapList,
+      'items.give': this.itemsGive, 'items.remove': this.itemsRemove, 'items.unname': this.itemsUnname, 'snapshot.save': this.snapSave, 'snapshot.list': this.snapList,
       'snapshot.get': this.snapGet, 'snapshot.restore': this.snapRestore, 'snapshot.delete': this.snapDelete, 'config.get': this.configGet,
       ban: this.ban, unban: this.unban, bans: this.bans, kick: this.kick, warn: this.warn, signout: this.signout, 'note.add': this.noteAdd,
       rename: this.rename, reset: this.reset, audit: this.auditList, 'settings.get': this.settingsGet, 'settings.set': this.settingsSet,
@@ -545,6 +552,24 @@ export class Admin {
     return { removed: out.length };
   }
 
+  // A bad name comes off an item, wherever the player keeps it: only the name changes.
+  async itemsUnname(actor, a) {
+    const t = await this.target(a.id);
+    await this.canTidy(actor, t);
+    const [uid] = removeUids([a.uid]);
+    const out = await this.srv.store.withUser(t.id, async (e) => {
+      const ctx = makeCtx(e.st, { online: true });
+      const r = clearNameForStaff(ctx, uid);
+      this.srv.store.markDirty(e);
+      await this.srv.store.commit([e]);
+      this.srv.deltaTo(t.id, delta(ctx));
+      return r;
+    });
+    await this.audit(actor, 'items.unname', t, unnamedDetail(out)); // (first: the name's gone, whatever happens to the copies)
+    await this.srv.trades.dropName(uid);
+    return { cleared: out.name };
+  }
+
   async snapSave(actor, a) {
     const t = await this.target(a.id);
     const label = text(a.label, 'Label', 80, { min: 0 }) || `Saved by ${actor.name}`;
@@ -573,11 +598,21 @@ export class Admin {
     return { id: s.id, user: { id: s.user_id, name: s.name }, label: s.label, kind: s.kind, by: s.by_name, created: num(s.created), state: parse(s.state), config: parse(s.config) ?? null };
   }
 
+  // A name staff cleared stays cleared when a snapshot from before that comes back (the audit log has the item and the name).
+  async keepNamesCleared(st) {
+    const named = ownedItems(st).filter(customName);
+    if (!named.length) return;
+    const { rows } = await this.db.query("SELECT detail->>'uid' AS uid, detail->>'name' AS name FROM audit WHERE action = 'items.unname' AND detail->>'uid' = ANY($1::text[])", [named.map((it) => it.uid)]);
+    for (const it of named) if (rows.some((r) => r.uid === it.uid && r.name === it.name)) delete it.name;
+  }
+
   async snapRestore(actor, a) {
     const s = await this.snapshot(a.snap);
     const t = await this.target(s.user_id);
     await this.canChange(actor, t);
-    const { dropped, rewards } = await this.replaceWith(actor, t, upgradeState(parse(s.state)), 'restore');
+    const next = upgradeState(parse(s.state));
+    await this.keepNamesCleared(next);
+    const { dropped, rewards } = await this.replaceWith(actor, t, next, 'restore');
     await this.audit(actor, 'snapshot.restore', t, { snap: s.id, label: s.label, created: num(s.created), dropped, rewards });
     return { dropped, rewards };
   }

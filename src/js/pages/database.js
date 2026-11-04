@@ -17,7 +17,7 @@ import { marketWindow, skinListings, localSold, lowestPrice } from '../engine/ma
 import { floatRanks, countCopies, copyCategory, CATEGORY_NAME, itemKey } from '../engine/database.js';
 
 const PAGE = 60;
-const TYPES = [['all', 'All items'], ['skin', 'Weapon skins'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents']];
+const TYPES = [['all', 'All items'], ['skin', 'Weapon skins'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['tool', 'Tools']];
 const WEAPON_CATS = [['all', 'All weapons'], ['rifle', 'Rifles'], ['pistol', 'Pistols'], ['smg', 'SMGs'], ['heavy', 'Heavy']];
 const SORTS = [['owned', 'Most copies'], ['pricey', 'Price: high → low'], ['cheap', 'Price: low → high'], ['rarity', 'Rarity'], ['name', 'Name']];
 const COPY_SORTS = [['low', 'Float: low → high'], ['high', 'Float: high → low'], ['value', 'Value'], ['new', 'Newest']];
@@ -44,8 +44,11 @@ function catalog() {
   for (const s of Object.values(D.stickers)) { const [, a, ...b] = s.n.split(' | '); add('sticker', s, 'sticker', b.length ? `Sticker · ${b.join(' | ')}` : 'Sticker', a || s.n, s.p); }
   for (const c of Object.values(D.charms)) add('charm', c, 'charm', `Charm · ${(D.charmColById[c.col]?.n || '').replace(' Charm Collection', '')}`, c.n.replace('Charm | ', ''), c.p);
   for (const a of Object.values(D.agents)) { const [n, f] = a.n.split(' | '); add('agent', a, 'agent', f || 'Agent', n, a.p); }
+  for (const t of Object.values(I.TOOLS)) add('tool', t, 'tool', 'Tool', t.n, t.p);
   return (CATALOG = out);
 }
+// An entry's picture (tools' come with the game).
+const pictureOf = (e, size) => (e.t === 'tool' ? I.itemImage({ t: e.t, id: e.id }, size) : imgUrl(e.img, size));
 
 // Which cases and collections a skin comes from, and the skins that come as Souvenirs (in a souvenir package).
 let SOURCES = null, SOUVENIR = null;
@@ -128,7 +131,7 @@ function draw() {
       <span class="spacer"></span><span class="muted">${list.length.toLocaleString()} items</span>
     </div>
     ${shown.length ? `<div class="grid">${shown.map((e) => `<div class="card db-card" data-key="${esc(e.key)}" style="--rc:${e.rc}">
-      <div class="img"><img loading="lazy" src="${imgUrl(e.img, 'm')}" alt=""></div><div class="rbar"></div>
+      <div class="img"><img loading="lazy" src="${pictureOf(e, 'm')}" alt=""></div><div class="rbar"></div>
       <div class="meta"><div class="n1" title="${esc(e.top)}">${esc(e.top)}</div><div class="n2" title="${esc(e.bottom)}">${esc(e.bottom)}</div>
       <div class="row"><span class="wear">${esc(e.rn)}</span><span class="val">${e.kind === 'skin' || e.kind === 'knife' || e.kind === 'gloves' ? '<span class="dim" style="font-weight:400">from</span> ' : ''}${money(e.price)}</span></div>
       <div class="row"><span class="db-count ${counts[e.key] ? '' : 'none'}">${counts[e.key] ? `${counts[e.key].toLocaleString()} ${counts[e.key] === 1 ? 'copy' : 'copies'}` : 'No copies yet'}</span></div></div></div>`).join('')}</div>`
@@ -194,7 +197,7 @@ function drawItem() {
   root.innerHTML = `<div class="page db">
     <div class="page-head"><button class="btn sm ghost" data-back>‹ Item Database</button><h1>${esc(e.bottom)}</h1><span class="sub">${esc(e.top)}</span></div>
     <div class="db-item">
-      <div class="db-hero" style="--rc:${e.rc}"><img src="${imgUrl(e.img, 'l')}" alt=""><div class="rbar"></div><button class="btn sm" data-inspect>Inspect</button></div>
+      <div class="db-hero" style="--rc:${e.rc}"><img src="${pictureOf(e, 'l')}" alt=""><div class="rbar"></div>${e.t === 'tool' ? '' : '<button class="btn sm" data-inspect>Inspect</button>'}</div>
       <div class="db-facts">
         <div class="db-stats">
           <div><b>${all.length.toLocaleString()}</b><span>${all.length === 1 ? 'copy' : 'copies'}</span></div>
@@ -254,7 +257,7 @@ function drawItem() {
 const floatCell = (it) => (it.fl == null ? '—' : `<span class="db-float"><b class="wk" style="--wc:${WEAR_BY_KEY[wearOf(it.fl)].c}">${wearOf(it.fl)}</b>${it.fl.toFixed(8)}<i class="floatline"><i style="left:${it.fl * 100}%"></i></i></span>`);
 const itemCell = (it) => {
   const pat = I.patternInfo(it);
-  return `<span class="db-name ${it.stt ? 'stt' : it.sv ? 'sv' : ''}">${it.stt ? 'StatTrak™' : it.sv ? 'Souvenir' : 'Normal'}</span>${pat.label ? ' ' + patternTag(pat) : ''}${it.sn ? ` <span class="tag sn" title="Serial number">#${it.sn}</span>` : ''}
+  return `<span class="db-name ${it.stt ? 'stt' : it.sv ? 'sv' : ''}">${it.stt ? 'StatTrak™' : it.sv ? 'Souvenir' : 'Normal'}</span>${pat.label ? ' ' + patternTag(pat) : ''}${it.sn ? ` <span class="tag sn" title="Serial number">#${it.sn}</span>` : ''}${I.nameTagHtml(it)}
     ${it.stk?.length ? `<span class="db-stk">${it.stk.map((s) => `<img src="${imgUrl(D.stickers[s.id]?.img, 's')}" title="${esc(D.stickers[s.id]?.n || '')}" alt="">`).join('')}</span>` : ''}`;
 };
 const ownerCell = (c) => (c.npc ? `<a href="#" class="db-owner npc" data-npc="${esc(c.npc)}" title="Visit ${esc(c.owner)}'s profile">${esc(c.owner)}</a>`
@@ -263,7 +266,7 @@ function copyRow(c, i, skin, ranks) {
   const it = c.item, r = ranks.get(it.uid);
   return `<tr class="${r ? 'ranked' : ''}">${skin ? `<td class="db-rank-col"><div class="db-ranks">${rankBadges(r, copyCategory(it))}</div></td><td>${floatCell(it)}</td><td>${it.sd ?? '—'}</td>` : ''}
     <td>${skin ? itemCell(it) : esc(I.itemName(it))}</td><td>${ownerCell(c)}</td><td>${money(I.itemValue(it))}</td>
-    <td><button class="btn sm" data-cinsp="${i}">Inspect</button></td></tr>`;
+    <td>${it.t === 'tool' ? '' : `<button class="btn sm" data-cinsp="${i}">Inspect</button>`}</td></tr>`;
 }
 
 function inspectCopy(item) {

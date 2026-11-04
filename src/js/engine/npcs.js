@@ -173,8 +173,12 @@ export function guess(npc, it) {
   const hunch = 0.7 + 0.7 * mulberry32(hashStr(npc.id + ':' + it.id))();
   return round2((it.t === 'skin' ? I.basePrice(it) : I.itemValue(it)) * hunch);
 }
+// Tools are the store's goods to all of them: three quarters of its price for yours, a little over it for theirs. That's so
+// nothing is made selling tools to them or buying them back (a tool sells on the Market for what it cost).
+const TOOL_BID = 0.75, TOOL_ASK = 1.05;
 // The most they'd pay for an item: market value, more for a collector's kind of item, a beginner's guess.
 export function buyValue(npc, it) {
+  if (I.isTool(it)) return round2(I.itemValue(it) * TOOL_BID);
   const k = interest(npc, it);
   if (npc.type === 'beginner') return round2(guess(npc, it) * (k ? npc.g + 0.2 * k : 0.8));
   const v = I.itemValue(it);
@@ -184,6 +188,7 @@ export function buyValue(npc, it) {
 // What one of their own items is worth to them when they trade it away (a collector's focus items, a lot more; a
 // beginner's, what they guess).
 export function keepValue(npc, it) {
+  if (I.isTool(it)) return round2(I.itemValue(it) * TOOL_ASK);
   if (npc.type === 'beginner') return guess(npc, it);
   const v = I.itemValue(it), k = npc.type === 'collector' ? FOCUS[npc.focus].fit(it) : 0;
   return round2(v * (k ? 1.1 + npc.premium * k : npc.type === 'collector' ? 1 : 1.04));

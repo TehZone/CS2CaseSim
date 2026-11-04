@@ -675,6 +675,40 @@ function tierFreq(box, n) {
   let twice = null; try { run('play.reward', { run: id, result: 'win', kills: 12, roundsWon: 9, rounds: 14 }, { online: true, now: t0 + 21 * 60e3 }); } catch (e) { twice = e; }
   check('online match money: only for a match the server saw start, once, long enough, with kills a Wingman match could have',
     unseen?.code === 'match' && quick?.code === 'match' && many?.code === 'match' && ok.r.earned === 490 && twice?.code === 'match');
+  {
+    // A StatTrak™ kill online: only in a match the server saw start, one at a time, no faster than the match's clock.
+    const def = Object.values(D.skins).find((s) => s.stt && s.cat === 'rifle');
+    const gun = { uid: 'kc1', t: 'skin', id: def.id, fl: 0.2, sd: 1, stt: true, kills: 0, stk: [] }, t = 1e12;
+    st.inv.push(gun);
+    const kill = (ms, a = {}) => run('play.stattrak', { uid: gun.uid, ...a }, { online: true, now: t + ms });
+    const no = (ms, a) => { try { kill(ms, a); return null; } catch (e) { return e.code; } };
+    st.play = null;
+    check('StatTrak™ online: no kill counts without a match the server saw start', no(3600e3) === 'match' && gun.kills === 0);
+    run('play.start', { mode: 'deathmatch' }, { online: true, now: t });
+    check('StatTrak™ online: nor the moment one starts', no(500) === 'match' && gun.kills === 0 && !st.play.kills);
+    const first = kill(1500, { kills: 50 });
+    check('StatTrak™ online: a call is one kill, whatever it claims', first.r.kills === 1 && gun.kills === 1 && st.play.kills === 1 && first.d.upd[0]?.kills === 1 && 'play' in first.d.set);
+    check('StatTrak™ online: and no faster than the match\'s clock', no(2000) === 'match' && gun.kills === 1 && st.play.kills === 1);
+    for (let i = 0; i < 19; i++) kill(30e3);
+    check('StatTrak™ online: kills in a burst count, up to a kill every 1.5 seconds of the match', gun.kills === 20 && no(30e3) === 'match' && gun.kills === 20);
+    run('play.start', { mode: 'deathmatch' }, { online: true, now: t + 31e3 });
+    check('StatTrak™ online: starting another match only starts the clock again', no(31e3 + 1000) === 'match' && gun.kills === 20 && !st.play.kills);
+    check('StatTrak™ online: a match six hours old counts no more', no(31e3 + 6 * 3600e3 + 1000) === 'match' && gun.kills === 20);
+    gun.lk = true;
+    kill(60e3);
+    check('StatTrak™ online: a lock doesn\'t stop a kill counting (it only keeps an item from being sold or traded)', gun.kills === 21);
+    delete gun.lk;
+    const { run: over } = run('play.start', { mode: 'deathmatch' }, { online: true, now: t + 90e3 }).r;
+    run('play.reward', { run: over, mode: 'deathmatch', result: 'win', kills: 1, rounds: 1 }, { online: true, now: t + 200e3 });
+    check('StatTrak™ online: a finished match counts no more', no(300e3) === 'match' && gun.kills === 21);
+    gun.kills = 999999;
+    run('play.stattrak', { uid: gun.uid });
+    check('StatTrak™ offline: a kill counts with no match on record, and the counter stops at six digits', gun.kills === 999999 && !st.play);
+    gun.kills = 5;
+    run('play.stattrak', { uid: gun.uid, kills: 50 });
+    check('StatTrak™ offline: one at a time too', gun.kills === 6);
+    st.inv = st.inv.filter((i) => i !== gun);
+  }
   const crate = drop.offers.find((o) => o.t === 'crate');
   check('reward cases are inventory cases that take their own key', !!keyFor(D.caseById[crate.id]) && I.itemName(crate) === D.caseById[crate.id].n && I.itemValue(crate) === D.caseById[crate.id].price);
 }
@@ -1071,6 +1105,316 @@ function tierFreq(box, n) {
     const ret = upgradeState({ money: 1, inv: [unit], stored: [chick], stats: {} });
     check('save upgrade: retired items are sold wherever they are', I.retireOld(ret).n === 1 && !ret.stored.length);
   }
+}
+
+// ---- tools: Name Tags and the StatTrak™ Swap Tool --------------------------------------------------------------------------
+{
+  const TL = await E('tools');
+  const N = await E('npcs');
+  const SU = await E('storage');
+  const DBE = await E('database');
+  const { upgradeState } = await E('economy');
+  const skins = Object.values(D.skins);
+  const find = (f) => skins.find(f);
+  const ak = find((s) => s.w === 'AK-47' && !s.v && s.stt);
+  const ak2 = skins.find((s) => s.w === 'AK-47' && !s.v && s.stt && s.id !== ak.id);
+  const m4a4 = find((s) => s.w === 'M4A4' && !s.v && s.stt), m4a1 = find((s) => s.w === 'M4A1-S' && !s.v && s.stt);
+  const usp = find((s) => s.w === 'USP-S' && !s.v && s.stt), p2000 = find((s) => s.w === 'P2000' && !s.v && s.stt);
+  const deagle = find((s) => s.w === 'Desert Eagle' && !s.v && s.stt), r8 = find((s) => s.w === 'R8 Revolver' && !s.v && s.stt);
+  const karambit = find((s) => s.w === 'Karambit' && !s.v && s.stt), bayonet = find((s) => s.w === 'Bayonet' && !s.v && s.stt);
+  const vanilla = find((s) => s.cat === 'knife' && s.v && s.stt), zeus = find((s) => s.cat === 'equipment');
+  const glove = find((s) => s.cat === 'gloves');
+  const sticker = Object.values(D.stickers).find((s) => s.p > 0), charm = Object.values(D.charms)[0], agent = Object.values(D.agents)[0];
+  const box = D.cases.find((c) => c.price != null);
+  const setup = () => {
+    const st = { ...freshState(), money: 1000 };
+    const run = (name, args, o) => { const c = ACT.makeCtx(st, { rng, ...o }); const r = ACT.runAction(c, name, args); return { r, d: ACT.delta(c) }; };
+    const gun = (s = ak, x = {}) => { const it = { ...I.makeSkinItem(s, { stt: !!x.stt, r: rng, src: 'test' }), ...x }; st.inv.unshift(it); return it; };
+    const tool = (id = I.NAME_TAG) => run('tools.buy', { id }).r.items[0];
+    return { st, run, gun, tool };
+  };
+  const code = (fn) => { try { fn(); } catch (e) { return e instanceof ACT.GameError ? e.code : 'crash: ' + e.message; } return null; };
+  const count = (st, id) => st.inv.filter((i) => i.t === 'tool' && i.id === id).length;
+
+  // The items
+  {
+    const { st, run } = setup();
+    const r = run('tools.buy', { id: I.NAME_TAG, n: 3 }).r;
+    const t = r.items[0];
+    check('tools: 3 Name Tags cost 3 x the Steam Market\'s $4.47, one item each', r.cost === 13.41 && st.money === 986.59 && st.inv.length === 3 && t.t === 'tool' && t.nw === true && t.src === 'Store');
+    check('tools: a Base Grade Tool with CS2\'s name and description', I.itemName(t) === 'Name Tag' && I.rarityInfo(t).n === 'Base Grade Tool' && I.rarityInfo(t).c === I.rarityInfo({ t: 'key', id: Object.keys(D.keys)[0] }).c
+      && /rename a weapon/.test(I.itemDef(t).desc) && I.nameParts(t).bottom === 'Name Tag' && I.rarityRank(t) === 0);
+    const sw = run('tools.buy', { id: I.SWAP_TOOL }).r.items[0];
+    check('tools: the Swap Tool costs $1.62, with CS2\'s description', I.itemValue(sw) === 1.62 && I.itemName(sw) === 'StatTrak™ Swap Tool' && /same item type/.test(I.itemDef(sw).desc));
+    check('tools: worth their price, in your net worth', I.itemValue(t) === 4.47 && SU.ownedValue(st) === 15.03);
+    check('tools: tradable, and nothing you equip or put stickers on', I.tradable(t) && I.loadoutSlot(t) === null && !I.canHaveCharm(t) && !I.canHaveStickers(t));
+    check('tools: other ids and counts are refused, with nothing spent', code(() => run('tools.buy', { id: 'nope' })) === 'bad' && code(() => run('tools.buy', { id: '__proto__' })) === 'bad' && code(() => run('tools.buy', { id: I.NAME_TAG, n: 0 })) === 'bad'
+      && code(() => run('tools.buy', { id: I.NAME_TAG, n: 101 })) === 'bad' && code(() => run('tools.buy', { id: I.NAME_TAG, n: 1.5 })) === 'bad' && st.money === 984.97);
+    st.money = 4;
+    check('tools: refused without the money', code(() => run('tools.buy', { id: I.NAME_TAG })) === 'funds' && st.money === 4 && st.inv.length === 4);
+    st.money = 100;
+    check('tools: a full inventory refuses them, and nothing is spent', code(() => run('tools.buy', { id: I.NAME_TAG }, { invCap: 4 })) === 'full' && st.money === 100 && st.inv.length === 4);
+    check('tools: they earn no Armory Stars (they sell for what they cost)', st.stars === 0 && !st.starSpend);
+    run('tools.buy', { id: I.SWAP_TOOL, n: 2 });
+    const before = st.money;
+    const out = run('item.sell', { uids: st.inv.filter((i) => i.id === I.SWAP_TOOL).map((i) => i.uid) }).r;
+    check('tools: selling pays exactly what buying cost', out.total === 4.86 && st.money === round2(before + 4.86));
+  }
+
+  // No money from NPCs: nobody pays more than the store, and nobody sells one back for less
+  {
+    const { st, run, tool } = setup();
+    run('npc.tick');
+    const crowd = N.crowd(st.social.seed), bad = [];
+    for (const id of [I.NAME_TAG, I.SWAP_TOOL]) {
+      const it = { t: 'tool', id, uid: 'x' }, v = I.itemValue(it);
+      for (const n of crowd) {
+        const s = { inv: [it], money: 1e6 }, so = st.social;
+        if (N.judge(so, n, s, { yours: [it], theirs: [], myMoney: 0, theirMoney: v }).ok) bad.push(n.id + ' paid the store price');
+        if (N.judge(so, n, s, { yours: [], theirs: [it], myMoney: v * 0.99, theirMoney: 0 }).ok) bad.push(n.id + ' sold under the store price');
+        if (N.buyValue(n, it) >= N.keepValue(n, it) || N.buyValue(n, it) >= v) bad.push(n.id + ' buys for what they sell');
+      }
+    }
+    check(`tools: none of the ${crowd.length} NPCs pays the store's price for one, or sells one for less`, !bad.length, bad.slice(0, 3).join(', '));
+    const beginner = crowd.find((n) => n.type === 'beginner' && N.guess(n, { t: 'tool', id: I.NAME_TAG }) > 4.47 * 1.2) || crowd.find((n) => n.type === 'beginner');
+    check('tools: a beginner\'s hunch doesn\'t count for them', N.buyValue(beginner, { t: 'tool', id: I.NAME_TAG }) === round2(4.47 * 0.75));
+    const npc = crowd.find((n) => n.type === 'player'), t = tool();
+    const ask = run('npc.offer', { npc: npc.id, give: { uids: [t.uid] }, get: { money: 4 } }).r;
+    check('tools: they don\'t haggle over one: too high is a plain no', ask.result === 'declined' && st.inv.includes(t) && !st.social.offers.some((o) => o.status === 'open' && o.want.uids.includes(t.uid)));
+    const cash = st.money;
+    const sold = run('npc.offer', { npc: npc.id, give: { uids: [t.uid] }, get: { money: 3 } }).r;
+    check('tools: they trade with NPCs at their own bid, and stay in their inventory', sold.result === 'accepted' && st.money === round2(cash + 3) && !st.inv.includes(t) && st.social.npcs[npc.id].inv.some((i) => i.uid === t.uid));
+    check('tools: never something they message you about', !N.notable(t) && N.interest(npc, t) === 0);
+  }
+
+  // Everything else that switches on the item's type
+  {
+    const { st, run, gun, tool } = setup();
+    const t = tool(), g = gun();
+    const wager = code(() => run('gamble.coinflip', { money: 0, uids: [t.uid], side: 't', clientSeed: 's' }));
+    check('tools: staked like any other item, at their price', wager === null);
+    st.inv = st.inv.filter((i) => i.uid !== t.uid);
+    const t2 = tool();
+    check('tools: refused by a trade-up', (await E('tradeup')).tradeupIneligible(t2) === 'Only weapon skins can be traded up' && code(() => run('tradeup.sign', { uids: [t2.uid] })) === 'bad' && st.inv.includes(t2));
+    check('tools: refused by the loadout', code(() => run('loadout.equip', { uid: t2.uid })) === 'bad');
+    check('tools: can be showcased', run('persona.set', { showcase: [t2.uid] }).r.me.showcase.length === 1);
+    check('tools: in the item database\'s counts', DBE.DB_TYPES.includes('tool') && DBE.countCopies([{ item: t2 }])['tool:' + I.NAME_TAG] === 1);
+    check('tools: found by a Storage Unit\'s filters and sorts', SU.viewItems([t2, g], { q: 'name tag' }).length === 1 && SU.viewItems([t2], { rank: '0', sort: 'quality' }).length === 1);
+    const u = run('storage.buy', {}).r.items[0];
+    run('storage.name', { unit: u.uid, name: 'x' });
+    run('storage.deposit', { unit: u.uid, uids: [t2.uid] });
+    check('tools: stored in a unit: still yours', SU.ownedItems(st).some((i) => i.uid === t2.uid) && !st.inv.includes(t2));
+    check('tools: a stored one can\'t be used, named or picked for you', code(() => run('tools.name', { uid: g.uid, tool: t2.uid, name: 'x' })) === 'stored' && code(() => run('tools.name', { uid: g.uid, name: 'x' })) === 'notool' && !g.name);
+    run('storage.retrieve', { unit: u.uid, uids: [t2.uid] });
+    check('tools: retrieved, it works', run('tools.name', { uid: g.uid, tool: t2.uid, name: 'x' }).r.item.name === 'x');
+  }
+
+  // What can take a name
+  {
+    const mk = (s, x = {}) => ({ uid: 'u', t: 'skin', id: s.id, fl: 0.2, sd: 1, ...x });
+    check('Name Tag: guns, knives and the Zeus, of any quality', [mk(ak), mk(ak, { stt: true }), mk(ak, { sv: true }), mk(karambit), mk(vanilla, { fl: null, sd: null }), mk(zeus)].every(TL.nameable));
+    check('Name Tag: not gloves, agents, charms, stickers, cases, keys, units or tools', ![mk(glove), I.makeAgentItem(agent), I.makeCharmItem(charm), I.makeStickerItem(sticker), I.makeCrateItem(box), I.makeKeyItem(Object.keys(D.keys)[0]), I.makeUnitItem(), I.makeToolItem(I.NAME_TAG)].some(TL.nameable));
+  }
+
+  // What a name can be
+  {
+    const ok = ['a', 'x'.repeat(20), '<img src=x onerror=', '"quoted"', "it's", 'a b', '😀'.repeat(10), '日本語の名前', 'שלום', 'مرحبا', '&amp;', '\u00a0x', 'x\u00a0', 'Ünï'];
+    const bad = ['', ' a', 'a ', ' ', 'x'.repeat(21), '😀'.repeat(11), 'a\nb', 'a\tb', '\u0000', 'a\u001f', '\u007f', 'a\u0085', '\u009f', 'a\u200eb', 'a\u200fb', 'a\u202eb', 'a\u2066b', 'a\u2028b', '\ud83d', 'a\ude00b', null, undefined, 5, {}, ['a']];
+    check('Name Tag: CS2\'s rule: 1 to 20 UTF-16 units, < > quotes and emoji are fine', ok.every((s) => TL.nameProblem(s) === ''), ok.filter((s) => TL.nameProblem(s)).join(' | '));
+    check('Name Tag: empty, too long, spaces at the ends, control and reordering characters and broken text are refused', bad.every((s) => TL.nameProblem(s) !== ''), bad.filter((s) => !TL.nameProblem(s)).map(String).join(' | '));
+    check('Name Tag: the server\'s words are refused, however they\'re written', ['fuck', 'FUCKER', 'xshitx', 'ｆｕｃｋ', 'f\u200bu\u200bck', 'fúck', 'admin', 'Valve', 'bot_1', 'moderator_x'].every((s) => TL.nameProblem(s) === 'Please pick another name'));
+    check('Name Tag: and a name that merely holds a reserved word isn\'t', TL.nameProblem('botany') === '' && TL.nameProblem('my admin') === '');
+    const spelt = ['f.u.c.k', 'f u c k', 'f_u_c_k', 'f-uck', 'sh1t', 'sh!t', 'n1gger', 'ni66er', 'h1tler', 'hitl3r', 'fսck', 'fuсk', 'nаzi', 'f\u3164uck', 'f\u115fuck', 'f\u2800uck', 'f\u{1F480}uck', 'f*uck',
+      'Аdmin', 'admin.', '[admin]', 'admin\u00a0', 'b o t', 'adm1n', 'b0t', 's3rver_1', 'Server:'];
+    check('Name Tag: the words are refused as they read: spaced out, signs between, digits for letters, lookalike letters, blank letters', spelt.every((s) => TL.nameProblem(s) === 'Please pick another name'), spelt.filter((s) => TL.nameProblem(s) !== 'Please pick another name').join(' | '));
+    const fine = ['Push It', 'Wolf Agent', 'War Ape', 'Star Apex', 'Mini GG', 'Smash It', 'I Push It', 'M4A1-S', 'AK-47 Killer', 'Dust 2', '1337', 'Рома', '小明', 'بطل', 'Bot Killer'];
+    check('Name Tag: words side by side stay words, and other alphabets are fine', fine.every((s) => TL.nameProblem(s) === ''), fine.filter((s) => TL.nameProblem(s)).join(' | '));
+    check('Name Tag: usernames go through the same words', ['sh1t_lord', 'f_u_c_k', 'b0t', 'adm1n', 'admin_1', 'Admin-'].every(TL.refusedWord) && !['wolf_agent', 'push_it', 'player_1', 'Bob_2', 'tradepal'].some(TL.refusedWord));
+    const blank = ['\u3164', '\u115f', '\u200b', '\u00a0', '\u2800', '\ufeff', '\u034f', '\u0301', '\u3164\u3164', '\u00a0\u200b'];
+    check('Name Tag: a name with nothing to see is refused', blank.every((s) => TL.nameProblem(s) === TL.BAD_NAME), blank.filter((s) => TL.nameProblem(s) !== TL.BAD_NAME).map((s) => JSON.stringify(s)).join(' '));
+  }
+
+  // Applying, renaming, removing
+  {
+    const { st, run, gun, tool } = setup();
+    const g = gun(ak, { stt: true, kills: 7 }), before = JSON.stringify(g), worth = I.itemValue(g), real = I.itemName(g);
+    check('Name Tag: needs a tag', code(() => run('tools.name', { uid: g.uid, name: 'x' })) === 'notool' && !g.name);
+    tool();
+    check('Name Tag: a refused name doesn\'t use up the tag', code(() => run('tools.name', { uid: g.uid, name: ' x' })) === 'name' && code(() => run('tools.name', { uid: g.uid, name: 'fuck' })) === 'name' && code(() => run('tools.name', { uid: g.uid })) === 'name' && count(st, I.NAME_TAG) === 1 && !g.name);
+    const { d } = run('tools.name', { uid: g.uid, name: '"<b>" & co' });
+    check('Name Tag: the name goes on and the tag is used up', g.name === '"<b>" & co' && count(st, I.NAME_TAG) === 0 && d.upd.some((i) => i.uid === g.uid && i.name === g.name) && d.del.length === 1);
+    check('Name Tag: only the name changed, and it adds no value', JSON.stringify({ ...g, name: undefined }) === before && I.itemValue(g) === worth);
+    check('Name Tag: the real name stays readable beside it', I.itemName(g) === real + ' "\"<b>\" & co"'.replaceAll('\\', '') && I.realName(g) === real && I.customName(g) === g.name && I.nameParts(g).bottom === I.nameParts({ ...g, name: null }).bottom);
+    check('Name Tag: search finds it by the name', SU.viewItems([g], { q: '<b>' }).length === 1);
+    check('Name Tag: a new name takes a new tag', code(() => run('tools.name', { uid: g.uid, name: 'second' })) === 'notool' && g.name === '"<b>" & co');
+    tool();
+    check('Name Tag: the same name again is refused, tag kept', code(() => run('tools.name', { uid: g.uid, name: g.name })) === 'name' && count(st, I.NAME_TAG) === 1);
+    run('tools.name', { uid: g.uid, name: 'second' });
+    check('Name Tag: renamed with the second tag', g.name === 'second' && count(st, I.NAME_TAG) === 0);
+    const removed = run('tools.unname', { uid: g.uid });
+    check('Name Tag: removing needs no tag, costs nothing and gives none back', !('name' in g) && count(st, I.NAME_TAG) === 0 && removed.d.upd[0].uid === g.uid && !('name' in removed.d.upd[0]) && I.itemName(g) === real);
+    check('Name Tag: nothing to remove is refused', code(() => run('tools.unname', { uid: g.uid })) === 'nameable');
+    const u = run('storage.buy', {}).r.items[0];
+    run('storage.name', { unit: u.uid, name: 'stash' });
+    check('Name Tag: a unit\'s label isn\'t one', code(() => run('tools.unname', { uid: u.uid })) === 'nameable' && u.name === 'stash');
+    check('Name Tag: and a tag can\'t name a unit, a tool or gloves', (() => { const t = tool(), gl = gun(glove); return code(() => run('tools.name', { uid: u.uid, name: 'x' })) === 'nameable' && code(() => run('tools.name', { uid: t.uid, name: 'x' })) === 'nameable' && code(() => run('tools.name', { uid: gl.uid, name: 'x' })) === 'nameable' && count(st, I.NAME_TAG) === 1; })());
+    const v = gun(vanilla, { stt: false });
+    check('Name Tag: a vanilla knife takes one', run('tools.name', { uid: v.uid, name: 'knife' }).r.item.name === 'knife' && I.itemName(v).endsWith('"knife"'));
+  }
+
+  // Refused: not yours, stored, locked, in an offer
+  {
+    const { st, run, gun, tool } = setup();
+    const g = gun(), t = tool();
+    check('Name Tag: an item you don\'t own', code(() => run('tools.name', { uid: 'nope', name: 'x' })) === 'missing');
+    check('Name Tag: a tag that isn\'t one', code(() => run('tools.name', { uid: g.uid, tool: g.uid, name: 'x' })) === 'bad');
+    g.lk = true;
+    check('Name Tag: a locked item', code(() => run('tools.name', { uid: g.uid, name: 'x' })) === 'locked' && !g.name && count(st, I.NAME_TAG) === 1);
+    delete g.lk;
+    t.lk = true;
+    check('Name Tag: a locked tag isn\'t used', code(() => run('tools.name', { uid: g.uid, name: 'x' })) === 'notool' && code(() => run('tools.name', { uid: g.uid, tool: t.uid, name: 'x' })) === 'locked' && !g.name);
+    delete t.lk;
+    const held = new Set([g.uid]), tagHeld = new Set([t.uid]);
+    check('Name Tag: an item in an offer you made', code(() => run('tools.name', { uid: g.uid, name: 'x' }, { reserved: held })) === 'reserved' && !g.name);
+    check('Name Tag: or one someone\'s offer asks you for', code(() => run('tools.name', { uid: g.uid, name: 'x' }, { asked: held })) === 'reserved' && !g.name);
+    check('Name Tag: a tag in an offer isn\'t used', code(() => run('tools.name', { uid: g.uid, name: 'x' }, { reserved: tagHeld })) === 'notool' && code(() => run('tools.name', { uid: g.uid, tool: t.uid, name: 'x' }, { asked: tagHeld })) === 'reserved' && !g.name);
+    const says = (fn) => { try { fn(); return ''; } catch (e) { return e.message; } };
+    check('Name Tag: and it says why, when you do own one', /is locked or in a pending trade offer/.test(says(() => run('tools.name', { uid: g.uid, name: 'x' }, { reserved: tagHeld }))));
+    run('npc.tick');
+    const offer = { id: 'o', npc: N.crowd(st.social.seed)[0].id, status: 'open', at: 0, exp: Date.now() + 1e6, want: { uids: [g.uid], money: 0 }, give: { uids: [], money: 5 } };
+    st.social.offers.push(offer);
+    check('Name Tag: offline, or one a trader\'s open offer is for', code(() => run('tools.name', { uid: g.uid, name: 'x' })) === 'reserved' && !g.name);
+    offer.status = 'declined';
+    run('tools.name', { uid: g.uid, name: 'x' });
+    check('Name Tag: free again once it\'s answered', g.name === 'x');
+    g.lk = true;
+    check('Name Tag: a locked item keeps its name', code(() => run('tools.unname', { uid: g.uid })) === 'locked' && g.name === 'x');
+    delete g.lk;
+    check('Name Tag: and so does one in an offer', code(() => run('tools.unname', { uid: g.uid }, { reserved: new Set([g.uid]) })) === 'reserved' && code(() => run('tools.unname', { uid: g.uid }, { asked: new Set([g.uid]) })) === 'reserved' && g.name === 'x');
+    const u = run('storage.buy', {}).r.items[0];
+    run('storage.name', { unit: u.uid, name: 's' });
+    run('storage.deposit', { unit: u.uid, uids: [g.uid] });
+    const kept = SU.storedItem(st, g.uid);
+    tool();
+    check('Name Tag: not on a stored item, or off one', code(() => run('tools.name', { uid: g.uid, name: 'y' })) === 'stored' && code(() => run('tools.unname', { uid: g.uid })) === 'stored' && kept.name === 'x');
+  }
+
+  // A name travels with the item
+  {
+    const { st, run, gun, tool } = setup();
+    const g = gun();
+    tool();
+    run('tools.name', { uid: g.uid, name: 'keeps <3' });
+    const u = run('storage.buy', {}).r.items[0];
+    run('storage.name', { unit: u.uid, name: 's' });
+    run('storage.deposit', { unit: u.uid, uids: [g.uid] });
+    check('Name Tag: stored with the item', SU.storedItem(st, g.uid).name === 'keeps <3');
+    run('storage.retrieve', { unit: u.uid, uids: [g.uid] });
+    const back = st.inv.find((i) => i.uid === g.uid);
+    check('Name Tag: and retrieved with it', back.name === 'keeps <3');
+    const round = upgradeState(JSON.parse(JSON.stringify(st)));
+    check('Name Tag: and saved and loaded with it', round.inv.find((i) => i.uid === g.uid).name === 'keeps <3');
+    check('Name Tag: the database shows it, the unit a label doesn\'t count as one', DBE.publicCopy(back).name === 'keeps <3' && I.customName(u) === '');
+    run('npc.tick');
+    const npc = N.crowd(st.social.seed).find((n) => n.type === 'collector');
+    N.npcState(st.social, npc.id).money = 1e6;
+    const r = run('npc.offer', { npc: npc.id, give: { uids: [back.uid] }, get: { money: 0.01 } }).r;
+    check('Name Tag: and traded to an NPC with it', r.result === 'accepted' && st.social.npcs[npc.id].inv.find((i) => i.uid === g.uid)?.name === 'keeps <3');
+    check('Name Tag: older saves load unchanged', JSON.stringify(upgradeState({ money: 1, inv: [{ uid: 'a', t: 'skin', id: ak.id, fl: 0.2, sd: 1, stk: [], stt: false }], stats: {} }).inv[0]) === JSON.stringify({ uid: 'a', t: 'skin', id: ak.id, fl: 0.2, sd: 1, stk: [], stt: false }));
+  }
+
+  // Swapping counters
+  {
+    const pair = (a = ak, b = ak, ka = 120, kb = 5) => {
+      const s = setup();
+      const x = s.gun(a, { stt: true, kills: ka }), y = s.gun(b, { stt: true, kills: kb });
+      return { ...s, x, y };
+    };
+    {
+      const { st, run, x, y, tool } = pair(ak, ak2);
+      x.name = 'keep'; x.stk = [{ id: sticker.id, x: 0.5, y: 0.5, r: 0, wr: 0 }];
+      const was = [JSON.stringify({ ...x, kills: 0 }), JSON.stringify({ ...y, kills: 0 })], worth = [I.itemValue(x), I.itemValue(y)];
+      check('Swap: needs a tool', code(() => run('tools.swap', { a: x.uid, b: y.uid })) === 'notool' && x.kills === 120);
+      const t = tool(I.SWAP_TOOL);
+      const { d } = run('tools.swap', { a: x.uid, b: y.uid });
+      check('Swap: the two counters change places in one action, and the tool is used up', x.kills === 5 && y.kills === 120 && count(st, I.SWAP_TOOL) === 0 && d.del.includes(t.uid) && d.upd.length === 2);
+      check('Swap: nothing else moves: floats, seeds, stickers, names, value', JSON.stringify({ ...x, kills: 0 }) === was[0] && JSON.stringify({ ...y, kills: 0 }) === was[1] && I.itemValue(x) === worth[0] && I.itemValue(y) === worth[1]);
+      check('Swap: a second swap needs a second tool', code(() => run('tools.swap', { a: x.uid, b: y.uid })) === 'notool' && x.kills === 5);
+    }
+    const refuse = (name, a, b, want = 'swap', ka = 120, kb = 5) => {
+      const { st, run, x, y, tool } = pair(a, b, ka, kb);
+      tool(I.SWAP_TOOL);
+      const c = code(() => run('tools.swap', { a: x.uid, b: y.uid }));
+      check(`Swap: ${name}`, c === want && x.kills === ka && y.kills === kb && count(st, I.SWAP_TOOL) === 1, String(c));
+    };
+    refuse('an M4A4 and an M4A1-S are different items', m4a4, m4a1);
+    refuse('a USP-S and a P2000 are too', usp, p2000);
+    refuse('a Desert Eagle and an R8 too, though CS2 gives them one class', deagle, r8);
+    refuse('an AK and an M4 are too', ak, m4a4);
+    refuse('equal counters are refused, as in CS2, and the tool kept', ak, ak2, 'swap', 9, 9);
+    refuse('two untouched counters too', ak, ak2, 'swap', 0, 0);
+    {
+      const { run, x, y, tool } = pair(karambit, bayonet);
+      tool(I.SWAP_TOOL);
+      run('tools.swap', { a: x.uid, b: y.uid });
+      check('Swap: any two knives can', x.kills === 5 && y.kills === 120);
+    }
+    {
+      const s = setup();
+      const k = s.gun(karambit, { stt: true, kills: 3 }), v = s.gun(vanilla, { stt: true, kills: 44 });
+      s.tool(I.SWAP_TOOL);
+      s.run('tools.swap', { a: k.uid, b: v.uid });
+      check('Swap: a vanilla knife with a painted one', k.kills === 44 && v.kills === 3);
+    }
+    {
+      const s = setup();
+      const x = s.gun(ak, { stt: true }), y = s.gun(ak, { stt: true, kills: 12 });
+      delete x.kills;
+      s.tool(I.SWAP_TOOL);
+      s.run('tools.swap', { a: x.uid, b: y.uid });
+      check('Swap: a counter that was never written counts as 0', x.kills === 12 && y.kills === 0);
+    }
+    {
+      const { st, run, x, y, tool, gun } = pair();
+      const t = tool(I.SWAP_TOOL), plain = gun(ak, { stt: false }), sv = gun(find((s) => s.w === 'AK-47' && !s.v), { sv: true, stt: false }), stick = I.makeStickerItem(sticker);
+      st.inv.push(stick);
+      const fails = (a, b, o) => code(() => run('tools.swap', { a, b }, o));
+      check('Swap: the same item twice', fails(x.uid, x.uid) === 'swap');
+      check('Swap: not a StatTrak™ item, a Souvenir or a sticker', fails(x.uid, plain.uid) === 'swap' && fails(sv.uid, x.uid) === 'swap' && fails(x.uid, stick.uid) === 'swap');
+      check('Swap: an item you don\'t own', fails(x.uid, 'nope') === 'missing' && code(() => run('tools.swap', { a: x.uid })) === 'missing');
+      y.lk = true;
+      check('Swap: a locked item', fails(x.uid, y.uid) === 'locked');
+      delete y.lk;
+      t.lk = true;
+      check('Swap: a locked tool', fails(x.uid, y.uid) === 'notool' && code(() => run('tools.swap', { a: x.uid, b: y.uid, tool: t.uid })) === 'locked');
+      delete t.lk;
+      check('Swap: an item in an offer, either way', fails(x.uid, y.uid, { reserved: new Set([y.uid]) }) === 'reserved' && fails(x.uid, y.uid, { asked: new Set([x.uid]) }) === 'reserved');
+      check('Swap: a tool in an offer', fails(x.uid, y.uid, { reserved: new Set([t.uid]) }) === 'notool');
+      const u = run('storage.buy', {}).r.items[0];
+      run('storage.name', { unit: u.uid, name: 's' });
+      run('storage.deposit', { unit: u.uid, uids: [y.uid] });
+      check('Swap: a stored item', fails(x.uid, y.uid) === 'stored');
+      check('Swap: all that left everything as it was', x.kills === 120 && SU.storedItem(st, y.uid).kills === 5 && count(st, I.SWAP_TOOL) === 1);
+    }
+    check('Swap: which skins share a type: StatTrak™ only, of the same weapon or two knives', TL.swapRefusal({ uid: 'a', t: 'skin', id: ak.id, stt: true, kills: 1 }, { uid: 'b', t: 'skin', id: ak2.id, stt: true, kills: 2 }) === ''
+      && TL.swapRefusal({ uid: 'a', t: 'skin', id: bayonet.id, stt: true, kills: 1 }, { uid: 'b', t: 'skin', id: karambit.id, stt: true, kills: 2 }) === ''
+      && TL.swapRefusal({ uid: 'a', t: 'skin', id: ak.id, stt: true, kills: 1 }, { uid: 'b', t: 'skin', id: karambit.id, stt: true, kills: 2 }) !== '');
+  }
+}
+
+// ---- a save holding what the game no longer has: worth nothing, and nothing else stops working ---------------------------------
+{
+  const { ownedValue } = await E('storage');
+  const gone = { uid: 'g1', t: 'skin', id: 'skin-gone', fl: 0.1, sd: 3, stt: false, stk: [], at: 1, src: 'x' };
+  const lost = { uid: 'g2', t: 'tool', id: 'gone_tool', at: 1, src: 'x' };
+  let total = null, threw = '';
+  try { total = ownedValue({ inv: [gone, lost], stored: [] }); } catch (e) { threw = e.message; }
+  check('an item the game no longer has adds nothing to a save\'s value, and adding it up works', total === 0, threw);
+  check('its card has a name to show, not an error', I.nameParts(gone).bottom === 'Unknown item' && I.nameParts(lost).bottom === 'Unknown item' && I.itemName(lost) === 'Unknown item');
+  const skinDef = Object.values(D.skins)[0], box = D.cases.find((c) => c.price != null);
+  const kinds = [I.makeSkinItem(skinDef, { stt: false }), I.makeStickerItem(Object.values(D.stickers)[0]), I.makeCharmItem(Object.values(D.charms)[0]), I.makeAgentItem(Object.values(D.agents)[0]),
+    I.makeCrateItem(box), I.makeKeyItem(Object.keys(D.keys)[0]), I.makeToolItem(I.NAME_TAG)];
+  check('nobody can be offered one, and every item the game has can still be', !I.tradable(gone) && !I.tradable(lost) && kinds.every(I.tradable) && !I.tradable(I.makeUnitItem()), kinds.filter((k) => !I.tradable(k)).map((k) => k.t).join());
 }
 
 // ---- the Index: the record of what you've unboxed, and the rewards for finishing a set ---------------------------------------

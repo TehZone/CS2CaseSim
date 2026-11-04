@@ -462,6 +462,10 @@ body.is-online .offline-only { display: none !important; }
 .card.unit .unit-mod { font-size: 11px; color: var(--dim); }
 .store-tool .tag.own { background: rgba(0, 0, 0, .6); color: #fff; }
 .store-tool .btn { margin-top: 8px; }
+.store-tool .meta > .row:has(.dim) { margin-bottom: auto; }
+.store-buy { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-end; }
+.store-buy .input { width: 62px; flex: none; padding-left: 6px; padding-right: 2px; }
+.store-buy .btn { flex: 1 1 auto; min-width: 0; white-space: nowrap; }
 .su-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding-bottom: 12px; }
 .su-head > img { width: 84px; height: 63px; object-fit: contain; filter: drop-shadow(0 4px 6px rgba(0, 0, 0, .5)); }
 .su-who { flex: 1 1 180px; min-width: 0; }
@@ -476,3 +480,30 @@ body.is-online .offline-only { display: none !important; }
 .su-grid { max-height: min(56vh, 620px); overflow: auto; padding: 2px; }
 .su-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .su-foot .muted { font-size: 12px; }
+
+/* Name Tags: an item's name, as CS2's tiles show it, and the Name Tag and StatTrak™ Swap Tool windows */
+.tag-name { font-size: 12px; font-style: italic; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.offer-items .tag-name { font-size: 10px; }
+.db-table .tag-name { display: inline-block; max-width: 180px; margin-left: 6px; vertical-align: bottom; }
+.adm-rowbtns { white-space: nowrap; }
+.nt-modal { width: min(480px, 94vw); }
+.nt-card { width: 240px; margin: 0 auto 12px; display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.nt-card .card { width: 100%; pointer-events: none; }
+.nt-plate { max-width: 360px; margin: 0 auto 12px; }
+.nt-plate canvas { display: block; width: 100%; height: auto; border-radius: 4px; }
+.nt-for { margin: 0 0 8px; line-height: 1.5; overflow-wrap: anywhere; }
+.nt-entry { display: flex; gap: 6px; }
+.nt-entry .input { flex: 1; min-width: 0; }
+.nt-msg { min-height: 18px; margin-top: 6px; font-size: 12px; color: var(--red); }
+.nt-warn { margin: 4px 0 0; font-size: 12px; line-height: 1.5; }
+.st-modal { width: min(640px, 94vw); }
+.st-desc { margin: 0 0 12px; text-align: center; }
+.st-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.st-side { min-width: 0; text-align: center; border-bottom: 3px solid var(--rc); padding-bottom: 10px; background: rgba(0, 0, 0, .22); }
+.st-img { aspect-ratio: 4 / 3; display: grid; place-items: center; }
+.st-img img { width: 86%; height: 86%; object-fit: contain; filter: drop-shadow(0 5px 7px rgba(0, 0, 0, .55)); }
+.st-name { padding: 0 8px; font-size: 13px; font-weight: 600; color: var(--hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-side .tag-name { padding: 0 8px; }
+.st-count { margin-top: 8px; font: 700 34px/1 ui-monospace, Consolas, monospace; letter-spacing: .08em; color: var(--st); }
+.st-was { margin-top: 4px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.st-warn { margin: 12px 0 0; text-align: center; font-size: 12px; }

@@ -9,7 +9,7 @@ import * as I from '../items.js';
 import { S, on } from '../state.js';
 import { act, online } from '../backend.js';
 import { sfx } from '../audio.js';
-import { toast, openModal, itemCard, openInspect, showItemDetail, confirmDialog } from '../ui.js';
+import { toast, openModal, itemCard, openInspect, canInspect, showItemDetail, confirmDialog } from '../ui.js';
 import { mountPicker } from '../picker.js';
 import * as N from '../engine/npcs.js';
 import { ownedItems } from '../engine/storage.js';
@@ -185,7 +185,7 @@ async function typing(fn) {
   try { return await fn(); } catch (e) { sfx.error(); toast(esc(e.message), 'bad'); drawMain(); return null; }
 }
 
-const itemsHtml = (items) => items.map((it) => `<div class="oi" style="--rc:${I.rarityInfo(it).c}" data-item="${esc(it.uid)}" title="${esc(I.itemName(it))}"><img src="${I.itemImage(it, 's')}"><div>${esc(I.nameParts(it).bottom)}</div><div class="v">${money(I.itemValue(it))}</div></div>`).join('');
+const itemsHtml = (items) => items.map((it) => `<div class="oi" style="--rc:${I.rarityInfo(it).c}" data-item="${esc(it.uid)}" title="${esc(I.itemName(it))}"><img src="${I.itemImage(it, 's')}"><div>${esc(I.nameParts(it).bottom)}</div>${I.nameTagHtml(it)}<div class="v">${money(I.itemValue(it))}</div></div>`).join('');
 function offerItems(o) {
   const s = stateOf(o.npc);
   return { mine: o.want.uids.map((u) => S.inv.find((it) => it.uid === u)).filter(Boolean), theirs: o.give.uids.map((u) => s?.inv.find((it) => it.uid === u)).filter(Boolean) };
@@ -214,7 +214,7 @@ function timeLeft(t) { const m = Math.max(0, Math.round((t - Date.now()) / 60000
 function wireOffers(el) {
   el.querySelectorAll('[data-item]').forEach((x) => x.addEventListener('click', () => {
     const it = S.inv.find((i) => i.uid === x.dataset.item) || Object.values(so().npcs).flatMap((s) => s.inv).find((i) => i.uid === x.dataset.item);
-    if (it) S.inv.includes(it) ? showItemDetail(it) : openInspect(it);
+    if (it) S.inv.includes(it) ? showItemDetail(it) : canInspect(it) && openInspect(it);
   }));
   el.querySelectorAll('[data-acc-offer]').forEach((b) => b.addEventListener('click', async () => {
     const o = so().offers.find((x) => x.id === b.dataset.accOffer);
@@ -328,7 +328,7 @@ function drawProfile(el, id) {
   for (const sel of ['[data-offer2]', '[data-offer3]']) el.querySelector(sel)?.addEventListener('click', (e) => { e.preventDefault(); offerModal(id); });
   el.querySelectorAll('.sp .card[data-uid]').forEach((c) => c.addEventListener('click', () => {
     const it = p.inv.find((x) => x.uid === c.dataset.uid);
-    if (it) mine ? showItemDetail(it) : openInspect(it);
+    if (it) mine ? showItemDetail(it) : canInspect(it) && openInspect(it);
   }));
   backdrop(el.querySelector('[data-sp]'), p);
 }

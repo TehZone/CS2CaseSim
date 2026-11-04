@@ -80,7 +80,8 @@ export function cs2FirstPerson(weapon) {
   return firstPersons.get(weapon);
 }
 
-// StatTrak™ for a weapon id: { module, knife, attach, legacy } (the counter models and where it sits on the weapon).
+// StatTrak™ for a weapon id: { module, knife, attach, legacy } (the counter models and where it sits on the weapon), and
+// the name plate the same way: { plate, nametag, nametagLegacy }.
 const statTraks = new Map();
 export function cs2StatTrak(weapon) {
   if (!statTraks.has(weapon)) {

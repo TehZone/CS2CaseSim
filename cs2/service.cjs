@@ -204,7 +204,8 @@ class CS2Service {
 
   // StatTrak™: CS2's counter models (the module on guns, the digits etched into knife blades) and where the counter sits
   // on a weapon's model (its "stattrak" attachment, and "stattrak_legacy" for the legacy model): { module, knife,
-  // attach, legacy } (see attachment()).
+  // attach, legacy } (see attachment()). The name plate comes with it, the same way: CS2's one plate model for every
+  // weapon, and its "nametag" and "nametag_legacy" attachments: { plate, nametag, nametagLegacy }.
   statTrak(weapon) {
     weapon = String(weapon);
     return this.playJob('stattrak:' + weapon, async () => {
@@ -216,16 +217,19 @@ class CS2Service {
       for (const name of ['stattrak_module', 'stattrak_module_knife']) {
         urls[name] = this.url(await cs2.exportGltf(`weapons/models/shared/stattrak/${name}.vmdl`, `stattrak/${name}/${name}.gltf`, { materials: true }));
       }
+      // (A plate that won't export leaves the gun without one, its counter still there.)
+      const plate = await cs2.exportGltf('weapons/models/shared/nametag/nametag_module.vmdl', 'nametag/nametag_module/nametag_module.gltf', { materials: true })
+        .catch((e) => { this.log(`name plate: ${e.message}`); return null; });
       const file = path.join(this.cacheDir, 'stattrak', 'attach', weapon + '.json');
       let at = null;
       try { at = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
-      if (at?.model !== w.model) {
+      if (at?.model !== w.model || at.nametag === undefined) { // (files from before name plates have no nametag)
         const text = String(await cs2.run(['-i', cs2.vpk, '-f', w.model + '_c', '--block', 'MDAT']));
-        at = { model: w.model, attach: attachment(text, 'stattrak'), legacy: attachment(text, 'stattrak_legacy') };
+        at = { model: w.model, attach: attachment(text, 'stattrak'), legacy: attachment(text, 'stattrak_legacy'), nametag: attachment(text, 'nametag'), nametagLegacy: attachment(text, 'nametag_legacy') };
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.writeFileSync(file, JSON.stringify(at));
       }
-      return { module: urls.stattrak_module, knife: urls.stattrak_module_knife, attach: at.attach, legacy: at.legacy };
+      return { module: urls.stattrak_module, knife: urls.stattrak_module_knife, attach: at.attach, legacy: at.legacy, plate: plate && this.url(plate), nametag: at.nametag, nametagLegacy: at.nametagLegacy };
     });
   }
 

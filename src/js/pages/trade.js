@@ -117,7 +117,7 @@ async function send() {
 function sideHTML(side, label) {
   return `<div class="offer-side"><h4>${label} · <span class="green">${money(side.items.reduce((s, i) => s + I.itemValue(i), 0) + (side.money || 0))}</span></h4>
     ${side.money ? `<div class="green" style="margin-bottom:6px">${money(side.money)} cash</div>` : ''}
-    <div class="offer-items">${side.items.map((it) => `<div class="oi" style="--rc:${I.rarityInfo(it).c}" data-item='${esc(JSON.stringify(it))}' title="${esc(I.itemName(it))}"><img src="${I.itemImage(it, 's')}"><div>${esc(I.nameParts(it).bottom)}</div><div class="v">${money(I.itemValue(it))}</div></div>`).join('') || '<span class="muted" style="font-size:12px">Nothing</span>'}</div></div>`;
+    <div class="offer-items">${side.items.map((it) => `<div class="oi" style="--rc:${I.rarityInfo(it).c}" data-item='${esc(JSON.stringify(it))}' title="${esc(I.itemName(it))}"><img src="${I.itemImage(it, 's')}"><div>${esc(I.nameParts(it).bottom)}</div>${I.nameTagHtml(it)}<div class="v">${money(I.itemValue(it))}</div></div>`).join('') || '<span class="muted" style="font-size:12px">Nothing</span>'}</div></div>`;
 }
 
 function drawOffers() {

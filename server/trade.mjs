@@ -35,6 +35,26 @@ export class Trades {
     return s;
   }
 
+  // uids of a player's that other players' open trades ask for.
+  asked(userId) {
+    const s = new Set();
+    for (const t of this.open.values()) if (t.to_id === userId) for (const u of t.offer.get.uids) s.add(u);
+    return s;
+  }
+  // Staff took a bad name off an item: the copies of it in offers lose it too, closed ones as well (Recent trades shows them).
+  async dropName(uid) {
+    const holding = (side) => JSON.stringify({ [side]: [{ uid }] });
+    const { rows } = await this.srv.db.query('SELECT * FROM trades WHERE offer @> $1::jsonb OR offer @> $2::jsonb', [holding('giveItems'), holding('getItems')]);
+    for (const row of rows) {
+      const t = this.open.get(row.id) || norm(row); // (an open one: the copy the server works from)
+      const copies = [...t.offer.giveItems, ...t.offer.getItems].filter((i) => i.uid === uid && i.name != null);
+      if (!copies.length) continue;
+      for (const it of copies) delete it.name;
+      await this.srv.db.query('UPDATE trades SET offer = $1::jsonb WHERE id = $2', [JSON.stringify(t.offer), t.id]);
+      await this.pushLists(t.from_id, t.to_id);
+    }
+  }
+
   async list(userId) {
     const { rows } = await this.srv.db.query(
       'SELECT * FROM trades WHERE from_id = $1 OR to_id = $1 ORDER BY updated DESC LIMIT ' + MAX_LIST, [userId]);

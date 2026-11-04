@@ -380,6 +380,108 @@ try {
   check('race: after moves in both directions at once, the database has exactly what memory has', uids(mem.stored) === uids(row.stored) && uids(mem.inv) === uids(row.inv) && await noDupes(), `${mem.stored.length} stored`);
   R1.close(); R2.close();
   await wait(50);
+
+  // ---- tools: Name Tags and the StatTrak™ Swap Tool, on the server -------------------------------------
+  {
+    const skin = (x = {}) => () => ({ ...makeSkinItem(skinDef, { stt: false, src: 'test' }), ...x });
+    const tagsOf = (st, id = 'nametag') => st.inv.filter((i) => i.t === 'tool' && i.id === id);
+    await give(A.user.id, 5000); await give(B.user.id, 5000);
+    const T1 = await client(la.body.token), T2 = await client(la.body.token); // (the same player on two more connections)
+    const bought = await A.act('tools.buy', { id: 'nametag', n: 2 });
+    check('tools: bought on the server, for the Steam Market\'s price', bought.cost === 8.94 && bought.items.length === 2 && A.st.inv.filter((i) => i.t === 'tool').length === 2);
+    await A.act('item.sell', { uids: [bought.items[1].uid] });
+    check('tools: and sold for what they cost', (await serverState(A.user.id)).money === 5000 - 4.47);
+    check('tools: on no path is the price the client\'s', await code(A.act('tools.buy', { id: 'nametag', n: 2, cost: 0.01, p: 0.01 })) === undefined && (await serverState(A.user.id)).money === Math.round((5000 - 4.47 * 3) * 100) / 100);
+    for (const t of tagsOf(await serverState(A.user.id)).slice(1)) await A.act('item.sell', { uids: [t.uid] });
+
+    const [g1, g2] = await grant(A, 2, skin());
+    const hostile = '<img src=x onerror=';
+    const tagged = await A.act('tools.name', { uid: g1.uid, name: hostile });
+    const row = await dbState(A.user.id);
+    check('tools: a name is in the database when the answer arrives, and the tag is gone from it', tagged.item.name === hostile && row.inv.find((i) => i.uid === g1.uid)?.name === hostile && !tagsOf(row).length);
+    check('tools: the client\'s mirror has the name, and the other connection too', A.st.inv.find((i) => i.uid === g1.uid)?.name === hostile && await (async () => { for (let i = 0; i < 80 && !T1.st.inv.find((x) => x.uid === g1.uid)?.name; i++) await wait(25); return true; })());
+    check('tools: a name can\'t be set any other way', await failure(A.act('tools.name', { uid: g2.uid, name: 'x', free: true })) !== null && !(await serverState(A.user.id)).inv.find((i) => i.uid === g2.uid).name);
+
+    // The name filter, and a refused name costs nothing.
+    await A.act('tools.buy', { id: 'nametag' });
+    for (const bad of ['fuck you', 'admin', ' x', 'x'.repeat(21), 'a\u202eb', 'a\u0000b', '\ud83d', 'f.u.c.k', 'sh1t', 'fu\u0441k', '\u3164']) check(`tools: the server refuses the name ${JSON.stringify(bad)}, tag kept`, await code(A.act('tools.name', { uid: g2.uid, name: bad })) === 'name' && tagsOf(await serverState(A.user.id)).length === 1);
+    check('tools: what the database has is still good', !(await dbState(A.user.id)).inv.find((i) => i.uid === g2.uid)?.name);
+
+    // Two connections, one tag: one wins, the other is refused.
+    const raced = await Promise.allSettled([T1.act('tools.name', { uid: g2.uid, name: 'first' }), T2.act('tools.name', { uid: g1.uid, name: 'second' })]);
+    const after = await serverState(A.user.id);
+    check('race: one Name Tag, two connections: one success and one refusal', raced.filter((r) => r.status === 'fulfilled').length === 1 && raced.find((r) => r.status === 'rejected')?.reason.code === 'notool' && !tagsOf(after).length, raced.map((r) => r.status).join());
+    const st1 = await A.act('tools.buy', { id: 'stattrak_swap' });
+    const [k1, k2, k3] = await grant(A, 3, skin({ stt: true, kills: 0 }));
+    await server.store.withUser(A.user.id, async (e) => { for (const [uid, n] of [[k1.uid, 500], [k2.uid, 7], [k3.uid, 90]]) e.st.inv.find((i) => i.uid === uid).kills = n; server.store.markDirty(e); });
+    const swaps = await Promise.allSettled([T1.act('tools.swap', { a: k1.uid, b: k2.uid }), T2.act('tools.swap', { a: k1.uid, b: k3.uid })]);
+    const sw = await serverState(A.user.id), kill = (u) => sw.inv.find((i) => i.uid === u).kills;
+    check('race: one Swap Tool, two connections: one swap and one refusal', swaps.filter((r) => r.status === 'fulfilled').length === 1 && swaps.find((r) => r.status === 'rejected')?.reason.code === 'notool' && !tagsOf(sw, 'stattrak_swap').length
+      && [kill(k1.uid), kill(k2.uid), kill(k3.uid)].sort((a, b) => a - b).join() === '7,90,500', swaps.map((r) => r.status).join());
+    const swRow = await dbState(A.user.id);
+    check('tools: the swap is in the database, tool and all', swRow.inv.find((i) => i.uid === k1.uid).kills === kill(k1.uid) && !tagsOf(swRow, 'stattrak_swap').length && !swRow.inv.some((i) => i.uid === st1.items[0].uid));
+
+    // A counter only runs in a match the server saw start, a kill at a time, as fast as that match's clock.
+    const before = (await serverState(A.user.id)).inv.find((i) => i.uid === k1.uid).kills;
+    check('StatTrak: no match, no kill', await code(A.act('play.stattrak', { uid: k1.uid, kills: 50 })) === 'match' && (await serverState(A.user.id)).inv.find((i) => i.uid === k1.uid).kills === before);
+    await A.act('play.start', { mode: 'deathmatch' });
+    check('StatTrak: a match that\'s only just started has no kills in it', await code(A.act('play.stattrak', { uid: k1.uid })) === 'match');
+    await server.store.withUser(A.user.id, async (e) => { e.st.play = { ...e.st.play, at: Date.now() - 3000 }; server.store.markDirty(e); });
+    const counted = await A.act('play.stattrak', { uid: k1.uid, kills: 50 });
+    check('StatTrak: a kill in the match counts once, whatever it claims', counted.kills === before + 1 && (await serverState(A.user.id)).inv.find((i) => i.uid === k1.uid).kills === before + 1, String(counted.kills));
+    await A.act('play.stattrak', { uid: k1.uid });
+    check('StatTrak: and a third in three seconds is too fast', await code(A.act('play.stattrak', { uid: k1.uid })) === 'match' && (await serverState(A.user.id)).inv.find((i) => i.uid === k1.uid).kills === before + 2);
+
+    // Offers: an item (or a tool) in one can't be changed or used, whichever side asked.
+    const reservedSkin = (await grant(A, 1, skin()))[0], askedSkin = (await grant(A, 1, skin()))[0];
+    await A.act('tools.buy', { id: 'nametag' });
+    const mine = await A.rpc('trade', 'offer', { to: 'Bob_2', give: { uids: [reservedSkin.uid], money: 0 }, get: { uids: [], money: 0 } });
+    const theirs = await B.rpc('trade', 'offer', { to: 'alice', give: { uids: [], money: 1 }, get: { uids: [askedSkin.uid], money: 0 } });
+    check('tools: an item in an offer you made refuses a name', await code(A.act('tools.name', { uid: reservedSkin.uid, name: 'x' })) === 'reserved');
+    check('tools: so does one another player\'s offer asks you for', await code(A.act('tools.name', { uid: askedSkin.uid, name: 'x' })) === 'reserved');
+    await A.rpc('trade', 'cancel', { id: mine.id });
+    await B.rpc('trade', 'cancel', { id: theirs.id });
+    const tag = tagsOf(await serverState(A.user.id))[0];
+    const tagOffer = await A.rpc('trade', 'offer', { to: 'Bob_2', give: { uids: [tag.uid], money: 0 }, get: { uids: [], money: 0 } });
+    check('tools: a tag in an offer isn\'t used', await code(A.act('tools.name', { uid: askedSkin.uid, name: 'x' })) === 'notool' && !(await serverState(A.user.id)).inv.find((i) => i.uid === askedSkin.uid).name);
+    check('tools: and the refusal says it\'s held, not that you have none', /in a pending trade offer/.test((await failure(A.act('tools.name', { uid: askedSkin.uid, name: 'x' })))?.message || ''));
+    await A.rpc('trade', 'cancel', { id: tagOffer.id });
+
+    // A name survives a trade; so does a counter; the tool itself trades.
+    const named = (await serverState(A.user.id)).inv.find((i) => i.name === hostile || i.name === 'first' || i.name === 'second');
+    const seen = await B.rpc('trade', 'inventory', { name: 'alice' });
+    check('tools: another player sees the name, and tools, in your inventory', seen.items.find((i) => i.uid === named.uid)?.name === named.name && seen.items.some((i) => i.t === 'tool'));
+    const counter = sw.inv.find((i) => i.uid === k1.uid);
+    const deal = await A.rpc('trade', 'offer', { to: 'Bob_2', give: { uids: [named.uid, k1.uid, tag.uid], money: 0 }, get: { uids: [], money: 1 } });
+    const listed = (await B.waitFor((m) => m.t === 'trades' && m.trades.some((t) => t.id === deal.id)))?.trades.find((t) => t.id === deal.id);
+    check('tools: the offer shows the name', listed?.give.items.find((i) => i.uid === named.uid)?.name === named.name);
+    await B.rpc('trade', 'accept', { id: deal.id });
+    const bSt = await serverState(B.user.id);
+    check('tools: a traded item keeps its name, and a traded counter its kills', bSt.inv.find((i) => i.uid === named.uid)?.name === named.name && bSt.inv.find((i) => i.uid === k1.uid)?.kills === counter.kills && B.st.inv.find((i) => i.uid === named.uid)?.name === named.name);
+    check('tools: and the tool changed hands, ready to use', tagsOf(bSt).some((t) => t.uid === tag.uid));
+    check('tools: it isn\'t yours to rename any more', await code(A.act('tools.unname', { uid: named.uid })) === 'missing');
+    const removed = await B.act('tools.unname', { uid: named.uid });
+    check('tools: removal reaches the client: the name goes from the mirror too', !('name' in removed.item) && !('name' in B.st.inv.find((i) => i.uid === named.uid)));
+    await B.act('tools.name', { uid: named.uid, name: 'bobs now' });
+    check('tools: the new owner names it with the tag they got', (await serverState(B.user.id)).inv.find((i) => i.uid === named.uid).name === 'bobs now');
+
+    // Storage and the item database.
+    const stash2 = await newUnit(B, 'tools');
+    await B.act('storage.deposit', { unit: stash2.uid, uids: [named.uid] });
+    const inside = (await dbState(B.user.id)).stored.find((i) => i.uid === named.uid);
+    check('tools: stored with its name, and no tool reaches it there', inside?.name === 'bobs now' && await code(B.act('tools.unname', { uid: named.uid })) === 'stored');
+    await B.act('storage.retrieve', { unit: stash2.uid, uids: [named.uid] });
+    check('tools: and it comes back out with its name, in the database and the client\'s mirror', (await dbState(B.user.id)).inv.find((i) => i.uid === named.uid)?.name === 'bobs now' && B.st.inv.find((i) => i.uid === named.uid)?.name === 'bobs now');
+    await B.act('storage.deposit', { unit: stash2.uid, uids: [named.uid] });
+    const { copies } = await B.rpc('social', 'db.item', { t: 'skin', id: skinDef.id });
+    check('tools: the item database shows the name to everyone', copies.find((c) => c.item.uid === named.uid)?.item.name === 'bobs now');
+    await A.act('tools.buy', { id: 'nametag' });
+    const idx = await A.rpc('social', 'db.index', {});
+    const toolCopies = await A.rpc('social', 'db.item', { t: 'tool', id: 'nametag' });
+    check('tools: and counts tools', toolCopies.copies.length >= 1 && typeof idx.counts === 'object');
+    T1.close(); T2.close();
+    await wait(50);
+  }
   }
 
   // ---- the Index: the server keeps the record, and pays each reward once ----------------------------------------------------
@@ -513,6 +615,8 @@ try {
   const ixAgain = await serverState(ixUser);
   check('index: the record and what\'s been claimed survive a restart', Object.keys(ixAgain.index.items).length > 3 && Object.keys(ixAgain.index.claimed).length === 3);
   check('storage: units and what\'s in them survive a restart', A2.st.stored.length > 1000 - 200 && A2.st.inv.some((i) => i.t === 'unit' && i.name === 'stash') && A2.st.stored.some((i) => i.uid === stored1), `${A2.st.stored.length} stored`);
+  const bAgain = await server.store.load(B.user.id);
+  check('tools: a name survives a restart', bAgain.st.stored.some((i) => i.name === 'bobs now'));
   const counted = await A2.rpc('social', 'db.index', {});
   const held = A2.st.stored.filter((i) => i.t === 'sticker');
   check('storage: the item database counts stored copies (a fresh count after the restart)', counted.counts['sticker:' + held[0].id] >= held.filter((i) => i.id === held[0].id).length, String(counted.counts['sticker:' + held[0].id]));

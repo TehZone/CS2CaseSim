@@ -1,19 +1,34 @@
 // Client side of items: the shared engine rules plus item images.
-import { itemDef } from './engine/items.js';
+import { itemDef, itemName, realName, customName, UNIT_ID, NAME_TAG, SWAP_TOOL } from './engine/items.js';
 import { D } from './engine/data.js';
-import { imgUrl, loadImage } from './util.js';
+import { esc, imgUrl, loadImage } from './util.js';
 import { charmPicture } from './charmpics.js';
 
 export * from './engine/items.js';
 
+// CS2's own pictures of its tools (panorama/images/econ/tools), shipped with the game for players with no CS2 install.
+const TOOL_ART = { [UNIT_ID]: 'casket', [NAME_TAG]: 'tag', [SWAP_TOOL]: 'stattrak_swap_tool' };
+
 export function itemImage(item, size = 'm') {
   const d = itemDef(item);
   if (!d) return '';
-  if (item.t === 'unit') return 'img/storage-unit.svg';
+  if (item.t === 'unit' || item.t === 'tool') return `img/tools/${TOOL_ART[item.id]}.png`;
   if (item.t === 'crate' && d.custom) return crateImage(d, size);
   if (d.slab) return slabImage(d, size);
   if (item.t === 'charm') return charmPicture(item, imgUrl(d.img, size)); // its own pattern's colours
   return imgUrl(d.img, size);
+}
+
+// A Name Tag's name as CS2's tiles show it, under the item's own: in quotes and italics ('' if it has none).
+export function nameTagHtml(item) {
+  const name = customName(item);
+  return name ? `<div class="tag-name" title="${esc(name)}">"<bdi>${esc(name)}</bdi>"</div>` : '';
+}
+
+// An item's whole name for a page: a Name Tag's name is kept apart, so right-to-left text can't run into the item's own.
+export function nameHtml(item) {
+  const name = customName(item);
+  return name ? `${esc(realName(item))} "<bdi>${esc(name)}</bdi>"` : esc(itemName(item));
 }
 
 // A Sticker Slab's picture: its sticker cropped to the artwork (Steam's sticker icons are mostly margin), filling the case

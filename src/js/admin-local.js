@@ -8,16 +8,16 @@ import { S, save, applyDelta, replaceState } from './state.js';
 import { online, act } from './backend.js';
 import { staffPc } from './account.js';
 import { playPrefs } from './pages/play-settings.js';
-import { GameError, makeCtx, delta, give, take, takeForStaff } from './engine/actions.js';
+import { GameError, makeCtx, delta, give, take, takeForStaff, clearNameForStaff } from './engine/actions.js';
 import { freshState, upgradeState } from './engine/economy.js';
-import { backfillSerials } from './engine/items.js';
+import { backfillSerials, customName, itemName } from './engine/items.js';
 import { backfillIndex } from './engine/itemindex.js';
 import * as N from './engine/npcs.js';
 import { ownedItems } from './engine/storage.js';
 import { round2 } from './engine/util.js';
 import {
   KEEP_AUTO, MAX_MANUAL, PAGE, LEVEL_NAMES, fail, isObj, pick, worthOf, replaceInPlace, revOf, rawView, text, int, number, bool,
-  optBool, editPlan, applyEdit, rawEdit, restoreMerge, saveFile, giveSpecs, buildItems, localSerial, removeUids, givenDetail, removedDetail,
+  optBool, editPlan, applyEdit, rawEdit, restoreMerge, saveFile, giveSpecs, buildItems, localSerial, removeUids, givenDetail, removedDetail, unnamedDetail,
 } from './engine/admin.js';
 
 const DB = 'cs2-admin';
@@ -448,6 +448,30 @@ const METHODS = {
       const { ctx, items } = takeMine(S);
       applyDelta(delta(ctx), { local: true });
       return { answer: { removed: items.length }, detail: removedDetail(items) };
+    });
+  },
+
+  // A bad name comes off an item, yours (in a Storage Unit too) or a trader's: only the name changes.
+  async 'items.unname'(a) {
+    const t = await who(a.id);
+    const [uid] = removeUids([a.uid]);
+    const named = (items) => {
+      const it = items.find((i) => i.uid === uid) || fail('Item not found (it may have been sold or traded)', 'missing');
+      if (!customName(it)) fail(`${itemName(it)} has no custom name`);
+      return {};
+    };
+    if (t.npc) {
+      return change(t, 'items.unname', 'name removal', () => named(npcNow(t).inv), () => {
+        const r = clearNameForStaff(makeCtx(N.npcState(S.social, t.id)), uid);
+        socialChanged();
+        return { answer: { cleared: r.name }, detail: unnamedDetail(r) };
+      });
+    }
+    return change(t, 'items.unname', 'name removal', () => named(ownedItems(S)), () => {
+      const ctx = makeCtx(S);
+      const r = clearNameForStaff(ctx, uid);
+      applyDelta(delta(ctx), { local: true });
+      return { answer: { cleared: r.name }, detail: unnamedDetail(r) };
     });
   },
 

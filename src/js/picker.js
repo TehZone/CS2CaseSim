@@ -19,7 +19,7 @@ export function mountPicker(el, { items, selected, onChange, empty = 'No items',
         const np = I.nameParts(it);
         return `<div class="card ${selected.has(it.uid) ? 'selected' : ''}" data-uid="${it.uid}" style="--rc:${r.c}" title="${esc(I.itemName(it))}">
           <div class="sel"></div><div class="img"><img loading="lazy" src="${I.itemImage(it, 's')}"></div><div class="rbar"></div>
-          <div class="meta"><div class="n2">${esc(np.bottom)}</div><div class="row"><span class="val">${money(v)}</span></div></div></div>`;
+          <div class="meta"><div class="n2">${esc(np.bottom)}</div>${I.nameTagHtml(it)}<div class="row"><span class="val">${money(v)}</span></div></div></div>`;
       }).join('')}</div>` : `<div class="empty" style="padding:30px">${empty}</div>`}`;
     el.querySelectorAll('[data-uid]').forEach((c) => c.addEventListener('click', () => {
       const u = c.dataset.uid;

@@ -1071,6 +1071,114 @@ try {
     sc.close();
   }
 
+  // ---- tools in the panel: staff give them, and a bad name can be cleared --------------------------------------------------
+  {
+    const regT = await post('/api/register', { name: 'namer', password: 'namerpass1' }, IP.other);
+    const nc = await client(regT.body.token, IP.other);
+    const nid = nc.user.id;
+    const tidyId = '300000000000000099';
+    mock.member(tidyId, { username: 'tidy_d', roles: ['mod'] });
+    const regM = await post('/api/register', { name: 'tidymod', password: 'tidymodpass1' }, '10.0.9.1');
+    const tidy = await client(regM.body.token, '10.0.9.1');
+    await linkByDb(tidy.user.id, tidyId, 'tidy_d');
+    const modLevel = await server.admin.levelOf(tidy.user.id, { refresh: true });
+    const regO = await post('/api/register', { name: 'tradepal', password: 'tradepalpass1' }, '10.0.9.2');
+    const pal = await client(regO.body.token, '10.0.9.2');
+    await boss.admin('edit', { id: nid, set: { money: 100 } });
+    const sk = Object.values(D.skins).find((s) => !s.v && !s.star);
+    const gave = await boss.admin('items.give', { id: nid, items: [{ t: 'tool', id: 'nametag', n: 9 }, { t: 'tool', id: 'stattrak_swap' }, { t: 'skin', id: sk.id, n: 3 }, { t: 'unit', id: 'casket' }] });
+    await until(() => nc.st.inv.filter((i) => i.t === 'tool').length === 10);
+    const tools = nc.st.inv.filter((i) => i.t === 'tool');
+    check('panel: staff can give tools; they arrive with "Admin" as their source and no serial', gave.added === 14 && tools.every((t) => t.src === 'Admin' && t.sn === undefined), JSON.stringify(tools[0]));
+    const badKind = await refused(boss.admin('items.give', { id: nid, items: [{ t: 'tool', id: 'nope' }] }));
+    check('panel: an unknown tool is refused', /Unknown tool/.test(badKind?.message || ''), badKind?.message);
+    const [s1, s2, s3] = nc.st.inv.filter((i) => i.t === 'skin');
+    const unit = nc.st.inv.find((i) => i.t === 'unit');
+    const name = '@everyone **hi**';
+    await nc.act('tools.name', { uid: s1.uid, name });
+    await nc.act('tools.name', { uid: s2.uid, name: 'in a unit' });
+    await nc.act('tools.name', { uid: s3.uid, name: 'in an offer' });
+    await nc.act('storage.name', { unit: unit.uid, name: 'box' });
+    await nc.act('storage.deposit', { unit: unit.uid, uids: [s2.uid] });
+    const offer = await nc.rpc('trade', 'offer', { to: 'tradepal', give: { uids: [s3.uid], money: 0 }, get: { uids: [], money: 0 } });
+
+    check('panel: a moderator is one here', modLevel === 1, String(modLevel));
+    const notStaff = await refused(pal.admin('items.unname', { id: nid, uid: s1.uid }));
+    check('panel: a player can\'t clear a name', perm(notStaff) && (await server.store.load(nid)).st.inv.find((i) => i.uid === s1.uid).name === name, notStaff?.message);
+    const up = await refused(tidy.admin('items.unname', { id: (await idOf('boss')), uid: 'x' }));
+    check('panel: nor a moderator one of an admin\'s', perm(up), up?.message);
+    nc.events.length = 0;
+    const cleared = await tidy.admin('items.unname', { id: nid, uid: s1.uid });
+    await until(() => !nc.st.inv.find((i) => i.uid === s1.uid)?.name);
+    const log = await lastAudit('items.unname');
+    check('panel: a moderator clears a bad name: it\'s gone from memory, the database and the player\'s game', cleared.cleared === name && !(await server.store.load(nid)).st.inv.find((i) => i.uid === s1.uid).name
+      && !(await dbState(nid)).inv.find((i) => i.uid === s1.uid).name && !('name' in nc.st.inv.find((i) => i.uid === s1.uid)));
+    check('panel: and it\'s in the audit log, name and all', log?.actor === 'tidymod' && log.target_name === 'namer' && log.detail.name === name && log.detail.uid === s1.uid && log.detail.item === sk.n, JSON.stringify(log?.detail));
+    await until(() => mock.messages.some((m) => m.channel === mock.modLogChannel && m.body.embeds?.[0]?.title === 'Item name cleared'));
+    const posted = mock.messages.find((m) => m.channel === mock.modLogChannel && m.body.embeds?.[0]?.title === 'Item name cleared');
+    check('panel: the mod log says so, and pings nobody', /@everyone/.test(JSON.stringify(posted?.body.embeds)) && JSON.stringify(posted?.body.allowed_mentions) === '{"parse":[]}' && !/\*\*hi\*\*/.test(posted.body.embeds[0].fields.at(-1).value), JSON.stringify(posted?.body.embeds?.[0]?.fields));
+    const again = await refused(tidy.admin('items.unname', { id: nid, uid: s1.uid }));
+    check('panel: nothing to clear is refused', /no custom name/.test(again?.message || ''), again?.message);
+    const noItem = await refused(tidy.admin('items.unname', { id: nid, uid: 'nope' }));
+    check('panel: nor an item they don\'t have', noItem?.code === 'missing');
+
+    await boss.admin('items.unname', { id: nid, uid: s2.uid });
+    await until(() => !nc.st.stored.find((i) => i.uid === s2.uid)?.name);
+    check('panel: a name is cleared in a Storage Unit too, and the unit keeps the item', !('name' in nc.st.stored.find((i) => i.uid === s2.uid)) && !(await server.store.load(nid)).st.stored.find((i) => i.uid === s2.uid).name && (await server.store.load(nid)).st.stored.find((i) => i.uid === s2.uid).su === unit.uid);
+
+    pal.events.length = 0;
+    await boss.admin('items.unname', { id: nid, uid: s3.uid });
+    const pushed = await pal.waitFor((m) => m.t === 'trades' && m.trades.some((t) => t.id === offer.id && !t.give.items[0].name));
+    const { rows: [tr] } = await server.db.query('SELECT offer FROM trades WHERE id = $1', [offer.id]);
+    check('panel: and off an item in an open offer: the other player stops seeing it, and the offer stays open', !!pushed && !json(tr.offer).giveItems[0].name && server.srv.trades.open.has(offer.id));
+
+    // A closed offer keeps a copy of what was in it, shown in Recent trades: that goes too.
+    await nc.act('tools.name', { uid: s1.uid, name: 'closed offer' });
+    const closed = await nc.rpc('trade', 'offer', { to: 'tradepal', give: { uids: [s1.uid], money: 0 }, get: { uids: [], money: 0 } });
+    await pal.rpc('trade', 'decline', { id: closed.id });
+    pal.events.length = 0;
+    await boss.admin('items.unname', { id: nid, uid: s1.uid });
+    const pushedClosed = await pal.waitFor((m) => m.t === 'trades' && m.trades.some((t) => t.id === closed.id && t.status === 'declined' && !t.give.items[0].name));
+    const { rows: [trClosed] } = await server.db.query('SELECT status, offer FROM trades WHERE id = $1', [closed.id]);
+    check('panel: and off the copy in a closed offer: Recent trades stops showing it, and the offer stays closed', !!pushedClosed && !json(trClosed.offer).giveItems[0].name && trClosed.status === 'declined');
+    // The mod log can't be given a masked link.
+    const masked = '[x](http://a.co)';
+    await nc.act('tools.name', { uid: s1.uid, name: masked });
+    await boss.admin('items.unname', { id: nid, uid: s1.uid });
+    const maskedPost = await until(() => mock.messages.find((m) => m.channel === mock.modLogChannel && m.body.embeds?.[0]?.title === 'Item name cleared' && /a\.co/.test(m.body.embeds[0].fields.at(-1).value)));
+    check('panel: a name is no link in the mod log', !!maskedPost && maskedPost.body.embeds[0].fields.at(-1).value.includes('\\[x\\]\\(http://a.co\\)'), maskedPost?.body.embeds[0].fields.at(-1).value);
+    // The clear is on record whatever happens to the copies.
+    await nc.act('tools.name', { uid: s1.uid, name: 'copies fail' });
+    const dropName = server.srv.trades.dropName;
+    server.srv.trades.dropName = async () => { throw new Error('the offers table is gone'); };
+    await refused(boss.admin('items.unname', { id: nid, uid: s1.uid }));
+    server.srv.trades.dropName = dropName;
+    const onRecord = await lastAudit('items.unname');
+    check('panel: a clear is audited even if its offers can\'t be reached', onRecord?.detail.name === 'copies fail' && onRecord.detail.uid === s1.uid && !(await server.store.load(nid)).st.inv.find((i) => i.uid === s1.uid).name, JSON.stringify(onRecord?.detail));
+    // Going back to before a clear doesn't bring the name back.
+    await nc.rpc('trade', 'cancel', { id: offer.id });
+    await nc.act('tools.name', { uid: s1.uid, name: 'bad again' });
+    await nc.act('tools.name', { uid: s3.uid, name: 'fine name' });
+    const before = await boss.admin('snapshot.save', { id: nid, label: 'before the clear' });
+    await boss.admin('items.unname', { id: nid, uid: s1.uid });
+    await nc.act('tools.name', { uid: s1.uid, name: 'its new name' });
+    await boss.admin('snapshot.restore', { snap: before.id });
+    const back = (await server.store.load(nid)).st;
+    check('panel: restoring a snapshot leaves a cleared name cleared, and every other name as it was', !back.inv.find((i) => i.uid === s1.uid).name && back.inv.find((i) => i.uid === s3.uid).name === 'fine name', JSON.stringify(back.inv.filter((i) => i.t === 'skin').map((i) => i.name)));
+    await until(() => !nc.st.inv.find((i) => i.uid === s1.uid)?.name);
+
+    const raw = await refused(boss.admin('edit.raw', { id: nid, base: (await boss.admin('player', { id: nid })).rev, state: { inv: [] } }));
+    check('panel: a raw edit still can\'t reach items', /can't be edited here/.test(raw?.message || ''), raw?.message);
+    const editName = await refused(boss.admin('edit', { id: nid, set: { name: 'x' } }));
+    check('panel: nor an edit', /Unknown field/.test(editName?.message || ''), editName?.message);
+
+    const snap = await boss.admin('snapshot.save', { id: nid, label: 'names' });
+    await nc.act('tools.name', { uid: s1.uid, name: 'after' });
+    const snapRow = (await boss.admin('snapshot.get', { snap: snap.id }));
+    check('panel: a snapshot keeps names as they were', !snapRow.state.inv.find((i) => i.uid === s1.uid).name && snapRow.state.inv.some((i) => i.t === 'tool'));
+    for (const c of [nc, tidy, pal]) c.close();
+  }
+
   for (const c of [boss, alice, bob]) c.close();
 } catch (e) {
   failed++;

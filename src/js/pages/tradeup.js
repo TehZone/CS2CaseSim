@@ -113,7 +113,7 @@ function draw() {
           const np = I.nameParts(it);
           return `<div class="card ${w ? 'ineligible' : ''}" data-add="${it.uid}" style="--rc:${r.c}" title="${esc(w || 'Add to contract')}">
             <div class="img"><img loading="lazy" src="${I.itemImage(it, 's')}"></div><div class="rbar"></div>
-            <div class="meta"><div class="n1">${esc(np.top)}</div><div class="n2">${esc(np.bottom)}</div>
+            <div class="meta"><div class="n1">${esc(np.top)}</div><div class="n2">${esc(np.bottom)}</div>${I.nameTagHtml(it)}
             <div class="row"><span class="val">${money(v)}</span><span class="wear">${it.fl != null ? it.fl.toFixed(4) : ''}</span></div></div></div>`;
         }).join('')}</div>` : '<div class="empty">No skins to trade up. Open some cases or souvenir packages first.</div>'}
       </div>

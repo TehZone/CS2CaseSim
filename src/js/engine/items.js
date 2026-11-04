@@ -43,8 +43,23 @@ export const UNIT_ID = 'casket';
 const UNIT_DEF = { id: UNIT_ID, n: 'Storage Unit', r: 0, p: 0 };
 export const makeUnitItem = (src = '') => ({ uid: uid(), t: 'unit', id: UNIT_ID, at: Date.now(), src });
 export const isUnit = (item) => item.t === 'unit';
-// What another player, a trader or a stake can take: not locked items, and not units.
-export const tradable = (item) => !item.lk && !isUnit(item);
+// What another player, a trader or a stake can take: not locked items, not units, and nothing the game no longer has.
+export const tradable = (item) => !item.lk && !isUnit(item) && !!itemDef(item);
+
+// ---- tools -----------------------------------------------------------------------------------
+// CS2's Name Tag (item 1200) and StatTrak™ Swap Tool (item 1324), t: 'tool' in your inventory: Base Grade, with CS2's own
+// descriptions. Nothing in items_game.txt says `cannot trade` for them, so unlike the Storage Unit they trade and sell like
+// any other item. Their prices are the Steam Market's, fixed like the key's and the unit's, so one always sells for what it
+// cost. What they do: tools.js.
+export const NAME_TAG = 'nametag', SWAP_TOOL = 'stattrak_swap';
+export const TOOLS = {
+  [NAME_TAG]: { id: NAME_TAG, n: 'Name Tag', r: 0, p: 4.47, use: 'Apply Name Tag', desc: 'This item will rename a weapon. A custom engraved nameplate will be applied to the weapon and viewable in game.' },
+  [SWAP_TOOL]: { id: SWAP_TOOL, n: 'StatTrak™ Swap Tool', r: 0, p: 1.62, use: 'Open StatTrak™ Swap Tool', desc: 'This item swaps StatTrak™ values between two of the same item type.' },
+};
+export const makeToolItem = (id, src = '') => ({ uid: uid(), t: 'tool', id, at: Date.now(), src });
+export const isTool = (item) => item.t === 'tool';
+// The name a Name Tag gave an item ('' if none). (A Storage Unit's label is in `name` too, but it's no Name Tag's.)
+export const customName = (item) => (item.t === 'skin' && item.name) || '';
 
 // ---- charms ----------------------------------------------------------------------------------
 // A charm hangs off a gun's keychain point. Each copy has a pattern (1-100,000, like CS2's): which way it hangs and turns.
@@ -172,6 +187,7 @@ export function itemDef(item) {
     case 'crate': return D.caseById?.[item.id] || null; // a case in your inventory, opened with its key
     case 'key': return D.keys[item.id] || null;
     case 'unit': return UNIT_DEF;
+    case 'tool': return Object.hasOwn(TOOLS, item.id) ? TOOLS[item.id] : null;
   }
   return null;
 }
@@ -183,14 +199,16 @@ export function itemName(item) {
   if (item.t === 'pro') return `${d.n} (${eventShort(d.ev)})`;
   if (item.t === 'unit') return item.name ? `${d.n} "${item.name}"` : d.n;
   if (item.t !== 'skin') return d.n;
-  if (item.sv) return 'Souvenir ' + d.n;
-  if (!item.stt) return d.n;
-  return d.star ? d.n.replace('★ ', '★ StatTrak™ ') : 'StatTrak™ ' + d.n;
+  const real = item.sv ? 'Souvenir ' + d.n : !item.stt ? d.n : d.star ? d.n.replace('★ ', '★ StatTrak™ ') : 'StatTrak™ ' + d.n;
+  return item.name ? `${real} "${item.name}"` : real;
 }
+// An item's own name, whatever a Name Tag called it.
+export const realName = (item) => itemName({ ...item, name: null });
 
 // "AK-47" + "Redline" split, used by cards.
 export function nameParts(item) {
   const d = itemDef(item);
+  if (!d) return { top: '', bottom: 'Unknown item' };
   if (item.t === 'skin') {
     const [w, f] = d.n.replace('★ ', '').split(' | ');
     const pre = (d.star ? '★ ' : '') + (item.sv ? 'Souvenir ' : item.stt ? 'StatTrak™ ' : '');
@@ -210,6 +228,7 @@ export function nameParts(item) {
   if (item.t === 'crate') return { top: 'Container', bottom: d.n };
   if (item.t === 'key') return { top: 'Key', bottom: d.n };
   if (item.t === 'unit') return { top: d.n, bottom: item.name || 'Not labelled yet' };
+  if (item.t === 'tool') return { top: 'Tool', bottom: d.n };
   return { top: '', bottom: '' };
 }
 
@@ -223,13 +242,13 @@ export function rarityRank(item) {
   if (!d) return 0;
   if (item.t === 'skin' && d.star) return 6;
   if (item.t === 'pro') return 2 + proTier(d.ovr);
-  if (item.t === 'crate' || item.t === 'key' || item.t === 'unit') return 0;
+  if (item.t === 'crate' || item.t === 'key' || item.t === 'unit' || item.t === 'tool') return 0;
   return d.r;
 }
 export function rarityInfo(item) {
   const rank = rarityRank(item);
   if (item.t === 'pro') { const t = PRO_RARITY[rank - 2]; return { rank, n: t.n, c: t.c }; }
-  const fam = item.t === 'sticker' || item.t === 'charm' ? 'sticker' : ['agent', 'chicken', 'crate', 'key', 'unit'].includes(item.t) ? item.t : 'skin';
+  const fam = item.t === 'sticker' || item.t === 'charm' ? 'sticker' : ['agent', 'chicken', 'crate', 'key', 'unit', 'tool'].includes(item.t) ? item.t : 'skin';
   let n = RARITY[fam][rank] || '';
   if (item.t === 'skin' && rank === 6) n = itemDef(item).cat === 'gloves' ? 'Extraordinary' : 'Covert ★';
   return { rank, n, c: rarityColor(rank) };
@@ -242,7 +261,7 @@ export const canHaveStickers = (item) => item.t === 'skin' && !item.sv && STICKE
 export function basePrice(item) {
   const d = itemDef(item);
   if (!d) return 0;
-  if (item.t === 'sticker' || item.t === 'agent' || item.t === 'charm' || item.t === 'unit') return d.p || 0;
+  if (item.t === 'sticker' || item.t === 'agent' || item.t === 'charm' || item.t === 'unit' || item.t === 'tool') return d.p || 0;
   if (item.t === 'chicken') return chickenValue(item);
   if (item.t === 'pro') return proValue(d);
   if (item.t === 'crate') return d.price || 0;
@@ -261,6 +280,7 @@ export function basePrice(item) {
 export function floatMultiplier(item) {
   if (item.t !== 'skin' || item.fl == null) return 1;
   const d = itemDef(item);
+  if (!d) return 1; // (a skin the game no longer has: worth nothing, see basePrice)
   const f = item.fl;
   const wk = wearOf(f);
   if (wk === 'FN') {
@@ -281,7 +301,7 @@ export function floatMultiplier(item) {
 
 export function patternInfo(item) {
   if (item.t === 'charm') return charmPattern(item.pat);
-  if (item.t !== 'skin') return { mult: 1, label: '', tier: '', info: [] };
+  if (item.t !== 'skin' || !itemDef(item)) return { mult: 1, label: '', tier: '', info: [] };
   return analyzePattern(itemDef(item), item.sd);
 }
 
