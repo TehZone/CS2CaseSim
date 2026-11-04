@@ -9,8 +9,8 @@ import { MAIN_SLOTS, GUN_GROUPS, ZEUS_SLOT, equipped, equippedUids, slotName } f
 import { cs2Play } from '../cs2/api.js';
 import { iconFor } from '../play/icons.js';
 import { refreshRanks } from '../floatranks.js';
-import { ownedItems, ownedValue, storedOf, UNIT_PRICE } from '../engine/storage.js';
-import { buyUnit, moveToUnit, openUnit } from './storage.js';
+import { ownedItems, ownedValue, storedOf } from '../engine/storage.js';
+import { moveToUnit, openUnit } from './storage.js';
 
 const view = { type: 'all', sort: 'new', q: '', select: false, selected: new Set(), limit: 150 };
 const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['crate', 'Cases'], ['key', 'Keys'], ['unit', 'Storage Units']];
@@ -90,7 +90,7 @@ function draw() {
            <button class="btn" data-a="storesel" ${selItems.length ? '' : 'disabled'}>Store ${selItems.length}…</button>
            <button class="btn primary" data-a="sellsel" ${selItems.length ? '' : 'disabled'}>Sell ${selItems.length} (${money(selValue)})</button>
            <button class="btn ghost" data-a="done">Done</button>`
-        : `<button class="btn" data-a="buyunit" title="Stores up to 1,000 items. Can't be traded or sold.">Buy Storage Unit · ${money(UNIT_PRICE)}</button><button class="btn" data-a="loadout">Loadout</button><button class="btn" data-a="bulk">Bulk sell…</button><button class="btn" data-a="select">Select</button>`}
+        : `<button class="btn" data-a="loadout">Loadout</button><button class="btn" data-a="bulk">Bulk sell…</button><button class="btn" data-a="select">Select</button>`}
     </div>
     ${items.length ? `<div class="grid">${items.slice(0, view.limit).map((i) => itemCard(i, { selectable: view.select, selected: view.selected.has(i.uid) })).join('')}</div>` : `<div class="empty">${S.inv.length ? 'Nothing matches your filters.' : 'Your inventory is empty. Open some cases!'}</div>`}
     ${items.length > view.limit ? `<div class="pager"><button class="btn" data-a="more">Show more (${items.length - view.limit} more)</button></div>` : ''}
@@ -131,7 +131,6 @@ async function action(a, items) {
   if (a === 'storesel') {
     if (await moveToUnit(S.inv.filter((i) => view.selected.has(i.uid)))) { view.selected.clear(); view.select = false; draw(); }
   }
-  if (a === 'buyunit') { if (await buyUnit()) draw(); }
   if (a === 'bulk') bulkSell();
   if (a === 'loadout') loadoutModal();
 }
