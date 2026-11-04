@@ -59,6 +59,8 @@ const served = [];
 let corrupt = false; // (the next exe asked for comes with one bit wrong)
 const feed = http.createServer((req, res) => {
   const name = path.basename(req.url);
+  // (As GitHub does: a release file's address redirects to where the file really is.)
+  if (!req.url.startsWith('/assets/')) { res.writeHead(302, { location: `/assets/${name}` }); return res.end(); }
   const file = path.join(WORK, 'new', name);
   served.push(name);
   if (!fs.existsSync(file)) { res.writeHead(404); return res.end('Not Found'); }
@@ -239,6 +241,8 @@ async function runInstaller() {
     const running = await until(() => (gameProcesses().includes(home) ? gameProcesses() : ''), 120000, 'the game to start again');
     check('installer: the game started again by itself', !!running, secs());
     check('installer: and it is the new version running', await until(() => updateLog().includes(`${NEW} started (installer)`), 180000, 'the new version\'s log'), secs());
+    const downloads = () => fs.readdirSync(path.join(DATA, 'updates')).filter((f) => /^\d+-/.test(f));
+    check('installer: the downloaded installer is cleared up a minute later', await until(() => !downloads().length, 120000, 'the download to be cleared'), secs());
     const saved = JSON.parse(fs.readFileSync(path.join(DATA, 'save.json'), 'utf8'));
     check('installer: the save came through', Math.abs(saved.money - money) < 0.01, `money ${saved.money}`);
   } finally {

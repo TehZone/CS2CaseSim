@@ -100,7 +100,7 @@ function createUpdater({ version, kind, exe = '', dir, tempDir = os.tmpdir(), ba
     } catch (e) {
       out.destroy();
       if (!out.closed) await once(out, 'close').catch(() => {});
-      fs.rmSync(target, { force: true });
+      try { fs.rmSync(target, { force: true }); } catch {} // (what's left goes at the next start; the reason is e)
       throw e;
     } finally {
       clearTimeout(stall);
@@ -115,9 +115,11 @@ function createUpdater({ version, kind, exe = '', dir, tempDir = os.tmpdir(), ba
     job = (async () => {
       if (!latest || !canInstall(latest)) return { ok: false, error: 'This copy of the game can\'t update itself. Get the new version from the download page.' };
       const file = fileOf(latest);
-      const target = kind === 'portable' ? `${exe}.update` : path.join(dir, file.name);
-      if (ready === target && fs.existsSync(target)) return { ok: true };
+      if (ready && fs.existsSync(ready)) return { ok: true };
       ready = '';
+      // (The installer gets a new name each time: an old one that has run can stay undeletable for a long while, with
+      // nothing to show what's holding it, and a fixed name would then fail every update after it.)
+      const target = kind === 'portable' ? `${exe}.update` : path.join(dir, `${Date.now()}-${file.name}`);
       try {
         fs.mkdirSync(path.dirname(target), { recursive: true });
         log(`downloading ${file.name} (${file.size} bytes) to ${target}`);
@@ -127,10 +129,10 @@ function createUpdater({ version, kind, exe = '', dir, tempDir = os.tmpdir(), ba
         return { ok: true };
       } catch (e) {
         const why = e?.message || String(e);
-        log(`download failed: ${e?.code || why}`);
+        log(`download failed: ${why}`);
         if (cancelled) return { ok: false, cancelled: true, error: '' };
         if (why === 'bad-file') return { ok: false, error: 'The download doesn\'t match the release, so it wasn\'t installed. Try again.' };
-        if (['EACCES', 'EPERM', 'EROFS'].includes(e?.code)) return { ok: false, error: 'The game can\'t write to the folder it\'s in. Move it somewhere you can write to, or get the new version from the download page.' };
+        if (kind === 'portable' && ['EACCES', 'EPERM', 'EROFS'].includes(e?.code)) return { ok: false, error: 'The game can\'t write to the folder it\'s in. Move it somewhere you can write to, or get the new version from the download page.' };
         if (e?.code === 'ENOSPC') return { ok: false, error: 'There isn\'t enough disk space for the update.' };
         return { ok: false, error: 'The download failed. Check your internet connection and try again.' };
       }
@@ -173,10 +175,11 @@ function createUpdater({ version, kind, exe = '', dir, tempDir = os.tmpdir(), ba
     }
   }
 
-  // What an earlier update left behind.
+  // What an earlier update left behind. Anything that can't go yet stays for the next time, and never gets in the way.
   function cleanup() {
-    try { if (dir) fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-    try { if (exe) fs.rmSync(`${exe}.update`, { force: true }); } catch {}
+    if (job || ready) return;
+    const old = dir && fs.existsSync(dir) ? fs.readdirSync(dir).map((f) => path.join(dir, f)) : [];
+    for (const f of [...old, ...(exe ? [`${exe}.update`] : [])]) try { fs.rmSync(f, { force: true }); } catch {}
   }
 
   return { check, download, cancel, install, cleanup };
@@ -207,7 +210,11 @@ function initUpdater({ smoke = false } = {}) {
     base: feed || RELEASE_FILES, fetcher: (u, o) => net.fetch(u, o), quit: () => app.quit(), log,
     enabled: !smoke && (app.isPackaged || !!feed),
   });
-  if (app.isPackaged && !smoke) { log(`started (${kind})`); updater.cleanup(); }
+  if (app.isPackaged && !smoke) {
+    log(`started (${kind})`);
+    updater.cleanup();
+    setTimeout(updater.cleanup, 60000); // (the installer that started this game is still closing just now)
+  }
 
   // What the page needs before anything else (preload.js): its version, and a test run's own server.
   const build = { version: app.getVersion(), packaged: app.isPackaged, server: localOnly(process.env.CS2SIM_SMOKE_SERVER) };

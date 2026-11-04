@@ -122,7 +122,8 @@ try {
   check('a release with only the installer: a portable game can\'t install it', !(await make({ kind: 'portable', exe: path.join(DIR, 'g.exe') }).check()).install);
 
   // ---- the download's checks ----------------------------------------------------------------------------------------
-  const target = path.join(DIR, 'updates', 'Setup.exe');
+  const updates = path.join(DIR, 'updates');
+  const left = () => (fs.existsSync(updates) ? fs.readdirSync(updates) : []);
   const downloaded = async (routes, o = {}) => {
     route = routes;
     const u = make(o);
@@ -131,22 +132,26 @@ try {
     return { u, result: await u.download((p) => progress.push(p)), progress };
   };
   let d = await downloaded(good());
-  check('a good download: checked, on disk, with progress up to the full size', d.result.ok && fs.readFileSync(target).equals(installerBytes)
+  check('a good download: checked, on disk, with progress up to the full size', d.result.ok && left().length === 1 && fs.readFileSync(path.join(updates, left()[0])).equals(installerBytes)
     && d.progress.at(-1)?.received === installerBytes.length && d.progress.at(-1)?.total === installerBytes.length, JSON.stringify([d.result, d.progress.length]));
-  fs.rmSync(target, { force: true });
+  const first = left()[0];
+  d.u.cleanup();
+  check('a download ready to install isn\'t cleared from under it', left().includes(first));
+  check('asking again doesn\'t download it twice', (await d.u.download()).ok && left().length === 1);
+  fs.rmSync(updates, { recursive: true, force: true });
 
   const corrupt = Buffer.from(installerBytes); corrupt[1000] ^= 1;
   d = await downloaded({ ...good(), 'Setup.exe': corrupt });
-  check('a corrupt download (one bit) is refused and deleted', !d.result.ok && /doesn't match/.test(d.result.error) && !fs.existsSync(target), d.result.error);
+  check('a corrupt download (one bit) is refused and deleted', !d.result.ok && /doesn't match/.test(d.result.error) && !left().length, d.result.error);
   check('and nothing can be installed from it', !(await d.u.install()).ok);
   d = await downloaded({ ...good(), 'Setup.exe': installerBytes.subarray(0, 1000) });
-  check('a short download is refused and deleted', !d.result.ok && !fs.existsSync(target));
+  check('a short download is refused and deleted', !d.result.ok && !left().length);
   d = await downloaded({ ...good(), 'Setup.exe': Buffer.concat([installerBytes, Buffer.from('more')]) });
-  check('a long download is refused and deleted', !d.result.ok && !fs.existsSync(target));
+  check('a long download is refused and deleted', !d.result.ok && !left().length);
   d = await downloaded({ 'latest.json': manifest() });
-  check('a file that\'s missing from the release fails with a message', !d.result.ok && /download failed/.test(d.result.error) && !fs.existsSync(target));
+  check('a file that\'s missing from the release fails with a message', !d.result.ok && /download failed/.test(d.result.error) && !left().length);
   d = await downloaded({ ...good(), 'Setup.exe': (res) => { res.writeHead(200); res.write(installerBytes.subarray(0, 5000)); setTimeout(() => res.socket.destroy(), 50); } });
-  check('a connection lost halfway fails with a message and leaves nothing', !d.result.ok && !fs.existsSync(target));
+  check('a connection lost halfway fails with a message and leaves nothing', !d.result.ok && !left().length);
 
   route = { ...good(), 'Setup.exe': (res) => { res.writeHead(200); res.write(installerBytes.subarray(0, 5000)); } }; // (and never finishes)
   let u = make();
@@ -155,7 +160,7 @@ try {
   await wait(200);
   u.cancel();
   r = await going;
-  check('cancelling stops it and leaves nothing', !r.ok && r.cancelled && !fs.existsSync(target));
+  check('cancelling stops it and leaves nothing', !r.ok && r.cancelled && !left().length);
   const nothing = await make().download();
   check('nothing to download: a message, no crash', !nothing.ok);
 
@@ -175,7 +180,7 @@ try {
   await u.check();
   await u.download();
   r = await u.install();
-  check('the installer runs by itself, asks nothing and starts the game after', r.ok && sp.calls.length === 1 && sp.calls[0].cmd === target && sp.calls[0].args.join(' ') === '--updated --force-run' && sp.calls[0].opts.detached);
+  check('the installer runs by itself, asks nothing and starts the game after', r.ok && sp.calls.length === 1 && path.dirname(sp.calls[0].cmd) === updates && sp.calls[0].cmd.endsWith('Setup.exe') && sp.calls[0].args.join(' ') === '--updated --force-run' && sp.calls[0].opts.detached);
   check('and the game quits', quit === 1);
 
   quit = 0;
@@ -186,10 +191,29 @@ try {
   r = await u.install();
   check('an installer that can\'t start (blocked by antivirus): the game stays open and says so', !r.ok && !!r.error && quit === 0, r.error);
 
-  fs.mkdirSync(path.join(DIR, 'updates'), { recursive: true });
-  fs.writeFileSync(path.join(DIR, 'updates', 'leftover.exe'), 'x');
+  fs.mkdirSync(updates, { recursive: true });
+  fs.writeFileSync(path.join(updates, 'leftover.exe'), 'x');
   make().cleanup();
-  check('what an earlier update left is cleared at the next start', !fs.existsSync(path.join(DIR, 'updates')));
+  check('what an earlier update left is cleared at the next start', !left().includes('leftover.exe'));
+
+  // An installer that has run can stay undeletable for a long while. It must not stop the next update.
+  if (process.platform === 'win32') {
+    const stuck = path.join(updates, 'Setup.exe');
+    fs.writeFileSync(stuck, 'an old installer');
+    const hold = `$f=[IO.File]::Open($env:LOCKED,'Open','Read','None'); [Console]::Out.WriteLine('locked'); Start-Sleep 3; $f.Close()`;
+    const holder = spawn('powershell.exe', ['-NoProfile', '-Command', hold], { env: { ...process.env, LOCKED: stuck }, stdio: ['ignore', 'pipe', 'inherit'] });
+    await new Promise((res) => holder.stdout.once('data', res));
+    route = good();
+    u = make({ spawner: fakeSpawn().spawner });
+    let threw = false;
+    try { u.cleanup(); } catch { threw = true; }
+    check('a leftover that can\'t be deleted is left alone, with no crash', !threw && left().includes('Setup.exe'));
+    await u.check();
+    r = await u.download();
+    check('and the next update downloads anyway', r.ok && left().length === 2, JSON.stringify(left()));
+    await new Promise((res) => holder.once('close', res));
+    fs.rmSync(updates, { recursive: true, force: true });
+  }
 
   // ---- the portable swap, for real ----------------------------------------------------------------------------------
   // The new exe is a copy of node, a real program: told by NODE_OPTIONS to write down where it was started from.

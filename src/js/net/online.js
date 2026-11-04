@@ -18,14 +18,17 @@ import { setRemote } from '../backend.js';
 
 const LS = 'cs2sim-online';
 const PROTOCOL = 1;
-// The one server the game plays on. A packaged game plays nowhere else: there is no way to choose, and a server saved by
-// an older install is ignored, with the login that went with it. Development only (`npm run dev`, `electron .`): a local
+// The one server the game plays on, and the only place its address is written: changing it is this one line, and only
+// when the user says so. Its address shows to staff in the admin panel and nowhere else, so no text may be built from it.
+// A packaged game plays nowhere else: there is no way to choose, and a server saved by an older install is ignored,
+// with the login that went with it. Development only (`npm run dev`, `electron .`): a local
 // server is net.setServerUrl('http://localhost:8787') in the console. A test run of any build: CS2SIM_SMOKE_SERVER
 // (localhost only, see shared/updater.cjs).
 const SERVER = 'https://cs2-case-sim-server.onrender.com';
-// This build, from the app (preload.js): { version, packaged, server }. In a browser (the dev server) there's none.
-const build = window.native?.build || {};
-const packaged = location.protocol === 'app:' && build.packaged !== false;
+// This build, from the app (preload.js): { version, packaged, server }. In a browser (the dev server) there's none, and in
+// Node (scripts/test-play.mjs loads this through the game) no window either.
+const build = globalThis.window?.native?.build || {};
+const packaged = globalThis.location?.protocol === 'app:' && build.packaged !== false;
 const bus = new EventTarget();
 let ws = null, user = null, status = 'offline', seq = 0, retry = 0, retryTimer = null, wantOnline = false;
 const pending = new Map();
@@ -140,7 +143,13 @@ function connect({ asked = false } = {}) {
     const url = net.serverUrl().replace(/^http/, 'ws') + '/ws';
     setStatus('connecting', retry ? 'Reconnecting…' : 'Connecting…');
     try { ws?.close(); } catch {}
-    const sock = new WebSocket(url);
+    // (Fixed text: what the browser throws here has the address in it, and the login window shows what comes back.)
+    let sock;
+    try { sock = new WebSocket(url); } catch {
+      wantOnline = false;
+      setStatus('offline');
+      return reject(new Error('Could not connect to the server'));
+    }
     ws = sock;
     let welcomed = false;
     sock.onopen = () => sock.send(JSON.stringify({ t: 'hello', token: saved().token, data: D.generatedAt, v: PROTOCOL, app: build.version }));
