@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
@@ -17,13 +17,18 @@ const OUT = process.env.CS2SIM_BUILD_DIR ? path.join(STAGE, 'out') : path.join(R
 const { FILE_KINDS, MANIFEST } = createRequire(import.meta.url)('../shared/release.cjs');
 const merge = (a, b) => { for (const [k, v] of Object.entries(b)) a[k] = v && typeof v === 'object' && !Array.isArray(v) ? merge(a[k] || {}, v) : v; return a; };
 const lock = (dir) => { try { return fs.readFileSync(path.join(dir, 'package-lock.json'), 'utf8'); } catch { return ''; } };
+const changelog = (...args) => execFileSync(process.execPath, [path.join(ROOT, 'scripts/build-changelog.mjs'), ...args], { cwd: ROOT, stdio: 'inherit' });
 
+// The changelog is made from git here, so an exe can't ship an old one, and checked again as staged in case a commit
+// landed in between. A real build also records where this version's updates end.
+changelog(...(process.env.CS2SIM_BUILD_DIR ? [] : ['--release']));
 fs.mkdirSync(STAGE, { recursive: true });
 const reuseModules = fs.existsSync(path.join(STAGE, 'node_modules')) && lock(STAGE) === lock(ROOT);
 for (const entry of ['main.js', 'preload.js', 'package.json', 'package-lock.json', 'shared', 'cs2', 'src', 'build', 'tools']) {
   fs.rmSync(path.join(STAGE, entry), { recursive: true, force: true });
   fs.cpSync(path.join(ROOT, entry), path.join(STAGE, entry), { recursive: true });
 }
+changelog('--check', path.join(STAGE, 'src/data/changelog.json'));
 if (!reuseModules) {
   console.log('Copying node_modules to', STAGE, '(first build only)...');
   fs.rmSync(path.join(STAGE, 'node_modules'), { recursive: true, force: true });

@@ -20,13 +20,14 @@ import * as database from './pages/database.js';
 import * as play from './pages/play.js';
 import * as community from './pages/community.js';
 import * as admin from './pages/admin.js';
+import * as changelog from './pages/changelog.js';
 import { npcOf, crowd, inventoryOf } from './engine/npcs.js';
 import { initMatchmaking } from './matchmaking.js';
 import { initProfile } from './profile.js';
 import { initAccount, discordSection, bindDiscordSection, openResetModal, staffPc } from './account.js';
 import { initUpdates } from './update.js';
 
-const PAGES = { play, cases, inventory, tradeup, armory, market, database, gamble, trade, stats, community, admin };
+const PAGES = { play, cases, inventory, tradeup, armory, market, database, gamble, trade, stats, community, admin, changelog };
 let current = null, currentName = 'cases';
 
 function go(name) {

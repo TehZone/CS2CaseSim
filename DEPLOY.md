@@ -154,6 +154,12 @@ Good to know:
 - The lock trusts the version a game sends. It stops everyone playing the normal game, not someone who modifies theirs.
 - `node scripts/test-update-e2e.mjs build` and `run` try a real update on two test builds (its own install, never the real
   game's) against a stand-in for GitHub.
+- **The in-game Changelog needs nothing by hand.** `npm run dist` makes it from the git log, the same source as Discord's
+  update log (`scripts/build-changelog.mjs`), and stops if it can't. A new commit shows as written unless it mentions
+  something players shouldn't read: those are held back, and the build lists them. To show one, or to hide or reword
+  anything, edit `scripts/data/changelog-notes.json`; `node scripts/build-changelog.mjs --report` lists every decision.
+- The build also records where this version's updates end, in `scripts/data/changelog-versions.json`. Commit that file
+  with the release.
 
 ## Notes
 

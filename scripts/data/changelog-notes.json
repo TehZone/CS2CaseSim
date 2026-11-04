@@ -1,0 +1,69 @@
+{
+  "$comment": "The reviewed wording of the in-game changelog (scripts/build-changelog.mjs). Keys are commit subjects. hide: updates players don't see, by why. rewrite: the subject as players read it, 'Area: what changed'. Anything else is shown as written if it passes the generator's checks. None of this ships: only src/data/changelog.json does.",
+  "hide": {
+    "staff tools": [
+      "Admin panel offline: on a PC a staff account has signed in on, it runs your save and the NPC traders",
+      "Admin panel: staff from the Discord server run the online server from the game"
+    ],
+    "the Discord server, not the game": [
+      "Discord: an update log channel with every update to the game and when it landed",
+      "Discord server setup: the game's server built from a config by a setup bot"
+    ],
+    "internal work": [
+      "README: the NPC players are Play's bots by name, country and avatar (their skins were taken out of matches)",
+      "README: charms follow their pattern's colours and rest against the gun",
+      "Smoke: the rounds run also counts draw calls, materials, the bots' objects, audio nodes and listeners",
+      "Tests: the charm Armory test redeems at the moment it picked its offer",
+      "Script to fetch real players for bot names and photos from Liquipedia",
+      "Smoke test: wait for a fresh frame before each screenshot"
+    ],
+    "the same update twice": [
+      "Merge CS2's weapon icons (buy menu and kill feed)"
+    ]
+  },
+  "rewrite": {
+    "Updates: the game updates itself from GitHub, only the latest version plays online, one server": "Updates: the game updates itself, and only the latest version plays online",
+    "Remove the Team manager, chickens and pro cards; the inventory sorts by CS2's Quality": "Inventory: the Team manager, chickens and pro cards are gone, and the inventory sorts by CS2's Quality",
+    "Inspect: the model and backdrop just say Loading… (not extracting from CS2)": "Inspect: the model and backdrop just say Loading… while they get ready",
+    "Play: the bots hold the default guns again (the NPC players' skins taken out: building them between rounds stuttered)": "Play: the bots hold the default guns again, which stops a stutter between rounds",
+    "Play offline: the bots play with the NPC players' own skins (each gun, their knife, their gloves when spectated), built at load for round start and the rest between rounds": "Play offline: the bots play with the NPC players' own skins: each gun, their knife, and their gloves when spectated",
+    "NPCs: 2,000 players (66 active, 20 collectors), and beginner traders who go by plain prices, misjudge skins, believe most of what you say and sometimes own a lucky unbox": "NPCs: 2,000 players, with collectors and beginner traders who sometimes own a lucky unbox",
+    "Friends chat: its message styles only apply inside the chat (.msgs .msg), not to the HUD's own .msg": "Play: the friends chat no longer changes how the HUD's messages look",
+    "Play: CS2's win panel at the end of each round, and the HUD's messages safe from the chat's .msg style": "Play: CS2's win panel at the end of each round",
+    "Play: matches pay through play.start and play.reward, and the end screen shows the money, XP and level": "Play: matches pay out, and the end screen shows the money, XP and level",
+    "Money from matches only, profile levels with Service Medals and level-up drops; bought cases go to the inventory and open with their keys": "Profile: money comes from matches only, with profile levels, Service Medals and level-up drops; bought cases go to the inventory and open with their keys",
+    "Play: half the garbage, and a full collection every few minutes, not every 45 s": "Play: fewer pauses during a match, with far less memory to clean up",
+    "Play: bots' bones worked out once a frame, not five times; out-of-view bots' hitboxes fixed": "Play: bots cost less to animate, and bots out of view take hits in the right place",
+    "Play: no shaders compiled mid-round, and the full collections cost less": "Play: fewer hitches mid-round",
+    "Play: net_graph 2 stays on for your next matches; its log is saved when it starts and after every round": "Play: net_graph 2 stays on for your next matches",
+    "Play: net_graph 2 logs the match to a file, every second and every slow frame with what came with it": "Play: net_graph 2 can log a match to a file, to help track down slow frames",
+    "Play: holding Tab no longer stutters; smoke runs that time bot shots and damage on their own": "Play: holding Tab no longer stutters",
+    "Cases: our own rare special item emblem instead of CS:GO's artwork": "Cases: a new rare special item emblem",
+    "Play runs ~13% faster: auto exposure on the GPU, no matrix work for what doesn't move": "Play: runs about 13% faster",
+    "Item Database tab like CSFloat's: every item, every copy, float ranks": "Item Database: a new tab like CSFloat's, with every item, every copy and float ranks",
+    "Bots play like players at their ranks, as real pros; Premier with CS Rating and map veto": "Play: bots play like players at their ranks, as real pros; Premier with CS Rating and map veto",
+    "Play: the garbage collection a few minutes into a match happens at a round start": "Play: the pause a few minutes into a match now comes at a round start",
+    "Play without stutters: nothing loads, compiles or uploads mid-round": "Play: no more stutters, as nothing loads mid-round",
+    "CS2 content survives updates, and can all be prepared up front": "Settings: CS2 content survives updates, and can all be prepared up front",
+    "Play performance, part 2: everything batched, cheaper bots, video settings": "Play: faster again, with cheaper bots and video settings",
+    "Play runs 3-4x faster: batched map surfaces, leaner bots, no radar canvas": "Play: runs 3-4x faster",
+    "Maps look like CS2's: every surface layer, glass, water, metal, skybox": "Play: maps look like CS2's, with every surface layer, glass, water, metal and skybox",
+    "Maps play like competitive: no Wingman content, doors, breakables, kill volumes": "Play: maps play like competitive, with doors and breakables",
+    "Bots move like players: no more clipping through walls (the jump up to A)": "Play: bots move like players, with no more clipping through walls",
+    "Bind command (scroll jump), the Molotov in the hand, a real fire on the ground": "Play: a bind command (scroll jump), the Molotov in the hand, a real fire on the ground",
+    "M4A4 | Howl on the market; Marble Fade Fire & Ice measured from CS2": "Market: the M4A4 | Howl is on the market; Marble Fade Fire & Ice measured from CS2",
+    "First person in front of a map: dimmer map, weapon keeps its colour": "Inspect: first person in front of a map has a dimmer map, and the weapon keeps its colour",
+    "First person: USP-S slide sits right (clips retargeted to the model)": "Inspect: the USP-S slide sits right in first person",
+    "Skins with an overlay layer render again (e.g. Glock-18 | Ghost Protocol)": "Items: skins with an overlay layer show properly again, like the Glock-18 | Ghost Protocol",
+    "Faster smoke bloom; brighter first-person inspect": "Play: a faster smoke bloom, and a brighter first-person inspect",
+    "CS2-style Play HUD, buy menu, scoreboard and lobby": "Play: a CS2-style HUD, buy menu, scoreboard and lobby",
+    "Play mode, step 1: walk around Dust II and shoot bots": "Play: the first step, walking around Dust II and shooting bots",
+    "Gloves: decode their textures exactly (black patches in the app)": "Gloves: no more black patches",
+    "Souvenir item styling, server keep-alive ping, online smoke check": "Items: Souvenir items get their own look",
+    "Team ladder, deploy kit, smoke test, polish": "Team ladder, and polish",
+    "Multiplayer server: accounts, server-side economy, trading, live gambling": "Online: accounts, trading and live gambling",
+    "Client: actions backend, trade-ups, armory, gamble, team manager, trade and online UI": "Trade-ups, the Armory, Gamble, the team manager and online trading",
+    "Shared game engine, souvenir packages, collections, pro players and trade-ups": "Souvenir packages, collections, pro players and trade-ups",
+    "Baseline: CS2 case simulator with real CS2 models, sounds and inspect": "The first version of the case simulator, with real CS2 models, sounds and inspect"
+  }
+}

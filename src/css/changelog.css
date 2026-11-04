@@ -1,0 +1,38 @@
+/* The Changelog page (pages/changelog.js) and its button in the top bar. */
+
+/* the button: the one entry at the top right that spells out its name, so it can be found without hovering */
+.top-right .nav-changelog { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 84px; }
+.nav-changelog .ico { width: 22px; height: 22px; }
+.nav-changelog .lbl { display: block; font-size: 10px; font-weight: 600; letter-spacing: .08em; line-height: 1; text-transform: uppercase; }
+/* (in a small window with the Update button up too, there's no room left for the open section's name on More) */
+@media (max-width: 1320px) { #topbar:has(#update-btn) .more-cur { display: none; } }
+
+.cl .toolbar [data-q] { flex: 1 1 260px; max-width: 420px; }
+.cl-count { font-variant-numeric: tabular-nums; }
+.cl-vhead { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin: 26px 0 10px; font-family: var(--font-cond); font-size: 22px; font-weight: 700; letter-spacing: .07em; color: var(--hi); text-transform: uppercase; text-shadow: 0 2px 8px rgba(0, 0, 0, .7); }
+.cl-version:first-child .cl-vhead { margin-top: 4px; }
+.cl-this { padding: 0 7px; font-size: 12px; line-height: 19px; letter-spacing: .08em; color: #1b1305; background: linear-gradient(180deg, var(--gold2), var(--gold)); text-shadow: none; }
+.cl-vcount { font-family: inherit; font-size: 13px; font-weight: 500; letter-spacing: .04em; color: var(--muted); text-transform: none; }
+/* (No backdrop blur on the days, unlike other panels, and days off screen skip layout: that keeps a list of thousands light.) */
+.cl-day { margin-bottom: 10px; background: rgba(19, 23, 28, .78); border: 1px solid var(--line); border-top-color: rgba(255, 255, 255, .12); content-visibility: auto; contain-intrinsic-size: auto 220px; }
+.cl-day h3 { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 0; padding: 8px 14px; font-size: 13px; font-weight: 600; letter-spacing: .03em; color: var(--hi); background: #232a33; border-bottom: 1px solid var(--line); }
+.cl-n { flex: none; font-size: 11px; font-weight: 500; color: var(--muted); }
+.cl-day ul { margin: 0; padding: 0; list-style: none; }
+.cl-day li { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; padding: 7px 14px; font-size: 14px; line-height: 1.4; }
+.cl-day li + li { border-top: 1px solid var(--line); }
+.cl-area { padding-top: 2px; font-size: 11px; font-weight: 600; letter-spacing: .07em; color: var(--muted); text-transform: uppercase; overflow-wrap: anywhere; }
+.cl-text { color: var(--text); overflow-wrap: anywhere; }
+.cl mark { color: var(--hi); background: rgba(228, 174, 57, .32); }
+.cl-top { position: fixed; right: 24px; bottom: 22px; z-index: 4; box-shadow: 0 6px 18px rgba(0, 0, 0, .55); }
+
+@media (max-width: 760px) {
+  .top-right .nav-changelog { width: 58px; gap: 2px; }
+  .nav-changelog .lbl { font-size: 9px; letter-spacing: .04em; }
+  .cl .toolbar [data-q] { flex-basis: 100%; max-width: none; }
+  .cl .toolbar select.input { flex: 1 1 130px; }
+  .cl-day li { grid-template-columns: minmax(0, 1fr); gap: 1px; }
+}
+/* (the logo gives way so the top row stays one row at phone width) */
+@media (max-width: 420px) {
+  .brand { display: none; }
+}

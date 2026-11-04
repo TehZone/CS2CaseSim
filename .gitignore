@@ -2,6 +2,7 @@ node_modules/
 dist/
 cache/
 src/vendor/
+src/data/changelog.json
 tools/s2v/*.exe
 server/node_modules/
 server/.data/
