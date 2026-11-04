@@ -171,6 +171,17 @@ body:not(.is-staff) .staff-only { display: none !important; }
 .fatal-box.gold { border-left-color: var(--gold); }
 .fatal-reason { font-size: 15px; line-height: 1.5; color: var(--hi); white-space: pre-wrap; word-break: break-word; }
 
+/* The update window, and the Update button left at the top right after a Not now (update.js) */
+.update-modal [hidden] { display: none !important; }
+.upd { display: grid; gap: 14px; }
+.upd-version { display: flex; align-items: baseline; gap: 10px; font-size: 15px; color: var(--hi); }
+.upd-version .muted { font-size: 13px; }
+.upd-notes { max-height: 240px; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); background: rgba(0, 0, 0, .22); font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.upd-progress { display: grid; gap: 8px; font-size: 13px; }
+.upd-bar { height: 8px; background: var(--panel3); overflow: hidden; }
+.upd-bar i { display: block; width: 0; height: 100%; background: var(--gold); transition: width .15s linear; }
+#update-btn { align-self: center; margin-right: 10px; }
+
 /* souvenir items (yellow like in CS2) */
 .card .sv { color: var(--sv); }
 .tag.sv { color: #1a1306; background: var(--sv); border-color: var(--sv); }

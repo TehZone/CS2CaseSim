@@ -7,8 +7,9 @@ import { S } from './state.js';
 import { sfx } from './audio.js';
 import { toast, openModal, confirmDialog } from './ui.js';
 import { online } from './backend.js';
-import { net, normalizeUrl } from './net/online.js';
+import { net } from './net/online.js';
 import { playPrefs } from './pages/play-settings.js';
+import { updateRequired } from './update.js';
 
 export const LEVEL_NAMES = ['Player', 'Moderator', 'Admin', 'Owner'];
 const fmtDate = (ts) => new Date(ts).toLocaleString();
@@ -27,7 +28,7 @@ const pcAccounts = () => {
 // The same account under a name it had before, renamed since, is this entry now: by the server's id for it.)
 function notePc(a) {
   const me = net.me(), name = me?.name, id = me?.id ?? null, server = net.serverUrl();
-  if (!a || typeof a !== 'object' || typeof name !== 'string' || !name || !server) return;
+  if (!a || typeof a !== 'object' || typeof name !== 'string' || !name || !server || net.testServer()) return;
   const level = Math.max(0, Math.min(3, a.staff | 0));
   try {
     const accounts = pcAccounts(), key = `${server}|${name.toLowerCase()}`;
@@ -174,13 +175,12 @@ export function openLinkModal() {
 
 // ---- a forgotten password: a reset code from /resetpassword in the Discord -------------------
 // Opened from the login window; onDone(name) once the new password is set (so the login window can fill the name in).
-export function openResetModal({ url = net.serverUrl(), name = '', onDone } = {}) {
+export function openResetModal({ name = '', onDone } = {}) {
   const m = openModal({
     title: 'Forgot password',
     body: `<div class="auth">
       <div class="muted" style="font-size:13px;line-height:1.5">If your account is linked to Discord, type <span class="fair">/resetpassword</span> in the game's Discord server.
         The bot replies with a reset code only you can see (it works for 15 minutes).</div>
-      <label>Server address<input class="input" data-url value="${esc(url)}" placeholder="e.g. my-cs2-server.onrender.com"></label>
       <label>Username<input class="input" data-name maxlength="20" autocomplete="username" value="${esc(name)}"></label>
       <label>Reset code<input class="input fair-input" data-code maxlength="12" placeholder="XXXX-XXXX" autocomplete="one-time-code"></label>
       <label>New password<input class="input" data-pass type="password" autocomplete="new-password"></label>
@@ -191,10 +191,8 @@ export function openResetModal({ url = net.serverUrl(), name = '', onDone } = {}
   const $m = (s) => m.el.querySelector(s);
   const err = $m('[data-err]'), ok = $m('[data-ok]');
   const submit = async () => {
-    const u = normalizeUrl($m('[data-url]').value), n = $m('[data-name]').value.trim(), code = $m('[data-code]').value.trim(), pass = $m('[data-pass]').value;
-    if (!u) return (err.textContent = 'Enter the server address.');
+    const n = $m('[data-name]').value.trim(), code = $m('[data-code]').value.trim(), pass = $m('[data-pass]').value;
     if (!n || !code || !pass) return (err.textContent = 'Enter your username, the reset code and a new password.');
-    net.setServerUrl(u);
     err.textContent = '';
     ok.disabled = true;
     try {
@@ -279,7 +277,7 @@ function adminMessage({ kind, msg, from }) {
 
 // Called once at boot (main.js).
 export function initAccount() {
-  net.on('fatal', fatalModal);
+  net.on('fatal', (f) => (f.code === 'outdated' ? updateRequired(f) : fatalModal(f)));
   net.on('admin.msg', adminMessage);
   // (Your account as the welcome, a push or accountRpc('info') tells it; null when you leave.)
   net.on('account', (a) => { notePc(a); staffClass(); });

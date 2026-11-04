@@ -8,6 +8,7 @@
 // DISCORD_TOKEN_FILE, DISCORD_GUILD_ID, DISCORD_ADMIN_ROLES, DISCORD_MOD_ROLES, DISCORD_LOG_CHANNEL, DISCORD_LINKED_ROLE,
 // DISCORD_GATEWAY=0 for an instance that must not run the bot's gateway). TRUST_PROXY=<hops>: only behind reverse
 // proxies (Render: 1), the client's address is taken from X-Forwarded-For, that many entries from the right.
+// The version lock: server/release.mjs (env: RELEASE_FEED; on by itself when NODE_ENV is production).
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,6 +22,7 @@ import { Trades } from './trade.mjs';
 import { Live } from './live.mjs';
 import * as A from './accounts.mjs';
 import { Admin, banText, networkBanText } from './admin.mjs';
+import { Release, releaseFromEnv } from './release.mjs';
 import { D, initData } from '../src/js/engine/data.js';
 import { makeCtx, runAction, delta, GameError } from '../src/js/engine/actions.js';
 import { marketWindow } from '../src/js/engine/market.js';
@@ -83,7 +85,7 @@ async function openDiscord(opt, log) {
 
 export async function startServer({
   port = +process.env.PORT || 8787, db: dbOpts = {}, log = console.log, priceRefresh = process.env.PRICE_REFRESH !== '0',
-  admins = list(process.env.ADMIN_USERS), discord: discordOpt, trustProxy = process.env.TRUST_PROXY,
+  admins = list(process.env.ADMIN_USERS), discord: discordOpt, trustProxy = process.env.TRUST_PROXY, release: releaseOpt = releaseFromEnv(),
 } = {}) {
   const data = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/game-data.json'), 'utf8'));
   initData(data, { keys: JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/keys.json'), 'utf8')) });
@@ -150,6 +152,9 @@ export async function startServer({
   const admin = new Admin(srv, discord, { admins });
   srv.admin = admin;
   await admin.init();
+  const release = new Release(srv, releaseOpt);
+  srv.release = release;
+  await release.init();
 
   // ---- market prices: same data build as the client, refreshed daily from the marketplaces ----------------
   let pricePatch = null, pricePatchGz = null;
@@ -268,11 +273,11 @@ export async function startServer({
     const url = new URL(req.url, 'http://x');
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
     try {
-      if (url.pathname === '/health') return json(res, 200, { ok: true, online: sockets.size, data: D.generatedAt, pricedAt: D.pricedAt, discord: { connected: !!discord.status().connected } });
+      if (url.pathname === '/health') return json(res, 200, { ok: true, online: sockets.size, data: D.generatedAt, pricedAt: D.pricedAt, requiredVersion: release.required, discord: { connected: !!discord.status().connected } });
       if (url.pathname === '/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         return res.end(`<!doctype html><title>CS2 Case Simulator server</title><body style="font-family:system-ui;background:#0a0d12;color:#e8eef5;padding:40px">
-          <h1>CS2 Case Simulator server</h1><p>This server is running. Put this address into the game (click <b>Offline</b> at the top right) to play online.</p>
+          <h1>CS2 Case Simulator server</h1><p>This server is running. To play online, click <b>Offline</b> at the top right of the game and log in.</p>
           <p>Players online: ${sockets.size}</p></body>`);
       }
       if (url.pathname === '/api/prices' && req.method === 'GET') {
@@ -399,6 +404,8 @@ export async function startServer({
 
       if (msg.t === 'hello') {
         if (user || greeting) return;
+        const outdated = release.refusal(msg.app); // (first: an old game gets the reason it can read, whatever else differs)
+        if (outdated) return refuse(outdated);
         if (msg.v !== PROTOCOL) return refuse({ t: 'fatal', error: 'Your game is a different version from the server. Update the game.', code: 'version' });
         if (msg.data !== D.generatedAt) return refuse({ t: 'fatal', error: 'Your game data is a different version from the server. Update the game (or the server).', code: 'version' });
         greeting = true;
@@ -420,6 +427,7 @@ export async function startServer({
           user = u;
           ws.user = u; // (a rename updates the name its requests use)
           ws.ipHash = ipHash; // (a network ban throws off every account connected from it)
+          ws.app = msg.app; // (a new release drops the versions it leaves behind)
           if (!sockets.has(u.id)) sockets.set(u.id, new Set());
           sockets.get(u.id).add(ws);
           store.online.add(u.id);
@@ -516,6 +524,7 @@ export async function startServer({
   async function close() {
     clearInterval(ping); clearInterval(priceTimer); clearInterval(saveMarket); clearInterval(serialTimer);
     admin.close();
+    release.close();
     try { discord.close(); } catch (e) { log('[discord] close failed', e?.message || e); }
     await saveSerials();
     if (marketDirty) await db.query("INSERT INTO kv (k, v) VALUES ('market', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(marketSnapshot())]).catch(() => {});

@@ -1,6 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('native', {
+  build: ipcRenderer.sendSync('app:build'),
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateDownload: () => ipcRenderer.invoke('update:download'),
+  updateCancel: () => ipcRenderer.invoke('update:cancel'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+  updatePage: () => ipcRenderer.invoke('update:page'),
+  onUpdateProgress: (cb) => ipcRenderer.on('update:progress', (_e, p) => cb(p)),
   loadSave: () => ipcRenderer.invoke('save:load'),
   writeSave: (text) => ipcRenderer.invoke('save:write', text),
   writeSaveSync: (text) => ipcRenderer.sendSync('save:writeSync', text),

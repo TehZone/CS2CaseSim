@@ -458,7 +458,7 @@ npm run vendor    # copy three.js into src/vendor (with the patch in scripts/cop
 node scripts/build-charm-pics.mjs   # rebake charm pictures from CS2's files (src/img/charms, src/data/charm-looks.json): when charms or their shader change; --check <dir> compares them with the 3D charm
 npm start         # run the game
 npm run dev       # browser preview at http://localhost:5178
-npm run dist      # build dist/CS2-Case-Simulator-Setup.exe and dist/CS2-Case-Simulator.exe
+npm run dist      # build dist/CS2-Case-Simulator-Setup.exe, dist/CS2-Case-Simulator.exe and dist/latest.json (a release: see DEPLOY.md)
 node scripts/test-engine.mjs            # game rule checks (odds, trade-ups, armory, gambling, NPCs)
 node scripts/test-play.mjs              # Play mode checks (traces, movement, ladders, rules, overtime, smoke, modes)
 cd server && npm install && cd ..       # multiplayer server dependencies

@@ -294,8 +294,8 @@ function draw() {
   }
   const pc = online() ? null : staffPc();
   root.innerHTML = `<div class="page adm">
-    <div class="page-head"><h1>Admin</h1><span class="sub">${pc ? `Offline save on this PC · unlocked by ${esc(pc.name)} (${esc(levelName(pc.level))}) on <span class="fair">${esc(pc.server)}</span>`
-      : `${esc(net.me()?.name || '')} ${staffChip(lvl)} on <span class="fair">${esc(net.serverUrl())}</span>`}</span></div>
+    <div class="page-head"><h1>Admin</h1><span class="sub">${pc ? `Offline save on this PC · unlocked by ${esc(pc.name)} (${esc(levelName(pc.level))})`
+      : `${esc(net.me()?.name || '')} ${staffChip(lvl)} <span data-online-text>${esc(net.onlineText())}</span>`}</span></div>
     <div class="seg adm-tabs" data-tabs>${TABS.map(([k, n]) => `<button data-v="${k}" class="${view.tab === k ? 'active' : ''}">${pc ? OFF_TABS[k] || n : n}</button>`).join('')}</div>
     <div class="adm-body" data-body></div>
   </div>`;
@@ -611,7 +611,7 @@ function localHeadHtml(p, ban) {
   const u = p.user, n = u.npc, pc = staffPc() || {};
   const facts = n
     ? [['Trader', esc(typeName(n))], ['Country', n.country ? cc(n.country) : '<span class="dim">—</span>'], ['Friend', esc(friendText(n.friend))], ['Trades with you', num(+n.trades || 0)]]
-    : [['Save', 'Offline, on this PC'], ['Unlocked by', `${esc(pc.name)} <span class="dim">(${esc(levelName(pc.level))}) on ${esc(pc.server)}</span>`]];
+    : [['Save', 'Offline, on this PC'], ['Unlocked by', `${esc(pc.name)} <span class="dim">(${esc(levelName(pc.level))})</span>`]];
   const chips = n
     ? `${u.online != null ? `<span class="chip ${u.online ? 'green' : ''}"><span class="adm-dot ${u.online ? 'on' : ''}"></span>${u.online ? 'Online' : 'Offline'}</span>` : ''}<span class="chip">NPC trader</span>${ban ? '<span class="chip red">Blocked</span>' : ''}`
     : '<span class="chip gold">Your save</span>';

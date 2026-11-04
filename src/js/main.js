@@ -7,7 +7,7 @@ import { toast, topModal, openModal, installTooltips } from './ui.js';
 import { initMenu, initMoreMenu } from './menu.js';
 import { loadGameSounds } from './audio.js';
 import { keepPrepared } from './cs2/content.js';
-import { net, normalizeUrl } from './net/online.js';
+import { net } from './net/online.js';
 import * as cases from './pages/cases.js';
 import * as inventory from './pages/inventory.js';
 import * as tradeup from './pages/tradeup.js';
@@ -24,6 +24,7 @@ import { npcOf, crowd, inventoryOf } from './engine/npcs.js';
 import { initMatchmaking } from './matchmaking.js';
 import { initProfile } from './profile.js';
 import { initAccount, discordSection, bindDiscordSection, openResetModal, staffPc } from './account.js';
+import { initUpdates } from './update.js';
 
 const PAGES = { play, cases, inventory, tradeup, armory, market, database, gamble, trade, stats, community, admin };
 let current = null, currentName = 'cases';
@@ -103,14 +104,14 @@ function updateAccount({ status, detail } = { status: net.status() }) {
   el.classList.toggle('online', status === 'online');
   el.classList.toggle('connecting', status === 'connecting');
   $('#account-name').textContent = status === 'online' ? net.me()?.name : status === 'connecting' ? 'Connecting…' : 'Offline';
-  el.title = detail || (status === 'online' ? `Online at ${net.serverUrl()}` : 'Playing offline. Click to log in to a server.');
+  el.title = detail || (status === 'online' ? net.onlineText() : 'Playing offline. Click to log in.');
 }
 
 function accountModal() {
   if (net.status() === 'online') {
     const m = openModal({
       title: 'Online account',
-      body: `<div class="auth"><div>Logged in as <b>${esc(net.me().name)}</b> on <span class="fair">${esc(net.serverUrl())}</span>.</div>
+      body: `<div class="auth"><div data-online-text>${esc(net.onlineText())}</div>
         <div class="muted" style="font-size:12px">Online progress is saved on the server. Your offline save is kept separately on this PC.</div>${discordSection()}</div>`,
       foot: '<button class="btn danger" data-out>Log out (play offline)</button><button class="btn ghost" data-close>Close</button>',
     });
@@ -121,9 +122,8 @@ function accountModal() {
   const m = openModal({
     title: 'Play online',
     body: `<div class="auth">
-      <div class="muted" style="font-size:13px;line-height:1.5">Log in to a game server to trade with friends, join live case battles, coinflips and jackpots, and see the shared Armory.
+      <div class="muted" style="font-size:13px;line-height:1.5">Log in to trade with friends, join live case battles, coinflips and jackpots, and see the shared Armory.
         Online accounts start fresh and are saved on the server; your offline save stays on this PC. Virtual money only.</div>
-      <label>Server address<input class="input" data-url placeholder="e.g. my-cs2-server.onrender.com" value="${esc(net.serverUrl())}"></label>
       <label>Username<input class="input" data-name maxlength="20" autocomplete="username"></label>
       <label>Password<input class="input" data-pass type="password" autocomplete="current-password"></label>
       <div class="err" data-err></div>
@@ -133,12 +133,9 @@ function accountModal() {
   });
   const err = m.el.querySelector('[data-err]');
   const submit = async (register) => {
-    const url = normalizeUrl(m.el.querySelector('[data-url]').value);
     const name = m.el.querySelector('[data-name]').value.trim();
     const pass = m.el.querySelector('[data-pass]').value;
-    if (!url) return (err.textContent = 'Enter the server address.');
     if (!name || !pass) return (err.textContent = 'Enter a username and password.');
-    net.setServerUrl(url);
     err.textContent = '';
     m.el.querySelectorAll('.modal-foot .btn').forEach((b) => (b.disabled = true));
     try {
@@ -155,8 +152,8 @@ function accountModal() {
   m.el.querySelector('[data-reg]').addEventListener('click', () => submit(true));
   m.el.querySelector('[data-pass]').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(false); });
   m.el.querySelector('[data-forgot]').addEventListener('click', () => openResetModal({
-    url: m.el.querySelector('[data-url]').value, name: m.el.querySelector('[data-name]').value.trim(),
-    onDone: (name) => { m.el.querySelector('[data-name]').value = name; m.el.querySelector('[data-url]').value = net.serverUrl(); err.textContent = ''; m.el.querySelector('[data-pass]').focus(); },
+    name: m.el.querySelector('[data-name]').value.trim(),
+    onDone: (name) => { m.el.querySelector('[data-name]').value = name; err.textContent = ''; m.el.querySelector('[data-pass]').focus(); },
   }));
 }
 
@@ -179,6 +176,7 @@ async function boot() {
   on('social', updateMessages);
   on('reset', () => { lastMoney = S.money; updateBalance(); updateInv(); updateStars(); updateMessages(); go(currentName); });
   net.on('status', updateAccount);
+  net.on('players', () => { updateAccount(); $$('[data-online-text]').forEach((el) => { el.textContent = net.onlineText(); }); });
   net.on('notice', ({ msg, type }) => toast(msg, type || ''));
   $('#account').addEventListener('click', accountModal);
   $$('#topbar [data-page]').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
@@ -196,6 +194,7 @@ async function boot() {
   initMatchmaking();
   initProfile();
   initAccount();
+  initUpdates();
   startNpcLoop();
   go('cases');
   setInterval(() => save(), 15000);

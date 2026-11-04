@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const pricing = require('./shared/pricing.cjs');
 const { CS2Service } = require('./cs2/service.cjs');
+const { initUpdater } = require('./shared/updater.cjs');
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
@@ -2923,6 +2924,7 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   protocol.handle('app', handleApp);
   registerIpc();
+  initUpdater({ smoke: SMOKE });
   createWindow();
   // Index the player's CS2 install in the background so the first real-model inspect is quick.
   if (!SMOKE) setTimeout(() => { if (cs2.status().available) cs2.ensureIndex().catch((e) => console.warn('[cs2]', e.message)); }, 4000);

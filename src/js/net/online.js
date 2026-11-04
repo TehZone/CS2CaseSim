@@ -2,14 +2,15 @@
 // game actions to the server instead of running them locally.
 //
 // Protocol (JSON over WebSocket at <server>/ws):
-//   client -> server  { t: 'hello', token, data }            first message; data = game data build stamp
+//   client -> server  { t: 'hello', token, data, v, app }    first message; data = game data build stamp, app = the game's version
 //                     { t: 'rpc', id, ns, m, args }          ns: 'act' | 'gamble' | 'trade' | 'social' | 'account' | 'admin'
 //   server -> client  { t: 'welcome', user, state, account, motd, ... }   after hello
 //                     { t: 'res', id, ok, r, d, err }        reply to an rpc (d = state changes)
 //                     { t: 'delta', d }                      state changes from elsewhere (trades, idle income, wins)
 //                     { t: 'account', account }              your Discord link or staff level changed
 //                     { t: 'admin.msg', kind, msg, from }    a moderator's warning or a broadcast
-//                     { t: 'fatal', code, error, ban? }      refused or thrown off (auth, version, banned, kicked, maintenance)
+//                     { t: 'fatal', code, error, ban? }      refused or thrown off (auth, version, outdated, banned, kicked, maintenance)
+//                     { t: 'update', version }               a new release is out: this game is about to be locked out
 //                     { t: 'lobbies' | 'players' | 'trades' | 'gamble.result' | 'notice', ... }
 import { D } from '../data.js';
 import { S, applyDelta, enterOnline, leaveOnline } from '../state.js';
@@ -17,6 +18,14 @@ import { setRemote } from '../backend.js';
 
 const LS = 'cs2sim-online';
 const PROTOCOL = 1;
+// The one server the game plays on. A packaged game plays nowhere else: there is no way to choose, and a server saved by
+// an older install is ignored, with the login that went with it. Development only (`npm run dev`, `electron .`): a local
+// server is net.setServerUrl('http://localhost:8787') in the console. A test run of any build: CS2SIM_SMOKE_SERVER
+// (localhost only, see shared/updater.cjs).
+const SERVER = 'https://cs2-case-sim-server.onrender.com';
+// This build, from the app (preload.js): { version, packaged, server }. In a browser (the dev server) there's none.
+const build = window.native?.build || {};
+const packaged = location.protocol === 'app:' && build.packaged !== false;
 const bus = new EventTarget();
 let ws = null, user = null, status = 'offline', seq = 0, retry = 0, retryTimer = null, wantOnline = false;
 const pending = new Map();
@@ -33,6 +42,7 @@ const startKeepAlive = () => { clearInterval(keepAlive); keepAlive = setInterval
 
 const saved = () => { try { return JSON.parse(localStorage.getItem(LS) || '{}'); } catch { return {}; } };
 const store = (v) => { try { localStorage.setItem(LS, JSON.stringify({ ...saved(), ...v })); } catch {} };
+if (packaged && saved().url) store({ url: null, ...(saved().url === SERVER ? {} : { token: null }) });
 
 function setStatus(s, detail = '') {
   status = s;
@@ -47,7 +57,7 @@ function setAccount(a, announce = true) {
   if (announce) emit('account', account);
 }
 // Fatal codes that end the session for a reason the player is shown in a window (main.js / account.js).
-const SHOWN_FATAL = new Set(['banned', 'kicked', 'maintenance']);
+const SHOWN_FATAL = new Set(['banned', 'kicked', 'maintenance', 'outdated']);
 
 export const net = {
   on(type, fn) { const h = (e) => fn(e.detail); bus.addEventListener(type, h); return () => bus.removeEventListener(type, h); },
@@ -56,10 +66,14 @@ export const net = {
   lobbies: () => lobbies,
   players: () => players,
   trades: () => trades,
-  serverUrl: () => saved().url || '',
+  serverUrl: () => build.server || (packaged ? SERVER : saved().url || SERVER),
+  // A packaged game on a test run's server: what that server says about you counts for nothing outside the run.
+  testServer: () => packaged && !!build.server,
+  // What the game says about being online; a page showing it keeps it live with data-online-text (main.js).
+  onlineText: () => `Online. Players Online: ${players.length}`,
   serverNow: () => Date.now() + clockOffset,
   marketSold: (w) => { if (!marketSold.has(w)) marketSold.set(w, new Set()); return marketSold.get(w); },
-  setServerUrl: (url) => store({ url: normalizeUrl(url) }),
+  setServerUrl: (url) => { if (!packaged) store({ url: normalizeUrl(url) }); },
   gamble: (m, args) => rpc('gamble', m, args),
   trade: (m, args) => rpc('trade', m, args),
   social: (m, args) => rpc('social', m, args),
@@ -73,7 +87,7 @@ export const net = {
   login, logout, resume,
 };
 
-export function normalizeUrl(url) {
+function normalizeUrl(url) {
   url = String(url || '').trim().replace(/\/+$/, '');
   if (url && !/^https?:\/\//.test(url)) url = (/^(localhost|127\.)/.test(url) ? 'http://' : 'https://') + url;
   return url;
@@ -81,7 +95,6 @@ export function normalizeUrl(url) {
 
 async function http(path, body) {
   const url = net.serverUrl();
-  if (!url) throw new Error('Set the server address first');
   let res;
   try {
     res = await fetch(url + path, { method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
@@ -99,7 +112,7 @@ async function login(name, password, { register = false } = {}) {
   try {
     const r = await http(register ? '/api/register' : '/api/login', { name, password });
     store({ token: r.token, name: r.name });
-    await connect();
+    await connect({ asked: true });
   } catch (e) {
     setStatus('offline');
     throw e;
@@ -116,10 +129,11 @@ function logout() {
 
 // Reconnect on startup when the player was online last time.
 function resume() {
-  if (saved().token && saved().url) connect().catch(() => {});
+  if (saved().token) connect().catch(() => {});
 }
 
-function connect() {
+// (asked: the player pressed Log in, as opposed to the game connecting by itself.)
+function connect({ asked = false } = {}) {
   return new Promise((resolve, reject) => {
     wantOnline = true;
     clearTimeout(retryTimer);
@@ -129,7 +143,7 @@ function connect() {
     const sock = new WebSocket(url);
     ws = sock;
     let welcomed = false;
-    sock.onopen = () => sock.send(JSON.stringify({ t: 'hello', token: saved().token, data: D.generatedAt, v: PROTOCOL }));
+    sock.onopen = () => sock.send(JSON.stringify({ t: 'hello', token: saved().token, data: D.generatedAt, v: PROTOCOL, app: build.version }));
     sock.onmessage = async (e) => {
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
@@ -142,8 +156,8 @@ function connect() {
         wantOnline = false;
         if (msg.code === 'auth') store({ token: null });
         reject(new Error(msg.error));
-        // A ban, kick or maintenance gets a window of its own instead of a toast.
-        if (SHOWN_FATAL.has(msg.code)) emit('fatal', { code: msg.code, error: msg.error || '', ban: msg.ban || null });
+        // A ban, kick, maintenance or an outdated game gets a window of its own instead of a toast.
+        if (SHOWN_FATAL.has(msg.code)) emit('fatal', { code: msg.code, error: msg.error || '', ban: msg.ban || null, required: msg.required || '', asked });
         else emit('notice', { msg: msg.error, type: 'bad' });
         sock.close();
       } else handle(msg);
@@ -228,6 +242,7 @@ function handle(msg) {
     case 'market': net.marketSold(msg.w).add(msg.lid); emit('market', msg); return;
     case 'account': setAccount(msg.account); return;
     case 'admin.msg': emit('admin.msg', { kind: msg.kind, msg: msg.msg || '', from: msg.from || '' }); return;
+    case 'update': emit('update', { version: msg.version || '' }); return;
   }
 }
 

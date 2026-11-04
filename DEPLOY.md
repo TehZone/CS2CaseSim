@@ -10,7 +10,8 @@ On Render's free plan the server **sleeps after 15 minutes without players**. Th
 afterwards waits about a minute while it wakes up (the game shows "Connecting…" and retries on its own).
 Nothing is lost while it sleeps: everything is saved in Neon.
 
-You need a GitHub account with this project pushed to a repository (private is fine).
+You need a GitHub account with this project pushed to a repository. It has to be public: the game and the server read
+its releases without logging in to GitHub.
 
 ## 1. Create the database (Neon)
 
@@ -46,9 +47,11 @@ git push -u origin main
 
 ## 4. Play online
 
+The game always plays on one server: the address is `SERVER` in `src/js/net/online.js`. If yours is at another address,
+change it there before building the game.
+
 1. Start the game, click **Offline** at the top right.
-2. Enter the server address from step 3 (for example `cs2-case-sim-server.onrender.com`), a username and a
-   password, then **Create account**. Your friends do the same with their own usernames.
+2. Enter a username and a password, then **Create account**. Your friends do the same with their own usernames.
 3. Online accounts start fresh with $10 and are saved on the server. Your offline save stays on your PC and you
    can switch back any time (click your name → Log out).
 
@@ -117,11 +120,40 @@ behind a reverse proxy you run (nginx, Caddy: `TRUST_PROXY=1`). The server's log
 (`[server] client addresses: ...`). A count that is too low shows up as every player having the same address: in the
 admin panel, every account lists every other one as an alt.
 
-## Updating
+## Releasing a new version
 
-The game and the server must come from the same version of the project (same item database). After you change
-the project, push to GitHub (Render redeploys automatically) and rebuild the game with `npm run dist`, then give
-your friends the new `.exe`. If versions differ, the game says so when connecting.
+Players get new versions from this repository's GitHub Releases. The game looks at the latest release when it starts and
+every four hours and offers it (`shared/updater.cjs`, `src/js/update.js`). Only the latest version may play online
+(`server/release.mjs`), so **publishing a release locks out every older version** within about five minutes.
+
+1. Put the new version in `package.json` (`x.y.z`, higher than the last release) and what changed in `RELEASE_NOTES.md`:
+   the update window shows it.
+2. `npm run dist`. `dist/` then holds the three files of the release: `CS2-Case-Simulator-Setup.exe`,
+   `CS2-Case-Simulator.exe` and `latest.json` (the version, the notes, and each exe's size and SHA-256).
+3. Push `main` and wait for Render to deploy it. Nobody is locked out by this: the server goes by the published release.
+4. On GitHub: **Releases → Draft a new release**, tag `v<version>`, attach those three files, **Publish release**. A draft
+   or a prerelease changes nothing: only publishing does, and only with `latest.json` attached.
+
+What happens then:
+
+- Within five minutes the server reads the release. Players connected on older versions are told at once and taken
+  offline five minutes later; a game on an older version is refused from then on. Offline play is never affected.
+- The update window comes up at the game's next start or check, or straight away for anyone the server told or refused.
+- Exes from before the updater (1.0.0) can't update themselves: the server's refusal tells them where to download.
+
+Good to know:
+
+- **The item database is a lock of its own:** the game and the server must have the same `src/data/game-data.json`
+  (its `generatedAt`). If a release regenerates it, every game is refused from the moment Render has the new data
+  until players have the new exe, so do steps 3 and 4 back to back.
+- The server remembers the required version in its database. If GitHub is down it keeps the last one it read, and with
+  no release at all it refuses nobody. `/health` shows it as `requiredVersion`.
+- A bad release: delete it (or publish a fixed, higher one). The server follows the newest published release, so the
+  version before it is let back in. In an emergency, `RELEASE_FEED=off` on Render lets every version in.
+- Reusing a version number does nothing for players who already have it: always go up.
+- The lock trusts the version a game sends. It stops everyone playing the normal game, not someone who modifies theirs.
+- `node scripts/test-update-e2e.mjs build` and `run` try a real update on two test builds (its own install, never the real
+  game's) against a stand-in for GitHub.
 
 ## Notes
 
@@ -130,8 +162,9 @@ your friends the new `.exe`. If versions differ, the game says so when connectin
 - Everything is virtual money. There are no real-money purchases and nothing can be cashed out.
 - Running the server on your own PC instead: `cd server && npm install`, then from the project folder
   `node server/index.mjs` (it uses an embedded database stored in `server/.data` when started with
-  `PGLITE_DIR=server/.data`, or Neon if `DATABASE_URL` is set). Friends connect to your PC's address on port
-  8787 (needs port forwarding or something like Tailscale).
-- Tests: `node scripts/test-engine.mjs` (game rules), `node server/test.mjs` (server, trading, gambling) and
-  `node server/test-admin.mjs` (the admin panel and the Discord bot, against a stand-in Discord; `npm test` in
-  `server/` runs both server tests).
+  `PGLITE_DIR=server/.data`, or Neon if `DATABASE_URL` is set). The version lock is off there unless `RELEASE_FEED`
+  is set. The packaged game only plays on the one server; for a local server use the game from `npm run dev` or
+  `electron .` and run `(await import('./js/net/online.js')).net.setServerUrl('http://localhost:8787')` in its console.
+- Tests: `node scripts/test-engine.mjs` (game rules), `node scripts/test-update.mjs` (the updater), `node server/test.mjs`
+  (server, trading, gambling), `node server/test-admin.mjs` (the admin panel and the Discord bot, against a stand-in
+  Discord) and `node server/test-release.mjs` (the version lock); `npm test` in `server/` runs the server tests.
