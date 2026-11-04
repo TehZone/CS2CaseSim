@@ -234,8 +234,8 @@ class CS2Service {
   // models). `mat` is the charm's own material where the model is a shared blank (the community charms: one model, a
   // material each), put in place of the model's own (all but its chain).
   // { model: url, materials: { glTF material name: { shader, flags, params, dynamic, textures } } }: csgo_weapon's
-  // parameters (colour adjustments, tint, roughness), its dynamic expressions (most charms' colours follow the charm's
-  // pattern, $KeychainSeed) and its textures (colour, normal, AO, roughness/metal, tint mask).
+  // parameters (colour adjustments, tint, roughness, glitter, iridescence, pearlescence), its dynamic expressions (most
+  // charms' colours follow the charm's pattern, $KeychainSeed) and its textures (see charmMaterial).
   charm(mdl, mat = null) {
     mdl = String(mdl).replace(/\\/g, '/');
     mat = mat ? String(mat).replace(/\\/g, '/') : null;
@@ -263,8 +263,11 @@ class CS2Service {
       return { model: this.url(file), materials };
     });
   }
-  // One csgo_weapon material of a charm, decompiled: its flags, parameters, dynamic expressions and textures (copied
-  // beside it under charms/materials and made smaller like the models'). Cached per material.
+  // One material of a charm, decompiled: its flags, parameters, dynamic expressions and textures (copied beside it
+  // under charms/materials and made smaller like the models'). csgo_weapon's colour, normal, AO, roughness/metal (with
+  // the SFX mask in its blue), tint mask, detail and clear mask (F_OPAQUE_REFRACT), and its glitter normal as the shader
+  // samples it (raw: the normal in red and green, the flakes in alpha; kept full size); csgo_simple_liquid's (the
+  // lighter's tank) liquid mask. Cached per material.
   charmMaterial(vmat) {
     return this.playJob('charmMaterial:' + vmat, async () => {
       const cs2 = this.ensureCS2();
@@ -275,20 +278,27 @@ class CS2Service {
       for (const [k, v] of Object.entries(layer)) {
         if (typeof v !== 'string') continue;
         if (/^F_/.test(k)) flags[k] = +v;
-        else if (/^g_[fv]/.test(k)) params[k] = v.startsWith('[') ? v.slice(1, -1).trim().split(/\s+/).map(Number) : +v;
+        else if (/^g_[bfv]/.test(k)) params[k] = v.startsWith('[') ? v.slice(1, -1).trim().split(/\s+/).map(Number) : +v;
       }
       const compiled = layer['Compiled Textures'] || {};
-      const want = { color: 'g_tColor', normal: 'g_tNormal', ao: 'g_tAmbientOcclusion', rm: 'g_tMetalness', tint: 'g_tTintMask' };
-      const files = await cs2.extract(Object.values(want).map((k) => compiled[k]).filter(Boolean));
+      const want = { color: 'g_tColor', normal: 'g_tNormal', ao: 'g_tAmbientOcclusion', rm: 'g_tMetalness', tint: 'g_tTintMask', detail: 'g_tDetail', liquid: 'g_tLiquidMask', clear: 'g_tOpaqueRefractMask' };
+      if (/^materials\/default\//.test(compiled.g_tDetail)) delete want.detail; // the default is plain white: nothing to draw
+      const raw = flags.F_GLITTER ? { glitter: 'g_tGlitterNormal' } : {};
+      const [files, rawFiles] = await Promise.all([
+        cs2.extract(Object.values(want).map((k) => compiled[k]).filter(Boolean)),
+        cs2.extract(Object.values(raw).map((k) => compiled[k]).filter(Boolean), { raw: true }),
+      ]);
       const out = path.join(this.cacheDir, 'charms', 'materials', path.basename(vmat, '.vmat'));
       fs.mkdirSync(out, { recursive: true });
       const textures = {}, copies = [];
-      for (const [key, param] of Object.entries(want)) {
-        const local = compiled[param] && files[compiled[param] + '_c'];
-        if (!local) continue;
-        const dest = path.join(out, key + path.extname(local));
-        if (!fs.existsSync(dest)) { fs.copyFileSync(local, dest); copies.push(dest); }
-        textures[key] = this.url(dest);
+      for (const [list, got] of [[want, files], [raw, rawFiles]]) {
+        for (const [key, param] of Object.entries(list)) {
+          const local = compiled[param] && got[compiled[param] + '_c'];
+          if (!local) continue;
+          const dest = path.join(out, key + path.extname(local));
+          if (!fs.existsSync(dest)) { fs.copyFileSync(local, dest); if (list === want) copies.push(dest); }
+          textures[key] = this.url(dest);
+        }
       }
       if (this.shrinkImages && copies.length) await this.shrinkImages(copies.filter((f) => /\.png$/i.test(f)), 1024);
       return { shader: String(layer.shader || '').replace(/\.vfx$/, ''), flags, params, dynamic: layer.DynamicParams || {}, textures };

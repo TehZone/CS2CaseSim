@@ -9,7 +9,7 @@ import { loadSource, texture, solidTex } from './textures.js';
 // Material expressions of the shader's albedo ranges: float3(-x, -1.4427 * log(1 - y), 2 - z) of the authored levels.
 const levels = (x, y, z) => `vec3(${[-x, -1.4427 * Math.log(Math.max(0.0001, 1 - y)), 2 - z].map((v) => v.toFixed(6)).join(', ')})`;
 // Direction of the inspect key light (world space); CS2 adds the view angle to it to scroll the holo spectrum.
-const KEY_LIGHT = new THREE.Vector3(3, 4, 6).normalize();
+export const KEY_LIGHT = new THREE.Vector3(3, 4, 6).normalize();
 
 const SHADER_PARS = /* glsl */ `
 #define CS2_LUM vec3(0.2125, 0.7154, 0.0721)
@@ -191,8 +191,8 @@ vec3 cs2Sparkles = vec3(0.0);
 }
 `;
 
-// Glitter is lit like the diffuse surface (CS2 multiplies it by the diffuse lighting).
-const SHADER_SPARKLE = /* glsl */ `
+// Glitter is lit like the diffuse surface (CS2 multiplies it by the diffuse lighting). charm.js lights its glitter so too.
+export const SHADER_SPARKLE = /* glsl */ `
 {
   vec3 irr = irradiance + iblIrradiance;
 #if NUM_DIR_LIGHTS > 0

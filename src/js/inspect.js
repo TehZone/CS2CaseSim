@@ -269,6 +269,7 @@ function shadowBlob() {
 // ---------------------------------------------------------------------------------------------
 // Viewer
 // ---------------------------------------------------------------------------------------------
+const DEFAULT_VIEW = { yaw: 0.22, pitch: 0.12 };
 const easeOutBack = (t) => 1 + 2.2 * Math.pow(t - 1, 3) + 1.2 * Math.pow(t - 1, 2);
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
@@ -315,7 +316,7 @@ class InspectView {
     this.scene.add(this.pivot);
     this.shadow = shadowBlob();
     this.scene.add(this.shadow);
-    this.state = { yaw: 0, pitch: 0, vy: 0, vp: 0, zoom: 1, dragging: false, lastInput: 0, anim: null, swayT: 0 };
+    this.state = { yaw: 0, pitch: 0, roll: 0, zOff: 0, vy: 0, vp: 0, zoom: 1, dragging: false, lastInput: 0, anim: null, swayT: 0 };
     this.clock = new THREE.Timer();
     this.bindInput(r.domElement);
     this.resizeObs = new ResizeObserver(() => this.resize());
@@ -323,22 +324,28 @@ class InspectView {
 
   bindInput(el) {
     el.style.touchAction = 'none';
-    let lx = 0, ly = 0, sx = 0, sy = 0;
+    let lx = 0, ly = 0, sx = 0, sy = 0, lt = 0;
     el.addEventListener('pointerdown', (e) => {
       el.setPointerCapture(e.pointerId);
       this.state.dragging = true; this.state.anim = null;
-      lx = sx = e.clientX; ly = sy = e.clientY;
+      this.state.vy = this.state.vp = 0; // a press stops a spin
+      lx = sx = e.clientX; ly = sy = e.clientY; lt = performance.now();
       el.style.cursor = 'grabbing';
     });
     el.addEventListener('pointermove', (e) => {
       if (!this.state.dragging) return;
-      const dx = e.clientX - lx, dy = e.clientY - ly;
-      lx = e.clientX; ly = e.clientY;
-      this.state.vy = dx * 0.0085; this.state.vp = dy * 0.0065;
-      this.state.yaw += this.state.vy; this.state.pitch = clamp(this.state.pitch + this.state.vp, -1.35, 1.35);
-      this.state.lastInput = performance.now();
+      const dx = e.clientX - lx, dy = e.clientY - ly, now = performance.now();
+      // The momentum it keeps is per 60th of a second, whatever the rate moves come at (once a frame: 240 a second on
+      // some screens, where it barely carried on).
+      const k = 1 / (60 * clamp((now - lt) / 1000, 1 / 240, 1 / 20));
+      lx = e.clientX; ly = e.clientY; lt = now;
+      this.state.vy = dx * 0.0085 * k; this.state.vp = dy * 0.0065 * k;
+      this.state.yaw += dx * 0.0085; this.state.pitch = clamp(this.state.pitch + dy * 0.0065, -1.35, 1.35);
+      this.state.lastInput = now;
     });
     const up = (e) => {
+      // Held still before letting go: no flick.
+      if (performance.now() - lt > 80) this.state.vy = this.state.vp = 0;
       this.state.dragging = false; el.style.cursor = this.pick ? 'crosshair' : 'grab'; this.state.lastInput = performance.now();
       // A click rather than a drag picks a point on the gun while something wants one (placing a charm).
       if (this.pick && e.type === 'pointerup' && Math.hypot(e.clientX - sx, e.clientY - sy) < 5) this.pickAt(e);
@@ -594,7 +601,7 @@ class InspectView {
         console.warn('CS2 sticker material unavailable, using the icon model instead:', e);
       }
     }
-    // Charms (and Sticker Slabs): CS2's charm model, hanging from its clasp and swinging as you turn it.
+    // Charms (and Sticker Slabs): CS2's charm model, turning about its middle as you turn it.
     if (item.t === 'charm') {
       try {
         if ((await cs2Status()).available) {
@@ -641,19 +648,25 @@ class InspectView {
     return g;
   }
 
+  // The view a model is first seen from (its own, e.g. a charm's as its icon shows it, else a slight three-quarter).
+  view() {
+    return this.model?.userData.view || DEFAULT_VIEW;
+  }
+
   reset(intro = false) {
-    const s = this.state;
+    const s = this.state, v = this.view();
     s.zoom = 1; s.vy = 0; s.vp = 0;
     if (intro) {
       // CS2-style draw: swings in from a three-quarter back view and settles
-      s.anim = { t: 0, dur: 1.25, from: { yaw: -2.6, pitch: 0.45, z: 0.6 }, to: { yaw: 0.22, pitch: 0.12, z: 0 }, ease: easeOutBack };
+      s.anim = { t: 0, dur: 1.25, from: { yaw: v.yaw - 2.82, pitch: 0.45, z: 0.6 }, to: { yaw: v.yaw, pitch: v.pitch, z: 0 }, ease: easeOutBack };
     } else {
-      s.anim = { t: 0, dur: 0.6, from: { yaw: s.yaw, pitch: s.pitch, z: 0 }, to: { yaw: Math.round(s.yaw / (Math.PI * 2)) * Math.PI * 2 + 0.22, pitch: 0.12, z: 0 }, ease: easeInOut };
+      s.anim = { t: 0, dur: 0.6, from: { yaw: s.yaw, pitch: s.pitch, z: 0 }, to: { yaw: Math.round(s.yaw / (Math.PI * 2)) * Math.PI * 2 + v.yaw, pitch: v.pitch, z: 0 }, ease: easeInOut };
     }
   }
 
   flip() {
     const s = this.state;
+    s.vy = s.vp = 0;
     s.anim = { t: 0, dur: 0.8, from: { yaw: s.yaw, pitch: s.pitch, z: 0 }, to: { yaw: s.yaw + Math.PI, pitch: s.pitch, z: 0 }, ease: easeInOut };
   }
 
@@ -662,12 +675,13 @@ class InspectView {
     if (this.fp) return this.playFirstPerson();
     const s = this.state;
     const y0 = s.yaw, p0 = s.pitch;
+    s.vy = s.vp = 0;
     s.anim = {
       t: 0, dur: 3.2, custom: (t) => {
         const k = easeInOut(t);
         s.yaw = y0 + Math.sin(k * Math.PI) * 0.9 + k * Math.PI * 2;
-        s.pitch = p0 + Math.sin(k * Math.PI * 2) * 0.55;
-        this.pivot.rotation.z = Math.sin(k * Math.PI * 2) * 0.25;
+        s.pitch = clamp(p0 + Math.sin(k * Math.PI * 2) * 0.55, -1.35, 1.35);
+        s.roll = Math.sin(k * Math.PI * 2) * 0.25;
       },
     };
   }
@@ -676,7 +690,6 @@ class InspectView {
     this.clock.update();
     const dt = Math.min(0.05, this.clock.getDelta());
     const s = this.state;
-    let zOff = 0;
     if (s.anim) {
       s.anim.t += dt / s.anim.dur;
       const t = Math.min(1, s.anim.t);
@@ -685,28 +698,35 @@ class InspectView {
         const k = s.anim.ease(t);
         s.yaw = s.anim.from.yaw + (s.anim.to.yaw - s.anim.from.yaw) * k;
         s.pitch = s.anim.from.pitch + (s.anim.to.pitch - s.anim.from.pitch) * k;
-        zOff = s.anim.from.z + (s.anim.to.z - s.anim.from.z) * Math.min(1, t * 1.4);
+        if (s.anim.from.z) s.zOff = s.anim.from.z + (s.anim.to.z - s.anim.from.z) * Math.min(1, t * 1.4);
       }
-      if (t >= 1) { s.anim = null; this.pivot.rotation.z = 0; s.lastInput = performance.now(); }
+      if (t >= 1) { s.anim = null; s.lastInput = performance.now(); }
     } else if (!s.dragging) {
-      s.yaw += s.vy; s.pitch = clamp(s.pitch + s.vp, -1.35, 1.35);
-      s.vy *= 0.93; s.vp *= 0.9;
+      // Momentum and sway per 60th of a second, so they're the same at any frame rate.
+      const f = dt * 60;
+      s.yaw += s.vy * f; s.pitch = clamp(s.pitch + s.vp * f, -1.35, 1.35);
+      s.vy *= Math.pow(0.93, f); s.vp *= Math.pow(0.9, f);
       // gentle idle sway after a few seconds without input
       if (performance.now() - s.lastInput > 2500) {
         s.swayT += dt;
-        s.yaw += Math.sin(s.swayT * 0.7) * 0.0016;
-        s.pitch += (0.12 - s.pitch) * 0.01;
+        s.yaw += Math.sin(s.swayT * 0.7) * 0.0016 * f;
+        s.pitch += (this.view().pitch - s.pitch) * (1 - Math.pow(0.99, f));
       }
     }
+    // The roll and distance of an animation that was cut short (a press, or another animation) ease away.
+    const settle = Math.pow(0.85, dt * 60);
+    if (!s.anim?.custom) s.roll *= settle;
+    if (!s.anim?.from?.z) s.zOff *= settle;
     this.pivot.rotation.y = s.yaw;
     this.pivot.rotation.x = s.pitch;
+    this.pivot.rotation.z = s.roll;
     if (this.size) {
       const fov = (this.camera.fov * Math.PI) / 180;
       const fitH = this.size.y / 2 / Math.tan(fov / 2);
       const fitW = this.size.x / 2 / Math.tan(fov / 2) / this.camera.aspect;
       const dist = (Math.max(fitH, fitW) * 1.55) / s.zoom;
       const lift = this.size.y * 0.12; // keep the model above the HUD text
-      this.camera.position.set(0, -lift, dist * (1 + zOff));
+      this.camera.position.set(0, -lift, dist * (1 + s.zOff));
       this.camera.lookAt(0, -lift, 0);
     }
     this.model?.userData.tick?.(dt); // animated models (gloves on CS2's inspect pose)
@@ -748,6 +768,7 @@ const DEFAULT_KNIFE_ITEM = { t: 'skin', fl: 0, sd: 0 };
 function disposeTree(root) {
   root.traverse((o) => {
     o.geometry?.dispose();
+    o.skeleton?.dispose();
     for (const m of [].concat(o.material || [])) {
       for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap']) m[k]?.dispose();
       m.userData.dispose?.();
