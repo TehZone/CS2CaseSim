@@ -7,6 +7,8 @@
 // Charms are drawn with their csgo_weapon materials as CS2 does: tint, colour adjustments, roughness and the effects
 // (pearlescence, glitter, iridescence), most of them following the charm's pattern (CS2's dynamic expressions of
 // $KeychainSeed: a pattern's colours); the lighter's liquid as csgo_simple_liquid does.
+// Two charms react to how they're moved, as in CS2: the 8 Ball's answer goes when it's shaken and comes back, maybe
+// another (see shakeWatch), and the lighter's liquid sloshes, wobbles and fizzes (see sloshing).
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2Charm, cs2CharmAttach } from './api.js';
@@ -79,8 +81,10 @@ const FUNCS = {
   float2: (...a) => a.flat().slice(0, 2), float3: (...a) => a.flat().slice(0, 3), float4: (...a) => a.flat().slice(0, 4),
   length: (x) => Math.hypot(...[].concat(x)), normalize: (x) => { const l = Math.hypot(...[].concat(x)) || 1; return each(x, (v) => v / l); },
 };
+const tokens = new Map(); // (some run every frame)
 export function evalExpression(src, attrs = {}) {
-  const toks = String(src).match(/\$[\w$]+|[A-Za-z_]\w*|\d*\.\d+|\d+|<=|>=|==|!=|&&|\|\||[-+*/%(),?:<>!.;=]/g) || [];
+  let toks = tokens.get(src);
+  if (!toks) tokens.set(src, toks = String(src).match(/\$[\w$]+|[A-Za-z_]\w*|\d*\.\d+|\d+|<=|>=|==|!=|&&|\|\||[-+*/%(),?:<>!.;=]/g) || []);
   let i = 0;
   const locals = {};
   const peek = () => toks[i];
@@ -150,9 +154,9 @@ export function evalExpression(src, attrs = {}) {
 // Materials: csgo_weapon's charm look on three's physical material, from the game's decompiled pixel shader. The colour
 // map's tint and adjustments (contrast, brightness, hue about the grey axis weighted by saturation, then saturation;
 // masked by the tint mask), a detail texture multiplied in or laid over the colour before them (the pattern moves and
-// scales it: Diner Dog's and Lil' Teacup's prints, the 8 Ball's answer), the roughness/metal map (roughness in red with
-// its contrast and brightness, metalness in green remapped; the diffuse fades as pow(1 - metalness, bias)) and the
-// effects its blue channel, the SFX mask, lets through: pearlescence (the colour's hue turning with the view angle),
+// scales it: Diner Dog's and Lil' Teacup's prints; the 8 Ball's answer follows its last shake), the roughness/metal map
+// (roughness in red with its contrast and brightness, metalness in green remapped; the diffuse fades as
+// pow(1 - metalness, bias)) and the effects its blue channel, the SFX mask, lets through: pearlescence (the colour's hue turning with the view angle),
 // glitter (point-sampled flakes that flash in rainbow colours as the view moves, lit like the surface) and iridescence
 // (the reflections' colour turned to a rainbow, keeping its brightness, that scrolls with the view and the light). The
 // lighter's tank (csgo_simple_liquid) is the exporter's material with CS2's liquid inside.
@@ -326,19 +330,44 @@ function patchShader(shader, u) {
     .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n#ifdef CS2_GLITTER\n' + SHADER_SPARKLE + '\n#endif');
 }
 
-// A charm material from the service's description (see CS2Service.charm) for this charm's attributes. `base` is the
-// exporter's material (the lighter's tank keeps it, with its liquid). Null when it's neither a csgo_weapon material
-// with a colour map nor a liquid.
-async function charmMaterial(info, attrs, { name = '', base = null } = {}) {
-  const p = { ...info?.params };
-  for (const [k, src] of Object.entries(info?.dynamic || {})) {
+// A material's parameters with its dynamic expressions worked out for these attributes (`dynamic`: just these ones, into
+// `p`): { num, vec }, which read a number or a vector with a default.
+function readParams(info, attrs, p = { ...info?.params }, dynamic = Object.entries(info?.dynamic || {})) {
+  for (const [k, src] of dynamic) {
     const v = evalExpression(src, attrs);
     if (v == null) continue;
     p[k] = Array.isArray(p[k]) && !Array.isArray(v) ? p[k].map(() => v) : v;
   }
-  const num = (k, d) => (typeof p[k] === 'number' && Number.isFinite(p[k]) ? p[k] : d);
-  const vec = (k, d) => (Array.isArray(p[k]) ? p[k] : typeof p[k] === 'number' ? [p[k], p[k], p[k], p[k]] : d);
-  if (info?.shader === 'csgo_simple_liquid') return base && info.textures?.liquid ? liquidMaterial(info.textures.liquid, base, num, vec) : null;
+  return {
+    num: (k, d) => (typeof p[k] === 'number' && Number.isFinite(p[k]) ? p[k] : d),
+    vec: (k, d) => (Array.isArray(p[k]) ? p[k] : typeof p[k] === 'number' ? [p[k], p[k], p[k], p[k]] : d),
+  };
+}
+// Reads a material's parameters again as an attribute changes (only the expressions that use it, those being the ones
+// that move). Returns fn(value) -> { num, vec }, or null when it has none.
+function following(info, attrs, attr) {
+  const dynamic = Object.entries(info?.dynamic || {}).filter(([, src]) => src.includes(attr));
+  if (!dynamic.length) return null;
+  const p = { ...info.params }, now = { ...attrs };
+  return (value) => { now[attr] = value; return readParams(info, now, p, dynamic); };
+}
+
+// The detail texture's place: CS2 compiles the offset to scale and turn it about its middle.
+function placeDetail(xform, opts, { num, vec }, on) {
+  const ds = vec('g_vDetailTexCoordScale', [1, 1]), dr = num('g_flDetailTexCoordRotation', 0) * DEG, dc = Math.cos(dr), dn = Math.sin(dr);
+  const off = vec('g_vDetailTexCoordOffset', [0, 0]);
+  xform.set(ds[0] * dc, -ds[0] * dn, ds[1] * dn, ds[1] * dc);
+  opts.x = 0.5 + off[0] - 0.5 * ds[0] * (dc - dn);
+  opts.y = 0.5 + off[1] - 0.5 * ds[1] * (dn + dc);
+  opts.z = on ? num('g_fDetailBlendFactor', 1) : 0;
+}
+
+// A charm material from the service's description (see CS2Service.charm) for this charm's attributes. `base` is the
+// exporter's material (the lighter's tank keeps it, with its liquid). Null when it's neither a csgo_weapon material
+// with a colour map nor a liquid.
+async function charmMaterial(info, attrs, { name = '', base = null } = {}) {
+  const read = readParams(info, attrs), { num, vec } = read;
+  if (info?.shader === 'csgo_simple_liquid') return base && info.textures?.liquid ? liquidMaterial(info, attrs, base, read) : null;
   if (info?.shader !== 'csgo_weapon' || !info.textures?.color) return null;
   const t = info.textures, f = info.flags || {};
   // The effects it has: CS2 lets them through its SFX mask only, so without one there's nothing to draw.
@@ -346,11 +375,12 @@ async function charmMaterial(info, attrs, { name = '', base = null } = {}) {
   const pearl = sfx ? num('g_flPearlescentScale', 0) : 0;
   const glitter = sfx && f.F_GLITTER && t.glitter ? num('g_fGlitterIntensity', 0) : 0;
   const irid = sfx && f.F_IRIDESCENCE ? num('g_flIridescentStrength', 0.75) : 0;
+  const shaken = t.detail ? following(info, attrs, '$ent_weapon_shake') : null;
   const blend = t.detail ? num('g_fDetailBlendFactor', 1) : 0;
   const [color, normal, ao, rm, tint, flakes, detail, clear] = await Promise.all([
     texture(t.color, true), t.normal ? texture(t.normal, false) : null, t.ao ? texture(t.ao, false) : null,
     t.rm ? texture(t.rm, false) : null, t.tint && f.F_TINT_MASK ? texture(t.tint, false) : null,
-    glitter > 0 ? texture(t.glitter, false, true) : null, blend > 0 ? texture(t.detail, true) : null,
+    glitter > 0 ? texture(t.glitter, false, true) : null, blend > 0 || shaken ? texture(t.detail, true) : null,
     t.clear && f.F_OPAQUE_REFRACT ? texture(t.clear, false) : null,
   ]);
   const tc = vec('g_vColorTint', [1, 1, 1]), mr = vec('g_vMetalnessRemapRange', [0, 1]);
@@ -361,8 +391,6 @@ async function charmMaterial(info, attrs, { name = '', base = null } = {}) {
   if (effects.length) for (const k of ['CS2_EFFECTS', ...effects]) m.defines[k] = '';
   if (detail) m.defines.CS2_DETAIL = '';
   if (clear) m.defines.CS2_CLEAR = '';
-  const ds = vec('g_vDetailTexCoordScale', [1, 1]), dr = num('g_flDetailTexCoordRotation', 0) * DEG, dc = Math.cos(dr), dn = Math.sin(dr);
-  const off = vec('g_vDetailTexCoordOffset', [0, 0]);
   const u = {
     cs2Rm: { value: rm }, cs2TintMap: { value: tint },
     cs2Has: { value: new THREE.Vector4(rm ? 1 : 0, tint ? 1 : 0, f.F_ENABLE_ADJUSTMENTS ? 1 : 0, f.F_DETAIL_TEXTURE ? 1 : 0) },
@@ -379,10 +407,12 @@ async function charmMaterial(info, attrs, { name = '', base = null } = {}) {
     cs2ClearMask: { value: clear },
     cs2Clear: { value: new THREE.Vector4(num('g_flRefractGlancingMask', 0), num('g_flRefractOpacity', 1), num('g_flRefractContrast', 0), num('g_flRefractBrightness', 1)) },
     cs2Detail: { value: detail },
-    cs2DetailXform: { value: new THREE.Vector4(ds[0] * dc, -ds[0] * dn, ds[1] * dn, ds[1] * dc) },
-    // CS2 compiles the offset to scale and turn the detail about its middle.
-    cs2DetailOpts: { value: new THREE.Vector4(0.5 + off[0] - 0.5 * ds[0] * (dc - dn), 0.5 + off[1] - 0.5 * ds[1] * (dn + dc), blend, num('g_bMaskDetailTextureByTintMask', 0)) },
+    cs2DetailXform: { value: new THREE.Vector4() },
+    cs2DetailOpts: { value: new THREE.Vector4(0, 0, 0, num('g_bMaskDetailTextureByTintMask', 0)) },
   };
+  placeDetail(u.cs2DetailXform.value, u.cs2DetailOpts.value, read, !!detail);
+  // The 8 Ball's answer follows the last shake, for whichever copy of it is about to draw.
+  if (shaken) m.userData.cs2Shaken = (shake) => placeDetail(u.cs2DetailXform.value, u.cs2DetailOpts.value, shaken(shake), true);
   m.onBeforeCompile = (shader) => patchShader(shader, u);
   const key = 'cs2charm' + effects.join('') + (detail ? 'CS2_DETAIL' : '') + (clear ? 'CS2_CLEAR' : ''); // a program per set of effects
   m.customProgramCacheKey = () => key;
@@ -399,36 +429,105 @@ function hueTurn(c, a) {
 }
 
 // The lighter's tank (csgo_simple_liquid): the exporter's material with CS2's liquid behind the see-through part (its
-// liquid mask). The liquid is coloured by the pattern and fills the tank to the pattern's level, its surface level
-// with the world whichever way the charm turns (keepLevel), with a waterline where it meets the glass; what shows
-// through the glass and the liquid is the environment behind them, refracted and tinted by them, which CS2 draws as
-// light of its own: the liquid's glow.
+// liquid mask). The liquid is coloured by the pattern and fills the tank to the pattern's level, its surface square to
+// its own gravity (which follows the swing of a little pendulum in the tank, see sloshing) with a waterline where it
+// meets the glass. The surface wobbles in waves that grow with the agitation, and bubbles rise through the liquid,
+// bigger near the surface and as it's agitated, until it foams. What shows through the glass and the liquid is the
+// environment behind them, refracted (bent by the bubbles) and tinted by them, which CS2 draws as light of its own:
+// the liquid's glow.
 const LIQUID_HEAD = `
 uniform sampler2D cs2LiquidMask;
 uniform vec2 cs2MaskRange; // mask minimum, maximum
 uniform vec3 cs2Liquid; // the liquid's colour x brightness, hue turned
 uniform vec4 cs2Glow; // liquid brightness, inner glow, emissive strength, brightening of the empty part
-uniform vec4 cs2Surface; // the surface's world height, inches per world unit, sharpness, waterline strength
+uniform vec4 cs2Surface; // the level (inches from the liquid's centre), inches per world unit, sharpness, waterline strength
 uniform vec4 cs2Refract; // glass and liquid transparency, refracted environment brightness, glass fresnel thickness
-uniform vec2 cs2Eta; // glass and liquid refraction
+uniform vec3 cs2Eta; // glass, liquid and liquid surface refraction
+uniform vec3 cs2Up; // the liquid's up, against its gravity (world)
+uniform vec3 cs2Centre; // the liquid's centre (world)
+uniform vec3 cs2Slosh; // wave time, agitation, the tank's up along the liquid's up
+uniform vec4 cs2Wobble; // wave height, wavelength, surface tension, how far back the surface shows from above
+uniform vec4 cs2Bubbles; // size, spacing, the agitation's smallest and biggest
+uniform vec4 cs2Bubbles2; // shrinking with depth, bending of the refraction, speed, opacity
+uniform vec3 cs2BubbleIn;
+uniform vec3 cs2BubbleOut;
+uniform float cs2BackFade;
+// One layer of bubbles: a circle in each cell of a grid, its edge lit and bending what's behind it.
+void cs2Bubble(vec2 p, float inv, float edge, inout vec3 colour, inout vec2 bend, inout float sum) {
+  vec2 q = (fract(p) * 2.0 - 1.0) * inv;
+  float l = length(q), a = saturate(edge * (1.0 - l));
+  vec2 n = q * l * l;
+  colour += mix(cs2BubbleIn, cs2BubbleOut, length(n)) * a;
+  bend += n * a;
+  sum += a;
+}
 `;
 const LIQUID_SURFACE = `
 vec3 cs2LiquidGlow = vec3(0.0);
 {
   float mask = saturate((texture2D(cs2LiquidMask, vMapUv).r - cs2MaskRange.x) / (cs2MaskRange.y + 0.001));
   vec3 V = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(vViewPosition);
-  float f = saturate(1.0 - dot(V, normal)), f1 = 1.0 - f;
-  float d = (cameraPosition.y + (vec4(-vViewPosition, 0.0) * viewMatrix).y - cs2Surface.x) * cs2Surface.y; // inches above the surface
+  float f = saturate(1.0 - dot(V, normal)), f1 = 1.0 - f, f2 = f1 * f1;
+  // Inches from the liquid's centre: along its up, and in the view across and down its gravity (what the waves and bubbles
+  // run on). CS2's model and world are in inches.
+  vec3 rel = (cameraPosition + (vec4(-vViewPosition, 0.0) * viewMatrix).xyz - cs2Centre) * cs2Surface.y;
+  float height = dot(rel, cs2Up);
+  vec3 sideways = mat3(viewMatrix) * rel, fall = mat3(viewMatrix) * -cs2Up;
+  fall = dot(fall.xy, fall.xy) > 1e-6 ? normalize(vec3(fall.xy, 0.0)) : vec3(0.0, -1.0, 0.0);
+  vec2 w = vec2(dot(sideways, cross(fall, vec3(0.0, 0.0, 1.0))), dot(sideways, fall));
+  float wave = cs2Slosh.x, agitation = cs2Slosh.y, a = agitation * agitation + 0.01;
+  float upright = mix(0.5, 1.0, abs(cs2Slosh.z));
+  float level = length(inverseTransformDirection(normal, viewMatrix) * cs2Up), rough = 1.0 - level, turn = wave * 0.104;
+  vec2 k = w * cs2Wobble.y * upright * mix(0.2, 0.6, a);
+  float waves = (a * exp(sin(dot(vec2(-1.24211, 1.142074), k) + wave * 0.034) - 1.0) * 0.125
+    + exp(sin(dot(vec2(2.8211, 2.92074), k) + wave * 0.044) - 1.0) * 0.333333
+    + a * exp(sin(dot(vec2(-3.24211, -3.642074), k) + wave * 0.024) - 1.0) * 0.111111
+    + a * exp(sin(dot(vec2(3.74211, -3.642074), k) + wave * 0.029) - 1.0) * 0.111111)
+    * exp(sin(dot(vec2(-8.74211, 13.642074), k) + turn) * rough * 0.14) * exp(sin(dot(vec2(13.74211, 14.642074), k) - turn) * rough * 0.13)
+    * exp(sin(dot(vec2(-23.74211, -13.642074), k) + turn) * rough * 0.1) * exp(sin(dot(vec2(31.74211, -20.642075), k) - turn) * rough * 0.08);
+  float wobble = waves * cs2Wobble.x * a * a * upright * 15.0 * (1.5 - f) - a * 0.25;
+  float tension = (f * mix(0.25, 1.0, level) + pow(f, 5.0) * 0.8) * cs2Wobble.z;
+  float above = dot(inverseTransformDirection(V, viewMatrix), cs2Up); // seen from above
+  // The bubbles, in four layers drifting up at their own speeds.
+#ifdef USE_NORMALMAP_TANGENTSPACE
+  vec2 b = w * cs2Bubbles.y + (texture2D(normalMap, vNormalMapUv).xy - 0.5) * 0.25;
+#else
+  vec2 b = w * cs2Bubbles.y;
+#endif
+  float size = 1.5 * cs2Bubbles.x * mix(cs2Bubbles.z, cs2Bubbles.w, pow(agitation, 9.0) + 0.25) / (1.0 + abs((cs2Surface.x + tension + wobble - height) * cs2Bubbles2.x));
+  b.y += 0.4 * wobble * size;
+  float s1 = sin(b.y) * 0.25 + sin(b.y * 23.1984) * 0.02, s2 = sin(b.x * 1.294) * 0.25 + sin(b.x * 18.1984) * 0.04;
+  float inv = 1.0 / max(size, 0.001), edge = 4.0 * (1.0 - roughnessFactor), rise = wave * 0.005 * cs2Bubbles2.z, sum = 0.0;
+  vec3 tint = vec3(0.0);
+  vec2 bend = vec2(0.0);
+  cs2Bubble(((b + vec2(0.2 - s1, 0.356 + s2)) * 0.6 + vec2(0.1, 1.0) * rise * 0.25) * 1.74, inv, edge, tint, bend, sum);
+  cs2Bubble(((b + vec2(-0.2 + s1, -0.56 - s2)) * 0.55 + vec2(-0.1, 1.0) * rise * 0.3) * 2.74, inv, edge, tint, bend, sum);
+  cs2Bubble(((b + vec2(0.35 - s1 * 0.5, 0.6 - s2 * 0.5)) * 0.5 + vec2(0.13, 1.0) * rise * 0.35) * 4.74, inv, edge, tint, bend, sum);
+  cs2Bubble(((b + vec2(-0.42 + s1 * 0.5, -0.76 + s2 * 0.5)) * 0.45 + vec2(-0.14, 1.0) * rise * 0.4) * 5.34, inv, edge, tint, bend, sum);
+  float bubbles = sum * size;
+  // The surface: inches above it (d), its line on the glass, the liquid in front and, from above, its surface further back.
+  float top = cs2Surface.x + wobble + bubbles * 0.025 - abs(above) * 0.05;
   float sharp = cs2Surface.z * mask * mix(1.0, 0.2, pow(roughnessFactor, 1.5));
-  float line = (1.0 - saturate(abs(d - 0.05) * f1 * f1 * sharp)) * f1 * f1 * cs2Surface.w;
-  float filled = saturate(line + 1.0 - saturate(d * sharp * 0.25));
-  float cover = saturate(filled * mask);
-  vec3 liquid = cs2Liquid * saturate(1.0 - line);
+  float d = height - (top + tension + 1.5 * min(0.3, saturate(1.0 - abs(cs2Up.y))) * (f - 0.2));
+  float line = (1.0 - saturate(abs(d - 0.05) * f2 * sharp)) * f2 * cs2Surface.w;
+  float front = 1.0 - saturate(d * sharp * 0.25);
+  float reach = 1.5 * cs2Wobble.w * pow(saturate(above), 2.0) * f1 * length(rel);
+  float fade = 1.0 - saturate(saturate(d / max(reach, 1e-4)) * cs2BackFade * 0.5);
+  float back = (1.0 - saturate((d - reach) * sharp * 0.125)) * fade;
+  float filled = saturate(line + front + back), cover = saturate(filled * mask), surface = saturate((back - front) * mask);
+  vec3 liquid = cs2Liquid * saturate(1.0 - line) * mix(vec3(1.0), tint * 4.0, saturate(cs2Bubbles2.w * bubbles * front));
   vec3 col = diffuseColor.rgb * mix(1.0, 0.2, saturate(2.0 * (f - cs2Refract.w)) * mask);
-  col = col * mix(vec3(1.0), liquid, cover) + liquid * cs2Glow.x * f1 * f1 * f1 * cover / (1.0 + max(-d, 0.0)) * cs2Glow.y;
+  col = col * mix(vec3(1.0), liquid, cover) + liquid * cs2Glow.x * f1 * f2 * cover / (1.0 + max(top - height, 0.0)) * cs2Glow.y;
   col *= 1.0 + cs2Glow.w * mask * (1.0 - filled);
-  vec3 r = refract(-V, normal, mix(cs2Eta.x, cs2Eta.y, filled));
-  if (dot(r, r) < 1e-4) r = reflect(-V, normal);
+  // What's behind, through the bubbles and, from above, the surface.
+  bend *= size * front;
+  vec3 bent = normalize(mix(normal, V, -0.3) + (vec3(0.0, 1.0, 0.0) * bend.y + cross(vec3(0.0, 1.0, 0.0), -V) * bend.x) * cs2Bubbles2.y);
+  vec3 flat2 = normalize(mat3(viewMatrix) * (cs2Up + vec3(0.0, 0.0, wobble * 0.5)));
+  bent = normalize(mix(bent, flat2, saturate(1.0 - (saturate(d) - saturate(d - reach)) * 0.5) * saturate(filled) * surface * (0.25 + fade * 0.666667)));
+  float eta = mix(mix(cs2Eta.x, cs2Eta.y, filled), cs2Eta.z, surface);
+  vec3 through = normalize(mix(normal, mix(normal, bent, 0.75), filled));
+  vec3 r = refract(-V, through, eta);
+  if (dot(r, r) < 1e-4) r = reflect(-V, through);
 #if defined( USE_ENVMAP ) && defined( ENVMAP_TYPE_CUBE_UV )
   vec3 env = textureCubeUV(envMap, envMapRotation * inverseTransformDirection(r, viewMatrix), mix(0.1, 1.0, roughnessFactor)).rgb * envMapIntensity;
 #else
@@ -440,7 +539,7 @@ vec3 cs2LiquidGlow = vec3(0.0);
   cs2LiquidGlow = seen * open + liquid * cover * cs2Glow.z;
   // A light behind the tank shines through it, tinted (CS2: for its sun, with its colour squared).
 #if NUM_DIR_LIGHTS > 0
-  vec3 rs = refract(-V, normal, mix(mix(cs2Eta.x, cs2Eta.y, filled), 1.0, 0.5));
+  vec3 rs = refract(-V, normal, mix(eta, 1.0, 0.5));
   if (dot(rs, rs) > 1e-4) {
     float e = 40.0 / (roughnessFactor + 0.2);
     vec3 sun = vec3(0.0);
@@ -453,18 +552,29 @@ vec3 cs2LiquidGlow = vec3(0.0);
 #endif
 }
 `;
-async function liquidMaterial(maskUrl, base, num, vec) {
+async function liquidMaterial(info, attrs, base, { num, vec }) {
   const m = base.clone();
   m.envMapIntensity = 1.1;
   const colour = hueTurn(vec('g_vLiquidColor', [0.6, 0.4, 0.1]).slice(0, 3).map((c) => toLinear(c) * num('g_flLiquidBrightness', 1)), (num('g_flLiquidColorHueShift', 0) * Math.PI) / 180);
+  const linear = (k, d) => new THREE.Vector3(...vec(k, d).slice(0, 3).map(toLinear));
+  const glass = num('g_flGlassRefraction', 1), inside = num('g_flLiquidRefraction', 1);
   const u = {
-    cs2LiquidMask: { value: await texture(maskUrl, false) },
+    cs2LiquidMask: { value: await texture(info.textures.liquid, false) },
     cs2MaskRange: { value: new THREE.Vector2(num('g_flMaskMinimum', 0), num('g_flMaskMaximum', 1)) },
     cs2Liquid: { value: new THREE.Vector3(...colour) },
     cs2Glow: { value: new THREE.Vector4(num('g_flLiquidBrightness', 1), num('g_flLiquidInnerGlow', 0.1), num('g_flLiquidEmissiveStrength', 0), num('g_flBrightenEmptyArea', 3)) },
-    cs2Surface: { value: new THREE.Vector4(-1e9, 1, num('g_flLiquidSharpness', 100), num('g_flWaterLineStrength', 1)) },
+    cs2Surface: { value: new THREE.Vector4(1e9, 1, num('g_flLiquidSharpness', 100), num('g_flWaterLineStrength', 1)) },
     cs2Refract: { value: new THREE.Vector4(num('g_flCubeRefractTransparency', 1), num('g_flCubeRefractLiquidTransparency', 1), num('g_flCubeRefractBrightness', 1), num('g_flFresnelGlassThickness', 0.2)) },
-    cs2Eta: { value: new THREE.Vector2(num('g_flGlassRefraction', 1), num('g_flLiquidRefraction', 1)) },
+    cs2Eta: { value: new THREE.Vector3(glass, inside, num('g_flLiquidSurfaceRefraction', inside)) },
+    cs2Up: { value: UP.clone() },
+    cs2Centre: { value: new THREE.Vector3() },
+    cs2Slosh: { value: new THREE.Vector3(0, 0, 1) },
+    cs2Wobble: { value: new THREE.Vector4(num('g_flLiquidWobbleScale', 0.02), num('g_flLiquidWobbleWavelength', 6), num('g_flSurfaceTension', 0), num('g_flLiquidBackOffset', 0)) },
+    cs2Bubbles: { value: new THREE.Vector4(num('g_flBubbleScale', 0.3), num('g_flBubbleSpaceScale', 1), num('g_flBubblesMinimum', 0.1), num('g_flBubblesMaximum', 0.4)) },
+    cs2Bubbles2: { value: new THREE.Vector4(num('g_flBubbleDepthFalloff', 1), num('g_flBubbleStrength', 10), num('g_flBubbleSpeed', 1), num('g_flBubbleOpacity', 1)) },
+    cs2BubbleIn: { value: linear('g_vBubbleColorInner', [0, 0, 0]) },
+    cs2BubbleOut: { value: linear('g_vBubbleColorOuter', [1, 1, 1]) },
+    cs2BackFade: { value: num('g_flLiquidBackFade', 0) },
   };
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, u);
@@ -475,10 +585,17 @@ async function liquidMaterial(maskUrl, base, num, vec) {
   };
   m.customProgramCacheKey = () => 'cs2liquid';
   // The surface's level (inches about the liquid's centre) when the tank stands up, lies on its side or hangs upside
-  // down, and how full it is.
+  // down, how full it is, and what follows the pendulum: its agitation and gravity (CS2's axes).
+  const moves = following(info, attrs, LIQUID_ATTR);
   m.userData.cs2Level = {
-    surface: u.cs2Surface.value, height: num('g_flLiquidLevelHeight', 0.5), centre: vec('g_flLiquidCenterOffset', [0, 0, 0]),
+    surface: u.cs2Surface.value, slosh: u.cs2Slosh.value, liquidUp: u.cs2Up.value, liquidCentre: u.cs2Centre.value,
+    height: num('g_flLiquidLevelHeight', 0.5), centre: vec('g_flLiquidCenterOffset', [0, 0, 0]),
     up: vec('g_vLiquidLevelUpwardsMinMidMax', [-1, 0, 1]), side: vec('g_vLiquidLevelSidewardsMinMidMax', [-1, 0, 1]), down: vec('g_vLiquidLevelDownwardsMinMidMax', [-1, 0, 1]),
+    waves: 3 * Math.floor(num('g_flLiquidWobbleSpeed', 0.3) * 200),
+    follow: (up) => {
+      const p = moves ? moves(up) : { num, vec };
+      return { agitation: p.num('g_flTestAgitation', 0), gravity: p.vec('g_vTestGravityDir', [0, 0, -1]) };
+    },
   };
   return m;
 }
@@ -498,27 +615,65 @@ function liquidAnchor(mesh, root, lv) {
   };
 }
 
-// Keeps the liquid in a holder's tanks level under gravity (world -Y) as its charm swings and turns: the level's range
-// follows how far the tank is turned from upright, in that copy's own place and scale (the material is shared).
-function keepLevel(holder) {
-  holder.traverse((mesh) => {
-    const at = mesh.userData.cs2Liquid;
-    if (!at) return;
-    const lv = mesh.material.userData.cs2Level, bone = mesh.skeleton.bones.find((b) => b.name === at.bone);
-    const centre = new THREE.Vector3().fromArray(at.centre), up = new THREE.Vector3().fromArray(at.up);
+// Keeps the liquid in a holder's tanks moving: CS2's liquid_surface is a rod an inch long in the tank with a light weight
+// on its end at half gravity (as the model's cloth has it), its up what CS2's materials read as $bone_upvector. As the tank
+// is moved that swings, tipping the liquid's gravity and agitating it through the materials' own expressions, which set
+// the level and the waves. `held`: in first person, where the tank's real moves do that, else the inspect's turn does too
+// (see LIQUID_ARM). Returns fn(q, dt, gap), run each frame with the holder's turn; each tank draws in its copy's own place
+// (the material is shared). Null when the holder has no tank.
+function sloshing(holder, held) {
+  const tanks = [];
+  holder.traverse((o) => { if (o.userData.cs2Liquid) tanks.push(o); });
+  if (!tanks.length) return null;
+  const bone = tanks[0].skeleton.bones.find((b) => b.name === tanks[0].userData.cs2Liquid.bone);
+  const dir = DOWN.clone(), vel = new THREE.Vector3(), next = new THREE.Vector3(), force = new THREE.Vector3();
+  const pos = new THREE.Vector3(), size = new THREE.Vector3();
+  const pushed = new THREE.Vector3(), turn = new THREE.Vector3(), was = new THREE.Quaternion();
+  const moved = inertia(LIQUID_SMOOTH, LIQUID_INERTIA);
+  const up = [0, 0, 1]; // the rod's up, CS2's axes (x its z, y its x, z its y)
+  const sat = (x) => Math.min(1, Math.max(0, x));
+  const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+  for (const mesh of tanks) {
+    const at = mesh.userData.cs2Liquid, lv = mesh.material.userData.cs2Level;
+    const centre = new THREE.Vector3().fromArray(at.centre), tank = new THREE.Vector3().fromArray(at.up);
     const c = new THREE.Vector3(), u = new THREE.Vector3(), s = new THREE.Vector3();
-    const sat = (x) => Math.min(1, Math.max(0, x));
-    const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
     mesh.onBeforeRender = () => {
+      const { agitation, gravity } = lv.follow(up);
+      lv.liquidUp.set(-gravity[1], -gravity[2], -gravity[0]).normalize();
       c.copy(centre).applyMatrix4(bone.matrixWorld);
-      u.copy(up).transformDirection(bone.matrixWorld);
-      const inch = INCH * s.setFromMatrixScale(bone.matrixWorld).x;
-      const r = mix(mix(lv.down, lv.side, sat(u.y + 1)), lv.up, sat(u.y)), h = lv.height;
+      u.copy(tank).transformDirection(bone.matrixWorld);
+      const tilt = u.dot(lv.liquidUp), h = lv.height;
+      const r = mix(mix(lv.down, lv.side, sat(tilt + 1)), lv.up, sat(tilt));
       const low = r[0] + (r[1] - r[0]) * sat(h * 2);
-      lv.surface.x = c.y + (low + (r[2] - low) * sat(h * 2 - 1)) * inch;
-      lv.surface.y = 1 / inch;
+      lv.surface.x = low + (r[2] - low) * sat(h * 2 - 1);
+      lv.surface.y = 1 / (INCH * s.setFromMatrixScale(bone.matrixWorld).x);
+      lv.liquidCentre.copy(c);
+      lv.slosh.set(((performance.now() / 1000) % 200) * lv.waves, agitation, tilt);
     };
-  });
+  }
+  return (q, dt, gap) => {
+    if (dt && !held) pushed.add(turnVector(turn, was, q).cross(LIQUID_ARM));
+    was.copy(q);
+    // (Metres, whatever the charm's scale.)
+    pos.setFromMatrixPosition(bone.matrixWorld).divideScalar(size.setFromMatrixScale(bone.matrixWorld).x).add(pushed);
+    const acc = moved(pos, 1, dt, gap);
+    if (!dt) { dir.copy(DOWN); vel.set(0, 0, 0); } else {
+      force.copy(DOWN).multiplyScalar(LIQUID_GRAVITY).sub(acc);
+      const n = Math.ceil(dt / SUBSTEP - 1e-6), h = dt / n;
+      for (let i = 0; i < n; i++) {
+        vel.addScaledVector(force, h).multiplyScalar(Math.exp(-LIQUID_DAMPING * h));
+        next.copy(dir).addScaledVector(vel, h / LIQUID_ROD).normalize();
+        const side = Math.hypot(next.x, next.z);
+        if (next.y > 0 || side > Math.sin(LIQUID_SWING)) {
+          const k = Math.sin(LIQUID_SWING) / (side || 1);
+          next.set(next.x * k, -Math.cos(LIQUID_SWING), next.z * k);
+        }
+        vel.subVectors(next, dir).multiplyScalar(LIQUID_ROD / h);
+        dir.copy(next);
+      }
+    }
+    up[0] = -dir.z; up[1] = -dir.x; up[2] = Math.min(1, -dir.y);
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -539,9 +694,8 @@ async function charmModel(charm) {
     if (o.isMesh) { o.frustumCulled = false; meshes.push(o); }
   });
   if (!joint) throw new Error('Charm model has no chain');
-  // $ent_weapon_shake is what the 8 Ball reads: its answer fades in as it settles (x) and shakes pick it (y). Here it's
-  // settled, as its icon shows it, the pattern picking one of its three answers.
-  const attrs = { $KeychainSeed: keychainSeed(charm.pat), $ent_weapon_shake: [3, ((charm.pat || 0) % 3) + 0.5] };
+  // Never shaken (see shakeWatch), and its liquid at rest (see sloshing).
+  const attrs = { $KeychainSeed: keychainSeed(charm.pat), $ent_weapon_shake: [SHAKE_SETTLE, 0], [LIQUID_ATTR]: [0, 0, 1] };
   if (def.slab) {
     const s = D.stickers[def.sk];
     if (s?.rc) attrs.$sticker_rarity_color = [1, 3, 5].map((k) => parseInt(s.rc.slice(k, k + 2), 16) / 255);
@@ -665,16 +819,131 @@ const SWAY_LAG = 0.03, SWAY_MAX = 0.18, SWAY_TWIST = 0.5; // s, rad, share about
 const SWAY_SPRING = 10, SWAY_DAMPING = 0.35;
 // Both are worked out in steps of at most this (the same at any frame rate).
 const SUBSTEP = 1 / 240; // s
+// The lighter's pendulum (see sloshing), and what CS2's materials read it as.
+const LIQUID_ROD = INCH, LIQUID_GRAVITY = 180 * INCH; // m, m/s²: CS2's 360 units/s² at the model's half gravity
+// The model smooths a keychain's motion before its cloth feels it (motion_smooth_cdt 0.25, critically damped: two stages of
+// half that). CS2's rod has no damping of its own and no limits but its solver's: these keep it from going over the top
+// of the tank (the liquid would jump to the other end) or past where CS2's agitation turns it all to black foam, at 40°.
+const LIQUID_SMOOTH = 0.125, LIQUID_INERTIA = 0.4 * GRAVITY, LIQUID_DAMPING = 3, LIQUID_SWING = 35 * DEG; // s, m/s², per second, radians
+const LIQUID_ATTR = '$bone_upvector$liquid_surface';
+// CS2's shake (its weapons' tick, in client.dll): each tick the weapon's move goes in a ring of its last ticks, and more than
+// turns changes of direction among them along either axis, counting moves over STEP inches a tick, is a shake. It won't
+// shake again for SETTLE seconds, as long as the 8 Ball's answer takes to come back.
+const SHAKE_TICK = 1 / 64, SHAKE_STEP = 1, SHAKE_SETTLE = 3; // s, inches, s
+const SHAKE_HELD = { ticks: 32, turns: 5 };
+// CS2's inspect has no shake (a charm with no weapon reads a fixed "settled"), so this is ours: there it's the turn that
+// counts, as if your hand were TURN_ARM inches away (four radians a second is STEP), and a mouse doesn't go back and forth
+// as fast as a gun on a moving player: a second's worth of ticks, left-right-left-right.
+const SHAKE_TURNED = { ticks: 64, turns: 3 }, TURN_ARM = 16;
+// A charm turned in the inspect barely moves through space, so its liquid would feel nothing: the turn pushes it as if
+// from that hand, out below and in front of it (so that a turn about any axis tips it).
+const LIQUID_ARM = new THREE.Vector3(0, -1, -1).normalize().multiplyScalar(TURN_ARM * INCH); // m
+
+// The turn from one orientation to another, as a vector along its axis as long as its angle (radians, world axes).
+const turnVector = (() => {
+  const d = new THREE.Quaternion();
+  return (out, from, to) => {
+    d.copy(from).invert().premultiply(to);
+    if (d.w < 0) d.set(-d.x, -d.y, -d.z, -d.w);
+    const sin = Math.hypot(d.x, d.y, d.z);
+    return out.set(d.x, d.y, d.z).multiplyScalar(sin > 1e-9 ? (2 * Math.atan2(sin, d.w)) / sin : 2);
+  };
+})();
+
+// A point's acceleration (m/s², it may be scaled) from its last moves, none across a pause; at most `most`, its velocity
+// smoothed twice for `smooth` seconds (see INERTIA_SMOOTH). Returns fn(point, scale, dt, gap) -> the acceleration, reused.
+function inertia(smooth = INERTIA_SMOOTH, most = INERTIA_MAX) {
+  const at = new THREE.Vector3(), v = new THREE.Vector3(), slow = new THREE.Vector3(), slower = new THREE.Vector3(), acc = new THREE.Vector3();
+  let moving = 0; // frames its velocity has been known for
+  return (p, scale, dt, gap) => {
+    if (!dt) { moving = 0; acc.set(0, 0, 0); } else {
+      v.subVectors(p, at).divideScalar(dt * Math.abs(scale));
+      moving = gap ? 0 : moving + 1;
+      if (moving < 2) { slow.copy(v); slower.copy(v); }
+      const k = 1 - Math.exp(-dt / smooth);
+      acc.copy(slower);
+      slower.lerp(slow.lerp(v, k), k);
+      acc.subVectors(slower, acc).divideScalar(dt);
+      if (acc.length() > most) acc.setLength(most);
+    }
+    at.copy(p);
+    return acc;
+  };
+}
+
+// Watches a holder for CS2's shake (see SHAKE_HELD): { x: seconds since the last shake (from SHAKE_SETTLE: settled), y: when
+// it was, feed(...) each frame }: what CS2's $ent_weapon_shake reads. `held`: in first person, where it's the clasp's
+// moves across the world that count; else the inspect's turn (SHAKE_TURNED). The moves are shared out among fixed ticks, so
+// it's the same at any frame rate. The 8 Ball's answer is y's seconds modulo 3, CS2 leaving it to the clock; in CS2 that's
+// the same answer again one time in three, here the next one along, so a shake always changes it.
+function shakeWatch(held) {
+  const { ticks, turns } = held ? SHAKE_HELD : SHAKE_TURNED;
+  const ring = new Float32Array(ticks * 3), sum = [0, 0, 0], move = [0, 0, 0];
+  const at = new THREE.Vector3(), was = new THREE.Quaternion(), turn = new THREE.Vector3();
+  let head = 0, count = 0, inTick = 0, when = -Infinity;
+  const shaken = () => {
+    for (let axis = 0; axis < 3; axis++) {
+      let sign = 0, n = 0;
+      for (let i = 0; i < count; i++) {
+        const v = ring[((head + ticks - count + i) % ticks) * 3 + axis];
+        if (Math.abs(v) > SHAKE_STEP && Math.sign(v) !== sign) { sign = Math.sign(v); n++; }
+      }
+      if (n > turns) return true;
+    }
+    return false;
+  };
+  const answer = (y) => Math.max(1, Math.ceil(y % 3));
+  const watch = {
+    x: SHAKE_SETTLE, y: 0,
+    feed(anchor, q, scale, dt, gap, now) {
+      if (gap) { count = inTick = 0; sum.fill(0); } else if (dt) {
+        if (held) {
+          const k = 1 / (Math.abs(scale) * INCH);
+          move[0] = (anchor.x - at.x) * k; move[1] = (anchor.z - at.z) * k; move[2] = 0;
+        } else {
+          turnVector(turn, was, q).multiplyScalar(TURN_ARM).toArray(move);
+        }
+        for (let left = dt; left > 1e-9;) {
+          const take = Math.min(left, SHAKE_TICK - inTick);
+          for (let i = 0; i < 3; i++) sum[i] += (move[i] * take) / dt;
+          inTick += take; left -= take;
+          if (inTick < SHAKE_TICK - 1e-9) continue;
+          ring.set(sum, head * 3);
+          head = (head + 1) % ticks; count = Math.min(count + 1, ticks); inTick = 0; sum.fill(0);
+          if (now - when >= SHAKE_SETTLE && shaken()) {
+            when = now;
+            watch.y = answer(now) === answer(watch.y) ? now + 1 : now;
+          }
+        }
+      }
+      at.copy(anchor); was.copy(q);
+      watch.x = Math.min(SHAKE_SETTLE, now - when);
+    },
+  };
+  return watch;
+}
 
 // Hangs a holder's charm from its clasp: on a gun (see holderFor) a damped pendulum under gravity (world -Y) that
 // swings as the gun moves, kept clear of the gun; on its own, turned with the view and trailing it a little. It runs as
-// the holder's world matrix is worked out each frame. First person calls this again on its copy of the gun.
-export function swingCharm(holder) {
+// the holder's world matrix is worked out each frame, and so do the charm's reactions to being moved: the liquid in a
+// tank (see sloshing) and the 8 Ball's shake (see shakeWatch). First person calls this again on its copy of the gun, as
+// `held`.
+export function swingCharm(holder, { held = false } = {}) {
   const { turn, rest, frame } = holder.userData.charm;
   let joint = null;
-  holder.traverse((o) => { if (o.isBone && !joint) joint = o; });
+  const shaken = [];
+  holder.traverse((o) => {
+    if (o.isBone && !joint) joint = o;
+    if (o.material?.userData?.cs2Shaken) shaken.push(o);
+  });
   if (!joint) return;
-  keepLevel(holder);
+  const slosh = sloshing(holder, held), watch = shaken.length ? shakeWatch(held) : null;
+  // (The material is shared with any other copy of the gun: each sets it as it draws.)
+  const shake = [SHAKE_SETTLE, 0];
+  for (const mesh of shaken) {
+    const show = mesh.material.userData.cs2Shaken;
+    mesh.onBeforeRender = () => { shake[0] = watch.x; shake[1] = watch.y; show(shake); };
+  }
   const restQ = new THREE.Quaternion().fromArray(rest);
   const twist = new THREE.Quaternion().setFromAxisAngle(UP, turn);
   const step = frame ? hanging(holder.userData.charm) : trailing();
@@ -687,13 +956,16 @@ export function swingCharm(holder) {
     else this.matrixWorld.copy(this.matrix);
     this.matrixWorld.decompose(anchor, q, s);
     // Once a frame (the matrix is worked out more often than that); after a pause it carries on from where it was.
-    const now = performance.now() / 1000, dt = now - last;
-    if (!last || dt > 0.001) {
-      step(swing, anchor, q, s.x, last ? Math.min(dt, 0.1) : 0, !last || dt > 0.25);
+    const now = performance.now() / 1000, dt = now - last, stepped = !last || dt > 0.001;
+    const h = last ? Math.min(dt, 0.1) : 0, gap = !last || dt > 0.25;
+    if (stepped) {
+      step(swing, anchor, q, s.x, h, gap);
+      watch?.feed(anchor, q, s.x, h, gap, now);
       last = now;
     }
     joint.quaternion.copy(swing).multiply(twist).multiply(restQ);
     update.call(this, true);
+    if (stepped) slosh?.(q, h, gap);
   };
 }
 
@@ -711,31 +983,20 @@ function hanging({ length, frame }) {
   // The nearest direction clear of the gun.
   const limit = (v) => chainDir(v, down, out, fwd, Math.max(outMin, Math.asin(Math.max(-1, Math.min(1, v.dot(out))))), Math.atan2(v.dot(fwd), v.dot(down)));
   const dir = new THREE.Vector3(), vel = new THREE.Vector3(), next = new THREE.Vector3(), force = new THREE.Vector3();
-  const at = new THREE.Vector3(), v = new THREE.Vector3(), slow = new THREE.Vector3(), slower = new THREE.Vector3(), acc = new THREE.Vector3();
-  const qi = new THREE.Quaternion(), hang = new THREE.Vector3(), away = new THREE.Vector3();
+  const moved = inertia(), qi = new THREE.Quaternion(), hang = new THREE.Vector3(), away = new THREE.Vector3();
   const was = new THREE.Vector3(), turned = new THREE.Quaternion(), straight = new THREE.Quaternion();
-  let moving = 0; // frames the clasp's velocity has been known for
   // A world direction in the holder's frame: a mirrored gun (Play's left-handed viewmodel) has a negative x scale.
   const toGun = (w, scale) => { w.applyQuaternion(qi); if (scale < 0) w.x = -w.x; return w; };
   return (swing, anchor, q, scale, dt, gap) => {
     qi.copy(q).invert();
     toGun(force.copy(DOWN).multiplyScalar(GRAVITY), scale);
     hang.copy(force).normalize();
+    const acc = moved(anchor, scale, dt, gap);
     if (!dt) {
       // Hanging still: straight down (as far as the gun lets it).
       limit(dir.copy(force).normalize());
       vel.set(0, 0, 0);
-      moving = 0;
     } else {
-      // The clasp's acceleration (m/s², the holder may be scaled) from its last moves, none across a pause.
-      v.subVectors(anchor, at).divideScalar(dt * Math.abs(scale));
-      moving = gap ? 0 : moving + 1;
-      if (moving < 2) { slow.copy(v); slower.copy(v); }
-      const k = 1 - Math.exp(-dt / INERTIA_SMOOTH);
-      acc.copy(slower);
-      slower.lerp(slow.lerp(v, k), k);
-      acc.subVectors(slower, acc).divideScalar(dt);
-      if (acc.length() > INERTIA_MAX) acc.setLength(INERTIA_MAX);
       force.sub(toGun(acc, scale));
       // The bob keeps its (damped) velocity and falls, the chain holds it at its length and the gun stops it at the limits.
       const n = Math.ceil(dt / SUBSTEP - 1e-6), h = dt / n;
@@ -753,7 +1014,6 @@ function hanging({ length, frame }) {
         dir.copy(next);
       }
     }
-    at.copy(anchor);
     // It turns the shortest way from where it was, easing back to the shortest way from hanging straight down the gun
     // (on its own that flips the charm round on its chain as the gun goes upside down).
     straight.setFromUnitVectors(DOWN, dir);

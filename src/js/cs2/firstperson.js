@@ -82,7 +82,7 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
     const f = fixes.get(on.name);
     if (f) o.applyMatrix4(f);
     b.add(o);
-    swingCharm(o);
+    swingCharm(o, { held: true });
   }
 
   // Stickers ride on the bone that moves the surface they're on (the magazine's for one on the mag, so it comes out
