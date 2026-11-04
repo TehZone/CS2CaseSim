@@ -190,6 +190,12 @@ body:not(.is-staff) .staff-only { display: none !important; }
 .card .stock { font-size: 11px; color: var(--green); }
 .card .stock.last { color: var(--gold2); }
 .card .stock.none { color: var(--dim); }
+/* Market charms: each listing's pattern number, and rare patterns picked out */
+.card .pat-no { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.card .pat-no b { font-weight: 700; color: var(--text); }
+.card.rare-pat { border-color: var(--gold2); box-shadow: 0 0 0 1px var(--gold2), 0 0 14px rgba(228, 174, 57, .28); }
+.card.rare-pat .pat-no b { color: var(--gold); }
+.chip.rare-chip { cursor: pointer; margin-right: 10px; }
 
 /* inspect backdrops (CS2 maps): darken the corners so the text stays readable */
 .inspect.has-bg .stage::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(0deg, rgba(0,0,0,.55) 0%, rgba(0,0,0,0) 32%), linear-gradient(180deg, rgba(0,0,0,.35) 0%, rgba(0,0,0,0) 14%); }

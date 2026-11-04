@@ -5,16 +5,26 @@ import { D, rarityColor } from '../data.js';
 import * as I from '../items.js';
 import { S, on } from '../state.js';
 import { sfx } from '../audio.js';
-import { toast, openModal, openInspect, tryAct } from '../ui.js';
+import { toast, openModal, openInspect, tryAct, patternTag } from '../ui.js';
 import { online } from '../backend.js';
 import { net } from '../net/online.js';
-import { marketWindow, windowEnd, skinListings, unitsLeft, localSold, lowestPrice } from '../engine/market.js';
+import { marketWindow, windowEnd, skinListings, charmListings, unitsLeft, localSold, lowestPrice } from '../engine/market.js';
 
 const PAGE = 60;
-const view = { tab: 'skins', q: '', sort: 'pricey', page: 0, fx: 'all', cat: 'all', stock: true };
+const view = { tab: 'skins', q: '', sort: 'pricey', page: 0, fx: 'all', cat: 'all', pat: 'all', stock: true };
 let root, offs = [], timer = null, shownWindow = -1, chooserRedraw = null;
 const FX = ['all', 'Paper', 'Holo', 'Foil', 'Gold', 'Glitter', 'Lenticular', 'Embroidered'];
 const CATS = [['all', 'All'], ['rifle', 'Rifles'], ['pistol', 'Pistols'], ['smg', 'SMGs'], ['heavy', 'Heavy'], ['knife', 'Knives'], ['gloves', 'Gloves']];
+// Which charm patterns to show, by the game's own rule for them (charmPattern, engine/items.js).
+const PATS = [['all', 'All patterns'], ['rare', 'Any rare pattern'], ['top', 'Top 10 (#1 to #10)'], ['low', 'Low (#11 to #1,000)'], ['special', 'Special numbers']];
+const patIn = {
+  all: () => true,
+  rare: (p) => !!p.label,
+  top: (p) => !!p.tier,
+  low: (p) => p.label === 'Low pattern',
+  special: (p) => p.label === 'Special pattern',
+};
+const PAT_SORTS = [['rarest', 'Pattern: rarest first'], ['patlow', 'Pattern: low → high'], ['pathigh', 'Pattern: high → low']];
 
 // Online the server's clock and the shared sold list count; offline, this PC's clock and the save.
 const now = () => (online() ? net.serverNow() : Date.now());
@@ -51,11 +61,7 @@ function rows(w, sold) {
     if (q) list = list.filter((s) => s.n.toLowerCase().includes(q));
     return list.map((s) => ({ id: s.id, n: s.n.replace('Sticker | ', ''), top: s.t || 'Sticker', img: s.img, p: s.p, rc: rarityColor(s.r), left: unitsLeft('sticker', s, w, sold) }));
   }
-  if (view.tab === 'charms') {
-    let list = Object.values(D.charms);
-    if (q) list = list.filter((c) => c.n.toLowerCase().includes(q));
-    return list.map((c) => ({ id: c.id, n: c.n.replace('Charm | ', ''), top: D.charmColById[c.col]?.n.replace(' Charm Collection', '') || 'Charm', img: c.img, p: c.p, rc: rarityColor(c.r), left: unitsLeft('charm', c, w, sold) }));
-  }
+  if (view.tab === 'charms') return charmRows(w, sold);
   if (view.tab === 'agents') {
     let list = Object.values(D.agents);
     if (q) list = list.filter((a) => a.n.toLowerCase().includes(q));
@@ -73,6 +79,24 @@ function rows(w, sold) {
   });
 }
 
+// Charms: a card per listing, each showing its own pattern's colours and number, and a card for each charm with none left
+// (when asked for). Searching takes a name or a pattern number (with or without its #).
+function charmRows(w, sold) {
+  const q = view.q, num = /^#?\d[\d,]*$/.test(q) ? q.replace(/\D/g, '') : '';
+  const out = [];
+  for (const c of Object.values(D.charms)) {
+    const named = !q || c.n.toLowerCase().includes(q);
+    const base = { id: c.id, n: c.n.replace('Charm | ', ''), top: D.charmColById[c.col]?.n.replace(' Charm Collection', '') || 'Charm', img: c.img, rc: rarityColor(c.r) };
+    const live = charmListings(c, w).filter((l) => !sold.has(l.lid));
+    for (const l of live) {
+      const info = I.patternInfo(l.item);
+      if (patIn[view.pat](info) && (named || (num && String(l.item.pat).includes(num)))) out.push({ ...base, p: l.p, left: 1, ln: l.n, item: l.item, pat: l.item.pat, info });
+    }
+    if (!live.length && named && view.pat === 'all') out.push({ ...base, p: c.p, left: 0 });
+  }
+  return out;
+}
+
 function draw() {
   if (!root) return;
   const w = marketWindow(now());
@@ -81,8 +105,14 @@ function draw() {
   let list = rows(w, sold);
   const inStock = list.filter((r) => r.left > 0).length;
   if (view.stock) list = list.filter((r) => r.left > 0);
-  const sorts = { pricey: (a, b) => b.p - a.p, cheap: (a, b) => a.p - b.p, name: (a, b) => a.n.localeCompare(b.n) };
+  const sorts = {
+    pricey: (a, b) => b.p - a.p, cheap: (a, b) => a.p - b.p, name: (a, b) => a.n.localeCompare(b.n),
+    rarest: (a, b) => (b.info?.mult || 0) - (a.info?.mult || 0) || (a.pat || 0) - (b.pat || 0),
+    patlow: (a, b) => (a.pat || 0) - (b.pat || 0), pathigh: (a, b) => (b.pat || 0) - (a.pat || 0),
+  };
   list.sort((a, b) => (b.left > 0) - (a.left > 0) || sorts[view.sort](a, b));
+  const charms = view.tab === 'charms';
+  const rare = charms ? charmListed(w, sold) : 0;
   const pages = Math.max(1, Math.ceil(list.length / PAGE));
   view.page = Math.min(view.page, pages - 1);
   const shown = list.slice(view.page * PAGE, view.page * PAGE + PAGE);
@@ -91,32 +121,40 @@ function draw() {
       <span class="spacer"></span><span class="chip gold">Restocks in <b data-restock style="margin-left:4px">${fmt(windowEnd(w) - now())}</b></span></div>
     <div class="toolbar">
       <div class="seg" data-tabs>${[['skins', 'Skins'], ['stickers', 'Stickers'], ['charms', 'Charms'], ['agents', 'Agents']].map(([k, n]) => `<button data-v="${k}" class="${view.tab === k ? 'active' : ''}">${n}</button>`).join('')}</div>
-      <input class="input" type="search" placeholder="Search ${view.tab}…" value="${esc(view.q)}">
+      <input class="input" type="search" placeholder="${charms ? 'Search charms or a pattern #…' : `Search ${view.tab}…`}" value="${esc(view.q)}">
       ${view.tab === 'stickers' ? `<select class="input" data-fx>${FX.map((f) => `<option value="${f}" ${view.fx === f ? 'selected' : ''}>${f === 'all' ? 'All finishes' : f}</option>`).join('')}</select>` : ''}
       ${view.tab === 'skins' ? `<select class="input" data-cat>${CATS.map(([k, n]) => `<option value="${k}" ${view.cat === k ? 'selected' : ''}>${n}</option>`).join('')}</select>` : ''}
-      <select class="input" data-sort>${[['pricey', 'Price: high → low'], ['cheap', 'Price: low → high'], ['name', 'Name']].map(([k, n]) => `<option value="${k}" ${view.sort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      ${charms ? `<select class="input" data-pat>${PATS.map(([k, n]) => `<option value="${k}" ${view.pat === k ? 'selected' : ''}>${n}</option>`).join('')}</select>` : ''}
+      <select class="input" data-sort>${[['pricey', 'Price: high → low'], ['cheap', 'Price: low → high'], ['name', 'Name'], ...(charms ? PAT_SORTS : [])].map(([k, n]) => `<option value="${k}" ${view.sort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <label class="check"><input type="checkbox" data-stock ${view.stock ? 'checked' : ''}> For sale now only</label>
-      <span class="spacer"></span><span class="muted">${inStock.toLocaleString()} for sale now</span>
+      <span class="spacer"></span>${rare ? `<button class="chip gold rare-chip" data-rare title="Show only the rare patterns listed now">${rare} rare pattern${rare === 1 ? '' : 's'} listed</button>` : ''}<span class="muted">${inStock.toLocaleString()} for sale now</span>
     </div>
-    ${shown.length ? `<div class="grid">${shown.map((r) => `<div class="card ${r.left ? '' : 'out'}" data-id="${r.id}" style="--rc:${r.rc}">
-      <div class="img"><img loading="lazy" src="${imgUrl(r.img, 'm')}"></div><div class="rbar"></div>
+    ${shown.length ? `<div class="grid">${shown.map((r) => `<div class="card ${r.left ? '' : 'out'} ${r.info?.label ? 'rare-pat' : ''}" data-id="${r.id}" ${r.item ? `data-ln="${r.ln}"` : ''} style="--rc:${r.rc}">
+      ${r.info?.label ? `<div class="tags">${patternTag(r.info)}</div>` : ''}
+      <div class="img"><img loading="lazy" src="${r.item ? I.itemImage(r.item, 'm') : imgUrl(r.img, 'm')}"></div><div class="rbar"></div>
       <div class="meta"><div class="n1" title="${esc(r.top)}">${esc(r.top)}</div><div class="n2" title="${esc(r.n)}">${esc(r.n)}</div>
       <div class="row"><span class="val">${r.left && r.skin ? '<span class="dim" style="font-weight:400">from</span> ' : ''}${money(r.p)}</span>
-      ${r.left ? `<button class="btn sm primary" data-buy="${r.id}" data-p="${r.p}">${r.skin ? 'View' : 'Buy'}</button>` : '<span class="dim" style="font-size:11px">Not for sale</span>'}</div>
-      <div class="row"><span class="stock ${r.left ? (r.left === 1 ? 'last' : '') : 'none'}">${r.left ? `${r.left} for sale` : 'Out of stock'}</span></div></div></div>`).join('')}</div>`
-      : `<div class="empty">${view.stock ? 'Nothing matching is for sale right now. Untick “For sale now only” to browse everything, or check back after the restock.' : 'No items match.'}</div>`}
+      ${r.left ? `<button class="btn sm primary" data-buy="${r.id}" ${r.item ? `data-ln="${r.ln}"` : ''} data-p="${r.p}">${r.skin ? 'View' : 'Buy'}</button>` : '<span class="dim" style="font-size:11px">Not for sale</span>'}</div>
+      <div class="row">${r.item ? `<span class="pat-no" title="This listing's pattern">Pattern <b>#${r.pat.toLocaleString('en-US')}</b></span>` : `<span class="stock ${r.left ? (r.left === 1 ? 'last' : '') : 'none'}">${r.left ? `${r.left} for sale` : 'Out of stock'}</span>`}</div></div></div>`).join('')}</div>`
+      : `<div class="empty">${charms && view.pat !== 'all' ? 'No charm with a pattern like that is listed right now. Rare patterns turn up now and then: check back after the restock.' : view.stock ? 'Nothing matching is for sale right now. Untick “For sale now only” to browse everything, or check back after the restock.' : 'No items match.'}</div>`}
     ${pages > 1 ? `<div class="pager"><button class="btn sm" data-pg="-1" ${view.page ? '' : 'disabled'}>‹ Prev</button><span>Page ${view.page + 1} / ${pages}</span><button class="btn sm" data-pg="1" ${view.page < pages - 1 ? '' : 'disabled'}>Next ›</button></div>` : ''}
   </div>`;
-  root.querySelectorAll('[data-tabs] button').forEach((b) => b.addEventListener('click', () => { view.tab = b.dataset.v; view.page = 0; view.q = ''; draw(); }));
+  root.querySelectorAll('[data-tabs] button').forEach((b) => b.addEventListener('click', () => {
+    view.tab = b.dataset.v; view.page = 0; view.q = ''; view.pat = 'all';
+    if (PAT_SORTS.some(([k]) => k === view.sort)) view.sort = 'pricey'; // pattern orders are the charms'
+    draw();
+  }));
   const q = root.querySelector('input[type=search]');
   q.addEventListener('input', debounce(() => { view.q = q.value.toLowerCase(); view.page = 0; draw(); const n = root.querySelector('input[type=search]'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 220));
   root.querySelector('[data-fx]')?.addEventListener('change', (e) => { view.fx = e.target.value; view.page = 0; draw(); });
   root.querySelector('[data-cat]')?.addEventListener('change', (e) => { view.cat = e.target.value; view.page = 0; draw(); });
+  root.querySelector('[data-pat]')?.addEventListener('change', (e) => { view.pat = e.target.value; view.page = 0; draw(); });
+  root.querySelector('[data-rare]')?.addEventListener('click', () => { view.pat = view.pat === 'rare' ? 'all' : 'rare'; view.sort = 'rarest'; view.page = 0; draw(); });
   root.querySelector('[data-sort]').addEventListener('change', (e) => { view.sort = e.target.value; draw(); });
   root.querySelector('[data-stock]').addEventListener('change', (e) => { view.stock = e.target.checked; view.page = 0; draw(); });
   root.querySelectorAll('[data-pg]').forEach((b) => b.addEventListener('click', () => { view.page += +b.dataset.pg; draw(); root.scrollTop = 0; }));
-  root.querySelectorAll('[data-buy]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); buy(b.dataset.buy); }));
-  root.querySelectorAll('.card[data-id]').forEach((c) => c.addEventListener('click', () => preview(c.dataset.id)));
+  root.querySelectorAll('[data-buy]').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); buy(b.dataset.buy, b.dataset.ln); }));
+  root.querySelectorAll('.card[data-id]').forEach((c) => c.addEventListener('click', () => preview(c.dataset.id, c.dataset.ln)));
   updateAfford();
 }
 
@@ -124,9 +162,16 @@ function updateAfford() {
   root?.querySelectorAll('[data-buy]').forEach((b) => (b.disabled = S.money < +b.dataset.p));
 }
 
-function preview(id) {
+// How many rare patterns are listed now, whatever's being searched for or shown.
+function charmListed(w, sold) {
+  let n = 0;
+  for (const c of Object.values(D.charms)) for (const l of charmListings(c, w)) if (!sold.has(l.lid) && I.patternInfo(l.item).label) n++;
+  return n;
+}
+
+function preview(id, ln) {
   if (view.tab === 'stickers') openInspect(I.makeStickerItem(D.stickers[id]));
-  else if (view.tab === 'charms') openInspect(I.makeCharmItem(D.charms[id]));
+  else if (view.tab === 'charms') openInspect(ln == null ? I.makeCharmItem(D.charms[id]) : charmListings(D.charms[id], marketWindow(now()))[+ln].item);
   else if (view.tab === 'agents') openInspect(I.makeAgentItem(D.agents[id]));
   else chooser(D.skins[id]);
 }
@@ -140,9 +185,12 @@ async function purchase(args, label) {
   return true;
 }
 
-function buy(id) {
+function buy(id, ln) {
   if (view.tab === 'stickers') return purchase({ kind: 'sticker', id }, D.stickers[id].n);
-  if (view.tab === 'charms') return purchase({ kind: 'charm', id }, D.charms[id].n);
+  if (view.tab === 'charms') {
+    const l = charmListings(D.charms[id], marketWindow(now()))[+ln];
+    return purchase({ kind: 'charm', id, n: l.n }, `${D.charms[id].n} #${l.item.pat.toLocaleString('en-US')}`);
+  }
   if (view.tab === 'agents') return purchase({ kind: 'agent', id }, D.agents[id].n);
   chooser(D.skins[id]);
 }

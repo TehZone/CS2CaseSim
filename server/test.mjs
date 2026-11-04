@@ -113,6 +113,11 @@ try {
     check('market stock is shared: a listing sells once for everyone', bought.item && e?.code === 'sold');
     const ev = await B.waitFor((m) => m.t === 'market' && m.lid === MK.skinListings(skin, w)[0].lid);
     check('other players are told when a listing sells', !!ev);
+    // A charm's listings are worked out from the clock too: the pattern and price a player sees are the server's.
+    const charm = Object.values(D.charms).find((c) => MK.charmListings(c, w)[0]?.p < 50), listing = MK.charmListings(charm, w)[0];
+    const got = await A.act('market.buy', { kind: 'charm', id: charm.id, n: 0, window: w });
+    let taken = null; try { await B.act('market.buy', { kind: 'charm', id: charm.id, n: 0, window: w }); } catch (x) { taken = x; }
+    check('a charm listing online is the one on screen: its pattern and price, sold once for everyone', got.item.pat === listing.item.pat && got.price === listing.p && got.lid === listing.lid && taken?.code === 'sold', `#${got.item?.pat} ${got.price}`);
   }
 
   // ---- the item database: everyone's copies, by item ----------------------------------------------------

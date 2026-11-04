@@ -576,6 +576,31 @@ function tierFreq(box, n) {
   st.money = 1000;
   const bought = run('market.buy', { kind: 'charm', id: forSale.id, window: w }).r.item;
   check('charms are sold on the market, each with its own pattern', bought.t === 'charm' && bought.id === forSale.id && bought.pat >= 1 && bought.src === 'Market');
+  // Each copy listed has its pattern already, from the clock, so everyone sees the same ones and buys what they see.
+  {
+    const again = await import(new URL('../src/js/engine/market.js?fresh', import.meta.url)); // nothing cached: as another player's game
+    const listed = Object.values(D.charms).flatMap((c) => MK.charmListings(c, w).map((l) => ({ c, l })));
+    check('charm listings: one per copy, each with its pattern and its price for it, under the listing ids sales go by', listed.length > 0
+      && Object.values(D.charms).every((c) => MK.charmListings(c, w).length === MK.unitStock('charm', c, w))
+      && listed.every(({ c, l }) => l.item.pat >= 1 && l.item.pat <= I.CHARM_PATTERNS && l.item.id === c.id && l.p === I.itemValue(l.item) && l.lid === MK.unitLid('charm', c.id, w, l.n)), `${listed.length} listed`);
+    check('charm listings: the same on every computer and the server (from the clock alone)',
+      listed.every(({ c, l }) => again.charmListings(c, w)[l.n].item.pat === l.item.pat && again.charmListings(c, w)[l.n].p === l.p));
+    const mine = MK.charmListings(forSale, w);
+    check('the charm bought with no listing named is the first one left', bought.pat === mine[0].item.pat);
+    const two = Object.values(D.charms).find((c) => MK.charmListings(c, w).length >= 3 && c.id !== forSale.id), [l0, l1, l2] = MK.charmListings(two, w);
+    st.money = 1000;
+    const pick = run('market.buy', { kind: 'charm', id: two.id, n: 1, window: w }).r;
+    let twice = null; try { run('market.buy', { kind: 'charm', id: two.id, n: 1, window: w }); } catch (e) { twice = e; }
+    const first = run('market.buy', { kind: 'charm', id: two.id, window: w }).r, next = run('market.buy', { kind: 'charm', id: two.id, window: w }).r;
+    check('buying a charm listing gets you that pattern at its price, once; with none named, those left in order',
+      pick.item.pat === l1.item.pat && pick.price === l1.p && twice?.code === 'sold' && first.item.pat === l0.item.pat && next.item.pat === l2.item.pat);
+    let gone = null; try { run('market.buy', { kind: 'charm', id: two.id, n: 99, window: w }); } catch (e) { gone = e; }
+    check('a charm listing that was never there is refused', !!gone);
+    // A low pattern costs what it's worth: nothing to be made buying it and selling it on.
+    let rare = null;
+    for (let x = w; x > w - 400 && !rare; x--) for (const c of Object.values(D.charms)) { rare = MK.charmListings(c, x).find((l) => I.patternInfo(l.item).label && c.p > 1); if (rare) { rare = { l: rare, c }; break; } }
+    check('a rare pattern is priced for it', rare && rare.l.p > rare.c.p && rare.l.p === I.itemValue(rare.l.item), rare && `${rare.c.n} #${rare.l.item.pat}: ${rare.l.p} against ${rare.c.p}`);
+  }
   st.stars = 10;
   const offer = A.armoryOffers(A.armoryWindow(now).i).offers.find((o) => o.type === 'charm');
   const red = run('armory.redeem', { offer: offer.id, n: 5 }).r;

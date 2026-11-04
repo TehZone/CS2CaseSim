@@ -33,7 +33,7 @@ const cache = new Map(); // window -> { skins: Map(id -> listings), units: Map(k
 function bucket(w) {
   let b = cache.get(w);
   if (!b) {
-    b = { skins: new Map(), units: new Map(), overview: null };
+    b = { skins: new Map(), charms: new Map(), units: new Map(), overview: null };
     cache.set(w, b);
     for (const k of [...cache.keys()]) if (k < w - 2 || k > w + 2) cache.delete(k);
   }
@@ -84,8 +84,24 @@ export function unitsLeft(kind, def, w, sold) {
   return left;
 }
 
-// A fresh inventory item for a bought skin listing.
-export const fromListing = (l) => ({ ...JSON.parse(JSON.stringify(l.item)), uid: uid(), at: Date.now(), src: 'Market' });
+// The concrete listings of a charm in a window: [{ lid, n, item, p }], one per copy. Each has its own pattern, rolled as
+// any new charm's is, and is priced for it (a low pattern costs what it's worth), so what you see is what you buy. Like a
+// skin's they come from the clock: the same for every player and the server.
+export function charmListings(def, w) {
+  const b = bucket(w);
+  if (b.charms.has(def.id)) return b.charms.get(def.id);
+  const r = seededRng(`market:charm-patterns:${def.id}:${w}`);
+  const out = [];
+  for (let k = 0, n = unitStock('charm', def, w); k < n; k++) {
+    const item = I.makeCharmItem(def, { src: 'Market', r });
+    out.push({ lid: unitLid('charm', def.id, w, k), n: k, item, p: I.itemValue(item) });
+  }
+  b.charms.set(def.id, out);
+  return out;
+}
+
+// A fresh inventory item for a bought skin or charm listing.
+export const fromListing =(l) => ({ ...JSON.parse(JSON.stringify(l.item)), uid: uid(), at: Date.now(), src: 'Market' });
 
 // The market's sold listings for a window, for players offline: kept in the save for the last two windows.
 export function localSold(st, w) {

@@ -438,8 +438,19 @@ export const ACTIONS = {
     if (w !== cur && !(w === cur - 1 && ctx.now - cur * MK.MARKET_WINDOW_MS < MK.MARKET_GRACE_MS)) fail('The market has restocked. Have a look at the new listings.', 'expired');
     const sold = ctx.market ? ctx.market(w) : MK.localSold(ctx.st, w);
     let item, price, lid;
-    if (kind === 'sticker' || kind === 'agent' || kind === 'charm') {
-      const d = kind === 'sticker' ? D.stickers[id] : kind === 'agent' ? D.agents[id] : D.charms[id];
+    if (kind === 'charm') {
+      // A listing by its number (each has its own pattern and price), or the first one left.
+      const d = D.charms[id];
+      if (!d) fail('Unknown item');
+      const all = MK.charmListings(d, w);
+      const listing = n == null ? all.find((l) => !sold.has(l.lid)) : all[int(n, 0, 99, 'listing')];
+      if (n == null && !listing) fail(all.length ? 'Sold out until the next restock' : 'Not for sale right now. Check back after a restock.', 'sold');
+      if (!listing) fail('That listing is gone');
+      if (sold.has(listing.lid)) fail('Someone already bought that listing', 'sold');
+      ({ lid, p: price } = listing);
+      item = MK.fromListing(listing);
+    } else if (kind === 'sticker' || kind === 'agent') {
+      const d = kind === 'sticker' ? D.stickers[id] : D.agents[id];
       if (!d) fail('Unknown item');
       const count = MK.unitStock(kind, d, w);
       let k = 0;
@@ -447,7 +458,7 @@ export const ACTIONS = {
       if (k >= count) fail(count ? 'Sold out until the next restock' : 'Not for sale right now. Check back after a restock.', 'sold');
       lid = MK.unitLid(kind, d.id, w, k);
       price = d.p;
-      item = kind === 'sticker' ? I.makeStickerItem(d, 'Market') : kind === 'agent' ? I.makeAgentItem(d, 'Market') : I.makeCharmItem(d, { src: 'Market', r: ctx.rng });
+      item = kind === 'sticker' ? I.makeStickerItem(d, 'Market') : I.makeAgentItem(d, 'Market');
     } else {
       const skin = D.skins[id];
       if (!skin) fail('Unknown item');
