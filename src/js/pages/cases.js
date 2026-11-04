@@ -306,7 +306,7 @@ function renderCase(root, c) {
           <div>Return<b class="${ev >= price ? 'green' : 'red'}">${((ev / price) * 100).toFixed(1)}%</b></div>
         </div>
         <div class="open-row">
-          <div class="seg" data-k="qty">${[1, 2, 3, 4, 5].map((n) => `<button data-v="${n}" class="${view.qty === n ? 'active' : ''}">×${n}</button>`).join('')}</div>
+          <div class="seg" data-k="qty">${[1, 2, 3, 4, 5, 10].map((n) => `<button data-v="${n}" class="${view.qty === n ? 'active' : ''}">×${n}</button>`).join('')}</div>
           <button class="btn gold big" data-open ${missing.length ? `disabled title="You need ${esc(missing.join(' and '))}"` : ''}>Open ×${view.qty}</button>
           <button class="btn big" data-autoopen title="Keep opening this case automatically">Auto open…</button>
           <label class="check"><input type="checkbox" data-fast ${S.settings.fast ? 'checked' : ''}> Fast open</label>
@@ -671,10 +671,12 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro 
     ov.innerHTML = `${intro ? '<div class="crate-stage"></div>' : ''}<h3>${title}</h3><div class="strips n${n}">${items.map(() => '<div class="strip"><div class="reel"></div><div class="marker"></div></div>').join('')}</div><div class="hint">Press SPACE or click to skip</div>`;
     document.body.appendChild(ov);
     const strips = [...ov.querySelectorAll('.strip')];
+    const filler = () => (c.fake ? c.fake() : I.fakeRoll(c));
+    const fillers = (k) => Array.from({ length: k }, () => slotHTML(filler(), c.showAll)).join('');
     const reels = strips.map((strip, si) => {
       const reel = strip.querySelector('.reel');
       // Containers can supply their own fillers (trade-ups, armory) and show gold items in the reel (showAll).
-      const entries = Array.from({ length: REEL_LEN }, (_, i) => (i === WIN_INDEX ? items[si] : c.fake ? c.fake() : I.fakeRoll(c)));
+      const entries = Array.from({ length: REEL_LEN }, (_, i) => (i === WIN_INDEX ? items[si] : filler()));
       reel.innerHTML = entries.map((e) => slotHTML(e, c.showAll)).join('');
       return { strip, reel };
     });
@@ -686,10 +688,17 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro 
         const tileW = reel.children[0].getBoundingClientRect().width;
         const slotW = tileW + (parseFloat(getComputedStyle(reel).columnGap) || 0);
         const center = strip.clientWidth / 2;
-        const from = START_INDEX * slotW + tileW / 2 - center;
-        const target = WIN_INDEX * slotW + tileW * (0.1 + Math.random() * 0.8) - center;
+        // Tiles shrink as more cases open at once (and a strip can be wide), so the reel gets as many more as it takes to
+        // fill the strip on both sides of the marker, at the start and past the item it stops on. It still scrolls 32.
+        const side = Math.ceil(center / slotW) + 1;
+        const before = Math.max(0, side - START_INDEX), after = Math.max(0, side - (REEL_LEN - 1 - WIN_INDEX));
+        reel.insertAdjacentHTML('afterbegin', fillers(before));
+        reel.insertAdjacentHTML('beforeend', fillers(after));
+        const win = WIN_INDEX + before;
+        const from = (START_INDEX + before) * slotW + tileW / 2 - center;
+        const target = win * slotW + tileW * (0.1 + Math.random() * 0.8) - center;
         reel.style.transform = `translateX(${-from}px)`;
-        return { reel, slotW, center, from, target, dur: (fast ? 2400 : CS2_SPIN) + si * (fast ? 120 : 350), lastIdx: -1, done: false };
+        return { reel, win, slotW, center, from, target, dur: (fast ? 2400 : CS2_SPIN) + si * (fast ? 120 : 350), lastIdx: -1, done: false };
       });
       const start = performance.now();
       const ease = fast ? fastEase : cs2Ease;
@@ -699,7 +708,7 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro 
         finished = true;
         window.removeEventListener('keydown', onKey, true);
         for (const a of anims) a.reel.style.transform = `translateX(${-a.target}px)`;
-        reels.forEach(({ reel }) => reel.children[WIN_INDEX].classList.add('win'));
+        for (const a of anims) a.reel.children[a.win].classList.add('win');
         const best = Math.max(...items.map((i) => I.rarityRank(i)));
         sfx.reveal(best);
         setTimeout(() => { ov.remove(); resolve(); }, best >= 6 ? 1300 : 750);
