@@ -72,7 +72,7 @@ export function classify(subject, notes) {
 // ---- how it reads --------------------------------------------------------------------------------------------------
 // Subjects start "Area: what changed". The same areas under other names:
 const AREA_NAMES = {
-  'Play mode': 'Play', 'Play mode fixes': 'Play', 'Play maps': 'Play', 'Play bots': 'Play', 'Play offline': 'Play',
+  'Play mode': 'Play', 'Play mode fixes': 'Play', 'Play maps': 'Play', 'Play bots': 'Play', 'Play offline': 'Play', 'Play console': 'Play',
   'Case reel': 'Cases', 'Case opening': 'Cases', 'Charm pictures': 'Charms', 'Inspect backdrops': 'Inspect',
   'Item details': 'Items', 'Item Database offline': 'Item Database', 'Offline NPC players': 'NPCs', 'Friends chat': 'Friends',
   'Top bar': 'Menus', 'Panorama UI': 'Menus', 'CS2-style UI': 'Menus',
