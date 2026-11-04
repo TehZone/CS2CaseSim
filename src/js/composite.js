@@ -3,6 +3,7 @@ import { loadImage, imgUrl, mulberry32, clamp, smoothstep } from './util.js';
 import { D } from './data.js';
 import { itemDef, patternInfo } from './items.js';
 import { weaponMarkup, placeSouvenirStickers } from './cs2/markup.js';
+import { charmPictureReady } from './charmpics.js';
 
 export const STICKER_BASE = 0.15; // sticker width as a fraction of the weapon image width at scale 1
 
@@ -183,10 +184,12 @@ const cache = new Map();
 // Returns a canvas with the composed item. Cached by everything that affects the look.
 export async function composeItem(item, { size = 'l', stickers = true } = {}) {
   const def = itemDef(item);
-  const key = [item.t, item.id, item.sk, item.fl, item.sd, size, stickers ? JSON.stringify(item.stk || []) : ''].join('|');
+  const key = [item.t, item.id, item.sk, item.fl, item.sd, item.t === 'charm' ? item.pat : '', size, stickers ? JSON.stringify(item.stk || []) : ''].join('|');
   if (cache.has(key)) return cache.get(key);
   const job = (async () => {
-    const base = await loadImage(imgUrl(def.img, size));
+    // A charm in its own pattern's colours (without CS2's files this is all the inspect has of it).
+    const own = item.t === 'charm' && !def.slab ? await charmPictureReady(item) : null;
+    const base = await loadImage(own || imgUrl(def.img, size));
     const W = base.naturalWidth, H = base.naturalHeight;
     const c = canvas(W, H);
     const ctx = c.getContext('2d', { willReadFrequently: true });

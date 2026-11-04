@@ -2,6 +2,7 @@
 import { itemDef } from './engine/items.js';
 import { D } from './engine/data.js';
 import { imgUrl, loadImage } from './util.js';
+import { charmPicture } from './charmpics.js';
 
 export * from './engine/items.js';
 
@@ -11,6 +12,7 @@ export function itemImage(item, size = 'm') {
   if (item.t === 'unit') return 'img/storage-unit.svg';
   if (item.t === 'crate' && d.custom) return crateImage(d, size);
   if (d.slab) return slabImage(d, size);
+  if (item.t === 'charm') return charmPicture(item, imgUrl(d.img, size)); // its own pattern's colours
   return imgUrl(d.img, size);
 }
 

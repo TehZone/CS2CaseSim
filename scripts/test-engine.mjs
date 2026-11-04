@@ -584,6 +584,25 @@ function tierFreq(box, n) {
 }
 
 
+// ---- charm pictures: every charm in its own pattern's colours, from what ships with the game --------------------------
+{
+  const L = await import(new URL('../src/js/charmlook.js', import.meta.url));
+  const looks = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/charm-looks.json'), 'utf8'));
+  const has = (f) => fs.existsSync(path.join(ROOT, 'src/img/charms', f));
+  const ids = Object.keys(looks);
+  check('charm pictures: a look for nearly every charm, each with its layers (and print) in the game, none needing CS2', ids.length >= 70 && ids.every((id) => D.charms[id] && has(`${id}.webp`) && (!looks[id].detail || has(`${id}-print.webp`))), `${ids.length} of ${Object.keys(D.charms).length}`);
+  check('charm pictures: every look reads at any pattern', ids.every((id) => [1, 4242, 100000].every((pat) => {
+    const p = L.lookParams(looks[id], pat);
+    return Object.keys(looks[id].dynamic).every((k) => [].concat(p[k]).every(Number.isFinite));
+  })));
+  // One pixel in the tint mask, one out of it, lit plainly: as layers read from a sheet.
+  const look = { adjust: true, params: { g_fContrast: 1, g_fBrightness: 1, g_fSaturation: 1, g_fHueShift: 0 }, dynamic: { g_fHueShift: 'return lerp(0,180,$KeychainSeed);' } };
+  const px = (masked) => ({ at: Uint32Array.of(0), n: 1, planes: [Uint8Array.of(200, 80, 60), Uint8Array.of(255, masked ? 255 : 0, 0), Uint8Array.of(140, 140, 140), Uint8Array.of(0, 0, 0)] });
+  const paint = (layer, pat) => [...L.paintCharm(layer, look, pat, new Uint8ClampedArray(L.PIC_W * L.PIC_H * 4)).slice(0, 4)];
+  const [low, high] = [paint(px(true), 1), paint(px(true), 100000)];
+  check('charm pictures: a pattern turns the colour where the tint mask says, and only there', high[2] > high[0] && low[0] > low[2] && String(paint(px(false), 1)) === String(paint(px(false), 100000)), `${low} / ${high}`);
+}
+
 // ---- profile levels, Service Medals and match money ------------------------------------------------------------------
 {
   const L = await E('levels');

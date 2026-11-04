@@ -455,6 +455,7 @@ node node_modules/electron/install.js   # npm 11+ blocks Electron's download ste
 npm run data      # rebuild src/data/game-data.json (add --refresh via `npm run data:refresh` for fresh downloads)
 node scripts/build-extras.mjs   # rebuild src/data/keys.json (which key opens which case) and medals.json (Service Medal pictures)
 npm run vendor    # copy three.js into src/vendor (with the patch in scripts/copy-vendor.mjs)
+node scripts/build-charm-pics.mjs   # rebake charm pictures from CS2's files (src/img/charms, src/data/charm-looks.json): when charms or their shader change; --check <dir> compares them with the 3D charm
 npm start         # run the game
 npm run dev       # browser preview at http://localhost:5178
 npm run dist      # build dist/CS2-Case-Simulator-Setup.exe and dist/CS2-Case-Simulator.exe
