@@ -3,6 +3,7 @@
 import { freshRank } from './ranks.js';
 import { freshMM } from './matchmaking.js';
 import { freshProfile } from './levels.js';
+import { repairStorage } from './storage.js';
 
 // Auto-sell rules for new drops: sell anything worth less than `below` dollars and/or of the rarity ranks in
 // `ranks` (0 Consumer ... 5 Covert). Knives, gloves and other ★ items are never auto-sold.
@@ -15,6 +16,7 @@ export function freshState() {
     stars: 0,
     starSpend: 0, // case spending towards the next armory star
     inv: [],
+    stored: [], // what's in your Storage Units (see storage.js)
     loadout: {}, // slot (see items.loadoutSlot) -> uid
     charmDetach: 0, // Charm Detachments left (taking a charm off a gun uses one)
     serials: {}, // offline serial counters: items.serialKey -> last number given
@@ -47,6 +49,7 @@ export function upgradeState(saved) {
   st.mm = { ...freshMM(), ...(saved.mm || {}) };
   st.prof = { ...freshProfile(), ...(saved.prof || {}) };
   st.serialsBackfilled = !!saved.serialsBackfilled; // saves from before serials get theirs on load (items.backfillSerials)
+  repairStorage(st); // saves from before Storage Units have none
   st.v = base.v;
   return st;
 }

@@ -103,6 +103,7 @@ function apply(c, d) {
   c.st.inv = c.st.inv.filter((i) => !del.has(i.uid));
   for (const u of d.upd || []) { const i = c.st.inv.findIndex((x) => x.uid === u.uid); if (i >= 0) c.st.inv[i] = u; }
   c.st.inv.unshift(...(d.add || []));
+  if (d.sto) { const gone = new Set(d.sto.del || []); c.st.stored = [...(d.sto.add || []), ...(c.st.stored || []).filter((i) => !gone.has(i.uid))]; }
 }
 const json = (v) => (typeof v === 'string' ? JSON.parse(v) : v);
 const dbState = async (id) => json((await server.db.query('SELECT state FROM users WHERE id = $1', [id])).rows[0].state);
@@ -323,7 +324,7 @@ try {
 
   // ---- edit.raw -----------------------------------------------------------------------------------------------------
   const pRaw = await boss.admin('player', { id: aid });
-  const { inv: _inv, social: _social, ...raw } = pRaw.state;
+  const { inv: _inv, stored: _stored, social: _social, ...raw } = pRaw.state;
   alice.events.length = 0;
   // (`base`: the `rev` of the state the edit starts from)
   const er = await boss.admin('edit.raw', { id: aid, state: { ...raw, money: 77, stars: 4 }, base: pRaw.rev });
@@ -585,7 +586,7 @@ try {
   const resetCode = (a) => /`([A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4})`/.exec(a?.data.content || '')?.[1];
   const giveDrop = (id) => server.store.withUser(id, async (e) => { const d = carePackage({ level: 2 }); e.st.prof = { ...e.st.prof, drops: [d] }; server.store.markDirty(e); return d; });
   const auditFails = () => logs.filter((l) => /audit write failed/.test(l)).length;
-  const rawOf = (st) => { const { inv: _inv, social: _social, ...rest } = st; return rest; };
+  const rawOf = (st) => { const { inv: _inv, stored: _stored, social: _social, ...rest } = st; return rest; };
   const modm = await acct('modm', '10.0.5.1'), plainp = await acct('plainp', '10.0.5.2'), modalt = await acct('modalt', '10.0.5.3');
   {
     await linkByDb(modm.id, ID.mod3, 'ModM');
@@ -984,6 +985,58 @@ try {
     })(),
   ]);
   for (const list of side) for (const [name, ok, info] of list) check(name, ok, info);
+
+  // ---- Storage Units in the panel: what's inside shows, and staff can still give and remove --------------------------------
+  {
+    const regS = await post('/api/register', { name: 'stasher', password: 'stashpass1' }, IP.other);
+    const sc = await client(regS.body.token, IP.other);
+    const cid = sc.user.id;
+    await boss.admin('edit', { id: cid, set: { money: 100 } });
+    const sk = Object.values(D.skins).find((s) => !s.v && !s.star);
+    await boss.admin('items.give', { id: cid, items: [{ t: 'skin', id: sk.id, n: 3 }, { t: 'unit', id: 'casket', n: 2 }] });
+    await until(() => sc.st.inv.filter((i) => i.t === 'unit').length === 2);
+    const [u1, u2] = sc.st.inv.filter((i) => i.t === 'unit');
+    const [k1, k2, k3] = sc.st.inv.filter((i) => i.t === 'skin');
+    check('panel: staff can give a Storage Unit; it arrives unlabelled, with no serial', !!u1 && !!u2 && !u1.name && u1.sn === undefined && u1.src === 'Admin');
+    await sc.act('storage.name', { unit: u1.uid, name: 'vault' });
+    await sc.act('storage.deposit', { unit: u1.uid, uids: [k1.uid, k2.uid] });
+    const view = await boss.admin('player', { id: cid });
+    check('panel: a player\'s page shows what\'s in their units', view.state.stored.length === 2 && view.state.stored.every((i) => i.su === u1.uid) && view.state.inv.find((i) => i.uid === u1.uid)?.name === 'vault');
+    const list = await boss.admin('players', { q: 'stasher' });
+    const row = (list.rows || list.players || []).find((p) => p.name === 'stasher');
+    check('panel: the player list counts stored items', row?.items === 5 && row?.worth > 0, JSON.stringify(row));
+    const over = await boss.admin('overview', {});
+    check('panel: the overview\'s item total counts stored items', over.items >= 5);
+    const stillHolds = await refused(boss.admin('items.remove', { id: cid, uids: [u1.uid] }));
+    check('panel: a unit that holds items can\'t be removed on its own', stillHolds?.code === 'unit' && /2 items/.test(stillHolds.message), stillHolds?.message);
+    sc.events.length = 0;
+    const rm = await boss.admin('items.remove', { id: cid, uids: [k1.uid] });
+    await until(() => sc.st.stored.length === 1);
+    check('panel: staff can remove an item from inside a unit, and the player sees it go', rm.removed === 1 && sc.st.stored.length === 1 && !(await server.store.load(cid)).st.stored.some((i) => i.uid === k1.uid));
+    const rmAudit = await lastAudit('items.remove');
+    check('panel: that removal is audited by name', rmAudit.detail.count === 1 && rmAudit.detail.items[0].uid === k1.uid);
+    const snapS = await boss.admin('snapshot.save', { id: cid, label: 'with storage' });
+    const raw = await boss.admin('player', { id: cid });
+    const { inv: _i, stored: _t, social: _s, ...rest } = raw.state;
+    const rawRefused = await refused(boss.admin('edit.raw', { id: cid, state: { ...rest, stored: [] }, base: raw.rev }));
+    check('panel: edit.raw can\'t touch what\'s stored', /stored can't be edited/.test(rawRefused?.message || ''), rawRefused?.message);
+    await boss.admin('edit.raw', { id: cid, state: { ...rest, money: 55 }, base: raw.rev });
+    check('panel: a raw edit leaves what\'s stored alone', (await server.store.load(cid)).st.stored.length === 1 && (await server.store.load(cid)).st.money === 55);
+    await sc.act('storage.retrieve', { unit: u1.uid, uids: [k2.uid] });
+    await sc.act('item.sell', { uids: [k2.uid] });
+    await boss.admin('snapshot.restore', { snap: snapS.id });
+    await until(() => sc.st.stored?.length === 1);
+    const back = (await server.store.load(cid)).st;
+    check('panel: a restore brings back what was in the units', back.stored.length === 1 && back.stored[0].uid === k2.uid && sc.st.stored[0]?.uid === k2.uid);
+    const { rows: [dbRow] } = await server.db.query('SELECT state FROM users WHERE id = $1', [cid]);
+    check('panel: and the database has it', json(dbRow.state).stored.length === 1);
+    await sc.act('storage.retrieve', { unit: u1.uid, uids: [k2.uid] });
+    const rm2 = await boss.admin('items.remove', { id: cid, uids: [u1.uid, u2.uid] });
+    check('panel: empty units can be removed', rm2.removed === 2 && !(await server.store.load(cid)).st.inv.some((i) => i.t === 'unit'));
+    const keep = k3;
+    void keep;
+    sc.close();
+  }
 
   for (const c of [boss, alice, bob]) c.close();
 } catch (e) {

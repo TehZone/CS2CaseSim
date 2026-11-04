@@ -24,8 +24,8 @@ import { Admin, banText, networkBanText } from './admin.mjs';
 import { D, initData } from '../src/js/engine/data.js';
 import { makeCtx, runAction, delta, GameError } from '../src/js/engine/actions.js';
 import { marketWindow } from '../src/js/engine/market.js';
-import { itemValue } from '../src/js/engine/items.js';
 import { DB_TYPES, publicCopy } from '../src/js/engine/database.js';
+import { ownedValue } from '../src/js/engine/storage.js';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -36,6 +36,9 @@ const MAX_MSG = 64 * 1024;
 const TRADE_ALWAYS = new Set(['cancel', 'decline']);
 const GAMBLE_ALWAYS = new Set(['flip.cancel', 'battle.cancel']);
 const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+// Actions saved in a transaction before they're answered (others are written within a couple of seconds): what moves
+// items in and out of a Storage Unit is never left only in memory.
+const IN_TRANSACTION = /^storage\./;
 
 // The bot's options from the environment (false: no token, no bot). The token is read, never logged.
 export function discordFromEnv({ env = process.env, tokenFile = env.DISCORD_TOKEN_FILE, log = console.log } = {}) {
@@ -316,6 +319,8 @@ export async function startServer({
   let dbIndex = null, dbFlushed = 0;
   const dbFresh = async () => { if (Date.now() - dbFlushed > 4000) { dbFlushed = Date.now(); await store.flush().catch(() => {}); } };
   const DB_IN = DB_TYPES.map((t) => `'${t}'`).join(', ');
+  // Everything a player owns, for a FROM clause: what's in their Storage Units counts as much as their inventory.
+  const OWNED = (u) => `jsonb_array_elements(COALESCE(${u}.state->'inv', '[]'::jsonb) || COALESCE(${u}.state->'stored', '[]'::jsonb))`;
 
   async function social(user, m, a) {
     // The item database: how many copies of each item there are on the server, and every copy of one with its owner.
@@ -323,7 +328,7 @@ export async function startServer({
       if (!dbIndex || Date.now() - dbIndex.at > 15000) {
         await dbFresh();
         const { rows } = await db.query(`SELECT it->>'t' AS t, it->>'id' AS id, count(*)::int AS n
-          FROM users, jsonb_array_elements(COALESCE(state->'inv', '[]'::jsonb)) AS it WHERE it->>'t' IN (${DB_IN}) GROUP BY 1, 2`);
+          FROM users u, ${OWNED('u')} AS it WHERE it->>'t' IN (${DB_IN}) GROUP BY 1, 2`);
         const { rows: [u] } = await db.query('SELECT count(*)::int AS n FROM users');
         dbIndex = { at: Date.now(), counts: Object.fromEntries(rows.map((x) => [x.t + ':' + x.id, x.n])), players: u.n };
       }
@@ -333,11 +338,11 @@ export async function startServer({
       const t = String(a.t || ''), id = String(a.id || '').slice(0, 80);
       if (!DB_TYPES.includes(t) || !id) throw new GameError('Unknown item');
       await dbFresh();
-      const { rows } = await db.query(`SELECT u.name, it FROM users u, jsonb_array_elements(COALESCE(u.state->'inv', '[]'::jsonb)) AS it
+      const { rows } = await db.query(`SELECT u.name, it FROM users u, ${OWNED('u')} AS it
         WHERE it->>'t' = $1 AND it->>'id' = $2 LIMIT 5000`, [t, id]);
       const row = (x) => ({ owner: x.name, me: x.name === user.name, item: publicCopy(typeof x.it === 'string' ? JSON.parse(x.it) : x.it) });
       // A sticker: also the guns it's applied to.
-      const applied = t !== 'sticker' ? [] : (await db.query(`SELECT u.name, it FROM users u, jsonb_array_elements(COALESCE(u.state->'inv', '[]'::jsonb)) AS it
+      const applied = t !== 'sticker' ? [] : (await db.query(`SELECT u.name, it FROM users u, ${OWNED('u')} AS it
         WHERE it->'stk' @> $1::jsonb LIMIT 5000`, [JSON.stringify([{ id }])])).rows;
       return { r: { copies: rows.map(row), applied: applied.map(row) } };
     }
@@ -348,9 +353,9 @@ export async function startServer({
       const { rows } = await db.query(`WITH c AS (
           SELECT u.id AS owner, it->>'uid' AS uid, it->>'id' AS sid, (it->>'fl')::float8 AS fl, COALESCE((it->>'at')::float8, 0) AS at,
             CASE WHEN it->>'sv' = 'true' THEN 'sv' WHEN it->>'stt' = 'true' THEN 'st' ELSE 'n' END AS cat
-          FROM users u, jsonb_array_elements(COALESCE(u.state->'inv', '[]'::jsonb)) AS it
+          FROM users u, ${OWNED('u')} AS it
           WHERE it->>'t' = 'skin' AND it->>'fl' IS NOT NULL AND it->>'id' IN (
-            SELECT mine->>'id' FROM users me, jsonb_array_elements(COALESCE(me.state->'inv', '[]'::jsonb)) AS mine WHERE me.id = $1 AND mine->>'t' = 'skin')
+            SELECT mine->>'id' FROM users me, ${OWNED('me')} AS mine WHERE me.id = $1 AND mine->>'t' = 'skin')
         ), r AS (
           SELECT owner, uid, cat, COUNT(*) OVER w AS n,
             ROW_NUMBER() OVER (PARTITION BY sid, cat ORDER BY fl ASC, at ASC, uid ASC) AS low,
@@ -368,7 +373,7 @@ export async function startServer({
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: MAX_MSG });
   const playersList = () => [...sockets.keys()].map((id) => {
     const e = store.cache.get(id);
-    return { name: e?.name || '?', online: true, worth: e ? Math.round(e.st.inv.reduce((s, i) => s + itemValue(i), 0)) : 0 };
+    return { name: e?.name || '?', online: true, worth: e ? Math.round(ownedValue(e.st)) : 0 };
   });
   const broadcastPlayers = () => { const players = playersList(); for (const id of sockets.keys()) srv.sendTo(id, { t: 'players', players }); };
 
@@ -449,6 +454,7 @@ export async function startServer({
             ctx.dirty.add('money');
             const r = runAction(ctx, String(msg.m), args);
             store.markDirty(e);
+            if (IN_TRANSACTION.test(String(msg.m))) await store.commit([e]);
             return { r, d: delta(ctx) };
           });
           reply(true, { r: out.r, d: out.d });

@@ -12,6 +12,7 @@ import { sfx } from '../audio.js';
 import { toast, openModal, itemCard, openInspect, showItemDetail, confirmDialog } from '../ui.js';
 import { mountPicker } from '../picker.js';
 import * as N from '../engine/npcs.js';
+import { ownedItems } from '../engine/storage.js';
 import { MEDALS, medalOf } from '../engine/levels.js';
 import { levelIconHtml, medalHtml } from '../profile.js';
 import { cs2Play } from '../cs2/api.js';
@@ -255,7 +256,7 @@ export function offerModal(id) {
     m.el.querySelector('[data-give]').textContent = money(sum(S.inv, mine) + myMoney);
     m.el.querySelector('[data-get]').textContent = money(sum(s?.inv || [], theirs) + theirMoney);
   };
-  mountPicker(m.el.querySelector('[data-mine]'), { items: () => S.inv.filter((it) => !it.lk), selected: mine, onChange: totals, empty: 'No unlocked items' });
+  mountPicker(m.el.querySelector('[data-mine]'), { items: () => S.inv.filter(I.tradable), selected: mine, onChange: totals, empty: 'No unlocked items' });
   mountPicker(m.el.querySelector('[data-theirs]'), { items: () => s?.inv || [], selected: theirs, onChange: totals, empty: 'Their inventory is empty' });
   m.el.querySelector('[data-mym]').addEventListener('input', (e) => { myMoney = Math.max(0, +e.target.value || 0); totals(); });
   m.el.querySelector('[data-thm]').addEventListener('input', (e) => { theirMoney = Math.max(0, +e.target.value || 0); totals(); });
@@ -277,10 +278,10 @@ function profileData(id) {
   if (id === 'me') {
     const me = so().me;
     const items = me.showcase.map((u) => S.inv.find((it) => it.uid === u)).filter(Boolean);
-    const top = [...S.inv].sort((a, b) => I.itemValue(b) - I.itemValue(a));
+    const top = S.inv.filter((it) => !I.isUnit(it)).sort((a, b) => I.itemValue(b) - I.itemValue(a));
     return {
       name: myName(), country: me.country, bio: me.bio || 'No information given.', level: S.prof.level, medal: medalOf(S.prof), medals: S.prof.medals,
-      showcase: items.length ? items : top.slice(0, 6), picked: items.length > 0, inv: S.inv, money: S.money, joined: new Date(S.created || Date.now()).getFullYear(),
+      showcase: items.length ? items : top.slice(0, 6), picked: items.length > 0, inv: ownedItems(S), money: S.money, joined: new Date(S.created || Date.now()).getFullYear(),
       friends: people().filter((n) => stateOf(n.id)?.friend === 1).length, comments: so().comments, status: { s: 'online', label: 'Online' }, bg: me.bg,
     };
   }
@@ -359,7 +360,7 @@ async function editProfile() {
     foot: '<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>Save</button>',
   });
   m.el.querySelectorAll('[data-av]').forEach((b) => b.addEventListener('click', () => { avatar = avatar === b.dataset.av ? null : b.dataset.av; m.el.querySelectorAll('[data-av]').forEach((x) => x.classList.toggle('on', x.dataset.av === avatar)); }));
-  mountPicker(m.el.querySelector('[data-show]'), { items: () => S.inv, selected: show, onChange: (sel) => { while (sel.size > 6) sel.delete([...sel][0]); }, empty: 'Your inventory is empty' });
+  mountPicker(m.el.querySelector('[data-show]'), { items: () => S.inv.filter((it) => !I.isUnit(it)), selected: show, onChange: (sel) => { while (sel.size > 6) sel.delete([...sel][0]); }, empty: 'Your inventory is empty' });
   m.el.querySelector('[data-save]').addEventListener('click', async () => {
     try {
       await act('persona.set', { name: m.el.querySelector('[data-name]').value, bio: m.el.querySelector('[data-bio]').value, country: m.el.querySelector('[data-country]').value,

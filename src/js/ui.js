@@ -1,5 +1,5 @@
 // Shared UI: cards, modals, toasts, tooltips, context menus, item detail, 3D inspect overlay, selling.
-import { esc, money, imgUrl } from './util.js';
+import { esc, money, imgUrl, timeAgo } from './util.js';
 import { D, WEARS, wearOf, WEAR_BY_KEY, rarityColor, keyFor } from './data.js';
 import * as I from './items.js';
 import { S, emit, save } from './state.js';
@@ -14,6 +14,7 @@ import { TIER_LABEL } from './patterns.js';
 import { isEquipped, slotName } from './loadout.js';
 import { floatRankOf } from './floatranks.js';
 import { CATEGORY_NAME } from './engine/database.js';
+import { UNIT_CAP, unitCount, unitValue } from './engine/storage.js';
 import { iconHtml } from './menu.js';
 
 // ---- toasts --------------------------------------------------------------------------------
@@ -190,7 +191,25 @@ function charmBadge(c) {
   return `<span class="kc-badge ${isSlab(c) ? 'slab' : ''}" title="${esc(I.itemName(c))} · Pattern #${c.pat}"><img src="${I.itemImage(c, 's')}" ${slabAttr(c)} alt=""></span>`;
 }
 
+// A Storage Unit's card: its label, how full it is, and when it last changed (click it to open it: pages/storage.js).
+function unitCard(item, { extra = '' } = {}) {
+  const r = I.rarityInfo(item), np = I.nameParts(item), n = unitCount(S, item.uid);
+  return `<div class="card unit ${extra}" data-uid="${item.uid}" style="--rc:${r.c}">
+    <div class="tags">${item.nw ? '<span class="tag new">New</span>' : ''}${item.name ? '' : '<span class="tag pat">Not in use</span>'}</div>
+    <div class="img"><img loading="lazy" src="${I.itemImage(item, 'm')}" alt=""></div>
+    <div class="rbar"></div>
+    <div class="unit-fill"><i style="width:${(n / UNIT_CAP) * 100}%"></i></div>
+    <div class="meta">
+      <div class="n1">${esc(np.top)}</div>
+      <div class="n2">${esc(np.bottom)}</div>
+      <div class="row"><span class="wear">${n.toLocaleString('en-US')} / ${UNIT_CAP.toLocaleString('en-US')} items</span><span class="val">${money(unitValue(S, item.uid))}</span></div>
+      <div class="row unit-mod"><span>${item.mod ? 'Modified ' + timeAgo(item.mod) : 'Not used yet'}</span></div>
+    </div>
+  </div>`;
+}
+
 export function itemCard(item, { selectable = false, selected = false, extra = '' } = {}) {
+  if (I.isUnit(item)) return unitCard(item, { extra });
   const r = I.rarityInfo(item);
   const np = I.nameParts(item);
   const pat = I.patternInfo(item);
@@ -216,7 +235,7 @@ export function itemCard(item, { selectable = false, selected = false, extra = '
 
 // ---- selling -------------------------------------------------------------------------------
 export async function sellItems(items, { ask = true } = {}) {
-  items = items.filter((i) => !i.lk);
+  items = items.filter(I.tradable);
   if (!items.length) return false;
   const total = items.reduce((s, i) => s + I.itemValue(i), 0);
   if (ask && total >= S.settings.confirmSellAbove) {
@@ -233,7 +252,8 @@ export async function sellItems(items, { ask = true } = {}) {
 
 // ---- item actions --------------------------------------------------------------------------
 // Cases and keys in your inventory have no 3D model to inspect; a case opens instead (with one of your keys for it).
-const canInspect = (item) => item.t !== 'crate' && item.t !== 'key';
+export const canInspect = (item) => item.t !== 'crate' && item.t !== 'key' && item.t !== 'unit';
+const storage = () => import('./pages/storage.js');
 async function openCrateItem(item) {
   const { openCrate } = await import('./pages/cases.js');
   return openCrate(item);
@@ -267,6 +287,7 @@ async function equipItem(item) {
 // one that changes the item.
 export function itemContextMenu(e, item, { onChange } = {}) {
   e.preventDefault();
+  if (I.isUnit(item)) { storage().then((p) => p.unitContextMenu(e, item, { onChange })); return; }
   const done = (ok) => { if (ok) onChange?.(); };
   const slot = I.loadoutSlot(item);
   const items = [
@@ -292,6 +313,7 @@ export function itemContextMenu(e, item, { onChange } = {}) {
   }
   if (item.t === 'charm') items.push({ label: 'Attach to a gun', icon: 'move_keychain', action: async () => done(await hangCharm(item)) });
   if (item.t === 'sticker' && D.slab) items.push({ label: 'Sticker Slab', icon: 'sticker', hint: money(D.slab.p), action: async () => done(await slabSticker(item)) });
+  items.push({ label: 'Move To Storage Unit', icon: 'crate', action: async () => done(await (await storage()).moveToUnit([item])) });
   items.push({ label: item.lk ? 'Unlock' : 'Lock', icon: item.lk ? 'unlocked' : 'locked', action: async () => done(await tryAct('item.lock', { uid: item.uid, lk: !item.lk })) });
   items.push('-', { label: 'Sell', icon: 'dollar_sign', hint: money(I.itemValue(item)), disabled: !!item.lk, action: async () => done(await sellItems([item])) });
   contextMenu(e.clientX, e.clientY, items);
@@ -299,7 +321,7 @@ export function itemContextMenu(e, item, { onChange } = {}) {
 
 // ---- charms --------------------------------------------------------------------------------
 // One item picked from a grid (null if the window is closed).
-function chooseItem(title, items, { empty = 'Nothing to choose from.', note = '' } = {}) {
+export function chooseItem(title, items, { empty = 'Nothing to choose from.', note = '' } = {}) {
   return new Promise((resolve) => {
     let picked = null;
     const m = openModal({
@@ -439,6 +461,7 @@ function detailBody(item) {
         ${I.loadoutSlot(item) ? (isEquipped(item)
           ? `<button class="btn" data-a="unequip" title="Equipped as your ${esc(slotName(I.loadoutSlot(item)))}">Unequip</button>`
           : `<button class="btn" data-a="equip">Equip (${esc(slotName(I.loadoutSlot(item)))})</button>`) : ''}
+        <button class="btn" data-a="store">Move To Storage Unit</button>
         <button class="btn" data-a="lock">${item.lk ? 'Unlock' : 'Lock'}</button>
         <button class="btn primary" data-a="sell" ${item.lk ? 'disabled' : ''}>Sell ${money(vb.total)}</button>
       </div>
@@ -462,6 +485,7 @@ function fitToContent(c) {
 }
 
 export function showItemDetail(item, { onChange } = {}) {
+  if (I.isUnit(item)) { storage().then((p) => p.openUnit(item)); return null; }
   if (item.nw) act('item.seen', { uids: [item.uid] }).catch(() => {});
   const m = openModal({ title: 'Item details', body: detailBody(item), cls: 'wide', onClose: onChange });
   const refresh = () => {
@@ -491,6 +515,7 @@ export function showItemDetail(item, { onChange } = {}) {
       if (a === 'equip' && await equipItem(item)) refresh();
       if (a === 'unequip' && await tryAct('loadout.unequip', { uid: item.uid })) refresh();
       if (a === 'sell') { if (await sellItems([item])) m.close(); }
+      if (a === 'store') { if (await (await storage()).moveToUnit([item])) m.close(); }
       if (a === 'stickers') openStickerEditor(item, { onDone: () => { emit('inv'); refresh(); } });
       if (a === 'charm-on' && await attachCharmTo(item)) refresh();
       if (a === 'charm-off' && await detachCharm(item)) refresh();

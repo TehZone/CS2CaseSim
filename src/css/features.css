@@ -438,3 +438,24 @@ body.is-online .offline-only { display: none !important; }
   .fr-panel { position: static; max-height: 260px; }
   .npc-offer { min-width: 0; }
 }
+
+/* Storage Units: their cards, and a unit's window (its contents, deposit and retrieve) */
+.card.unit .unit-fill { height: 3px; background: rgba(255, 255, 255, .08); flex: none; }
+.card.unit .unit-fill i { display: block; height: 100%; background: var(--gold2); }
+.card.unit .unit-mod { font-size: 11px; color: var(--dim); }
+.store-tool .tag.own { background: rgba(0, 0, 0, .6); color: #fff; }
+.store-tool .btn { margin-top: 8px; }
+.su-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding-bottom: 12px; }
+.su-head > img { width: 84px; height: 63px; object-fit: contain; filter: drop-shadow(0 4px 6px rgba(0, 0, 0, .5)); }
+.su-who { flex: 1 1 180px; min-width: 0; }
+.su-who h3 { margin: 0 0 2px; font-size: 18px; overflow-wrap: anywhere; }
+.su-fill { flex: 0 1 200px; font-size: 13px; }
+.su-bar { height: 6px; margin-top: 5px; border-radius: 3px; overflow: hidden; background: rgba(255, 255, 255, .1); }
+.su-bar i { display: block; height: 100%; background: var(--gold2); }
+.su-worth { display: flex; flex-direction: column; font-size: 12px; }
+.su-worth b { font-size: 15px; }
+.su-btns { display: flex; gap: 6px; }
+.su-bar-tools { flex-wrap: wrap; margin-top: 0; }
+.su-grid { max-height: min(56vh, 620px); overflow: auto; padding: 2px; }
+.su-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.su-foot .muted { font-size: 12px; }

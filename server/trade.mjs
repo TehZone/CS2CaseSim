@@ -2,7 +2,8 @@
 // Accepting re-checks both sides and swaps everything in one database transaction.
 import crypto from 'node:crypto';
 import { makeCtx, delta, take, give, spend, credit, GameError } from '../src/js/engine/actions.js';
-import { itemName } from '../src/js/engine/items.js';
+import { isUnit, itemName, tradable } from '../src/js/engine/items.js';
+import { storedItem } from '../src/js/engine/storage.js';
 import { round2 } from '../src/js/engine/util.js';
 
 const MAX_ITEMS = 100, MAX_OPEN = 20, MAX_LIST = 30;
@@ -71,7 +72,7 @@ export class Trades {
   async inventory(user, { name }) {
     const other = await this.findUser(name);
     const e = await this.srv.store.load(other.id);
-    return { name: other.name, items: e.st.inv.filter((i) => !i.lk).slice(0, 1500) };
+    return { name: other.name, items: e.st.inv.filter(tradable).slice(0, 1500) };
   }
 
   async offer(user, a) {
@@ -87,8 +88,10 @@ export class Trades {
       const me = entries.find((e) => e.id === user.id), them = entries.find((e) => e.id === other.id);
       const pick = (st, uids, whose) => uids.map((u) => {
         const it = st.inv.find((i) => i.uid === u);
+        if (!it && whose === 'You' && storedItem(st, u)) fail(`${itemName(storedItem(st, u))} is in a Storage Unit. Retrieve it first.`);
         if (!it) fail(`${whose} no longer ${whose === 'You' ? 'have' : 'has'} one of these items`);
         if (it.lk) fail(`${itemName(it)} is locked`);
+        if (isUnit(it)) fail("Storage Units can't be traded");
         return structuredClone(it);
       });
       const giveItems = pick(me.st, give.uids, 'You');

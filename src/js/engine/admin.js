@@ -9,11 +9,12 @@ import { sha256Hex } from './gamble.js';
 import * as I from './items.js';
 import { MAX_LEVEL, MEDALS } from './levels.js';
 import * as N from './npcs.js';
+import { repairStorage, storedOf } from './storage.js';
 import { round2 } from './util.js';
 
 export const MAX_JSON = 48 * 1024, KEEP_AUTO = 20, MAX_MANUAL = 50, PAGE = 50;
 export const LEVEL_NAMES = ['Player', 'Moderator', 'Admin', 'Owner'];
-export const ITEM_KINDS = ['skin', 'crate', 'key', 'sticker', 'agent', 'charm'];
+export const ITEM_KINDS = ['skin', 'crate', 'key', 'sticker', 'agent', 'charm', 'unit'];
 // The objects of a raw edit whose fields the panel's editor shows by name: their field names must be plain identifiers.
 export const NAMED_FIELDS = new Set(['stats', 'rank', 'wingman', 'prof', 'mm', 'premier']);
 export const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -34,17 +35,17 @@ export function replaceInPlace(st, next) {
   for (const [k, v] of Object.entries(next)) if (k !== '__proto__') st[k] = v;
 }
 
-// The state as edit.raw replaces it (all but the inventory, the NPC world and, offline, the device's settings), as a
+// The state as edit.raw replaces it (all but the inventory, what's in Storage Units, the NPC world and, offline, the device's settings), as a
 // short hash: the panel sends back the one it loaded, so a raw edit can't put back what changed since. Keys sorted (a
 // state read back from JSONB has them in another order).
 const canon = (v) => (Array.isArray(v) ? v.map(canon) : isObj(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
 export function revOf(st) {
-  const { inv: _inv, social: _social, settings: _settings, ...rest } = st;
+  const { inv: _inv, stored: _stored, social: _social, settings: _settings, ...rest } = st;
   return sha256Hex(JSON.stringify(canon(rest))).slice(0, 32);
 }
 // What a raw edit shows and answers: the state without those.
 export function rawView(st) {
-  const { inv: _inv, social: _social, settings: _settings, ...rest } = st;
+  const { inv: _inv, stored: _stored, social: _social, settings: _settings, ...rest } = st;
   return rest;
 }
 
@@ -156,7 +157,7 @@ export function rawEdit(cur, state, base) {
   if (typeof base !== 'string' || base !== revOf(cur)) fail('The account changed since you opened it. Reload it and try again.', 'stale');
   const fresh = freshState();
   for (const [k, v] of Object.entries(src)) {
-    if (k === 'inv' || k === 'social') fail(`${k} can't be edited here (use the inventory tools)`);
+    if (k === 'inv' || k === 'stored' || k === 'social') fail(`${k} can't be edited here (use the inventory tools)`);
     // (own fields only: '__proto__' is `in` every object)
     if (k === 'settings' || !(Object.hasOwn(fresh, k) || Object.hasOwn(cur, k))) fail(`Unknown field: ${k}`);
     const d = Object.hasOwn(fresh, k) ? fresh[k] : cur[k];
@@ -168,13 +169,13 @@ export function rawEdit(cur, state, base) {
     if (NAMED_FIELDS.has(k) && isObj(v)) for (const f of Object.keys(v)) if (!IDENT.test(f)) fail(`${k} has a field with an invalid name: ${JSON.stringify(f.slice(0, 40))}`);
   }
   if (src.money != null && src.money > 1e12) fail('Money must be a number from 0 to 1000000000000');
-  const st = upgradeState({ ...src, inv: cur.inv, social: cur.social });
+  const st = upgradeState({ ...src, inv: cur.inv, stored: cur.stored, social: cur.social });
   // Never from the JSON: the rewards waiting (their items' uids are handed out as they are), and what keepLive keeps.
   st.prof = { ...st.prof, drops: cur.prof?.drops ?? [] };
   keepLive(st, cur);
   fitLoadout(st);
   if (typeof st.money === 'number') st.money = round2(st.money);
-  const changed = [...new Set([...Object.keys(cur), ...Object.keys(st)])].filter((k) => k !== 'inv' && k !== 'social' && JSON.stringify(cur[k]) !== JSON.stringify(st[k]));
+  const changed = [...new Set([...Object.keys(cur), ...Object.keys(st)])].filter((k) => k !== 'inv' && k !== 'stored' && k !== 'social' && JSON.stringify(cur[k]) !== JSON.stringify(st[k]));
   return { next: st, changed, before: pick(cur, changed), after: pick(st, changed) };
 }
 
@@ -182,7 +183,7 @@ export function rawEdit(cur, state, base) {
 // The uids a restore of `next` would bring back (its items and its rewards' items), to look for elsewhere.
 export function restoreUids(next) {
   const drops = Array.isArray(next.prof?.drops) ? next.prof.drops : [];
-  return [...next.inv.map((i) => i.uid), ...drops.flatMap((d) => (Array.isArray(d?.offers) ? d.offers : []).map((o) => o?.uid)).filter(Boolean)];
+  return [...next.inv.map((i) => i.uid), ...storedOf(next).map((i) => i.uid), ...drops.flatMap((d) => (Array.isArray(d?.offers) ? d.offers : []).map((o) => o?.uid)).filter(Boolean)];
 }
 // Makes an upgraded snapshot `next` fit to replace `cur`: retired items sold, no item twice, none in `elsewhere` (uids
 // owned by someone else now: online, other inventories and escrows), loadout fitted, and what keepLive keeps. A level-up
@@ -194,11 +195,14 @@ export function restoreMerge(cur, next, { elsewhere = new Set(), keepRewards = f
   const drops = Array.isArray(next.prof?.drops) ? next.prof.drops : [];
   const seen = new Set();
   const inv = next.inv.filter((i) => !elsewhere.has(i.uid) && !seen.has(i.uid) && seen.add(i.uid));
-  const mine = new Set(cur.inv.map((i) => i.uid));
+  const stored = storedOf(next).filter((i) => !elsewhere.has(i.uid) && !seen.has(i.uid) && seen.add(i.uid));
+  const mine = new Set([...cur.inv, ...storedOf(cur)].map((i) => i.uid));
   const exists = (u) => elsewhere.has(u) || mine.has(u) || seen.has(u);
   const keep = keepRewards ? drops : drops.filter((d) => !(Array.isArray(d?.offers) ? d.offers : []).some((o) => exists(o?.uid)));
-  const rewards = drops.length - keep.length, dropped = next.inv.length - inv.length + rewards;
+  const rewards = drops.length - keep.length, dropped = next.inv.length - inv.length + storedOf(next).length - stored.length + rewards;
   next.inv = inv;
+  next.stored = stored;
+  repairStorage(next); // (a unit left out: what's in it goes back to the inventory)
   if (next.prof) next.prof = { ...next.prof, drops: keep };
   fitLoadout(next);
   keepLive(next, cur);
@@ -233,11 +237,14 @@ export function saveFile(file, now = Date.now()) {
     if (isObj(d)) for (const [f, x] of Object.entries(d)) if (st[k][f] !== undefined && !sameType(x, st[k][f])) bad(`${k}.${f}`);
   }
   const item = (it, what) => {
-    if (!isObj(it) || !isToken(it.uid) || !isObj(defOf(it)) || !['fl', 'sd', 'sn', 'pat', 'at'].every((f) => optNum(it[f]))
+    if (!isObj(it) || !isToken(it.uid) || !isObj(defOf(it)) || !['fl', 'sd', 'sn', 'pat', 'at', 'mod', 'sat'].every((f) => optNum(it[f]))
+      || (it.name != null && typeof it.name !== 'string')
       || (it.stk != null && !(Array.isArray(it.stk) && it.stk.every((s) => isObj(s) && isObj(D.stickers[s.id]))))
       || (it.kc != null && !(isObj(it.kc) && isObj(defOf(I.attachedCharm(it)))))) bad(what);
   };
   st.inv.forEach((it, i) => item(it, `inv[${i}]`));
+  // (what's stored in a unit the save doesn't have goes back to the inventory as it loads: storage.repairStorage)
+  (st.stored || []).forEach((it, i) => { item(it, `stored[${i}]`); if (!isToken(it.su)) bad(`stored[${i}]`); });
   (st.prof?.drops || []).forEach((d, i) => {
     if (!isObj(d) || !isToken(d.id) || !optNum(d.level) || !Array.isArray(d.offers)) bad(`prof.drops[${i}]`);
     d.offers.forEach((it, j) => item(it, `prof.drops[${i}].offers[${j}]`));
@@ -321,6 +328,10 @@ export function itemSpec(x) {
     case 'agent': {
       const g = D.agents[id] || fail(`Unknown agent: ${id}`);
       return { n, make: () => I.makeAgentItem(g, src) };
+    }
+    case 'unit': {
+      if (id !== I.UNIT_ID) fail(`Unknown Storage Unit: ${id}`);
+      return { n, unit: true, make: () => I.makeUnitItem(src) };
     }
     case 'charm': {
       const pat = x.pat == null ? undefined : int(x.pat, 'Charm pattern', 1, I.CHARM_PATTERNS);

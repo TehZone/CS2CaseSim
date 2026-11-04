@@ -34,17 +34,17 @@ const MIN = 60e3;
   // (what the server hashed before it shared this: node's SHA-256 of the sorted JSON, without inv and social)
   const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
   const canon = (v) => (Array.isArray(v) ? v.map(canon) : isObj(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
-  const oldRev = (st) => { const { inv: _i, social: _s, ...rest } = st; return crypto.createHash('sha256').update(JSON.stringify(canon(rest))).digest('hex').slice(0, 32); };
+  const oldRev = (st) => { const { inv: _i, stored: _t, social: _s, ...rest } = st; return crypto.createHash('sha256').update(JSON.stringify(canon(rest))).digest('hex').slice(0, 32); };
   const st = freshState();
   delete st.settings; // (as online states are)
   st.stats.bestName = 'AWP | Dragon Lore ★ 日本 ✓';
   st.money = 1234.56;
   const shuffled = Object.fromEntries(Object.entries(st).reverse());
   check('revOf: the same hash the server made before (node SHA-256), whatever the key order', AD.revOf(st) === oldRev(st) && AD.revOf(shuffled) === AD.revOf(st) && /^[0-9a-f]{32}$/.test(AD.revOf(st)));
-  const off = { ...st, settings: { volume: 0.2 }, inv: [{ uid: 'x' }], social: { seed: 1 } };
-  check('revOf: leaves out the inventory, the NPC world and (offline) the settings; a money change changes it',
+  const off = { ...st, settings: { volume: 0.2 }, inv: [{ uid: 'x' }], stored: [{ uid: 'y', su: 'x' }], social: { seed: 1 } };
+  check('revOf: leaves out the inventory, what\'s in Storage Units, the NPC world and (offline) the settings; a money change changes it',
     AD.revOf(off) === AD.revOf(st) && AD.revOf({ ...st, money: 1 }) !== AD.revOf(st));
-  check('rawView: the state without inv, social and settings', JSON.stringify(Object.keys(AD.rawView(off)).sort()) === JSON.stringify(Object.keys(st).filter((k) => k !== 'inv' && k !== 'social').sort()));
+  check('rawView: the state without inv, social and settings', JSON.stringify(Object.keys(AD.rawView(off)).sort()) === JSON.stringify(Object.keys(st).filter((k) => k !== 'inv' && k !== 'stored' && k !== 'social').sort()));
 }
 
 // ---- argument checks -----------------------------------------------------------------------------------------------------
@@ -426,6 +426,86 @@ const declineAll = (w) => { for (const o of w.st.social.offers.filter((x) => x.s
   const o = JSON.parse(json);
   o.social.offers.push({ id: 'imp', npc: bid, kind: 'buy', at: w.at(), exp: w.at() + 60 * MIN, status: 'open', want: { uids: [], money: 0 }, give: { uids: [], money: 5 }, max: 5, patience: 3, annoy: 0, args: [], agreed: false });
   check("saveFile: a blocked trader's open offer in it is cancelled", AD.saveFile(o, w.at()).social.offers.find((x) => x.id === 'imp').status === 'cancelled');
+}
+
+// ---- Storage Units in the admin rules --------------------------------------------------------------------------------------
+{
+  const SU = await E('storage');
+  const skin = Object.values(D.skins).find((s) => !s.v && !s.star);
+  const stickerDef = Object.values(D.stickers)[0];
+  const box = () => {
+    const unit = { ...I.makeUnitItem('Store'), name: 'stash', mod: 5 };
+    const a = I.makeSkinItem(skin, { r: rng }), b = I.makeStickerItem(stickerDef, 'x');
+    const kept = { ...I.makeSkinItem(skin, { r: rng }), su: unit.uid, sat: 5 }, kept2 = { ...I.makeStickerItem(stickerDef, 'x'), su: unit.uid, sat: 6 };
+    return { st: { ...freshState(), inv: [unit, a, b], stored: [kept, kept2] }, unit, a, b, kept, kept2 };
+  };
+
+  // items.give / items.remove
+  const spec = AD.itemSpec({ t: 'unit', id: I.UNIT_ID, n: 2 });
+  check('items.give: staff can give Storage Units; another id is refused', spec.n === 2 && spec.unit === true && spec.make().t === 'unit' && refused(() => AD.itemSpec({ t: 'unit', id: 'nope' })));
+  const built = AD.buildItems(AD.giveSpecs([{ t: 'unit', id: I.UNIT_ID }]).specs, () => 1);
+  check('items.give: a unit has no serial number and arrives unlabelled', built.length === 1 && built[0].sn === undefined && built[0].name === undefined && built[0].nw === true);
+  {
+    const { st, kept, a } = box();
+    const ctx = ACT.makeCtx(st);
+    const items = ACT.takeForStaff(ctx, [kept.uid, a.uid]);
+    const d = ACT.delta(ctx);
+    check('items.remove: staff reach items in a unit and the inventory in one go', items.length === 2 && !SU.storedItem(st, kept.uid) && !st.inv.includes(a) && d.sto.del.includes(kept.uid) && d.del.includes(a.uid));
+  }
+  {
+    const { st, unit, kept, kept2 } = box();
+    const e = refusal(() => ACT.takeForStaff(ACT.makeCtx(st), [unit.uid]));
+    check('items.remove: a unit that still holds items is refused, and nothing moved', e?.code === 'unit' && /2 items/.test(e.message) && st.inv.includes(unit) && st.stored.length === 2);
+    check('items.remove: a unit goes with everything in it', ACT.takeForStaff(ACT.makeCtx(st), [unit.uid, kept.uid, kept2.uid]).length === 3 && !st.inv.includes(unit) && !st.stored.length);
+  }
+  {
+    const { st, a, kept } = box();
+    const ctx = ACT.makeCtx({ ...st }, { reserved: new Set([a.uid]) });
+    check('items.remove: an item in an open offer still refuses it all (nothing out of the unit either)', refused(() => ACT.takeForStaff(ctx, [kept.uid, a.uid]), 'reserved') && !!SU.storedItem(ctx.st, kept.uid));
+  }
+
+  // edit.raw
+  {
+    const { st } = box();
+    delete st.settings;
+    check('edit.raw: what\'s in Storage Units is out of its reach, as the inventory is', refused(() => AD.rawEdit(st, { stored: [] }, AD.revOf(st))));
+    const r = AD.rawEdit(st, { ...AD.rawView(st), money: 77 }, AD.revOf(st));
+    check('edit.raw: it keeps what\'s in the units, and doesn\'t list it as changed', r.next.stored.length === 2 && r.next.money === 77 && !r.changed.includes('stored') && !('stored' in AD.rawView(r.next)));
+    check('revOf: storing an item doesn\'t stale an open raw edit, a rename of the money does', AD.revOf({ ...st, stored: [] }) === AD.revOf(st) && AD.revOf({ ...st, money: 1 }) !== AD.revOf(st));
+  }
+
+  // restoring a snapshot
+  {
+    const { st, kept, kept2, unit } = box();
+    check('restoreUids: a snapshot\'s stored items are looked for elsewhere too', AD.restoreUids(st).includes(kept.uid));
+    const next = upgradeState(structuredClone(st)), cur = freshState();
+    const r = AD.restoreMerge(cur, next, { elsewhere: new Set([kept.uid]) });
+    check('restoreMerge: a stored item owned elsewhere now is left out; the rest of the unit comes back', r.dropped === 1 && next.stored.length === 1 && next.stored[0].uid === kept2.uid && next.inv.some((i) => i.uid === unit.uid));
+    const lost = upgradeState(structuredClone(st));
+    const r2 = AD.restoreMerge(freshState(), lost, { elsewhere: new Set([unit.uid]) });
+    check('restoreMerge: a unit left out gives its items back to the inventory, nothing is lost', r2.dropped === 1 && !lost.stored.length && lost.inv.some((i) => i.uid === kept.uid) && lost.inv.some((i) => i.uid === kept2.uid) && lost.inv.every((i) => i.su === undefined));
+  }
+
+  // save files
+  {
+    const { st, kept, unit } = box();
+    const file = JSON.parse(JSON.stringify(st));
+    const c = AD.saveFile(file);
+    const up = upgradeState(c);
+    check('saveFile: a save with Storage Units loads, what\'s stored still stored', up.stored.length === 2 && up.inv.find((i) => i.uid === unit.uid)?.name === 'stash' && SU.storedItem(up, kept.uid)?.su === unit.uid);
+    const noUnit = JSON.parse(JSON.stringify(st));
+    noUnit.stored[0].su = 'gone';
+    const orphan = upgradeState(AD.saveFile(noUnit));
+    check('saveFile: an item stored in a unit the save lacks goes to the inventory', orphan.stored.length === 1 && orphan.inv.some((i) => i.uid === kept.uid));
+    const bad = (mutate) => { const v = JSON.parse(JSON.stringify(st)); mutate(v); return refused(() => AD.saveFile(v)); };
+    check('saveFile: refused when stored is no list, an item in it is broken, or a unit\'s label or date isn\'t one', bad((v) => { v.stored = {}; }) && bad((v) => { v.stored[0].su = '<x>"'; delete v.stored[0].su; })
+      && bad((v) => { v.stored[0].id = 'nope'; }) && bad((v) => { v.inv[0].name = 5; }) && bad((v) => { v.inv[0].mod = 'soon'; }));
+    const xss = JSON.parse(JSON.stringify(st));
+    xss.inv[0].name = '<img src=x onerror="alert(1)">';
+    const clean = upgradeState(AD.saveFile(xss)).inv[0].name;
+    check('saveFile: a label loses < > and quotes, and is cut to a label\'s length', !/[<>"]/.test(clean) && clean.length <= SU.UNIT_NAME_MAX, clean);
+  }
+  check('worthOf counts what you give it: the panels hand it everything owned', (() => { const { st, kept } = box(); return AD.worthOf(SU.ownedItems(st)) === SU.ownedValue(st) && SU.ownedValue(st) >= I.itemValue(kept); })());
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

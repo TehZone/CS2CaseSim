@@ -7,6 +7,8 @@ import { act } from '../backend.js';
 import { sfx } from '../audio.js';
 import { toast, openModal, itemCard, patternTag, sellItems, openInspect, showItemDetail, rarityOddsHTML } from '../ui.js';
 import { playCaseIntro } from '../caseintro.js';
+import { UNIT_CAP, UNIT_PRICE, unitsOf } from '../engine/storage.js';
+import { buyUnit } from './storage.js';
 
 const view = { mode: 'list', caseId: null, colId: null, filter: 'case', sort: 'new', q: '', qty: 1, major: 'all' };
 const SKIN_KINDS = new Set(['case', 'souvenir', 'package', 'collection']);
@@ -93,10 +95,33 @@ export function caseEV(c) {
 
 // ---- case list -----------------------------------------------------------------------------
 const FILTERS = [['case', 'Weapon Cases'], ['souvenir', 'Souvenir Packages'], ['package', 'Packages'], ['collection', 'Collections'],
-  ['capsule', 'Sticker Capsules'], ['autograph', 'Autograph Capsules'], ['special', 'Agents']];
+  ['capsule', 'Sticker Capsules'], ['autograph', 'Autograph Capsules'], ['special', 'Agents'], ['tools', 'Tools']];
 const majors = () => [...new Set(D.cases.filter((c) => c.kind === 'souvenir').map((c) => c.ev))].sort((a, b) => b - a);
 
+// The store's tools: the Storage Unit.
+function renderTools(root) {
+  const have = unitsOf(S).length;
+  root.innerHTML = `<div class="page">
+    <div class="page-head"><h1>Cases</h1><span class="sub">Tools from the store</span></div>
+    <div class="toolbar"><div class="seg" data-k="filter">${FILTERS.map(([k, n]) => `<button data-v="${k}" class="${view.filter === k ? 'active' : ''}">${n}</button>`).join('')}</div></div>
+    <div class="grid lg"><div class="card store-tool" style="--rc:${rarityColor(0)}">
+      ${have ? `<div class="tags"><span class="tag own" title="In your inventory">×${have}</span></div>` : ''}
+      <div class="img"><img src="img/storage-unit.svg" alt=""></div>
+      <div class="rbar"></div>
+      <div class="meta">
+        <div class="n2">Storage Unit</div>
+        <div class="row"><span class="price">${money(UNIT_PRICE)}</span><span class="key">holds ${UNIT_CAP.toLocaleString('en-US')} items</span></div>
+        <div class="row"><span class="dim" style="font-size:11px">Counts as one item. Can't be traded or sold.</span></div>
+        <button class="btn gold" data-buyunit>Buy</button>
+      </div>
+    </div></div>
+  </div>`;
+  root.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => { view.filter = b.dataset.v; renderList(root); }));
+  root.querySelector('[data-buyunit]').addEventListener('click', async () => { if (await buyUnit()) renderTools(root); });
+}
+
 function renderList(root) {
+  if (view.filter === 'tools') return renderTools(root);
   if (view.filter === 'collection') return renderCollections(root);
   const list = D.cases.filter((c) => {
     if (view.filter === 'special') return c.custom;

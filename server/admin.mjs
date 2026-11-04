@@ -5,8 +5,9 @@
 // The game's admin panel (ns 'admin' and 'account') and the bot's slash commands call the same methods, so every check,
 // audit row and mod-log message is the same whichever way a request comes in. Permissions are always checked here.
 import crypto from 'node:crypto';
-import { makeCtx, delta, take, give, GameError } from '../src/js/engine/actions.js';
+import { makeCtx, delta, takeForStaff, give, GameError } from '../src/js/engine/actions.js';
 import { upgradeState } from '../src/js/engine/economy.js';
+import { ownedItems } from '../src/js/engine/storage.js';
 import { round2 } from '../src/js/engine/util.js';
 // (the checks and rules the offline panel shares)
 import {
@@ -306,13 +307,13 @@ export class Admin {
     if (!want.size) return out;
     await this.srv.store.flush().catch(() => {});
     const { rows } = await this.db.query(`SELECT DISTINCT uid FROM (
-        SELECT it->>'uid' AS uid FROM users u, jsonb_array_elements(COALESCE(u.state->'inv', '[]'::jsonb)) AS it WHERE u.id <> $1
+        SELECT it->>'uid' AS uid FROM users u, jsonb_array_elements(COALESCE(u.state->'inv', '[]'::jsonb) || COALESCE(u.state->'stored', '[]'::jsonb)) AS it WHERE u.id <> $1
         UNION ALL
         SELECT it->>'uid' AS uid FROM rounds r, jsonb_each(COALESCE(r.data->'escrow', '{}'::jsonb)) AS x(k, v),
           jsonb_array_elements(COALESCE(x.v->'items', '[]'::jsonb)) AS it WHERE r.status = 'open'
       ) s WHERE uid = ANY($2::text[])`, [id, [...want]]);
     for (const r of rows) out.add(r.uid);
-    for (const e of this.srv.store.cache.values()) if (e.id !== id) for (const it of e.st.inv) if (want.has(it.uid)) out.add(it.uid);
+    for (const e of this.srv.store.cache.values()) if (e.id !== id) for (const it of ownedItems(e.st)) if (want.has(it.uid)) out.add(it.uid);
     const L = this.srv.live;
     for (const r of [...L.flips.values(), ...L.battles.values(), ...(L.pot ? [L.pot] : [])]) {
       for (const x of Object.values(r.escrow || {})) for (const it of x?.items || []) if (want.has(it.uid)) out.add(it.uid);
@@ -372,7 +373,7 @@ export class Admin {
     await this.srv.store.flush().catch(() => {}); // (what's only in memory, so the totals are current)
     const { rows: [u] } = await this.db.query(`SELECT count(*)::int AS accounts, count(discord_id)::int AS linked,
       COALESCE(sum((state->>'money')::float8), 0)::float8 AS money,
-      COALESCE(sum(jsonb_array_length(COALESCE(state->'inv', '[]'::jsonb))), 0)::float8 AS items FROM users`);
+      COALESCE(sum(jsonb_array_length(COALESCE(state->'inv', '[]'::jsonb) || COALESCE(state->'stored', '[]'::jsonb))), 0)::float8 AS items FROM users`);
     const { rows: [b] } = await this.db.query('SELECT count(*)::int AS n FROM bans WHERE lifted IS NULL AND (expires IS NULL OR expires > $1)', [Date.now()]);
     const { rows: recent } = await this.db.query('SELECT * FROM audit ORDER BY at DESC, id DESC LIMIT 15');
     return {
@@ -418,12 +419,12 @@ export class Admin {
     const online = [...this.srv.sockets.keys()].map(Number).filter(Number.isInteger).join(',') || 'NULL';
     const { rows: [c] } = await this.db.query(`SELECT count(*)::int AS n FROM users u ${W}`, params);
     const { rows } = await this.db.query(`SELECT u.id, u.name, u.created, u.last_seen, u.discord_id, u.discord_name, ${banned} AS banned,
-      (u.state->>'money')::float8 AS money, (u.state->'prof'->>'level')::int AS level, u.state->'inv' AS inv
+      (u.state->>'money')::float8 AS money, (u.state->'prof'->>'level')::int AS level, u.state->'inv' AS inv, u.state->'stored' AS stored
       FROM users u ${W} ORDER BY u.id IN (${online}) DESC, u.last_seen DESC, u.id DESC LIMIT ${PAGE} OFFSET ${page * PAGE}`, params);
     return {
       rows: rows.map((r) => {
         const e = this.srv.store.cache.get(r.id); // (fresher than the saved row)
-        const inv = e ? e.st.inv : parse(r.inv) || [];
+        const inv = ownedItems(e ? e.st : { inv: parse(r.inv) || [], stored: parse(r.stored) || [] });
         return {
           id: r.id, name: r.name, online: this.srv.isOnline(r.id), money: round2(e ? e.st.money : Number(r.money) || 0),
           level: (e ? e.st.prof?.level : r.level) || 1, worth: worthOf(inv), items: inv.length,
@@ -531,9 +532,10 @@ export class Admin {
     const uids = removeUids(a.uids);
     const out = await this.srv.store.withUser(t.id, async (e) => {
       const snapJson = JSON.stringify(e.st);
-      // Locked items go too; items in an open trade offer don't (take() refuses them before changing anything).
+      // Locked items go too, and items in Storage Units; items in an open trade offer don't (take() refuses them before
+      // changing anything).
       const ctx = makeCtx(e.st, { online: true, reserved: this.srv.trades.reserved(t.id) });
-      const items = take(ctx, uids, { allowLocked: true });
+      const items = takeForStaff(ctx, uids);
       this.srv.store.markDirty(e);
       await this.srv.store.commit([e], this.autoSnap(t, actor, 'item removal', snapJson));
       this.srv.deltaTo(t.id, delta(ctx));
@@ -974,8 +976,8 @@ export class Admin {
         title: u.name, description: `${md(who)}'s game account${this.srv.isOnline(u.id) ? ' · online now' : ''}`, color: GOLD,
         fields: [
           { name: 'Profile level', value: String(st.prof?.level || 1), inline: true },
-          { name: 'Items', value: String(st.inv.length), inline: true },
-          { name: 'Inventory value', value: `$${worthOf(st.inv).toFixed(2)}`, inline: true },
+          { name: 'Items', value: String(ownedItems(st).length), inline: true },
+          { name: 'Inventory value', value: `$${worthOf(ownedItems(st)).toFixed(2)}`, inline: true },
           { name: 'Cases opened', value: String(s.opened || 0), inline: true },
           { name: 'Matches played', value: String(s.playMatches || 0), inline: true },
           { name: 'Matches won', value: String(s.playWins || 0), inline: true },
@@ -1032,7 +1034,7 @@ export class Admin {
               { name: 'Online', value: this.srv.isOnline(t.id) ? 'Yes' : 'No', inline: true },
               { name: 'Money', value: `$${round2(st.money).toFixed(2)}`, inline: true },
               { name: 'Profile level', value: String(st.prof?.level || 1), inline: true },
-              { name: 'Items', value: `${st.inv.length} ($${worthOf(st.inv).toFixed(2)})`, inline: true },
+              { name: 'Items', value: `${ownedItems(st).length} ($${worthOf(ownedItems(st)).toFixed(2)})`, inline: true },
               { name: 'Discord', value: t.discord_id ? `<@${t.discord_id}>` : 'Not linked', inline: true },
               { name: 'Staff', value: LEVEL_NAMES[await this.levelOf(t.id)], inline: true },
               { name: 'Ban', value: ban ? `${md(ban.reason)} (${ban.expires ? `until <t:${Math.floor(ban.expires / 1000)}:f>` : 'permanent'}, by ${md(ban.by)})` : 'None' },

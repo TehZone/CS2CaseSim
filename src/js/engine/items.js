@@ -38,6 +38,13 @@ export const makeAgentItem = (a, src = '') => ({ uid: uid(), t: 'agent', id: a.i
 // A case (or capsule, package...) in your inventory, and a key that opens one.
 export const makeCrateItem = (c, src = '') => ({ uid: uid(), t: 'crate', id: c.id, at: Date.now(), src });
 export const makeKeyItem = (keyId, src = '') => ({ uid: uid(), t: 'key', id: keyId, at: Date.now(), src });
+// A Storage Unit (see storage.js): a tool, so it has no market price and can't be traded or sold.
+export const UNIT_ID = 'casket';
+const UNIT_DEF = { id: UNIT_ID, n: 'Storage Unit', r: 0, p: 0 };
+export const makeUnitItem = (src = '') => ({ uid: uid(), t: 'unit', id: UNIT_ID, at: Date.now(), src });
+export const isUnit = (item) => item.t === 'unit';
+// What another player, a trader or a stake can take: not locked items, and not units.
+export const tradable = (item) => !item.lk && !isUnit(item);
 
 // ---- charms ----------------------------------------------------------------------------------
 // A charm hangs off a gun's keychain point. Each copy has a pattern (1-100,000, like CS2's): which way it hangs and turns.
@@ -164,6 +171,7 @@ export function itemDef(item) {
     case 'charm': return item.id === 'slab' ? slabDef(item.sk) : D.charms[item.id];
     case 'crate': return D.caseById?.[item.id] || null; // a case in your inventory, opened with its key
     case 'key': return D.keys[item.id] || null;
+    case 'unit': return UNIT_DEF;
   }
   return null;
 }
@@ -173,6 +181,7 @@ export function itemName(item) {
   if (!d) return 'Unknown item';
   if (item.t === 'chicken') return chickenName(item);
   if (item.t === 'pro') return `${d.n} (${eventShort(d.ev)})`;
+  if (item.t === 'unit') return item.name ? `${d.n} "${item.name}"` : d.n;
   if (item.t !== 'skin') return d.n;
   if (item.sv) return 'Souvenir ' + d.n;
   if (!item.stt) return d.n;
@@ -200,6 +209,7 @@ export function nameParts(item) {
   if (item.t === 'pro') return { top: `${d.ovr} ${d.role} · ${proTeamTag(d)} ${eventShort(d.ev)}`, bottom: d.n };
   if (item.t === 'crate') return { top: 'Container', bottom: d.n };
   if (item.t === 'key') return { top: 'Key', bottom: d.n };
+  if (item.t === 'unit') return { top: d.n, bottom: item.name || 'Not labelled yet' };
   return { top: '', bottom: '' };
 }
 
@@ -213,13 +223,13 @@ export function rarityRank(item) {
   if (!d) return 0;
   if (item.t === 'skin' && d.star) return 6;
   if (item.t === 'pro') return 2 + proTier(d.ovr);
-  if (item.t === 'crate' || item.t === 'key') return 0;
+  if (item.t === 'crate' || item.t === 'key' || item.t === 'unit') return 0;
   return d.r;
 }
 export function rarityInfo(item) {
   const rank = rarityRank(item);
   if (item.t === 'pro') { const t = PRO_RARITY[rank - 2]; return { rank, n: t.n, c: t.c }; }
-  const fam = item.t === 'sticker' || item.t === 'charm' ? 'sticker' : ['agent', 'chicken', 'crate', 'key'].includes(item.t) ? item.t : 'skin';
+  const fam = item.t === 'sticker' || item.t === 'charm' ? 'sticker' : ['agent', 'chicken', 'crate', 'key', 'unit'].includes(item.t) ? item.t : 'skin';
   let n = RARITY[fam][rank] || '';
   if (item.t === 'skin' && rank === 6) n = itemDef(item).cat === 'gloves' ? 'Extraordinary' : 'Covert ★';
   return { rank, n, c: rarityColor(rank) };
@@ -232,7 +242,7 @@ export const canHaveStickers = (item) => item.t === 'skin' && !item.sv && STICKE
 export function basePrice(item) {
   const d = itemDef(item);
   if (!d) return 0;
-  if (item.t === 'sticker' || item.t === 'agent' || item.t === 'charm') return d.p || 0;
+  if (item.t === 'sticker' || item.t === 'agent' || item.t === 'charm' || item.t === 'unit') return d.p || 0;
   if (item.t === 'chicken') return chickenValue(item);
   if (item.t === 'pro') return proValue(d);
   if (item.t === 'crate') return d.price || 0;
@@ -317,7 +327,7 @@ export function serialMultiplier(sn) {
 export function backfillSerials(st) {
   if (st.serialsBackfilled) return;
   st.serialsBackfilled = true;
-  const unboxed = st.inv.filter((it) => !it.sn && ['skin', 'sticker', 'agent', 'chicken'].includes(it.t)
+  const unboxed = [...st.inv, ...(st.stored || [])].filter((it) => !it.sn && ['skin', 'sticker', 'agent', 'chicken'].includes(it.t)
     && it.src && it.src !== 'Market' && it.src !== 'Trade Up Contract').sort((a, b) => (a.at || 0) - (b.at || 0));
   const counts = { ...(st.serials || {}) };
   for (const it of unboxed) it.sn = counts[serialKey(it)] = (counts[serialKey(it)] || 0) + 1;
@@ -328,10 +338,11 @@ export function backfillSerials(st) {
 // save's are sold once when it loads, for what they're worth. Returns { n, value } (n 0: there were none).
 const RETIRED = new Set(['chicken', 'pro']);
 export function retireOld(st) {
-  const old = st.inv.filter((it) => RETIRED.has(it.t));
+  const old = [...st.inv, ...(st.stored || [])].filter((it) => RETIRED.has(it.t));
   if (!old.length) return { n: 0, value: 0 };
   const value = round2(old.reduce((s, it) => s + itemValue(it), 0));
   st.inv = st.inv.filter((it) => !RETIRED.has(it.t));
+  if (st.stored) st.stored = st.stored.filter((it) => !RETIRED.has(it.t));
   st.money = round2(st.money + value);
   st.stats.sold = round2((st.stats.sold || 0) + value);
   return { n: old.length, value };

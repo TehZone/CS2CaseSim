@@ -6,6 +6,7 @@ import { online } from './backend.js';
 import { net } from './net/online.js';
 import { floatRanks, itemKey } from './engine/database.js';
 import { worldCopies } from './engine/npcs.js';
+import { ownedItems } from './engine/storage.js';
 
 // Your skins' ranks among everyone's copies of the same item (offline).
 function offlineRanks(inv) {
@@ -28,7 +29,7 @@ export const floatRankOf = (uid) => ranks.get(uid) || null;
 
 // Brings them up to date (the server's a few seconds old at most); resolves true when they changed.
 export function refreshRanks() {
-  const inv = S.inv, k = (online() ? 'on|' : 'off|' + (S.social?.seed || 0) + '|' + Object.values(S.social?.npcs || {}).reduce((t, s) => t + s.inv.length, 0) + '|')
+  const inv = ownedItems(S), k = (online() ? 'on|' : 'off|' + (S.social?.seed || 0) + '|' + Object.values(S.social?.npcs || {}).reduce((t, s) => t + s.inv.length, 0) + '|')
     + inv.length + '|' + (inv[0]?.uid || '') + '|' + (inv[inv.length - 1]?.uid || '');
   if (!online()) {
     if (k === key) return Promise.resolve(false);

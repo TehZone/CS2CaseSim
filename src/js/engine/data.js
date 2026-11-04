@@ -28,6 +28,7 @@ export const RARITY = {
   chicken: ['', '', 'Barnyard', 'Free-Range', 'Prize', 'Legendary', 'Mythic', ''],
   crate: ['Base Grade Container'],
   key: ['Base Grade Key'],
+  unit: ['Base Grade Tool'],
 };
 export const rarityColor = (rank) => C[rank] ?? C[2];
 

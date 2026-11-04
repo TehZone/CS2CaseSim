@@ -37,7 +37,7 @@ const round = (v) => Math.round(v * 100) / 100;
 
 function draw() {
   if (!root) return;
-  for (const k of ['flip', 'jackpot']) for (const u of stake[k]) if (!S.inv.some((i) => i.uid === u && !i.lk)) stake[k].delete(u);
+  for (const k of ['flip', 'jackpot']) for (const u of stake[k]) if (!S.inv.some((i) => i.uid === u && I.tradable(i))) stake[k].delete(u);
   root.innerHTML = `<div class="page">
     <div class="page-head"><h1>Gamble</h1><span class="sub">Case battles, coinflip and jackpot${online() ? ' against other players or bots' : ' against bots (go online to play other people)'}. Provably fair, virtual money only, no house edge.</span></div>
     <div class="toolbar">
@@ -221,7 +221,7 @@ function stakePanel(which, extra = '') {
 function wireStake(el, which, after) {
   el.querySelector('[data-money]').addEventListener('input', (e) => { view[which].money = Math.max(0, +e.target.value || 0); el.querySelector('[data-stake]').textContent = money(stakeValue(which)); after?.(); });
   mountPicker(el.querySelector('[data-picker]'), {
-    items: () => S.inv.filter((i) => !i.lk), selected: stake[which], empty: 'No unlocked items',
+    items: () => S.inv.filter(I.tradable), selected: stake[which], empty: 'No unlocked items',
     onChange: () => { el.querySelector('[data-stake]').textContent = money(stakeValue(which)); after?.(); },
   });
 }

@@ -91,7 +91,7 @@ function drawCompose() {
       <input class="input" data-msg placeholder="Message (optional)" maxlength="140" value="${esc(view.msg)}" style="flex:1">
       <button class="btn gold" data-send>Send offer</button>
     </div></div>`;
-  mountPicker(el.querySelector('[data-mypick]'), { items: () => S.inv.filter((i) => !i.lk), selected: view.mine, onChange: () => drawCompose(), empty: 'No unlocked items' });
+  mountPicker(el.querySelector('[data-mypick]'), { items: () => S.inv.filter(I.tradable), selected: view.mine, onChange: () => drawCompose(), empty: 'No unlocked items' });
   mountPicker(el.querySelector('[data-thpick]'), { items: () => view.theirInv, selected: view.theirs, onChange: () => drawCompose(), empty: 'They have no tradable items' });
   el.querySelector('[data-mym]').addEventListener('change', (e) => { view.myMoney = Math.max(0, +e.target.value || 0); drawCompose(); });
   el.querySelector('[data-thm]').addEventListener('change', (e) => { view.theirMoney = Math.max(0, +e.target.value || 0); drawCompose(); });

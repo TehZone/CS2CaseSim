@@ -106,10 +106,14 @@ export function applyDelta(d, { local = false } = {}) {
       const have = new Set(S.inv.map((i) => i.uid));
       S.inv.unshift(...d.add.filter((i) => !have.has(i.uid)));
     }
+    if (d.sto) {
+      const del = new Set(d.sto.del || []);
+      S.stored = [...(d.sto.add || []), ...(S.stored || []).filter((i) => !del.has(i.uid))];
+    }
   }
   const set = d.set || {};
   if ('money' in set) emit('money');
-  if (d.add?.length || d.del?.length || d.upd?.length) emit('inv');
+  if (d.add?.length || d.del?.length || d.upd?.length || d.sto || 'stored' in set) emit('inv');
   if ('stars' in set) emit('stars');
   if ('prof' in set) emit('prof');
   if ('social' in set) emit('social');

@@ -394,6 +394,12 @@ What's in a match:
 - Cases you buy go to your inventory, like CS2's store, and open with their own key (bought apart, $2.49: the Fever Case
   Key for the Fever Case, the CS:GO Case Key for the first ones). Open them on the case's page (it shows how many cases
   and keys you have) or from the inventory; auto open uses yours first, then buys a case and a key for each opening
+- Storage Units, like CS2's: a $1.99 tool from the store (Cases, Tools, or the inventory) that can't be traded or sold.
+  Label it when you start using it (change the label for free), then move up to 1,000 items in and out, one at a time or
+  in bulk. A unit counts as one item in your inventory and shows how much it holds and when it last changed; its window
+  searches, sorts and filters by rarity. What's inside can't be traded, sold, staked, equipped, stickered or used in a
+  trade-up until it comes out, but still counts toward your net worth and in the Item Database. An empty unit can be
+  deleted, for no refund
 - NPC players (offline): 2,000 made-up CS2 players with their own inventories and money; 66 of them are active traders.
   Normal players buy on the Market (its stock goes for you too) and trade at about market price. 20 are collectors,
   each chasing one kind of item (Dopplers, blue gems, fades, low floats, serial numbers, Katowice-era stickers,

@@ -8,10 +8,11 @@ import { S, save, applyDelta, replaceState } from './state.js';
 import { online, act } from './backend.js';
 import { staffPc } from './account.js';
 import { playPrefs } from './pages/play-settings.js';
-import { GameError, makeCtx, delta, give, take } from './engine/actions.js';
+import { GameError, makeCtx, delta, give, take, takeForStaff } from './engine/actions.js';
 import { freshState, upgradeState } from './engine/economy.js';
 import { backfillSerials } from './engine/items.js';
 import * as N from './engine/npcs.js';
+import { ownedItems } from './engine/storage.js';
 import { round2 } from './engine/util.js';
 import {
   KEEP_AUTO, MAX_MANUAL, PAGE, LEVEL_NAMES, fail, isObj, pick, worthOf, replaceInPlace, revOf, rawView, text, int, number, bool,
@@ -261,7 +262,7 @@ function blockRows(so, log, now = Date.now()) {
 
 const meRow = () => ({
   id: 'me', name: myName(), self: true, online: true, country: S.social?.me?.country || '', level: S.prof?.level || 1, lastSeen: null,
-  blocked: null, friend: null, money: round2(S.money), items: S.inv.length, worth: worthOf(S.inv),
+  blocked: null, friend: null, money: round2(S.money), items: ownedItems(S).length, worth: worthOf(ownedItems(S)),
 });
 function npcRow(so, n, now) {
   const s = so.npcs[n.id] || N.startingState(so.seed, n);
@@ -304,7 +305,7 @@ const METHODS = {
     for (const n of N.crowd(so.seed)) if (isOn(n, now)) activeNow++;
     return {
       offline: true, me: { name: actor(), level: 3, levelName: LEVEL_NAMES[3] },
-      money: round2(S.money), items: S.inv.length, invValue: worthOf(S.inv), level: S.prof?.level || 1, opened: S.stats?.opened || 0,
+      money: round2(S.money), items: ownedItems(S).length, invValue: worthOf(ownedItems(S)), level: S.prof?.level || 1, opened: S.stats?.opened || 0,
       npcs: N.WORLD, activeNow, blocked: N.activeBlocks(so, now).length, snapshots: snaps.length,
       saveBytes: new TextEncoder().encode(JSON.stringify(S)).length, lastSaved: S.lastSeen ?? null,
       settings: rulesOf(so), recent: log.sort(newestFirst).slice(0, 15).map(auditRow),
@@ -396,6 +397,7 @@ const METHODS = {
     const t = await who(a.id);
     const { specs, total } = giveSpecs(a.items);
     if (t.npc) {
+      if (specs.some((x) => x.unit)) fail("Traders don't keep Storage Units");
       return change(t, 'items.give', 'give', () => {
         if (npcNow(t).inv.length + total > NPC_CAP) fail(`${t.name}'s inventory would be over the limit (${NPC_CAP} items)`, 'full');
         return {};
@@ -417,7 +419,8 @@ const METHODS = {
     });
   },
 
-  // As the server's: locked items go too; one an open offer holds refuses it all (take() checks before it changes anything).
+  // As the server's: locked items go too, and what's in Storage Units; one an open offer holds refuses it all (take() checks
+  // before it changes anything).
   async 'items.remove'(a) {
     const t = await who(a.id);
     const uids = removeUids(a.uids);
@@ -436,9 +439,9 @@ const METHODS = {
     }
     const takeMine = (st) => {
       const ctx = makeCtx(st, { reserved: heldMine(S.social) });
-      return { ctx, items: take(ctx, uids, { allowLocked: true }) };
+      return { ctx, items: takeForStaff(ctx, uids) };
     };
-    // (checked on a copy first: take() only replaces the copy's inventory and loadout)
+    // (checked on a copy first: it only replaces the copy's inventory, stored items and loadout)
     return change(t, 'items.remove', 'item removal', () => { takeMine({ ...S }); return {}; }, () => {
       const { ctx, items } = takeMine(S);
       applyDelta(delta(ctx), { local: true });

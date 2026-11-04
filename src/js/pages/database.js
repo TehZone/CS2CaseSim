@@ -9,6 +9,7 @@ import * as I from '../items.js';
 import { S, on } from '../state.js';
 import { act, online } from '../backend.js';
 import { worldCopies, crowd } from '../engine/npcs.js';
+import { ownedItems } from '../engine/storage.js';
 import { openPerson } from './community.js';
 import { openInspect, patternTag, toast } from '../ui.js';
 import { net } from '../net/online.js';
@@ -71,7 +72,7 @@ export function render(r) {
 export function destroy() { offs.forEach((o) => o()); offs = []; root = null; }
 
 // Offline, everything the NPC players own (and yours): [{ owner, npc | me, item }].
-const offlineCopies = () => [...S.inv.map((item) => ({ owner: S.social?.me?.name || 'You', me: true, item })), ...worldCopies(S.social)];
+const offlineCopies = () => [...ownedItems(S).map((item) => ({ owner: S.social?.me?.name || 'You', me: true, item })), ...worldCopies(S.social)];
 
 // How many copies of each item there are: the server's count online (refreshed every so often), offline yours and the
 // NPC players'.

@@ -8,6 +8,7 @@ export * from './engine/items.js';
 export function itemImage(item, size = 'm') {
   const d = itemDef(item);
   if (!d) return '';
+  if (item.t === 'unit') return 'img/storage-unit.svg';
   if (item.t === 'crate' && d.custom) return crateImage(d, size);
   if (d.slab) return slabImage(d, size);
   return imgUrl(d.img, size);

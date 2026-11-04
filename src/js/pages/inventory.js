@@ -9,9 +9,11 @@ import { MAIN_SLOTS, GUN_GROUPS, ZEUS_SLOT, equipped, equippedUids, slotName } f
 import { cs2Play } from '../cs2/api.js';
 import { iconFor } from '../play/icons.js';
 import { refreshRanks } from '../floatranks.js';
+import { ownedItems, ownedValue, storedOf, UNIT_PRICE } from '../engine/storage.js';
+import { buyUnit, moveToUnit, openUnit } from './storage.js';
 
 const view = { type: 'all', sort: 'new', q: '', select: false, selected: new Set(), limit: 150 };
-const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['crate', 'Cases'], ['key', 'Keys']];
+const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['crate', 'Cases'], ['key', 'Keys'], ['unit', 'Storage Units']];
 let root, off;
 
 function matches(item) {
@@ -21,7 +23,7 @@ function matches(item) {
     if (view.type === 'gun' && !(item.t === 'skin' && !['knife', 'gloves'].includes(d.cat))) return false;
     if (view.type === 'knife' && !(item.t === 'skin' && d.cat === 'knife')) return false;
     if (view.type === 'gloves' && !(item.t === 'skin' && d.cat === 'gloves')) return false;
-    if (['sticker', 'charm', 'agent', 'crate', 'key'].includes(view.type) && item.t !== view.type) return false;
+    if (['sticker', 'charm', 'agent', 'crate', 'key', 'unit'].includes(view.type) && item.t !== view.type) return false;
     if (view.type === 'souvenir' && !item.sv) return false;
   }
   if (view.q && !I.itemName(item).toLowerCase().includes(view.q)) return false;
@@ -57,10 +59,12 @@ export function destroy() {
 
 function draw() {
   if (!root || !root.querySelector || root.dataset.page !== 'inventory') return;
-  const items = S.inv.filter(matches).sort(SORTS[view.sort]);
-  const totalValue = S.inv.reduce((s, i) => s + I.itemValue(i), 0);
+  // (Storage Units first, whatever the order: they hold more than anything else here.)
+  const sorted = S.inv.filter(matches).sort(SORTS[view.sort]);
+  const items = [...sorted.filter(I.isUnit), ...sorted.filter((i) => !I.isUnit(i))];
+  const totalValue = ownedValue(S), stored = storedOf(S);
   const shownValue = items.reduce((s, i) => s + I.itemValue(i), 0);
-  const best = S.inv.reduce((b, i) => (!b || I.itemValue(i) > I.itemValue(b) ? i : b), null);
+  const best = ownedItems(S).reduce((b, i) => (!b || I.itemValue(i) > I.itemValue(b) ? i : b), null);
   for (const uid of [...view.selected]) if (!S.inv.some((i) => i.uid === uid)) view.selected.delete(uid);
   const selItems = S.inv.filter((i) => view.selected.has(i.uid));
   const selValue = selItems.reduce((s, i) => s + I.itemValue(i), 0);
@@ -72,6 +76,7 @@ function draw() {
     <div class="summary">
       <div>Items<b>${S.inv.length}</b></div>
       <div>Inventory value<b class="green">${money(totalValue)}</b></div>
+      ${stored.length ? `<div>In storage<b>${stored.length.toLocaleString('en-US')} · ${money(stored.reduce((s, i) => s + I.itemValue(i), 0))}</b></div>` : ''}
       <div>Showing<b>${items.length} · ${money(shownValue)}</b></div>
       <div>Most valuable<b>${best ? esc(I.itemName(best)) + ' · ' + money(I.itemValue(best)) : '—'}</b></div>
     </div>
@@ -82,9 +87,10 @@ function draw() {
       <span class="spacer"></span>
       ${view.select
         ? `<button class="btn" data-a="all">Select all shown</button><button class="btn" data-a="none">Clear</button>
+           <button class="btn" data-a="storesel" ${selItems.length ? '' : 'disabled'}>Store ${selItems.length}…</button>
            <button class="btn primary" data-a="sellsel" ${selItems.length ? '' : 'disabled'}>Sell ${selItems.length} (${money(selValue)})</button>
            <button class="btn ghost" data-a="done">Done</button>`
-        : `<button class="btn" data-a="loadout">Loadout</button><button class="btn" data-a="bulk">Bulk sell…</button><button class="btn" data-a="select">Select</button>`}
+        : `<button class="btn" data-a="buyunit" title="Stores up to 1,000 items. Can't be traded or sold.">Buy Storage Unit · ${money(UNIT_PRICE)}</button><button class="btn" data-a="loadout">Loadout</button><button class="btn" data-a="bulk">Bulk sell…</button><button class="btn" data-a="select">Select</button>`}
     </div>
     ${items.length ? `<div class="grid">${items.slice(0, view.limit).map((i) => itemCard(i, { selectable: view.select, selected: view.selected.has(i.uid) })).join('')}</div>` : `<div class="empty">${S.inv.length ? 'Nothing matches your filters.' : 'Your inventory is empty. Open some cases!'}</div>`}
     ${items.length > view.limit ? `<div class="pager"><button class="btn" data-a="more">Show more (${items.length - view.limit} more)</button></div>` : ''}
@@ -100,9 +106,10 @@ function draw() {
     const it = S.inv.find((i) => i.uid === c.dataset.uid);
     if (!it) return;
     if (view.select) {
-      if (view.selected.has(it.uid)) view.selected.delete(it.uid); else if (!it.lk) view.selected.add(it.uid);
+      if (view.selected.has(it.uid)) view.selected.delete(it.uid); else if (I.tradable(it)) view.selected.add(it.uid);
       draw();
-    } else showItemDetail(it, { onChange: () => draw() });
+    } else if (I.isUnit(it)) openUnit(it);
+    else showItemDetail(it, { onChange: () => draw() });
   }));
   // Right-click: CS2's item menu (inspect, equip, stickers, lock, sell).
   root.querySelectorAll('.card[data-uid]').forEach((c) => c.addEventListener('contextmenu', (e) => {
@@ -114,13 +121,17 @@ function draw() {
 async function action(a, items) {
   if (a === 'select') { view.select = true; draw(); }
   if (a === 'done') { view.select = false; view.selected.clear(); draw(); }
-  if (a === 'all') { items.filter((i) => !i.lk).forEach((i) => view.selected.add(i.uid)); draw(); }
+  if (a === 'all') { items.filter(I.tradable).forEach((i) => view.selected.add(i.uid)); draw(); }
   if (a === 'none') { view.selected.clear(); draw(); }
   if (a === 'more') { view.limit += 150; draw(); }
   if (a === 'sellsel') {
     const sel = S.inv.filter((i) => view.selected.has(i.uid));
     if (await sellItems(sel)) { view.selected.clear(); view.select = false; draw(); }
   }
+  if (a === 'storesel') {
+    if (await moveToUnit(S.inv.filter((i) => view.selected.has(i.uid)))) { view.selected.clear(); view.select = false; draw(); }
+  }
+  if (a === 'buyunit') { if (await buyUnit()) draw(); }
   if (a === 'bulk') bulkSell();
   if (a === 'loadout') loadoutModal();
 }
@@ -195,7 +206,7 @@ function bulkSell() {
   const pick = () => {
     const below = +th.value || 0;
     const ranks = new Set([...m.el.querySelectorAll('[data-rank]:checked')].map((x) => +x.dataset.rank));
-    return S.inv.filter((i) => !i.lk && !keep.has(i.uid) && I.rarityRank(i) < 6 && matchesType(i)
+    return S.inv.filter((i) => I.tradable(i) && !keep.has(i.uid) && I.rarityRank(i) < 6 && matchesType(i)
       && ((below > 0 && I.itemValue(i) < below) || ranks.has(I.rarityRank(i))));
   };
   const upd = () => { const l = pick(); pv.innerHTML = `${l.length} items · <b class="green">${money(l.reduce((s, i) => s + I.itemValue(i), 0))}</b>`; };

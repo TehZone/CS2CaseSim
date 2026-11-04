@@ -755,5 +755,279 @@ function tierFreq(box, n) {
   const me = run('persona.set', { name: 'dawso', bio: 'hi <b>', showcase: [st.inv[0].uid, 'nope'], country: 'US', avatar: Object.keys(D.agents)[0] }).r.me;
   check('your profile: name, bio (cleaned), showcase of your own items only', me.name === 'dawso' && me.bio === 'hi b' && me.showcase.length === 1 && me.country === 'US');
 }
+// ---- Storage Units ----------------------------------------------------------------------------------------------------
+{
+  const SU = await E('storage');
+  const { upgradeState } = await E('economy');
+  const N = await E('npcs');
+  const skinDef = Object.values(D.skins).find((s) => !s.v && !s.star && s.r === 3);
+  const skinOf = (o = {}) => ({ ...I.makeSkinItem(skinDef, { r: rng }), ...o });
+  const stickerDef = Object.values(D.stickers).find((s) => s.p > 0);
+  const setup = () => {
+    const st = { ...freshState(), money: 1000 };
+    const ctx = (o = {}) => ACT.makeCtx(st, { rng, ...o });
+    const run = (name, args, o) => { const c = ctx(o); const r = ACT.runAction(c, name, args); return { r, d: ACT.delta(c) }; };
+    const unit = () => { const u = run('storage.buy', {}).r.items[0]; return u; };
+    const named = (name = 'stash') => { const u = unit(); run('storage.name', { unit: u.uid, name }); return u; };
+    return { st, run, unit, named, ctx };
+  };
+  const code = (fn) => { try { fn(); } catch (e) { return e instanceof ACT.GameError ? e.code : 'crash: ' + e.message; } return null; };
+
+  // Buying, labelling, deleting
+  {
+    const { st, run, unit } = setup();
+    const u = unit();
+    check('Storage Unit: bought for CS2\'s $1.99, one item in the inventory, worth nothing itself', st.money === 998.01 && st.inv.length === 1 && u.t === 'unit' && u.nw === true && I.itemValue(u) === 0 && SU.UNIT_PRICE === 1.99);
+    check('Storage Unit: a Base Grade Tool', I.itemName(u) === 'Storage Unit' && I.rarityInfo(u).n === 'Base Grade Tool' && I.nameParts(u).top === 'Storage Unit');
+    check('Storage Unit: refused without the money', code(() => { st.money = 1; run('storage.buy', {}); }) === 'funds' && st.inv.length === 1 && st.money === 1);
+    st.money = 1000;
+    const it = skinOf();
+    st.inv.push(it);
+    check('Storage Unit: nothing goes in until it has a label', code(() => run('storage.deposit', { unit: u.uid, uids: [it.uid] })) === 'unnamed' && st.inv.includes(it));
+    check('Storage Unit: a blank label is refused', code(() => run('storage.name', { unit: u.uid, name: '   ' })) === 'bad' && !u.name);
+    run('storage.name', { unit: u.uid, name: '  <b>Blue "gems"</b> and a very long label' });
+    check('Storage Unit: a label is cleaned and cut to 20 characters', u.name === "bBlue 'gems'/b and a" && u.name.length <= SU.UNIT_NAME_MAX && !/[<>"]/.test(u.name), u.name);
+    check('Storage Unit: its name shows the label', I.itemName(u) === `Storage Unit "${u.name}"` && I.nameParts(u).bottom === u.name);
+    const at = u.mod;
+    run('storage.name', { unit: u.uid, name: 'Keepers' }, { now: at + 5000 });
+    check('Storage Unit: changing the label is free and counts as a change', u.name === 'Keepers' && u.mod === at + 5000 && st.money === 1000);
+    check('Storage Unit: a thing that isn\'t a unit can\'t be labelled', code(() => run('storage.name', { unit: it.uid, name: 'x' })) === 'bad');
+  }
+  {
+    const { st, run, named } = setup();
+    const u = named(), it = skinOf();
+    st.inv.push(it);
+    run('storage.deposit', { unit: u.uid, uids: [it.uid] });
+    check('Storage Unit: one with items in it can\'t be deleted', code(() => run('storage.delete', { unit: u.uid })) === 'unit' && st.inv.includes(u));
+    run('storage.retrieve', { unit: u.uid, uids: [it.uid] });
+    const money = st.money;
+    run('storage.delete', { unit: u.uid });
+    check('Storage Unit: an empty one can be deleted, for no refund', !st.inv.some((x) => x.uid === u.uid) && st.money === money);
+  }
+  {
+    const { st, run, unit } = setup();
+    st.money = 1e4;
+    for (let i = 0; i < SU.MAX_UNITS; i++) unit();
+    check('Storage Unit: there is a limit on how many you own', code(() => run('storage.buy', {})) === 'units' && SU.unitsOf(st).length === SU.MAX_UNITS);
+  }
+  {
+    const { st, ctx } = setup();
+    st.inv = Array.from({ length: 5 }, () => skinOf());
+    const c = ctx({ invCap: 5 });
+    ACT.runAction(c, 'storage.buy', {});
+    check('Storage Unit: a full inventory can still buy one, as in CS2 (a unit is how you make room)', st.inv.length === 6);
+  }
+
+  // Deposit and retrieve
+  {
+    const { st, run, named } = setup();
+    const u = named(), a = skinOf({ nw: true }), b = skinOf({ lk: true }), c = skinOf();
+    st.inv.push(a, b, c);
+    const before = SU.ownedValue(st), net = st.money + before;
+    const { r, d } = run('storage.deposit', { unit: u.uid, uids: [a.uid, b.uid] }, { now: 1234567 });
+    const kept = SU.contents(st, u.uid);
+    check('Storage Unit: deposit moves items out of the inventory, in bulk', r.n === 2 && st.inv.length === 2 && kept.length === 2 && kept.every((x) => x.su === u.uid && x.sat === 1234567));
+    check('Storage Unit: stored items lose "New" and keep being locked', !kept.find((x) => x.uid === a.uid).nw && kept.find((x) => x.uid === b.uid).lk === true);
+    check('Storage Unit: it shows when it changed', u.mod === 1234567);
+    check('Storage Unit: the unit still counts as one item whatever is in it', st.inv.filter(I.isUnit).length === 1 && SU.unitCount(st, u.uid) === 2);
+    check('Storage Unit: storing changes neither what you own nor your net worth', SU.ownedValue(st) === before && st.money + SU.ownedValue(st) === net && SU.ownedItems(st).length === 4);
+    check('Storage Unit: the delta sends what moved, not the whole unit', d.sto.add.length === 2 && d.del.length === 2 && !('stored' in d.set) && d.upd.some((x) => x.uid === u.uid));
+    const again = run('storage.retrieve', { unit: u.uid, uids: [a.uid] }, { now: 2000000 });
+    const back = st.inv.find((x) => x.uid === a.uid);
+    check('Storage Unit: retrieve puts it back as it was, one at a time', again.r.n === 1 && back && back.su === undefined && back.sat === undefined && back.fl === a.fl && back.sd === a.sd && !SU.storedItem(st, a.uid) && u.mod === 2000000);
+    check('Storage Unit: retrieve\'s delta', again.d.sto.del.includes(a.uid) && again.d.add.some((x) => x.uid === a.uid) && !again.d.sto.add.length);
+    check('Storage Unit: retrieving what isn\'t in it is refused', code(() => run('storage.retrieve', { unit: u.uid, uids: [c.uid] })) === 'missing');
+    check('Storage Unit: the same item twice is refused', code(() => run('storage.deposit', { unit: u.uid, uids: [c.uid, c.uid] })) === 'bad');
+    check('Storage Unit: an empty list is refused', code(() => run('storage.deposit', { unit: u.uid, uids: [] })) === 'bad' && code(() => run('storage.retrieve', { unit: u.uid, uids: 'x' })) === 'bad');
+  }
+  {
+    const { st, run, named } = setup();
+    const u = named('one'), v = named('two'), it = skinOf();
+    st.inv.push(it);
+    check('Storage Unit: a unit can\'t go in a unit', code(() => run('storage.deposit', { unit: u.uid, uids: [v.uid] })) === 'unit' && st.inv.includes(v));
+    check('Storage Unit: nor in itself', code(() => run('storage.deposit', { unit: u.uid, uids: [u.uid] })) === 'unit');
+    run('storage.deposit', { unit: u.uid, uids: [it.uid] });
+    check('Storage Unit: an item is only retrieved from the unit it is in', code(() => run('storage.retrieve', { unit: v.uid, uids: [it.uid] })) === 'missing' && SU.unitCount(st, u.uid) === 1);
+    check('Storage Unit: a stored item can\'t be deposited again', code(() => run('storage.deposit', { unit: v.uid, uids: [it.uid] })) === 'stored');
+  }
+  {
+    const { st, run, named } = setup();
+    const u = named(), a = skinOf();
+    st.inv.push(a);
+    const c = ACT.makeCtx(st, { rng, reserved: new Set([a.uid]) });
+    check('Storage Unit: an item in a pending trade offer can\'t be stored', code(() => ACT.runAction(c, 'storage.deposit', { unit: u.uid, uids: [a.uid] })) === 'reserved' && st.inv.includes(a) && !st.stored.length);
+    const mod = u.mod;
+    check('Storage Unit: and a refused move leaves the unit as it was', u.mod === mod && !c.sto.add.length);
+    run('loadout.equip', { uid: a.uid });
+    const slot = I.loadoutSlot(a);
+    check('Storage Unit: (equipped first)', st.loadout[slot] === a.uid);
+    run('storage.deposit', { unit: u.uid, uids: [a.uid] });
+    check('Storage Unit: an equipped item comes off when it\'s stored', !st.loadout[slot]);
+    check('Storage Unit: a stored item can\'t be equipped', code(() => run('loadout.equip', { uid: a.uid })) === 'stored');
+  }
+
+  // The 1,000 cap
+  {
+    const { st, run, named } = setup();
+    const u = named();
+    const many = (n) => Array.from({ length: n }, () => I.makeStickerItem(stickerDef, 'x'));
+    let items = many(999);
+    st.inv.push(...items);
+    run('storage.deposit', { unit: u.uid, uids: items.map((i) => i.uid) });
+    const two = many(2);
+    st.inv.push(...two);
+    const uids = two.map((i) => i.uid);
+    check('1,000 cap: 999 fit and two more are refused, all or nothing', code(() => run('storage.deposit', { unit: u.uid, uids })) === 'unitfull' && SU.unitCount(st, u.uid) === 999 && two.every((x) => st.inv.includes(x)));
+    run('storage.deposit', { unit: u.uid, uids: [uids[0]] });
+    check('1,000 cap: the 1,000th fits', SU.unitCount(st, u.uid) === 1000);
+    const e = (() => { try { run('storage.deposit', { unit: u.uid, uids: [uids[1]] }); } catch (x) { return x; } return null; })();
+    check('1,000 cap: the 1,001st doesn\'t, and says so', e?.code === 'unitfull' && /full/.test(e.message) && st.inv.some((x) => x.uid === uids[1]));
+    const inv0 = st.inv.length;
+    run('storage.retrieve', { unit: u.uid, uids: items.slice(0, 1000 - 1).map((i) => i.uid) });
+    check('1,000 cap: a thousand come back out in one go', st.inv.length === inv0 + 999 && SU.unitCount(st, u.uid) === 1);
+    check('1,000 cap: more than a unit holds is no request at all', code(() => run('storage.deposit', { unit: u.uid, uids: Array.from({ length: 1001 }, (_, i) => 'u' + i) })) === 'bad');
+    check('1,000 cap: units have their own: a second unit starts empty', (() => { const v = named('two'); return SU.unitCount(st, v.uid) === 0 && !code(() => run('storage.deposit', { unit: v.uid, uids: [uids[1]] })); })());
+  }
+  {
+    const { st, ctx, run, named } = setup();
+    const u = named(), a = skinOf(), b = skinOf();
+    st.inv.push(a, b);
+    run('storage.deposit', { unit: u.uid, uids: [a.uid, b.uid] });
+    st.inv.push(...Array.from({ length: 3 }, () => skinOf()));
+    const before = JSON.stringify(st.stored), c = ctx({ invCap: st.inv.length + 1 });
+    check('a full inventory refuses a retrieve, all or nothing', code(() => ACT.runAction(c, 'storage.retrieve', { unit: u.uid, uids: [a.uid, b.uid] })) === 'full' && JSON.stringify(st.stored) === before && !c.sto.del.length);
+    check('that\'s the same inventory limit as anywhere: one still fits', !code(() => ACT.runAction(ctx({ invCap: st.inv.length + 1 }), 'storage.retrieve', { unit: u.uid, uids: [a.uid] })));
+  }
+
+  // Refusals: everything that touches inventory items
+  {
+    const { st, run, named, ctx } = setup();
+    const u = named();
+    // (a contract's worth of one rarity, cases, keys, stickers, a charm and a gun to work on)
+    const col = Object.values(D.skins).find((s) => !s.v && !s.star && s.r === 2 && s.col && T.tradeupIneligible({ t: 'skin', id: s.id, fl: s.mn }) === '');
+    const ten = Array.from({ length: 10 }, () => I.makeSkinItem(col, { stt: false, r: rng }));
+    const box = D.cases.find((c) => c.n === 'Chroma 2 Case');
+    const crate = I.makeCrateItem(box, 'x'), key = I.makeKeyItem(keyFor(box), 'x');
+    const sticker = I.makeStickerItem(stickerDef, 'x'), gun = I.makeSkinItem(Object.values(D.skins).find((s) => !s.v && I.canHaveStickers({ t: 'skin', id: s.id, sv: false })), { stt: false, r: rng });
+    const charm = I.makeCharmItem(Object.values(D.charms)[0], { r: rng }), gun2 = I.makeSkinItem(skinDef, { stt: false, r: rng });
+    st.inv.push(...ten, crate, key, sticker, gun, charm);
+    const all = [...ten, crate, key, sticker, gun, charm];
+    run('storage.deposit', { unit: u.uid, uids: all.map((i) => i.uid) });
+    const held = () => SU.unitCount(st, u.uid) === all.length;
+    const stake = { money: 0, uids: [gun.uid] };
+    const paths = {
+      'selling': () => run('item.sell', { uids: [gun.uid] }),
+      'locking': () => run('item.lock', { uid: gun.uid, lk: true }),
+      'equipping': () => run('loadout.equip', { uid: gun.uid }),
+      'a trade-up': () => run('tradeup.sign', { uids: ten.map((i) => i.uid) }),
+      'stickers on a stored gun': () => run('stickers.apply', { uid: gun.uid, stickers: [] }),
+      'a stored sticker': () => { st.inv.push(gun2); try { run('stickers.apply', { uid: gun2.uid, stickers: [{ srcUid: sticker.uid, x: 0.5, y: 0.5, r: 0 }] }); } finally { st.inv = st.inv.filter((x) => x !== gun2); } },
+      'scraping': () => run('stickers.scrape', { uid: gun.uid, i: 0 }),
+      'a charm on a stored gun': () => run('charms.attach', { uid: gun.uid, charm: charm.uid }),
+      'slabbing': () => run('charms.slab', { uid: sticker.uid }),
+      'opening a stored case': () => run('case.open', { id: box.id, uids: [crate.uid] }),
+      'StatTrak kills': () => run('play.stattrak', { uid: gun.uid, kills: 1 }),
+      'a coinflip stake': () => run('gamble.coinflip', { ...stake, side: 't', clientSeed: 's' }),
+      'a jackpot stake': () => run('gamble.jackpot', { ...stake, bots: 1, clientSeed: 's' }),
+    };
+    for (const [name, fn] of Object.entries(paths)) check(`stored items refuse ${name}`, code(fn) === 'stored' && held(), code(fn));
+    check('opening needs a case outside the unit: a stored one isn\'t counted', code(() => run('case.open', { id: box.id, n: 1 })) === 'nocase');
+    // (a key in storage doesn't open a case in the inventory either)
+    const out = I.makeCrateItem(box, 'x');
+    st.inv.push(out);
+    check('a stored key doesn\'t open a case', code(() => run('case.open', { id: box.id, uids: [out.uid] })) === 'nokey' && held());
+    st.inv = st.inv.filter((x) => x !== out);
+    const c = ACT.makeCtx(st, { rng });
+    check('stored items refuse a server-style take too (trades, escrow)', code(() => ACT.take(c, [gun.uid])) === 'stored' && code(() => ACT.takeStake(c, { uids: [gun.uid] })) === 'stored' && held());
+    run('npc.tick');
+    const so = st.social, npc = N.crowd(so.seed)[0];
+    check('stored items refuse an NPC trade offer', code(() => run('npc.offer', { npc: npc.id, give: { uids: [gun.uid] }, get: { money: 1 } })) === 'stored' && held());
+    const o = { id: 'o1', npc: npc.id, kind: 'buy', at: Date.now(), exp: Date.now() + 1e7, status: 'open', want: { uids: [gun.uid], money: 0 }, give: { uids: [], money: 5 }, max: 6, patience: 3, annoy: 0, args: [] };
+    st.social = { ...st.social, offers: [...st.social.offers, o] };
+    check('stored items refuse an NPC\'s offer for them', code(() => run('npc.accept', { offer: 'o1' })) === 'stored' && held());
+    check('and haggling over it', code(() => run('npc.counter', { offer: 'o1', price: 6 })) === 'stored');
+    const said = run('npc.say', { npc: npc.id, text: 'how about 10 bucks' }).r;
+    check('and a message isn\'t read as a haggle over it', said.outcome === null);
+    run('npc.tick', {}, { now: Date.now() + 60e3 });
+    check('an NPC\'s open offer for an item you stored lapses', st.social.offers.find((x) => x.id === 'o1').status === 'expired');
+    const offer = N.makeOffer(st.social, st, { r: rng, now: Date.now() });
+    check('NPCs don\'t offer for what\'s stored', !offer?.want.uids.some((x) => SU.storedItem(st, x)));
+    check('your showcase can\'t hold what\'s stored', run('persona.set', { showcase: [gun.uid] }).r.me.showcase.length === 0);
+    run('storage.retrieve', { unit: u.uid, uids: [gun.uid] });
+    check('out again, it sells', run('item.sell', { uids: [gun.uid] }).r.n === 1);
+  }
+  {
+    const { st, run, named } = setup();
+    const u = named();
+    check('units refuse being sold', code(() => run('item.sell', { uids: [u.uid] })) === 'unit' && st.inv.includes(u));
+    check('units refuse a stake', code(() => run('gamble.coinflip', { money: 1, uids: [u.uid], side: 't', clientSeed: 's' })) === 'unit' && st.money === 998.01);
+    run('npc.tick');
+    const npc = N.crowd(st.social.seed)[0];
+    check('units refuse an NPC trade', code(() => run('npc.offer', { npc: npc.id, give: { uids: [u.uid] }, get: { money: 1 } })) === 'unit');
+    check('units refuse a trade-up', code(() => run('tradeup.sign', { uids: [u.uid] })) !== null && st.inv.includes(u));
+    check('units aren\'t tradable', !I.tradable(u) && I.tradable(skinOf()) && !I.tradable(skinOf({ lk: true })));
+    check('units can\'t be showcased or equipped', code(() => run('loadout.equip', { uid: u.uid })) === 'bad' && run('persona.set', { showcase: [u.uid] }).r.me.showcase.length === 0);
+    check('NPCs never want a unit', !N.notable(u));
+  }
+
+  // The contents view
+  {
+    const { st, run, named } = setup();
+    const u = named();
+    const cheap = skinOf({ fl: 0.5, at: 1 }), blue = I.makeSkinItem(Object.values(D.skins).find((s) => !s.v && !s.star && s.r === 2), { r: rng }), sticker = I.makeStickerItem(stickerDef, 'x');
+    st.inv.push(cheap, blue, sticker);
+    run('storage.deposit', { unit: u.uid, uids: [cheap.uid] }, { now: 100 });
+    run('storage.deposit', { unit: u.uid, uids: [blue.uid] }, { now: 200 });
+    run('storage.deposit', { unit: u.uid, uids: [sticker.uid] }, { now: 300 });
+    const list = SU.contents(st, u.uid), ids = (l) => l.map((x) => x.uid);
+    check('contents: newest stored first, or oldest', ids(SU.viewItems(list, { sort: 'new' }))[0] === sticker.uid && ids(SU.viewItems(list, { sort: 'old' }))[0] === cheap.uid);
+    check('contents: by value both ways', I.itemValue(SU.viewItems(list, { sort: 'vdesc' })[0]) >= I.itemValue(SU.viewItems(list, { sort: 'vasc' })[0]));
+    check('contents: search by name', ids(SU.viewItems(list, { q: I.itemName(blue).slice(0, 6).toUpperCase() })).includes(blue.uid) && SU.viewItems(list, { q: 'zzzzqq' }).length === 0);
+    check('contents: filter by rarity', SU.viewItems(list, { rank: String(I.rarityRank(cheap)) }).every((x) => I.rarityRank(x) === I.rarityRank(cheap)) && SU.viewItems(list, { rank: '6' }).length === 0);
+    check('contents: a copy, so sorting leaves the list as it was', ids(list).join() === ids(SU.contents(st, u.uid)).join());
+    check('contents: every filter and order the window offers works', SU.SORT_NAMES.every(([k]) => SU.viewItems(list, { sort: k }).length === 3) && SU.RANK_FILTERS.every(([k]) => Array.isArray(SU.viewItems(list, { rank: k }))));
+  }
+
+  // Failed actions
+  {
+    const { st, run, named } = setup();
+    const u = named(), a = skinOf(), b = skinOf();
+    st.inv.push(a, b);
+    const inv0 = [...st.inv], stored0 = st.stored;
+    check('a failed bulk deposit moves nothing (the second item is missing)', code(() => run('storage.deposit', { unit: u.uid, uids: [a.uid, 'nope'] })) === 'missing' && st.stored === stored0 && st.inv.length === inv0.length && inv0.every((x, i) => st.inv[i] === x));
+  }
+
+  // Older saves
+  {
+    const SAVE = { money: 50, inv: [skinOf()], stats: { opened: 3 }, serialsBackfilled: true };
+    const old = upgradeState(structuredClone(SAVE));
+    check('save upgrade: an older save gets empty storage and keeps everything else', Array.isArray(old.stored) && !old.stored.length && old.inv.length === 1 && old.money === 50 && old.stats.opened === 3);
+    const ctx = ACT.makeCtx(old, { rng });
+    check('save upgrade: and can buy, label and fill a unit straight away', !code(() => { const u = ACT.runAction(ctx, 'storage.buy', {}).items[0]; ACT.runAction(ctx, 'storage.name', { unit: u.uid, name: 'x' }); ACT.runAction(ctx, 'storage.deposit', { unit: u.uid, uids: [old.inv.find((i) => i.t === 'skin').uid] }); }) && old.stored.length === 1);
+    const round = upgradeState(JSON.parse(JSON.stringify(old)));
+    check('save upgrade: a save with units comes back the same', round.stored.length === 1 && round.stored[0].su === old.inv.find(I.isUnit).uid && round.inv.find(I.isUnit).name === 'x');
+    check('save upgrade: running it again changes nothing', JSON.stringify(upgradeState(JSON.parse(JSON.stringify(round))).stored) === JSON.stringify(round.stored));
+    const unit = { ...I.makeUnitItem('x'), name: 'u' }, lost = skinOf({ su: 'gone', sat: 1 }), both = skinOf(), dupe = { ...both, su: unit.uid, sat: 2 }, nested = { ...I.makeUnitItem('x'), su: unit.uid };
+    const fixed = upgradeState({ money: 1, inv: [unit, both], stored: [lost, dupe, nested, null, 'x'], stats: {} });
+    check('save upgrade: an item stored in a unit that\'s gone goes back to the inventory, without its storage fields', fixed.inv.some((i) => i.uid === lost.uid && i.su === undefined && i.sat === undefined));
+    check('save upgrade: an item in both places stays in the inventory, once', fixed.inv.filter((i) => i.uid === both.uid).length === 1 && !fixed.stored.some((i) => i.uid === both.uid));
+    check('save upgrade: a unit inside a unit comes out', fixed.inv.some((i) => i.uid === nested.uid) && !fixed.stored.length);
+    check('save upgrade: stored that isn\'t a list is treated as empty', Array.isArray(upgradeState({ money: 1, inv: [], stored: 'x', stats: {} }).stored));
+    const over = Array.from({ length: 1002 }, () => I.makeStickerItem(stickerDef, 'x')).map((i) => ({ ...i, su: unit.uid }));
+    const big = upgradeState({ money: 1, inv: [unit], stored: over, stats: {} });
+    check('save upgrade: over a unit\'s limit, the extra go to the inventory, none lost', big.stored.length === 1000 && big.inv.length === 3);
+    const eq = skinOf({ su: unit.uid });
+    check('save upgrade: nothing stays equipped from inside a unit', Object.keys(upgradeState({ money: 1, inv: [unit], stored: [eq], loadout: { 'w:x': eq.uid }, stats: {} }).loadout).length === 0);
+    const unboxed = skinOf({ src: 'Chroma 2 Case', su: unit.uid, sn: undefined });
+    delete unboxed.sn;
+    const pre = upgradeState({ money: 1, inv: [unit], stored: [unboxed], stats: {} });
+    I.backfillSerials(pre);
+    check('save upgrade: serial numbers are backfilled on what\'s stored too', pre.stored[0].sn === 1 && pre.serialsBackfilled === true);
+    const chick = { uid: 'c1', t: 'chicken', id: Object.keys((await E('chickens')).BREED)[0], su: unit.uid };
+    const ret = upgradeState({ money: 1, inv: [unit], stored: [chick], stats: {} });
+    check('save upgrade: retired items are sold wherever they are', I.retireOld(ret).n === 1 && !ret.stored.length);
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

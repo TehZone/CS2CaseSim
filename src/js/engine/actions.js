@@ -14,6 +14,7 @@ import * as P from './premier.js';
 import * as MM from './matchmaking.js';
 import * as L from './levels.js';
 import * as N from './npcs.js';
+import * as SU from './storage.js';
 import { rand, round2, clamp, pick, pickWeighted, uid as newUid } from './util.js';
 
 export class GameError extends Error {
@@ -55,7 +56,7 @@ export function makeCtx(st, opts = {}) {
   return {
     st, rng: opts.rng || rand, now: opts.now || Date.now(), online: !!opts.online,
     invCap: opts.invCap || Infinity, reserved: opts.reserved || null,
-    add: [], del: [], upd: new Map(), dirty: new Set(),
+    add: [], del: [], upd: new Map(), dirty: new Set(), sto: { add: [], del: [] },
   };
 }
 
@@ -70,6 +71,8 @@ export function delta(ctx) {
     add: ctx.add.filter((i) => !removed.has(i.uid)),
     del: ctx.del.filter((u) => !added.has(u)),
     upd: [...ctx.upd.values()].filter((i) => !removed.has(i.uid) && !added.has(i.uid)),
+    // (only what moved in or out of a Storage Unit: their contents are too big to send whole)
+    ...(ctx.sto.add.length || ctx.sto.del.length ? { sto: { add: ctx.sto.add, del: ctx.sto.del } } : {}),
   };
 }
 
@@ -105,15 +108,19 @@ export function give(ctx, items) {
 }
 export function findOwned(ctx, uid) {
   const it = ctx.st.inv.find((i) => i.uid === uid);
-  if (!it) fail('Item not found (it may have been sold or traded)', 'missing');
-  return it;
+  if (it) return it;
+  const kept = SU.storedItem(ctx.st, uid);
+  if (kept) fail(`${I.itemName(kept)} is in a Storage Unit. Retrieve it first.`, 'stored');
+  fail('Item not found (it may have been sold or traded)', 'missing');
 }
-// Removes items from the inventory (fails if any is missing, locked, or tied up in a trade offer).
-export function take(ctx, uids, { allowLocked = false } = {}) {
+// Removes items from the inventory (fails if any is missing, locked, a Storage Unit, or tied up in a trade offer). Only
+// what's meant for units themselves passes allowUnit.
+export function take(ctx, uids, { allowLocked = false, allowUnit = false } = {}) {
   if (!Array.isArray(uids) || new Set(uids).size !== uids.length) fail('Invalid items');
   const items = uids.map((u) => findOwned(ctx, String(u)));
   for (const it of items) {
     if (it.lk && !allowLocked) fail(`${I.itemName(it)} is locked. Unlock it first.`, 'locked');
+    if (I.isUnit(it) && !allowUnit) fail("Storage Units can't be traded or sold", 'unit');
     if (ctx.reserved?.has(it.uid)) fail(`${I.itemName(it)} is in a pending trade offer`, 'reserved');
   }
   const set = new Set(uids);
@@ -121,6 +128,25 @@ export function take(ctx, uids, { allowLocked = false } = {}) {
   ctx.del.push(...uids);
   unequip(ctx, set);
   return items;
+}
+// Staff removing items (the admin panels): from the inventory (locked ones too) or out of Storage Units. A unit only goes
+// with everything in it, so nothing is left without one.
+export function takeForStaff(ctx, uids) {
+  const stored = new Map(SU.storedOf(ctx.st).map((it) => [it.uid, it]));
+  const gone = new Set(uids);
+  for (const u of uids) {
+    const it = ctx.st.inv.find((i) => i.uid === u);
+    if (!it || !I.isUnit(it)) continue;
+    const left = SU.contents(ctx.st, u).filter((x) => !gone.has(x.uid)).length;
+    if (left) fail(`${I.itemName(it)} still holds ${left} item${left === 1 ? '' : 's'}: remove them with it, or take them out first`, 'unit');
+  }
+  const out = uids.filter((u) => stored.has(u)).map((u) => stored.get(u));
+  const items = take(ctx, uids.filter((u) => !stored.has(u)), { allowLocked: true, allowUnit: true });
+  if (out.length) {
+    ctx.st.stored = SU.storedOf(ctx.st).filter((it) => !gone.has(it.uid));
+    ctx.sto.del.push(...out.map((it) => it.uid));
+  }
+  return [...items, ...out];
 }
 // Clears loadout slots holding any of these uids (the items left the inventory or were unequipped).
 function unequip(ctx, uids) {
@@ -250,6 +276,24 @@ function passToNpcs(ctx, items) {
   keepSocial(ctx, so);
 }
 
+// ---- Storage Units (see storage.js) -----------------------------------------------------------------
+function ownedUnit(ctx, uid) {
+  const it = findOwned(ctx, String(uid));
+  if (!I.isUnit(it)) fail("That isn't a Storage Unit");
+  return it;
+}
+function unitUids(v) {
+  if (!Array.isArray(v) || !v.length || v.length > SU.UNIT_CAP) fail('Pick the items first');
+  const uids = v.map(String);
+  if (new Set(uids).size !== uids.length) fail('Invalid items');
+  return uids;
+}
+// A unit changed (last, so nothing can fail after it: a failed action doesn't put items back as they were).
+function unitChanged(ctx, unit) {
+  unit.mod = ctx.now;
+  touch(ctx, unit);
+}
+
 // ---- the actions -----------------------------------------------------------------------------------
 export const ACTIONS = {
   // Buying cases (and capsules, packages...): they go to your inventory, like CS2's store. A case that takes a key opens
@@ -302,6 +346,58 @@ export const ACTIONS = {
     give(ctx, items.filter((it) => !it.as));
     return { items, autoSold };
   },
+  // A Storage Unit from the store. As in CS2 a full inventory can still buy one (it's how you make room), so it doesn't go
+  // through give(); there's a limit on how many you can own instead.
+  'storage.buy'(ctx, { n = 1 }) {
+    n = int(n, 1, 10, 'count');
+    if (SU.unitsOf(ctx.st).length + n > SU.MAX_UNITS) fail(`You already own too many Storage Units (${SU.MAX_UNITS} at most)`, 'units');
+    const cost = round2(SU.UNIT_PRICE * n);
+    spend(ctx, cost);
+    const items = Array.from({ length: n }, () => ({ ...I.makeUnitItem('Store'), nw: true }));
+    ctx.st.inv.unshift(...items);
+    ctx.add.push(...items);
+    return { items, cost };
+  },
+  // Its label: set when you start using it, changed for free at any time.
+  'storage.name'(ctx, { unit, name }) {
+    const u = ownedUnit(ctx, unit), label = SU.cleanName(name);
+    if (!label) fail('Enter a label for it first');
+    u.name = label;
+    unitChanged(ctx, u);
+    return { item: u };
+  },
+  // Into a unit, all or nothing. Locked items may go (they stay locked); items in a pending trade offer may not.
+  'storage.deposit'(ctx, { unit, uids }) {
+    const u = ownedUnit(ctx, unit), list = unitUids(uids);
+    if (!u.name) fail('Label this Storage Unit first', 'unnamed');
+    const room = SU.UNIT_CAP - SU.unitCount(ctx.st, u.uid);
+    if (list.length > room) fail(room ? `This Storage Unit only has room for ${room} more item${room === 1 ? '' : 's'}` : `This Storage Unit is full (${SU.UNIT_CAP.toLocaleString('en-US')} items)`, 'unitfull');
+    for (const id of list) { const why = SU.storeRefusal(findOwned(ctx, id)); if (why) fail(why, 'unit'); }
+    const stored = take(ctx, list, { allowLocked: true }).map(({ nw: _nw, ...it }) => ({ ...it, su: u.uid, sat: ctx.now }));
+    ctx.st.stored = [...stored, ...SU.storedOf(ctx.st)];
+    ctx.sto.add.push(...stored);
+    unitChanged(ctx, u);
+    return { n: stored.length };
+  },
+  // Out of a unit, all or nothing (a full inventory refuses it, as in CS2).
+  'storage.retrieve'(ctx, { unit, uids }) {
+    const u = ownedUnit(ctx, unit), list = unitUids(uids);
+    const inside = new Map(SU.contents(ctx.st, u.uid).map((it) => [it.uid, it]));
+    const items = list.map((id) => inside.get(id) || fail("That item isn't in this Storage Unit", 'missing')).map(({ su: _su, sat: _sat, ...it }) => it);
+    const set = new Set(list);
+    ctx.st.stored = SU.storedOf(ctx.st).filter((it) => !set.has(it.uid));
+    ctx.sto.del.push(...list);
+    give(ctx, items);
+    unitChanged(ctx, u);
+    return { n: items.length };
+  },
+  // An empty unit can be deleted (since CS2's October 2022 update), for no refund.
+  'storage.delete'(ctx, { unit }) {
+    const u = ownedUnit(ctx, unit), n = SU.unitCount(ctx.st, u.uid);
+    if (n) fail(`Retrieve the ${n} item${n === 1 ? '' : 's'} in it first`, 'unit');
+    take(ctx, [u.uid], { allowLocked: true, allowUnit: true });
+  },
+
   'item.sell'(ctx, { uids }) {
     const items = take(ctx, uids);
     const total = round2(items.reduce((s, it) => s + I.itemValue(it), 0));
@@ -699,6 +795,7 @@ export const ACTIONS = {
   'npc.counter'(ctx, { offer, price, arg = null }) {
     const so = social(ctx), o = openOffer(so, offer);
     notBlocked(ctx, so, N.npcOf(so.seed, o.npc));
+    for (const u of o.want.uids) findOwned(ctx, u); // (not over what's gone into a Storage Unit since)
     price = Number(price);
     if (!Number.isFinite(price) || Math.abs(price) > 1e9) fail('Invalid price');
     price = round2(price);
@@ -718,7 +815,7 @@ export const ACTIONS = {
     text = String(text || '').replace(/[<>]/g, '').trim().slice(0, 300);
     if (!text) fail('Type a message first');
     N.post(so, n.id, 'me', text, {}, ctx.now);
-    const o = [...so.offers].reverse().find((x) => x.npc === n.id && x.status === 'open');
+    const o = [...so.offers].reverse().find((x) => x.npc === n.id && x.status === 'open' && !x.want.uids.some((u) => SU.storedItem(ctx.st, u)));
     const m = N.readMessage(text);
     let reply, outcome = null;
     if (o && m.no) {
@@ -748,7 +845,10 @@ export const ACTIONS = {
     const myMoney = money(g.money), theirMoney = money(get.money);
     if (!mine.length && !theirs.length && !myMoney && !theirMoney) fail('Add something to the offer');
     const yours = mine.map((u) => findOwned(ctx, u));
-    for (const it of yours) if (it.lk) fail(`${I.itemName(it)} is locked. Unlock it first.`, 'locked');
+    for (const it of yours) {
+      if (it.lk) fail(`${I.itemName(it)} is locked. Unlock it first.`, 'locked');
+      if (I.isUnit(it)) fail("Storage Units can't be traded or sold", 'unit');
+    }
     const their = theirs.map((u) => s.inv.find((x) => x.uid === u) || fail('They no longer have that item', 'missing'));
     if (myMoney > ctx.st.money + 1e-9) fail('Not enough money', 'funds');
     if (theirMoney > s.money + 1e-9) fail(`${n.name} doesn't have that much money`, 'funds');
@@ -801,7 +901,7 @@ export const ACTIONS = {
     if (bg !== undefined) me.bg = bg ? clean(bg, 40) : null;
     if (showcase !== undefined) {
       if (!Array.isArray(showcase) || showcase.length > 6) fail('Pick up to 6 items');
-      me.showcase = [...new Set(showcase.map(String))].filter((u) => ctx.st.inv.some((it) => it.uid === u));
+      me.showcase = [...new Set(showcase.map(String))].filter((u) => ctx.st.inv.some((it) => it.uid === u && !I.isUnit(it)));
     }
     so.me = me;
     keepSocial(ctx, so);
@@ -881,7 +981,7 @@ export function atomically(ctx, fn) {
   } catch (e) {
     for (const k of Object.keys(st)) if (!(k in snap)) delete st[k];
     Object.assign(st, snap);
-    ctx.add.length = 0; ctx.del.length = 0; ctx.upd.clear(); ctx.dirty.clear();
+    ctx.add.length = 0; ctx.del.length = 0; ctx.upd.clear(); ctx.dirty.clear(); ctx.sto.add.length = 0; ctx.sto.del.length = 0;
     throw e;
   }
 }

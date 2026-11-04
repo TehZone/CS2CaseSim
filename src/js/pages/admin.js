@@ -17,6 +17,7 @@ import { net } from '../net/online.js';
 import { LEVEL_NAMES, staffPc } from '../account.js';
 import { localAdmin } from '../admin-local.js';
 import { FOCUS } from '../engine/npcs.js';
+import { ownedItems, unitCount, unitsOf } from '../engine/storage.js';
 import { playPrefs, savePlayPrefs } from './play-settings.js';
 import { BINDS_VERSION } from '../play/input.js';
 import { ASPECTS, RESOLUTIONS } from '../play/screen.js';
@@ -31,8 +32,8 @@ const filters = () => (online() ? FILTERS : OFF_FILTERS);
 const SUBS = [['overview', 'Overview'], ['inventory', 'Inventory'], ['configs', 'Configs'], ['snapshots', 'Snapshots'], ['history', 'History']];
 // (An NPC trader has no configs, and snapshots are of your own save only.)
 const NPC_SUBS = SUBS.filter(([k]) => k !== 'configs' && k !== 'snapshots');
-const KINDS = [['all', 'All items'], ['skin', 'Skins'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['charm', 'Charms'], ['crate', 'Cases'], ['key', 'Keys']];
-const GIVE_KINDS = [['skin', 'Skin'], ['crate', 'Case'], ['key', 'Key'], ['sticker', 'Sticker'], ['agent', 'Agent'], ['charm', 'Charm']];
+const KINDS = [['all', 'All items'], ['skin', 'Skins'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['charm', 'Charms'], ['crate', 'Cases'], ['key', 'Keys'], ['unit', 'Storage Units']];
+const GIVE_KINDS = [['skin', 'Skin'], ['crate', 'Case'], ['key', 'Key'], ['sticker', 'Sticker'], ['agent', 'Agent'], ['charm', 'Charm'], ['unit', 'Storage Unit']];
 const DURATIONS = [['60', '1 hour'], ['1440', '1 day'], ['10080', '7 days'], ['43200', '30 days'], ['perm', 'Permanent'], ['custom', 'Custom (minutes)']];
 const PAGE = 50, INV_PAGE = 100, MAX_JSON = 48 * 1024, MAX_MINUTES = 5256000, MAX_SAVE = 64 * 1024 * 1024;
 const STAT_LABELS = {
@@ -55,7 +56,7 @@ const ACCESS = [
 
 const view = {
   tab: 'dash', q: '', filter: 'all', page: 0, player: null, sub: 'overview', bansActive: true, auditQ: '', auditPage: 0,
-  inv: { q: '', kind: 'all', sort: 'value', page: 0, sel: new Set() },
+  inv: { q: '', kind: 'all', sort: 'value', where: 'all', page: 0, sel: new Set() },
 };
 // (shownOnline: whether the page on screen is the server's or this PC's; switches: how many times that changed.)
 let root = null, offs = [], shownLevel = 0, shownOnline = null, switches = 0;
@@ -317,7 +318,7 @@ function drawBody() {
 
 function openPlayer(id) {
   if (online() ? !Number.isFinite(id) : !id) return;
-  Object.assign(view, { tab: 'players', player: id, sub: 'overview', inv: { q: '', kind: 'all', sort: 'value', page: 0, sel: new Set() } });
+  Object.assign(view, { tab: 'players', player: id, sub: 'overview', inv: { q: '', kind: 'all', sort: 'value', where: 'all', page: 0, sel: new Set() } });
   invalidate('player');
   draw();
 }
@@ -555,8 +556,7 @@ function drawPlayer(el) {
   // (Offline an NPC trader's block, while it lasts.)
   const ban = online() ? (p.bans || []).map(normBan).find(banActive) || (p.user.ban ? normBan(p.user.ban) : null)
     : p.user.npc?.blocked && banActive(normBan(p.user.npc.blocked)) ? normBan(p.user.npc.blocked) : null;
-  const inv = p.state?.inv || [];
-  const counts = { inventory: inv.length, snapshots: (p.snapshots || []).length };
+  const counts = { inventory: ownedItems(p.state || {}).length, snapshots: (p.snapshots || []).length };
   const subs = p.user.npc ? NPC_SUBS : SUBS, acts = online() ? PLAYER_ACTIONS : LOCAL_ACTIONS;
   if (!subs.some(([k]) => k === view.sub)) view.sub = 'overview';
   pv.innerHTML = `${online() ? playerHeadHtml(p, ban) : localHeadHtml(p, ban)}
@@ -813,7 +813,7 @@ function editorGroups(st) {
 function drawOverview(el, p) {
   if (p.user.npc) return drawNpcOverview(el, p);
   const u = p.user, st = p.state || {}, edit = canChange(u);
-  const inv = st.inv || [], invValue = inv.reduce((s, i) => s + itemValue(i), 0), s = obj(st.stats);
+  const inv = ownedItems(st), invValue = inv.reduce((s, i) => s + itemValue(i), 0), s = obj(st.stats);
   const sum = [
     ['Balance', money(+st.money || 0)], ['Inventory', `${num(inv.length)} · ${money(invValue)}`], ['Net worth', money((+st.money || 0) + invValue)],
     ['Level', profLevel(st.prof?.level)], ['Cases opened', num(s.opened)], ['Matches won', `${num(s.playWins || 0)} of ${num(s.playMatches || 0)}`],
@@ -909,7 +909,7 @@ function drawNpcOverview(el, p) {
 
 // Every top-level part of the state but the inventory and the (offline-only) NPC world, as JSON to edit by hand.
 function rawModal(p) {
-  const u = p.user, restOf = (st) => { const { inv, social, ...rest } = st || {}; return rest; };
+  const u = p.user, restOf = (st) => { const { inv, stored, social, ...rest } = st || {}; return rest; };
   // (Offline it's your own save.)
   const own = !online() && isSelf(u), whoseSave = own ? 'your save' : `<b>${esc(u.name)}</b>'s save`;
   // (The save this JSON was made from: the server refuses it when the account has changed since, a sale or a claimed
@@ -917,7 +917,7 @@ function rawModal(p) {
   let base = p.rev;
   const m = formModal({
     title: `Raw JSON: ${own ? 'your save' : esc(u.name)}`, ok: 'Save JSON', danger: true, cls: 'wide',
-    body: `<div class="muted adm-note">Everything in ${own ? 'your' : `${esc(u.name)}'s`} save except the inventory and the NPC world. Keys you leave out are reset to a new account's; an auto snapshot is saved first.</div>
+    body: `<div class="muted adm-note">Everything in ${own ? 'your' : `${esc(u.name)}'s`} save except the inventory, Storage Units' contents and the NPC world. Keys you leave out are reset to a new account's; an auto snapshot is saved first.</div>
       <textarea class="input adm-json" data-json spellcheck="false">${esc(JSON.stringify(restOf(p.state), null, 2))}</textarea>
       <div class="adm-json-bar"><span class="muted" data-size></span><span class="spacer"></span><button class="btn ghost sm" data-fmt>Format</button></div>`,
     submit: async ($, err) => {
@@ -972,11 +972,15 @@ function reservedUids(p) {
   return s;
 }
 const INSPECTABLE = new Set(['skin', 'sticker', 'agent', 'charm']);
+// Where an item is: in the inventory, or in which Storage Unit (their labels, for the filter and the rows).
+const unitLabel = (p, uid) => unitsOf(p.state || {}).find((u) => u.uid === uid)?.name || 'Unlabelled unit';
 function drawInventory(el, p) {
-  const edit = canChange(p.user), v = view.inv;
+  const edit = canChange(p.user), v = view.inv, units = unitsOf(p.state || {});
+  if (v.where !== 'all' && v.where !== 'inv' && !units.some((u) => u.uid === v.where)) v.where = 'all';
   el.innerHTML = `<div class="toolbar adm-bar">
       <input class="input" type="search" data-iq placeholder="Search items…" value="${esc(v.q)}">
       <select class="input" data-ikind>${KINDS.map(([k, n]) => `<option value="${k}" ${v.kind === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      ${units.length ? `<select class="input" data-iwhere>${[['all', 'Inventory and storage'], ['inv', 'Inventory only'], ...units.map((u) => [u.uid, `Unit: ${u.name || 'Unlabelled'} (${unitCount(p.state, u.uid).toLocaleString()})`])].map(([k, n]) => `<option value="${esc(k)}" ${v.where === k ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>` : ''}
       <select class="input" data-isort>${[['value', 'Most valuable'], ['new', 'Newest first'], ['old', 'Oldest first']].map(([k, n]) => `<option value="${k}" ${v.sort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <span class="muted" data-isum></span><span class="spacer"></span>
       ${edit ? '<button class="btn danger" data-remove disabled>Remove selected</button><button class="btn primary" data-give>Give items</button>' : ''}
@@ -985,6 +989,7 @@ function drawInventory(el, p) {
   const q = el.querySelector('[data-iq]');
   q.addEventListener('input', debounce(() => { v.q = q.value; v.page = 0; list(); }, 200));
   el.querySelector('[data-ikind]').addEventListener('change', (e) => { v.kind = e.target.value; v.page = 0; list(); });
+  el.querySelector('[data-iwhere]')?.addEventListener('change', (e) => { v.where = e.target.value; v.page = 0; list(); });
   el.querySelector('[data-isort]').addEventListener('change', (e) => { v.sort = e.target.value; v.page = 0; list(); });
   el.querySelector('[data-give]')?.addEventListener('click', () => giveModal(p));
   el.querySelector('[data-remove]')?.addEventListener('click', (e) => removeItems(p, e.currentTarget));
@@ -993,9 +998,10 @@ function drawInventory(el, p) {
 function drawInvList(el, p) {
   const box = el.querySelector('[data-ilist]');
   if (!box) return;
-  const edit = canChange(p.user), v = view.inv, reserved = reservedUids(p), all = p.state?.inv || [];
+  const edit = canChange(p.user), v = view.inv, reserved = reservedUids(p), all = ownedItems(p.state || {});
   const q = v.q.trim().toLowerCase();
-  let items = all.filter((i) => (v.kind === 'all' || i.t === v.kind) && (!q || itemName(i).toLowerCase().includes(q) || String(i.uid).toLowerCase() === q));
+  const inPlace = (i) => v.where === 'all' || (v.where === 'inv' ? !i.su : i.su === v.where);
+  let items = all.filter((i) => inPlace(i) && (v.kind === 'all' || i.t === v.kind) && (!q || itemName(i).toLowerCase().includes(q) || String(i.uid).toLowerCase() === q));
   items = v.sort === 'value' ? items.map((i) => [i, itemValue(i)]).sort((a, b) => b[1] - a[1]).map((x) => x[0])
     : items.slice().sort((a, b) => (v.sort === 'new' ? (b.at || 0) - (a.at || 0) : (a.at || 0) - (b.at || 0)));
   const pages = Math.max(1, Math.ceil(items.length / INV_PAGE));
@@ -1013,7 +1019,9 @@ function drawInvList(el, p) {
     const res = reserved.has(i.uid), wk = i.t === 'skin' && i.fl != null ? wearOf(i.fl) : null;
     const tags = [i.stt && '<span class="tag st">ST™</span>', i.sv && '<span class="tag sv">Souvenir</span>', i.lk && '<span class="tag lock" title="Locked">🔒</span>',
       i.sn && `<span class="tag sn" title="Serial number">#${+i.sn}</span>`, i.kc && '<span class="tag" title="A charm is attached">Charm</span>',
-      i.stk?.length && `<span class="tag" title="Stickers">${+i.stk.length} stk</span>`, res && '<span class="tag pat" title="In an open trade offer">In trade</span>'].filter(Boolean).join('');
+      i.stk?.length && `<span class="tag" title="Stickers">${+i.stk.length} stk</span>`, res && '<span class="tag pat" title="In an open trade offer">In trade</span>',
+      i.su && `<span class="tag" title="In this Storage Unit">In ${esc(unitLabel(p, i.su))}</span>`,
+      i.t === 'unit' && `<span class="tag" title="Items in it">${unitCount(p.state, i.uid).toLocaleString()} items</span>`].filter(Boolean).join('');
     return `<tr style="--rc:${esc(itemColor(i))}" class="${v.sel.has(i.uid) ? 'sel' : ''}">
       ${edit ? `<td class="cb"><input type="checkbox" data-uid="${esc(i.uid)}" ${v.sel.has(i.uid) ? 'checked' : ''} ${res ? 'disabled title="In an open trade offer"' : ''}></td>` : ''}
       <td class="adm-thumb"><img loading="lazy" src="${esc(itemImg(i))}" alt=""></td>
@@ -1041,7 +1049,7 @@ function drawInvList(el, p) {
   wirePager(box, (i) => { v.page = i; drawInvList(el, p); });
 }
 async function removeItems(p, btn) {
-  const u = p.user, sel = view.inv.sel, items = (p.state?.inv || []).filter((i) => sel.has(i.uid));
+  const u = p.user, sel = view.inv.sel, items = ownedItems(p.state || {}).filter((i) => sel.has(i.uid));
   if (!items.length) return;
   const worth = items.reduce((s, i) => s + itemValue(i), 0);
   const what = items.length === 1 ? `<b>${esc(itemName(items[0]))}</b>` : `<b>${plural(items.length, 'item')}</b>`;
@@ -1064,6 +1072,7 @@ function giveList(kind) {
   if (kind === 'sticker') list = Object.entries(D.stickers).map(([id, d]) => mk(id, d.n, { t: 'sticker', id }));
   if (kind === 'agent') list = Object.entries(D.agents).map(([id, d]) => mk(id, d.n, { t: 'agent', id }));
   if (kind === 'charm') list = Object.entries(D.charms || {}).map(([id, d]) => mk(id, d.n, { t: 'charm', id, pat: 50000 }));
+  if (kind === 'unit') list = [mk(I.UNIT_ID, 'Storage Unit', { t: 'unit', id: I.UNIT_ID })];
   return (giveLists[kind] = list.sort((a, b) => a.n.localeCompare(b.n)));
 }
 function giveModal(p) {
@@ -1073,7 +1082,7 @@ function giveModal(p) {
     title: `Give items to ${own ? 'yourself' : esc(u.name)}`, ok: 'Give', cls: 'wide',
     body: `<div class="adm-give">
       <div class="adm-give-pick">
-        <div class="toolbar adm-bar"><select class="input" data-gkind>${GIVE_KINDS.map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select>
+        <div class="toolbar adm-bar"><select class="input" data-gkind>${GIVE_KINDS.filter(([k]) => k !== 'unit' || !u.npc).map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select>
           <input class="input" type="search" data-gq placeholder="Search the game's items…"></div>
         <div class="adm-give-list" data-glist></div><div class="muted adm-note" data-gmore></div>
       </div>
