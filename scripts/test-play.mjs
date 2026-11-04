@@ -685,6 +685,82 @@ function fakeGame() {
   ok(rest === 0 && Math.abs(hand.position.x - 0.1) < 1e-6 && vm.role === 'inspect', 'viewmodel: with no blend (a draw) a clip starts at its first frame');
 }
 
+// ---- your equipped agent: its voice, its arms in first person, your body (bots keep theirs) -------------------------------
+{
+  const { voiceOf, voiceLines, heardLines } = (await import('node:module')).createRequire(import.meta.url)('../cs2/voice.cjs');
+  const model = (m) => ({ model_player: `agents/models/${m.split('_variant')[0]}/${m}.vmdl` });
+  ok(voiceOf(model('ctm_fbi_variantf')) === 'swat' && voiceOf(model('ctm_st6_variantj')) === 'seal' && voiceOf({ ...model('ctm_st6_variantk'), vo_prefix: 'ctm_gsg9' }) === 'gsg9'
+    && voiceOf({ ...model('tm_professional_varf5'), vo_prefix: 'professional_epic' }) === 'professional_epic' && voiceOf(model('tm_balkan_variantf')) === 'balkan' && voiceOf({ ...model('ctm_swat_variantf'), vo_prefix: 'swat_fem' }) === 'swat_fem',
+  "agents' voices: CS2's rule (vo_prefix, else the model's name up to _var, FBI as SWAT, ST6 as SEAL)");
+  const shared = { m_Requirements: [{ m_name: 'ConceptEnemySpotted', m_matchKey: 'Concept', m_matchExpr: 'Radio.EnemySpotted' }, { m_name: 'ConceptGo', m_matchKey: 'Concept', m_matchExpr: 'Radio.GoGoGo' },
+    { m_name: 'ConceptThanks', m_matchKey: 'Concept', m_matchExpr: 'radio.thanks' }, { m_name: 'ConceptPos', m_matchKey: 'Concept', m_matchExpr: 'Radio.InPosition' }] };
+  const talker = { m_ResponseGroups: [
+    { m_name: 'spotted', m_responses: [{ m_type: 'RESPONSE', m_value: 'lines' }], m_pEmbeddedRule: { m_Requirements: ['ConceptEnemySpotted'] } },
+    { m_name: 'lines', m_responses: [{ m_type: 'SPEAK', m_value: 'v.spotted01' }, { m_type: 'SPEAK', m_value: 'v.spotted01' }, { m_type: 'SPEAK', m_value: 'v.gone02' }] },
+    { m_name: 'go', m_responses: [{ m_type: 'SPEAK', m_value: 'v.radio_request_move_01' }], m_pEmbeddedRule: { m_Requirements: ['ConceptGo'] } },
+    { m_name: 'pos', m_responses: [{ m_type: 'SPEAK', m_value: 'v.at_position_01' }], m_pEmbeddedRule: { m_Requirements: ['ConceptPos'] } },
+    { m_name: 'thanks', m_responses: [{ m_type: 'SPEAK', m_value: 'v.thanks01' }], m_pEmbeddedRule: { m_Requirements: ['ConceptThanks'] } },
+  ] };
+  const lines = voiceLines(talker, shared, new Set(['v.spotted01', 'v.request_move_01', 'v.in_position_01', 'v.thanks01']));
+  ok(lines.enemyspotted.join() === 'v.spotted01' && lines.letsgo.join() === 'v.request_move_01' && lines.inposition.join() === 'v.in_position_01' && lines.thanks.join() === 'v.thanks01' && lines.negative.length === 0,
+    "agents' voices: each radio line from the talker script, by reference, in any case, only events the voice has, nothing for a line it hasn't recorded");
+
+  const heard = heardLines({ inposition: ['a', 'b', 'c'], thanks: ['d'] }, { a: ['u'], b: [], d: ['v'] });
+  ok(heard.inposition.join() === 'a' && heard.thanks.join() === 'd' && heardLines({ thanks: ['d'] }, { d: [] }) === null, "agents' voices: an event with no audio in the install is never picked, and a voice with none falls back to the default");
+
+  const { armsOnly, agentArms, dressArms } = await import('../src/js/play/viewmodel.js');
+  const bone = (name) => { const b = new THREE.Bone(); b.name = name; return b; };
+  const skinned = (name, tris, weights) => {
+    const g = new THREE.BufferGeometry(), n = weights.length;
+    g.setAttribute('position', new THREE.Float32BufferAttribute(new Array(n * 3).fill(0), 3));
+    g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(weights.flatMap((w) => [w, 0, 0, 0]), 4));
+    g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(weights.flatMap(() => [1, 0, 0, 0]), 4));
+    g.setIndex(tris);
+    const m = new THREE.SkinnedMesh(g, new THREE.MeshStandardMaterial());
+    m.name = name;
+    const bones = [bone('arm_lower_L'), bone('hand_L'), bone('clavicle_L'), bone('scapula_L')];
+    m.add(bones[0]); bones[0].add(bones[1]); m.add(bones[2]); bones[2].add(bones[3]);
+    m.bind(new THREE.Skeleton(bones));
+    return m;
+  };
+  const jacket = skinned('tm_leet_variantffirstperson_sleeves', [0, 1, 2, 2, 3, 0], [0, 1, 1, 3]);
+  const onArms = skinned('tm_leet_variantffirstperson_default_gloves_arms', [0, 1, 2], [0, 1, 1]);
+  const kept = armsOnly(jacket);
+  ok(kept !== jacket.geometry && kept.index.count === 3 && armsOnly(onArms) === onArms.geometry, "agents' arms: sleeve triangles hanging on the body are cut (a viewmodel clip doesn't move it), arms are left whole");
+
+  const scene = new THREE.Group(), body = skinned('tm_leet_variantfthirdperson_body', [0, 1, 2], [0, 1, 1]), wrapped = new THREE.Group();
+  wrapped.name = 'tm_leet_variantffirstperson_default_gloves_arms';
+  const wrappedMesh = skinned('tm_leet_variantffirstperson_default_gloves_arms_1', [0, 1, 2], [0, 1, 1]);
+  wrapped.add(wrappedMesh);
+  scene.add(jacket, body, wrapped);
+  const src = agentArms({ scene });
+  ok(src.arms.length === 1 && src.sleeves.length === 1 && src.arms[0].material !== wrappedMesh.material && src.arms[0].geometry === wrappedMesh.geometry && src.sleeves[0].geometry.index.count === 3
+    && agentArms({ scene: new THREE.Group() }).sleeves.length === 0, "agents' arms: found by name on the mesh or its group, with materials of their own (the model's are lit for the world); no sleeves is fine");
+
+  const rig = () => { const view = new THREE.Group(), skel = new THREE.Group(), arms = new THREE.Group(); view.add(skel, arms); return { view, skel, arms, bones: {} }; };
+  const vm = rig(), wear = dressArms(vm, { T: src }, false), roots = vm.view.children.slice(2);
+  wear('T');
+  const inT = !vm.arms.visible && roots[0].visible && roots[0].children.length === 2;
+  wear('CT');
+  ok(inT && vm.arms.visible && !roots[0].visible, "agents' arms: your side's on the rig in place of the default, the default back on a side with no agent");
+  const gv = rig(), gw = dressArms(gv, { T: src }, true), groot = gv.view.children[2];
+  gw('T');
+  ok(gv.arms.visible && groot.visible && groot.children.length === 1 && groot.children[0].material === src.sleeves[0].material, "agents' arms: equipped gloves stay on with the agent's sleeves over them, as in CS2");
+
+  const { Bot } = await import('../src/js/play/bots.js');
+  const gltf = (name, ...meshes) => { const s = new THREE.Group(); s.name = name; s.add(...meshes); return { scene: s }; };
+  const pool = { T: [gltf('phoenix', skinned('tm_phoenixthirdperson_body', [0, 1, 2], [0, 1, 1])), gltf('leet', skinned('tm_leetthirdperson_body', [0, 1, 2], [0, 1, 1]))], CT: [gltf('sas', skinned('ctm_sasdefusekit', [0, 1, 2], [0, 1, 1])), gltf('st6', skinned('ctm_st6defusekit', [0, 1, 2], [0, 1, 1]))] };
+  const mine = gltf('mine', skinned('ctm_swat_variantfdefusekit', [0, 1, 2], [0, 1, 1]), skinned('ctm_swat_variantfthirdperson_body', [0, 1, 2], [0, 1, 1]));
+  const assets = { models: pool, own: { T: null, CT: mine } };
+  const fake = (own) => Object.assign(Object.create(Bot.prototype), { assets, index: 1, ownBody: own, view: new THREE.Group(), lightOwn() {} });
+  const me = fake(true), bot = fake(false);
+  me.setModel('CT'); bot.setModel('CT');
+  const kit = (b) => { let v = null; b.model.traverse((o) => { if (o.isMesh && /defusekit/.test(o.name)) v = o.visible; }); return v; };
+  ok(me.modelSrc === mine && bot.modelSrc === pool.CT[1] && kit(me) === false && kit(bot) === true, 'your body is your agent, with no kit showing; a bot keeps its own model, as it was');
+  me.setModel('T');
+  ok(me.modelSrc === pool.T[1], 'your body on a side with no agent is the same default as before');
+}
+
 // ---- H switches hands (CS2's switchhands, cl_prefer_lefthanded): bound for older saved binds too, saved -------------------
 {
   const { bindTable, BINDS_VERSION, DEFAULT_BINDS, Input } = await import('../src/js/play/input.js');

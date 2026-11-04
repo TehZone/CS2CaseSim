@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { CS2Service } = require('../cs2/service.cjs');
+const { agentVoice } = require('../cs2/voice.cjs');
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = path.join(ROOT, 'src');
@@ -88,7 +89,7 @@ http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/cs2/play') {
       const calls = { maps: () => cs2.playMaps(), mapImages: () => cs2.playMapImages(), map: (a) => cs2.playMap(a), progress: (a) => cs2.playProgress(a), weapon: (a) => cs2.playWeapon(a),
-        agent: (a) => cs2.playAgent(a), anims: (a) => cs2.playAnims(a), sounds: (a) => cs2.playSounds(a), soundInfo: (a) => cs2.playSoundInfo(a), reverbs: () => cs2.playReverbs(), agentModel: (a) => cs2.agentModel(a), stats: () => cs2.playStats(), impacts: () => cs2.playImpacts(), voices: () => cs2.playVoices(), icons: () => cs2.playIcons(), ranks: () => cs2.playRanks(),
+        agent: (a) => cs2.playAgent(a), anims: (a) => cs2.playAnims(a), sounds: (a) => cs2.playSounds(a), soundInfo: (a) => cs2.playSoundInfo(a), reverbs: () => cs2.playReverbs(), agentModel: (a) => cs2.agentModel(a), agentVoice: (a) => agentVoice(cs2, a), stats: () => cs2.playStats(), impacts: () => cs2.playImpacts(), voices: () => cs2.playVoices(), icons: () => cs2.playIcons(), ranks: () => cs2.playRanks(),
         menuIcons: () => cs2.menuIcons(), menuBackdrop: (a) => cs2.menuBackdrop(a), profileArt: () => cs2.profileArt() };
       const fn = url.searchParams.get('fn');
       if (!Object.hasOwn(calls, fn)) return res.writeHead(400).end('Unknown play call');

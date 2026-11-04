@@ -20,6 +20,7 @@ import { START_RATING, ACTIVE_DUTY } from './engine/premier.js';
 import { matchedSkill, privateSkill, ratingOfSkill, groupOfSkill } from './play/skill.js';
 import { botIdentities, pickIdentities } from './play/identity.js';
 import { playPrefs, savePlayPrefs, matchSettings, privateRanks } from './pages/play-settings.js';
+import { equipped } from './loadout.js';
 import { BINDS_VERSION } from './play/input.js';
 import { premierVeto } from './pages/veto.js';
 
@@ -112,11 +113,15 @@ async function beginSearch() {
     mode, started: Date.now(), wait: window.__mmWait ?? (lo + Math.random() * (hi - lo)) * 1000, state: 'searching', ready: premier,
     map: premier ? null : pool[Math.floor(Math.random() * pool.length)], site: Math.random() < 0.5 ? 'A' : 'B', team: Math.random() < 0.5 ? 'CT' : 'T',
   };
+  s.p = p;
   s.timer = setInterval(() => searchTick(s), 250);
   changed();
   s.roster = await matchRoster(mode);
   if (search === s && !premier) prepare(s, p);
 }
+
+// The agents you have on: a match loads with them, so changing them while you search loads it again (see searchTick).
+const agentsOn = () => ['agentT', 'agentCT'].map((slot) => equipped(slot)?.uid || '').join();
 
 // The match found, loading out of sight while you search (and do whatever else).
 async function prepare(s, p) {
@@ -124,21 +129,22 @@ async function prepare(s, p) {
   if (search !== s) return;
   const ffa = s.mode === 'deathmatch' || s.mode === 'armsrace';
   s.overlay = makeOverlay({ behind: true });
-  s.game = new Game(s.overlay, gameOptions(p, {
+  s.agents = agentsOn();
+  const game = s.game = new Game(s.overlay, gameOptions(p, {
     map: s.map, mode: s.mode, team: s.team, site: s.site, ffa, minutes: 10, teamSize: 5, roster: s.roster, ranked: isRanked(s.mode), quiet: true,
     // CS2's matchmaking rules: Competitive and Wingman end in a draw on a tie, Premier plays overtime; friendly fire on.
     length: 'long', overtime: s.mode === 'premier', friendlyFire: true,
   }));
   try {
-    await s.game.load();
+    await game.load();
   } catch (e) {
     console.error(e);
-    if (search !== s) return;
+    if (search !== s || s.game !== game) return;
     toast('Could not get the match ready: ' + esc(e.message || String(e)), 'bad');
     cancelSearch();
     return;
   }
-  if (search === s && !s.game.disposed) s.ready = true;
+  if (search === s && s.game === game && !game.disposed) s.ready = true;
 }
 
 export function cancelSearch() {
@@ -155,6 +161,13 @@ export function cancelSearch() {
 
 function searchTick(s) {
   if (search !== s) return;
+  if (s.state === 'searching' && s.game && s.agents !== agentsOn()) {
+    s.ready = false;
+    s.game.dispose();
+    s.overlay?.remove();
+    s.game = s.overlay = null;
+    prepare(s, s.p);
+  }
   if (s.state === 'searching' && s.ready && s.roster && Date.now() - s.started >= s.wait) found(s);
   else updateBar();
 }

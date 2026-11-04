@@ -125,6 +125,7 @@ export class BotAssets {
     this.renderer = renderer;
     this.ambient = ambient;
     this.models = { T: [], CT: [] };
+    this.own = { T: null, CT: null }; // your equipped agents (see loadOwn): not in models, or the bots would wear them
     this.clips = {};
     this.weapons = new Map(); // weapon id -> Promise<template scene | null>
     this.holds = new Map(); // weapon id -> Promise<arm clip | null>
@@ -248,6 +249,15 @@ export class BotAssets {
     for (const [k, p] of Object.entries(SHARED)) this.clips[k] = this.trackClip(p, /^flinch|flashed/.test(k) ? UPPER : ARMS);
   }
 
+  // Your equipped agent for a side, for your own body (Bot: own). One that won't load leaves that side's default.
+  async loadOwn(team, vmdl) {
+    try {
+      const g = await loadGltf((await cs2Play('agent', vmdl)).model);
+      this.light(g.scene);
+      this.own[team] = g;
+    } catch (e) { console.warn('your agent failed', vmdl, e); }
+  }
+
   fit(c) { return c && this.boneNames?.size ? new THREE.AnimationClip(c.name, c.duration, c.tracks.filter((t) => this.boneNames.has(t.name.split('.')[0]))) : c; }
   trackClip(path, re) {
     const c = this.clips[path];
@@ -312,10 +322,12 @@ export class BotAssets {
 
 export class Bot {
   static drawing = false; // the game is drawing a frame (see the matrix pass in the constructor)
-  constructor(assets, c, index) {
+  // own: your own body, in your equipped agent (BotAssets.loadOwn) where there is one.
+  constructor(assets, c, index, { own = false } = {}) {
     this.c = c; // the Combatant (team, health, money...)
     this.assets = assets;
     this.index = index;
+    this.ownBody = own;
     this.root = new THREE.Group();
     // The model goes in here: hidden while it's out of view (Game culls bots itself: their meshes' bounds are the bind
     // pose's, so three's own culling is off for them).
@@ -343,8 +355,8 @@ export class Bot {
     if (this.model && this.modelTeam === team) return;
     this.model?.removeFromParent();
     this.mixer?.stopAllAction();
-    const list = this.assets.models[team];
-    const src = list[this.index % Math.max(1, list.length)];
+    const list = this.assets.models[team], mine = this.ownBody && this.assets.own[team];
+    const src = mine || list[this.index % Math.max(1, list.length)];
     this.modelTeam = team;
     this.modelSrc = src;
     this.model = cloneSkinned(src.scene);
@@ -358,6 +370,7 @@ export class Bot {
       if (!o.isMesh) return;
       o.frustumCulled = false; o.castShadow = true; o.receiveShadow = true;
       if (/firstperson/.test(o.name) || /firstperson/.test(o.parent?.name || '')) o.visible = false;
+      if (mine && (/defusekit/.test(o.name) || /defusekit/.test(o.parent?.name || ''))) o.visible = false; // (CS2 shows it only on someone carrying a kit)
     });
     this.view.add(this.model);
     bindBounds(this.model);

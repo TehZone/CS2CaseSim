@@ -26,10 +26,17 @@ export class Radio {
   constructor(game) {
     this.game = game;
     this.voices = {};
+    this.own = { T: null, CT: null }; // your equipped agents' voices (see loadOwn)
     this.last = new Map(); // combatant -> time of their last call
     this.lastAny = -9;
     this.menu = null;
     cs2Play('voices').then((v) => { this.voices = v || {}; }).catch(() => {});
+  }
+
+  // Your equipped agents' voices for the match: agents: { side: { def } } (see Game). One that won't load leaves that
+  // side's default voice.
+  async loadOwn(agents) {
+    await Promise.all(Object.entries(agents).map(async ([side, a]) => { this.own[side] = await cs2Play('agentVoice', a.def).catch(() => null); }));
   }
 
   agentOf(c) {
@@ -45,9 +52,12 @@ export class Radio {
     if (!force && (now - (this.last.get(c) ?? -99) < 5 || now - this.lastAny < 1.5)) return false;
     this.last.set(c, now);
     this.lastAny = now;
-    const list = this.voices[this.agentOf(c)]?.[line];
+    // (Your agent's voice has its own list, line for line: one it hasn't recorded stays silent, not someone else's voice.)
+    const own = c === g.me ? this.own[c.team] : null;
+    const list = own ? own.lines[line] : this.voices[this.agentOf(c)]?.[line];
     if (list?.length) {
       const ev = list[Math.floor(Math.random() * list.length)];
+      if (own) { g.sounds.info[ev] ||= own.info?.[ev]; g.sounds.add({ [ev]: own.sounds[ev] || [] }); } // (one at a time: a voice has a hundred)
       g.sounds.load([ev]).then(() => { if (!g.disposed) g.sounds.channel('voice', ev, { volume: 0.5 * g.voiceVolume }, 0.15); });
     }
     if (text) g.hud.chat(c === g.me ? 'You' : c.name, g.placeOf(c), text, c.team);

@@ -122,7 +122,7 @@ export async function assembleViewmodel(model, clipScene, armsUrl, { gloves = nu
       }
     });
   };
-  return { rig, skel, bones, pose, dispose };
+  return { rig, view, arms: armsScene, gloved: !!gloveArms, skel, bones, pose, dispose };
 }
 
 // A clip's skeleton can have two bones of one name, the exporter calling the second name_1: the Molotov's has the

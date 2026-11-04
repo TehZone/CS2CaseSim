@@ -2,7 +2,7 @@
 // CS2's viewmodel animations (draw, idle, shoot, reload, inspect, knife attacks, the silencer screwed on and off).
 import * as THREE from 'three';
 import { assembleViewmodel } from '../cs2/firstperson.js';
-import { loadGltf } from '../cs2/rig.js';
+import { loadGltf, rebind, shareSkeletons } from '../cs2/rig.js';
 import { buildCS2Model } from '../cs2/skin.js';
 import { barrelTip, SPECULAR_AA, centroidVaryings } from './world.js';
 
@@ -114,14 +114,84 @@ export function clipPlayer(root, clips) {
   };
 }
 
-// data: cs2Play('weapon', id) -> { clips: { role: url | [urls] }, arms }.
-export async function buildViewmodel(item, def, data, { gloves = null, gloveScene = null, renderer }) {
+// The bones that move with your arms. Some agents' sleeves are cut from their jacket, weighted to the shoulders and the
+// body too (tm_leet variantf-j, tm_jungle_raider_varianta), which no viewmodel clip moves: those triangles swept across
+// the screen. Only what hangs on the arms stays.
+const ARM_BONE = /^(arm_(upper|lower)_[LR](_TWIST1?)?|hand_[LR]|finger_\w+)$/;
+export function armsOnly(o) {
+  const g = o.geometry, si = g.attributes.skinIndex, sw = g.attributes.skinWeight, idx = g.index;
+  if (!si || !sw || !idx) return g;
+  const body = o.skeleton.bones.map((b) => !ARM_BONE.test(b.name));
+  const off = (v) => { for (let k = 0; k < 4; k++) if (sw.getComponent(v, k) > 0 && body[si.getComponent(v, k)]) return true; return false; };
+  const keep = [];
+  for (let i = 0; i < idx.count; i += 3) { const a = idx.getX(i), b = idx.getX(i + 1), c = idx.getX(i + 2); if (!off(a) && !off(b) && !off(c)) keep.push(a, b, c); }
+  if (keep.length === idx.count) return g;
+  const cut = new THREE.BufferGeometry();
+  for (const [k, v] of Object.entries(g.attributes)) cut.setAttribute(k, v);
+  cut.setIndex(keep);
+  return cut;
+}
+
+// An agent's arms in first person, from its model (each CS2 agent carries them): arms, its bare arms and default gloves;
+// sleeves, what it wears over them (none on 12 agents; a watch on some). Materials of their own: the model's are lit for
+// the world (see BotAssets.light), and they'd come out too bright here. Textures stay shared with your body.
+export function agentArms(gltf) {
+  const mats = new Map(), cuts = [];
+  const mine = (m) => {
+    if (!mats.has(m)) {
+      const c = m.clone();
+      c.envMapIntensity = 0.7;
+      if (c.transparent && c.map) { c.alphaTest = 0.4; c.transparent = false; }
+      mats.set(m, c);
+    }
+    return mats.get(m);
+  };
+  const meshes = (re) => {
+    const out = [];
+    gltf.scene.traverse((o) => {
+      if (!o.isSkinnedMesh || !(re.test(o.name) || re.test(o.parent?.name || ''))) return;
+      const c = o.clone();
+      c.visible = true;
+      c.material = Array.isArray(o.material) ? o.material.map(mine) : mine(o.material);
+      const g = armsOnly(o);
+      if (g !== o.geometry) { cuts.push(g); c.geometry = g; }
+      out.push(c);
+    });
+    return out;
+  };
+  return { arms: meshes(/firstperson_default_gloves_arms/), sleeves: meshes(/firstperson_sleeves/), dispose() { for (const m of mats.values()) m.dispose(); for (const g of cuts) g.dispose(); } };
+}
+
+// Your agents' arms on a rig: agents, each side's agentArms. Returns wear(side): that side's arms on, and today's arms
+// (weapon_arms) off, or left on for a side with no agent. Equipped gloves stay on either way, as in CS2: they replace the
+// agent's bare arms and gloves, its sleeves go over them.
+export function dressArms(vm, agents, gloves) {
+  const roots = {};
+  for (const [side, src] of Object.entries(agents)) {
+    const root = new THREE.Group();
+    for (const m of [...(gloves ? [] : src.arms), ...src.sleeves]) root.add(m.clone());
+    rebind(root, vm.bones, vm.skel);
+    shareSkeletons(root);
+    root.visible = false;
+    vm.view.add(root);
+    roots[side] = root;
+  }
+  return (side) => {
+    for (const [k, root] of Object.entries(roots)) root.visible = k === side;
+    if (!gloves) vm.arms.visible = !roots[side];
+  };
+}
+
+// data: cs2Play('weapon', id) -> { clips: { role: url | [urls] }, arms }. agents: your agents' arms (see dressArms), on
+// your own guns only: a spectated bot's hands stay as they are.
+export async function buildViewmodel(item, def, data, { gloves = null, gloveScene = null, renderer, agents = null }) {
   const model = await buildCS2Model(item, def, renderer, { quick: true });
   if (!model?.userData.root) throw new Error('No CS2 model for ' + def.n);
   const entries = Object.entries(data.clips).flatMap(([role, u]) => [].concat(u).map((url) => [role, url]));
   const loaded = await Promise.all(entries.map(([, url]) => loadGltf(url)));
   const base = loaded[entries.findIndex(([r]) => r === 'idle')] || loaded[0];
   const vm = await assembleViewmodel(model, base.scene, data.arms, { gloves, gloveScene, renderer });
+  const wear = agents ? dressArms(vm, agents, vm.gloved) : null; // (gloves that failed to load: as if none were on)
   vm.rig.traverse((o) => { if (o.isMesh) { o.frustumCulled = false; o.castShadow = false; o.receiveShadow = true; } });
   model.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) strongerReflections(m); });
   vm.rig.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) mirrorSafe(m); });
@@ -147,7 +217,7 @@ export async function buildViewmodel(item, def, data, { gloves = null, gloveScen
   const tip = !muzzle && vm.bones.weapon && def.cat !== 'knife' && barrelTip(model.userData.root);
   if (tip) { muzzle = new THREE.Object3D(); muzzle.name = 'muzzle_tip'; muzzle.position.copy(tip); vm.bones.weapon.add(muzzle); }
   return {
-    model, rig: vm.rig, bones: vm.bones, muzzle, play, has, length, update, setSilencer,
+    model, rig: vm.rig, bones: vm.bones, muzzle, play, has, length, update, setSilencer, wear,
     get role() { return anim.role; },
     dispose() {
       anim.mixer.stopAllAction();

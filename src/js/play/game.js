@@ -7,6 +7,7 @@ import { cs2Play } from '../cs2/api.js';
 import { equipped } from '../loadout.js';
 import { itemDef } from '../items.js';
 import { D } from '../data.js';
+import { imgUrl } from '../util.js';
 import { CollisionWorld, FLAG_BULLET, FLAG_PLAYER } from './collision.js';
 import { PlayerMovement, HULL_STAND as BOT_HULL } from './movement.js';
 import { loadWorld, toGl, fromGl } from './world.js';
@@ -14,7 +15,7 @@ import { Input, bindTable } from './input.js';
 import { SoundBank } from './sound.js';
 import { Soundscapes } from './soundscape.js';
 import { FrameLog } from './framelog.js';
-import { buildViewmodel } from './viewmodel.js';
+import { buildViewmodel, agentArms } from './viewmodel.js';
 import { Arsenal, Gun, basis, refillAmmo, WHEEL } from './weapons.js';
 import { BotAssets, Bot, BOT_NAMES, rayCapsule, bindBounds } from './bots.js';
 import { Brain, botGun, inaccuracyOf } from './ai.js';
@@ -136,6 +137,13 @@ export class Game {
     this.enemyTeam = team === 'T' ? 'CT' : 'T';
     this.mode = MODES[mode] ? mode : 'competitive';
     this.respawnMode = !!MODES[this.mode].respawn;
+    // Your equipped agent for each side you'll play, as the match is set up: read here and nowhere else, so a change counts
+    // from your next match. { side: { uid, def (its items_game number), img } }.
+    this.agents = {};
+    for (const side of this.respawnMode ? [team] : ['T', 'CT']) {
+      const item = equipped('agent' + side), def = /(\d+)$/.exec(item?.id || '')?.[1];
+      if (def) this.agents[side] = { uid: item.uid, def: Number(def), img: D.agents[item.id]?.img };
+    }
     this.armsRace = this.mode === 'armsrace';
     this.ffa = this.armsRace || (this.mode === 'deathmatch' && !!ffa);
     this.minutes = minutes;
@@ -290,6 +298,14 @@ export class Game {
     this.botAssets.coverage = this.msaa > 0;
     await this.botAssets.load(['weapon_glock', 'weapon_usp_silencer', 'weapon_ak47', 'weapon_m4a1', 'weapon_m4a1_silencer', 'weapon_awp', 'weapon_knife', 'weapon_c4']);
     if (this.disposed) return;
+    // Your agents: your body (see Bot: own) and the arms on your own guns.
+    await Promise.all(Object.entries(this.agents).map(async ([side, a]) => {
+      const vmdl = await cs2Play('agentModel', a.def).catch(() => null);
+      if (vmdl) await this.botAssets.loadOwn(side, vmdl);
+    }));
+    if (this.disposed) return;
+    const worn = Object.entries(this.botAssets.own).filter(([, g]) => g);
+    this.ownArms = worn.length ? Object.fromEntries(worn.map(([side, g]) => [side, agentArms(g)])) : null;
     // Who the bots are: real players (identity.js), each its own rank: the roster's (matchmaking finds them around yours,
     // Premier's veto shows them), else from the tier.
     const names = BOT_NAMES.slice().sort(() => Math.random() - 0.5);
@@ -324,7 +340,7 @@ export class Game {
     }
     this.radio = new Radio(this);
     // Your own body, seen where you fell while you spectate.
-    this.myBody = new Bot(this.botAssets, this.me, 1);
+    this.myBody = new Bot(this.botAssets, this.me, 1, { own: true });
     this.myBody.root.visible = false;
     this.scene.add(this.myBody.root);
     this.pings = [];
@@ -336,6 +352,7 @@ export class Game {
     await Promise.all([
       this.sounds.load(this.commonSounds()), this.soundscapes.load(),
       this.vmData(this.knifeId(this.team)), this.vmData(DEFAULT_PISTOL.CT), this.vmData(DEFAULT_PISTOL.T), this.vmData('weapon_c4'),
+      this.ffa ? null : this.radio.loadOwn(this.agents),
     ]);
     if (this.disposed) return;
     this.bombTemplate = buildCS2Model({ t: 'skin', fl: 0, sd: 0 }, { wid: 'weapon_c4', w: 'C4', n: 'C4', cat: 'equipment', v: true }, this.renderer, { quick: true }).catch(() => null);
@@ -370,7 +387,10 @@ export class Game {
     this.effects.warmUp(true); // (the muzzle flash, impacts and tracers: compiled now, not at the first shot)
     // Every bot and your own body too, though out of view (they'd compile when they first came into sight), with their
     // bones' textures made.
-    const bodies = [...this.bots, this.myBody];
+    // (And your other side's agent, for your body after halftime: for now a body of its own, thrown away after.)
+    const otherSide = !this.respawnMode && this.botAssets.own[this.enemyTeam] ? new Bot(this.botAssets, { team: this.enemyTeam }, 1, { own: true }) : null;
+    if (otherSide) this.scene.add(otherSide.root);
+    const bodies = [...this.bots, this.myBody, ...(otherSide ? [otherSide] : [])];
     for (const b of bodies) { b.view.visible = true; b.root.userData.wasVisible = b.root.visible; b.root.visible = true; }
     // So is the map's own hidden stuff (entities that start switched off, a door's other state...): it compiled the moment
     // it showed.
@@ -397,6 +417,7 @@ export class Game {
       b.root.visible = b.root.userData.wasVisible;
       b.root.traverse((o) => { if (o.isSkinnedMesh && !o.skeleton.boneTexture) { o.skeleton.computeBoneTexture(); this.renderer.initTexture(o.skeleton.boneTexture); } });
     }
+    otherSide?.dispose();
     this.effects.warmUp(false);
     // Every texture on the GPU now, not the first time it comes into view (a hitch turning round).
     const textures = new Set(this.world.layerTextures);
@@ -540,16 +561,18 @@ export class Game {
     const kdef = knife ? itemDef(knife) : DEFAULT_KNIFE[team];
     return kdef.wid?.startsWith('weapon_') ? kdef.wid : Object.values(D.skins).find((s) => s.w === kdef.w && s.wid.startsWith('weapon_'))?.wid || 'weapon_knife';
   }
-  // The viewmodel for a weapon, built once per match for each look: your equipped skin and gloves; skin: the skin of
-  // the gun in your hands (see drops.js gunSkin: one you picked up, a bot's default, null) with your gloves; plain: a
-  // bot's hands (no gloves of yours) and its gun's skin (the default, unless that's given), seen spectating it.
+  // The viewmodel for a weapon, built once per match for each look: your equipped skin, gloves and agents' arms; skin: the
+  // skin of the gun in your hands (see drops.js gunSkin: one you picked up, a bot's default, null) with your gloves and
+  // arms; plain: a bot's hands (no gloves or arms of yours) and its gun's skin (the default, unless that's given), seen
+  // spectating it.
   vmData(wid, { plain = false, skin } = {}) {
     const knife = /knife|bayonet/.test(wid);
     if (knife || wid === 'weapon_c4' || NADES[wid]) skin = undefined; // (your own, never dropped)
     const shown = skin === undefined ? (plain ? null : this.ownSkin(wid)) : skin?.item && itemDef(skin.item) ? skin.item : null;
     const gloves = plain ? null : equipped('gloves');
-    // (Looks that come out the same share one: a bot's default gun is yours when you have no skin for it or gloves.)
-    const key = (gloves ? 'gloves:' : '') + (shown ? 'item:' + (shown.uid || JSON.stringify(shown)) + ':' : '') + wid;
+    const agents = plain ? null : this.ownArms;
+    // (Looks that come out the same share one: a bot's default gun is yours when you have no skin for it, gloves or agent.)
+    const key = (agents ? 'agent:' : '') + (gloves ? 'gloves:' : '') + (shown ? 'item:' + (shown.uid || JSON.stringify(shown)) + ':' : '') + wid;
     if (!this.vmCache.has(key)) {
       const job = (async () => {
         const vanilla = Object.values(D.skins).find((s) => s.wid === wid);
@@ -565,8 +588,10 @@ export class Game {
         const data = await cs2Play('weapon', wid);
         // Your gloves are baked once for every weapon's arms.
         if (gloves) this.gloveScene ||= buildGloveScene(gloves, itemDef(gloves), this.renderer);
-        const vm = await buildViewmodel(item || { t: 'skin', fl: 0, sd: 0 }, def, data, { gloves, gloveScene: gloves ? this.gloveScene : null, renderer: this.renderer });
+        const vm = await buildViewmodel(item || { t: 'skin', fl: 0, sd: 0 }, def, data, { gloves, gloveScene: gloves ? this.gloveScene : null, renderer: this.renderer, agents });
         this.sounds.add(data.sounds);
+        vm.wear?.(this.me.team);
+        vm.rig.userData.wear = vm.wear; // (both sides' arms are on it: see onHalftime)
         vm.rig.visible = false;
         bindBounds(vm.rig);
         this.vmRigs.add(vm.rig); // (in the scene only while it shows: see syncRigs)
@@ -1009,7 +1034,11 @@ export class Game {
       }
     }
   }
-  onHalftime() { for (const b of this.bots) b.setModel(b.c.team); }
+  onHalftime() {
+    for (const b of this.bots) b.setModel(b.c.team);
+    this.myBody.setModel(this.me.team);
+    for (const r of this.vmRigs) r.userData.wear?.(this.me.team); // (the guns you keep, your knife)
+  }
 
   respawnMe(sp, died) {
     const me = this.me;
@@ -1086,7 +1115,7 @@ export class Game {
       : k >= 5 ? 'MVP for an Ace Round' : k === 4 ? 'MVP for most kills (4k)' : k === 3 ? 'MVP for most kills (3k)' : 'MVP';
     this.hud.hideMessage();
     this.hud.winPanel({ team: winner, title: winner === 'CT' ? 'Counter-Terrorists Win' : 'Terrorists Win', why,
-      mvp: mvp && { name: mvp.name, avatar: mvp.identity?.avatar || null, reason: award } });
+      mvp: mvp && { name: mvp.name, avatar: mvp.identity?.avatar || (mvp === this.me && this.agents[mvp.team]?.img ? imgUrl(this.agents[mvp.team].img, 's') : null), reason: award } });
     this.sounds.play(winner === 'CT' ? 'Event.CTWin' : 'Event.TERWin', { volume: 0.9 });
     this.sounds.channel('music', winner === this.me.team ? `Music.WonRound.${MUSIC}` : `Music.LostRound.${MUSIC}`, { volume: 0.4 * this.musicVolume }, 0.4);
     this.planting = null;
@@ -2548,6 +2577,7 @@ export class Game {
     this.gloveScene?.then(({ root }) => root.traverse((o) => { for (const m of o.isMesh ? [].concat(o.material || []) : []) { m.userData.dispose?.(); m.dispose(); } })).catch(() => {});
     for (const b of this.bots || []) b.dispose();
     this.myBody?.dispose();
+    for (const a of Object.values(this.ownArms || {})) a.dispose();
     this.effects?.dispose();
     this.nades?.dispose();
     this.drops?.dispose();

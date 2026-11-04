@@ -52,7 +52,7 @@ crate, or without CS2 installed, drop in as their icon). Turn it off under Setti
 ## Play (offline CS2 against bots)
 With CS2 installed, **Play** is a match against bots on any bomb defusal map in your install (Dust II, Mirage, Inferno,
 Nuke, Ancient, Anubis, Overpass, Train, Vertigo...; each map is prepared the first time you play it), with your equipped
-skins, gloves and knife. Two ways in, like CS2's play menu:
+skins, gloves, knife and agents. Two ways in, like CS2's play menu:
 - **Matchmaking** (Premier, Competitive, Wingman, Deathmatch, Arms Race): pick the maps you'll play (Premier bans its
   own from the Active Duty pool) and press Go. The search runs with its timer in the top bar while you use the rest of
   the game; meanwhile the match it will find is set up (one of your maps at random, bots of your rank: around your
@@ -376,6 +376,11 @@ What's in a match:
   punch and view punch), CS2's viewmodel animations (draw, idle, shoot, reload, inspect, silencer, knife slashes and
   stabs) and CS2's sounds. Scoped rifles zoom with CS2's zoom levels.
 - Bots are CS2 agent models with per-bone hitboxes (head, chest, stomach, arms, legs) and armor.
+- You play as the agent you have equipped for your side, as a match starts (change it and it counts from your next match;
+  changed while you search, the match loads again with it): your body where you fall, its own arms, default gloves and
+  sleeves in first person (equipped gloves go on under the sleeves, as in CS2), its voice on the radio (each agent's
+  CS2 lines, from its talker script), and its picture if you're the round's MVP. Sides swap at halftime and so does your
+  agent. With none equipped you play as the default.
 - Keys (rebindable in the settings, or with bind in the console): WASD, Space, Ctrl (or C) crouch, Shift walk, Mouse1/Mouse2, R, F inspect, B buy, E defuse/pick up,
   G drop, 1/2/3 (3 again for the Zeus), 4 (grenades), 5 (the bomb: hold Mouse1 in a site to plant), Q and the mouse
   wheel switch weapons, Z/X/V radio, Tab scores, Esc menu (the match goes on). Mouse sensitivity uses CS2's scale, so your CS2 sensitivity

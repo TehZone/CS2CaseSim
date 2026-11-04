@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const pricing = require('./shared/pricing.cjs');
 const { CS2Service } = require('./cs2/service.cjs');
+const { agentVoice } = require('./cs2/voice.cjs');
 const { initUpdater } = require('./shared/updater.cjs');
 
 protocol.registerSchemesAsPrivileged([
@@ -42,7 +43,7 @@ const PLAY_CALLS = {
   maps: () => cs2.playMaps(), mapImages: () => cs2.playMapImages(), map: (id) => cs2.playMap(id), progress: (key) => cs2.playProgress(key), weapon: (id) => cs2.playWeapon(id),
   agent: (vmdl) => cs2.playAgent(vmdl), anims: (list) => cs2.playAnims(list), sounds: (events) => cs2.playSounds(events),
   soundInfo: (events) => cs2.playSoundInfo(events), reverbs: () => cs2.playReverbs(),
-  agentModel: (id) => cs2.agentModel(id), stats: () => cs2.playStats(), impacts: () => cs2.playImpacts(), voices: () => cs2.playVoices(), icons: () => cs2.playIcons(),
+  agentModel: (id) => cs2.agentModel(id), agentVoice: (id) => agentVoice(cs2, id), stats: () => cs2.playStats(), impacts: () => cs2.playImpacts(), voices: () => cs2.playVoices(), icons: () => cs2.playIcons(),
   ranks: () => cs2.playRanks(), menuIcons: () => cs2.menuIcons(), menuBackdrop: (id) => cs2.menuBackdrop(id), profileArt: () => cs2.profileArt(),
 };
 function playCall(fn, arg) {
