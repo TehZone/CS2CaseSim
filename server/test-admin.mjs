@@ -324,7 +324,7 @@ try {
 
   // ---- edit.raw -----------------------------------------------------------------------------------------------------
   const pRaw = await boss.admin('player', { id: aid });
-  const { inv: _inv, stored: _stored, social: _social, ...raw } = pRaw.state;
+  const { inv: _inv, stored: _stored, index: _index, social: _social, ...raw } = pRaw.state;
   alice.events.length = 0;
   // (`base`: the `rev` of the state the edit starts from)
   const er = await boss.admin('edit.raw', { id: aid, state: { ...raw, money: 77, stars: 4 }, base: pRaw.rev });
@@ -586,7 +586,7 @@ try {
   const resetCode = (a) => /`([A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4})`/.exec(a?.data.content || '')?.[1];
   const giveDrop = (id) => server.store.withUser(id, async (e) => { const d = carePackage({ level: 2 }); e.st.prof = { ...e.st.prof, drops: [d] }; server.store.markDirty(e); return d; });
   const auditFails = () => logs.filter((l) => /audit write failed/.test(l)).length;
-  const rawOf = (st) => { const { inv: _inv, stored: _stored, social: _social, ...rest } = st; return rest; };
+  const rawOf = (st) => { const { inv: _inv, stored: _stored, index: _index, social: _social, ...rest } = st; return rest; };
   const modm = await acct('modm', '10.0.5.1'), plainp = await acct('plainp', '10.0.5.2'), modalt = await acct('modalt', '10.0.5.3');
   {
     await linkByDb(modm.id, ID.mod3, 'ModM');
@@ -986,6 +986,39 @@ try {
   ]);
   for (const list of side) for (const [name, ok, info] of list) check(name, ok, info);
 
+  // ---- the Index in the panel: staff can read a player's record, not write it, and a restore can't reopen a claim --------------
+  {
+    const IX = await import('../src/js/engine/itemindex.js');
+    const r = await post('/api/register', { name: 'collector', password: 'collectorpass' }, '10.0.9.1');
+    const pid = await idOf('collector'), cc = await client(r.body.token, '10.0.9.1');
+    const xray = D.cases.find((c) => c.n === 'X-Ray P250 Package'), goal = IX.setOf(xray.id).goal;
+    const snap = await boss.admin('snapshot.save', { id: pid, label: 'before the set' });
+    await server.store.withUser(pid, async (e) => { e.st.money = 100; server.store.markDirty(e); });
+    await cc.act('case.buy', { id: xray.id });
+    await cc.act('case.open', { id: xray.id });
+    await cc.act('index.claim', { goal });
+    const p = await boss.admin('player', { id: pid });
+    check('panel: a player\'s page has their Index: the record and what they\'ve claimed', Object.keys(p.state.index.items).length === 1 && Object.hasOwn(p.state.index.claimed, goal));
+    const { inv: _i, stored: _t, index: _x, social: _s, ...rest } = p.state;
+    const edit = await refused(boss.admin('edit.raw', { id: pid, state: { ...rest, index: { items: {}, claimed: {}, filled: true, lost: 0 } }, base: p.rev }));
+    check('panel: a raw edit can\'t write the Index, for staff either', /can't be edited/.test(edit?.message || ''), edit?.message);
+    const ok = await boss.admin('edit.raw', { id: pid, state: { ...rest, stars: 3 }, base: p.rev });
+    check('panel: and a raw edit leaves it as it was', ok.state.stars === 3 && !('index' in ok.state) && Object.hasOwn((await dbState(pid)).index.claimed, goal));
+    await boss.admin('snapshot.restore', { snap: snap.id });
+    const put = await dbState(pid);
+    check('panel: a snapshot from before a claim can\'t reopen it, and the record stays', Object.hasOwn(put.index.claimed, goal) && Object.keys(put.index.items).length === 1 && put.money !== 100);
+    const again = await refused(cc.act('index.claim', { goal }));
+    check('panel: so the reward can\'t be claimed a second time', again?.code === 'claimed', again?.message);
+    await wait(40);
+    check('panel: the restore reaches the player\'s game whole', Object.hasOwn(cc.st.index?.claimed || {}, goal));
+    await boss.admin('reset', { id: pid });
+    const wiped = await dbState(pid);
+    check('panel: a reset is a new account: the record and its claims start over', !Object.keys(wiped.index.items).length && !Object.keys(wiped.index.claimed).length && wiped.index.filled === true && wiped.index.lost === 0, JSON.stringify(wiped.index));
+    await wait(40);
+    check('panel: and the player\'s game shows that', !Object.keys(cc.st.index?.items || {}).length && !Object.keys(cc.st.index?.claimed || {}).length);
+    cc.close();
+  }
+
   // ---- Storage Units in the panel: what's inside shows, and staff can still give and remove --------------------------------
   {
     const regS = await post('/api/register', { name: 'stasher', password: 'stashpass1' }, IP.other);
@@ -1017,7 +1050,7 @@ try {
     check('panel: that removal is audited by name', rmAudit.detail.count === 1 && rmAudit.detail.items[0].uid === k1.uid);
     const snapS = await boss.admin('snapshot.save', { id: cid, label: 'with storage' });
     const raw = await boss.admin('player', { id: cid });
-    const { inv: _i, stored: _t, social: _s, ...rest } = raw.state;
+    const { inv: _i, stored: _t, index: _x, social: _s, ...rest } = raw.state;
     const rawRefused = await refused(boss.admin('edit.raw', { id: cid, state: { ...rest, stored: [] }, base: raw.rev }));
     check('panel: edit.raw can\'t touch what\'s stored', /stored can't be edited/.test(rawRefused?.message || ''), rawRefused?.message);
     await boss.admin('edit.raw', { id: cid, state: { ...rest, money: 55 }, base: raw.rev });

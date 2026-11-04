@@ -450,6 +450,13 @@ What's in a match:
   unboxing order (offline in your save, online across the whole server). Market buys and trade-ups have none; unboxed
   items are worth 3% more, with bigger premiums for #1, the top 10 and top 100, and special numbers (#69, #420, #777,
   #1337, #111, #1000...)
+- The Index: a lasting record of everything you've unboxed (when you first got it, how many, your lowest float and best
+  pattern, StatTrak™ and Souvenir counts), kept after you sell or trade it, and every case and collection with what you've
+  found in colour and what's missing dimmed. Cases, packages, capsules, the Armory, case battles and level-up drops count;
+  anything bought, traded or made with a contract doesn't. Finishing a set (all but its rare specials) pays XP and Armory
+  Stars once, by how hard it is: a weapon case 5,000 XP and 12 stars, a 320-sticker capsule 40,000 and 100. The first
+  knife or gloves from a pool pays a bonus. Sets with the same items share one reward. Offline and online are kept apart,
+  and online the server keeps the record
 - Floats (CS2 wear distribution), pattern seeds 0-1000 with rare patterns (blue gems, Fire & Ice, full fades, Doppler phases...)
 - StatTrak™, knives and gloves, stickers with free placement, scraping, and craft bonuses
 - Loadout (Inventory → Loadout, or Equip on an item): gloves, knife, a T and a CT agent, and one skin per gun

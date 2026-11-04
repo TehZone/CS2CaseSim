@@ -10,6 +10,8 @@ const { startServer } = await import('./index.mjs');
 const { D, casePrice, keyFor } = await import('../src/js/engine/data.js');
 const { serialKey, makeStickerItem, makeSkinItem, itemValue } = await import('../src/js/engine/items.js');
 const SU = await import('../src/js/engine/storage.js');
+const IX = await import('../src/js/engine/itemindex.js');
+const { marketWindow, skinListings } = await import('../src/js/engine/market.js');
 
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'cs2sim-test-db-'));
 let failed = 0, passed = 0;
@@ -18,6 +20,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const quiet = () => {};
 
 let server = await startServer({ port: 0, db: { dataDir: DIR }, log: quiet, priceRefresh: false, discord: false });
+let ixUser = null; // (the player the Index checks leave behind, for the restart)
 const base = () => `http://localhost:${server.port}`;
 
 async function post(p, body) {
@@ -55,6 +58,7 @@ function apply(c, d) {
   for (const u of d.upd || []) { const i = c.st.inv.findIndex((x) => x.uid === u.uid); if (i >= 0) c.st.inv[i] = u; }
   c.st.inv.unshift(...(d.add || []));
   if (d.sto) { const gone = new Set(d.sto.del || []); c.st.stored = [...(d.sto.add || []), ...(c.st.stored || []).filter((i) => !gone.has(i.uid))]; }
+  if (d.ix) c.st.index = IX.applyChange(c.st.index, d.ix);
 }
 const give = (id, money) => server.store.withUser(id, async (e) => { e.st.money = money; server.store.markDirty(e); });
 const serverState = async (id) => (await server.store.load(id)).st;
@@ -378,6 +382,122 @@ try {
   await wait(50);
   }
 
+  // ---- the Index: the server keeps the record, and pays each reward once ----------------------------------------------------
+  {
+    const code = async (p) => { try { await p; return null; } catch (e) { return e.code || e.message; } };
+    const said = async (p) => { try { await p; return null; } catch (e) { return e.message; } };
+    const dbState = async (id) => { const v = (await server.db.query('SELECT state FROM users WHERE id = $1', [id])).rows[0].state; return typeof v === 'string' ? JSON.parse(v) : v; };
+    const player = async (name) => { const r = await post('/api/register', { name, password: 'secret123' }); const c = await client(r.body.token); c.token = r.body.token; await give(c.user.id, 1e6); return c; };
+    const P = await player('indexer'), P2 = await client(P.token), Q = await player('indexer2');
+    ixUser = P.user.id;
+    const xray = D.cases.find((c) => c.n === 'X-Ray P250 Package'), goal = IX.setOf(xray.id).goal;
+    const cap = D.cases.find((c) => c.n === 'Sticker Capsule');
+    const open = async (c, box, n = 1) => { await c.act('case.buy', { id: box.id, n }); return c.act('case.open', { id: box.id, n }); };
+
+    check('index: a new account starts with an empty record, nothing to fill in', JSON.stringify(P.st.index) === JSON.stringify({ items: {}, claimed: {}, filled: true, lost: 0 }));
+    check('index: nothing to claim before you\'ve finished it', await code(P.act('index.claim', { goal })) === 'unfinished');
+    P2.events.length = 0;
+    const { items: [drop] } = await open(P, xray);
+    check('index: an opening goes on the record on the server, and the mirror has it', (await serverState(P.user.id)).index.items[drop.id]?.n === 1 && P.st.index.items[drop.id]?.n === 1);
+    const pushed = await P2.waitFor((e) => e.t === 'delta' && e.d.ix);
+    check('index: another connection is told, as a small change (not the record)', pushed && pushed.d.ix.items[drop.id]?.n === 1 && !('index' in pushed.d.set) && P2.st.index.items[drop.id]?.n === 1);
+    check('index: and the change says which set that finished', JSON.stringify(pushed?.d.ix.done) === JSON.stringify([goal]));
+
+    // A client can only ask for what the record says it has earned.
+    const fakes = await Promise.all([
+      P.act('index.add', { id: cap.id }), P.act('index.mark', { items: { [drop.id]: {} } }), P.act('index.record', { items: [drop] }),
+    ].map(said));
+    check('index: there is no action that writes to the record', fakes.every((x) => /Unknown action/.test(x || '')), fakes.join(' / '));
+    const other = IX.setOf(cap.id);
+    const forged = await code(P.act('index.claim', { goal: other.goal, items: Object.fromEntries(other.ids.map((id) => [id, { n: 1 }])), index: { items: {} }, done: true }));
+    check('index: and what a client sends with a claim counts for nothing', forged === 'unfinished');
+    const rec0 = JSON.stringify((await serverState(P.user.id)).index);
+    check('index: a raw state sent with an action changes nothing', await code(P.act('item.seen', { uids: [], index: { items: { x: { n: 1 } } } })) === null && JSON.stringify((await serverState(P.user.id)).index) === rec0);
+
+    // Two connections claiming at once: one success.
+    const paidBefore = (await serverState(P.user.id)).prof.total;
+    const race = await Promise.allSettled([P.act('index.claim', { goal }), P2.act('index.claim', { goal })]);
+    const wins = race.filter((r) => r.status === 'fulfilled'), losses = race.filter((r) => r.status === 'rejected');
+    check('index: two connections claiming at once leave one success', wins.length === 1 && losses.length === 1 && losses[0].reason.code === 'claimed', race.map((r) => r.status).join(', '));
+    check('index: and it paid once', (await serverState(P.user.id)).prof.total === paidBefore + IX.goalOf(goal).reward.xp);
+    check('index: a claim is in the database when the answer arrives (in a transaction)', Object.hasOwn((await dbState(P.user.id)).index.claimed, goal));
+    await wait(40);
+    check('index: both connections see it claimed', Object.hasOwn(P.st.index.claimed, goal) && Object.hasOwn(P2.st.index.claimed, goal));
+
+    // Harder: a weapon case's reward and its bonus, six requests at once from both connections.
+    const big = IX.setOf(box.id);
+    await server.store.withUser(P.user.id, async (e) => { IX.record(e.st, [...big.ids, big.rare[0]].map((id) => ({ t: 'skin', id, fl: 0.2, sd: 1 })), Date.now()); server.store.markDirty(e); });
+    const s0 = (await serverState(P.user.id)).stars;
+    const many = await Promise.allSettled([big.goal, big.rareGoal, big.goal, big.rareGoal, big.goal, big.rareGoal].map((g, i) => (i % 2 ? P : P2).act('index.claim', { goal: g })));
+    check('index: a burst of claims for two rewards pays each once', many.filter((r) => r.status === 'fulfilled').length === 2 && (await serverState(P.user.id)).stars === s0 + IX.goalOf(big.goal).reward.stars + IX.RARE_REWARD.stars);
+
+    // What doesn't count online.
+    const { items: [mine] } = await open(Q, cap);
+    const offer = await Q.rpc('trade', 'offer', { to: 'indexer', give: { uids: [mine.uid], money: 0 }, get: { uids: [], money: 0 } });
+    await P.rpc('trade', 'accept', { id: offer.id });
+    await wait(40);
+    const pRec = (await serverState(P.user.id)).index.items;
+    check('index: an item traded to you doesn\'t count, though it says which capsule it came from', (await serverState(P.user.id)).inv.some((i) => i.uid === mine.uid && i.src === cap.n) && !pRec[mine.id]);
+    check('index: and the one who unboxed it keeps it on their record', (await serverState(Q.user.id)).index.items[mine.id]?.n === 1 && !(await serverState(Q.user.id)).inv.some((i) => i.uid === mine.uid));
+
+    const w = marketWindow(Date.now());
+    let skin = null; // (the first listing still free: the checks above have bought from this window too)
+    for (const s of Object.values(D.skins).filter((x) => !x.star && skinListings(x, w).length && !pRec[x.id])) {
+      if (await code(P.act('market.buy', { kind: 'skin', id: s.id, n: 0, window: w })) === null) { skin = s; break; }
+    }
+    check('index: nor an item bought on the Market', skin && (await serverState(P.user.id)).inv.some((i) => i.id === skin.id) && !(await serverState(P.user.id)).index.items[skin.id]);
+
+    // A stake won from another player, and a battle's drops.
+    let staked = null;
+    for (let k = 0; k < 16 && !staked; k++) {
+      const { items: [it] } = await open(Q, cap), value = Math.max(0.01, Math.round(itemValue(it) * 100) / 100);
+      const f = await Q.rpc('gamble', 'flip.create', { money: 0, uids: [it.uid], side: 't', clientSeed: 'q' + k });
+      await P.rpc('gamble', 'flip.join', { id: f.id, money: value, clientSeed: 'p' + k });
+      await wait(30);
+      if ((await serverState(P.user.id)).inv.some((i) => i.uid === it.uid)) staked = it;
+    }
+    check('index: a stake won from another player doesn\'t count', staked && !(await serverState(P.user.id)).index.items[staked.id]);
+
+    let won = null;
+    for (let k = 0; k < 16 && !won; k++) {
+      P.events.length = 0;
+      const b = await P.rpc('gamble', 'battle.create', { cases: [cap.id], format: '1v1', mode: 'normal', clientSeed: 'b' + k });
+      await P.rpc('gamble', 'battle.bots', { id: b.id });
+      const ev = await P.waitFor((e) => e.t === 'gamble.result' && e.ev.kind === 'battle');
+      if (ev?.ev.result.winners.includes(0)) won = ev.ev.result.share[0];
+    }
+    await wait(40);
+    check('index: a live case battle\'s drops count for the one who takes them home', won?.length > 0 && won.every((i) => (P.st.index.items[i.id]?.n || 0) >= 1));
+
+    // An account from before the Index: filled in from what it owns, minus what changed hands.
+    const O = await player('oldtimer'), own = await open(O, cap), keep = own.items[0];
+    const { items: [gift] } = await open(Q, xray);
+    const t2 = await Q.rpc('trade', 'offer', { to: 'oldtimer', give: { uids: [gift.uid], money: 0 }, get: { uids: [], money: 0 } });
+    await O.rpc('trade', 'accept', { id: t2.id });
+    const { items: [flipped] } = await open(Q, cap);
+    let viaStake = null;
+    for (let k = 0; k < 16 && !viaStake; k++) {
+      const it = k ? (await open(Q, cap)).items[0] : flipped, value = Math.max(0.01, Math.round(itemValue(it) * 100) / 100);
+      const f = await Q.rpc('gamble', 'flip.create', { money: 0, uids: [it.uid], side: 't', clientSeed: 'o' + k });
+      await O.rpc('gamble', 'flip.join', { id: f.id, money: value, clientSeed: 'n' + k });
+      await wait(30);
+      if ((await serverState(O.user.id)).inv.some((i) => i.uid === it.uid)) viaStake = it;
+    }
+    O.close();
+    await wait(40);
+    await server.store.flush();
+    server.store.cache.delete(O.user.id);
+    await server.db.query("UPDATE users SET state = state - 'index' WHERE id = $1", [O.user.id]);
+    const back = await serverState(O.user.id), items = back.index.items;
+    check('index: an old account is filled in as it loads, from the box items it owns', back.index.filled === true && items[keep.id]?.n >= 1);
+    check('index: leaving out what came in a trade', back.inv.some((i) => i.uid === gift.uid) && !items[gift.id]);
+    check('index: and what was won as a stake', !!viaStake && back.inv.some((i) => i.uid === viaStake.uid) && (viaStake.id === keep.id || !items[viaStake.id]));
+    await server.store.flush();
+    check('index: and that\'s saved, so it happens once', (await dbState(O.user.id)).index?.filled === true);
+    for (const c of [P, P2, Q]) c.close();
+    await wait(50);
+  }
+
   // ---- restart: open escrow is refunded --------------------------------------------------------------
   const stored1 = (await serverState(A.user.id)).stored[0].uid;
   const r0 = (await serverState(A.user.id)).money;
@@ -390,6 +510,8 @@ try {
   check('open coinflip escrow refunded after a restart', Math.abs(r1 - (r0 - 25)) < 0.011 && Math.abs(r2 - r0) < 0.5, `${r0} -> ${r1} -> ${r2}`);
   const A2 = await client(la.body.token);
   check('player can log back in after a restart', A2.st.inv.length > 0);
+  const ixAgain = await serverState(ixUser);
+  check('index: the record and what\'s been claimed survive a restart', Object.keys(ixAgain.index.items).length > 3 && Object.keys(ixAgain.index.claimed).length === 3);
   check('storage: units and what\'s in them survive a restart', A2.st.stored.length > 1000 - 200 && A2.st.inv.some((i) => i.t === 'unit' && i.name === 'stash') && A2.st.stored.some((i) => i.uid === stored1), `${A2.st.stored.length} stored`);
   const counted = await A2.rpc('social', 'db.index', {});
   const held = A2.st.stored.filter((i) => i.t === 'sticker');

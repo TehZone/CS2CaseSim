@@ -40,7 +40,7 @@ const GAMBLE_ALWAYS = new Set(['flip.cancel', 'battle.cancel']);
 const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
 // Actions saved in a transaction before they're answered (others are written within a couple of seconds): what moves
 // items in and out of a Storage Unit is never left only in memory.
-const IN_TRANSACTION = /^storage\./;
+const IN_TRANSACTION = /^(storage|index)\./;
 
 // The bot's options from the environment (false: no token, no bot). The token is read, never logged.
 export function discordFromEnv({ env = process.env, tokenFile = env.DISCORD_TOKEN_FILE, log = console.log } = {}) {

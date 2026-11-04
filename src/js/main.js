@@ -17,6 +17,7 @@ import * as gamble from './pages/gamble.js';
 import * as trade from './pages/trade.js';
 import * as stats from './pages/stats.js';
 import * as database from './pages/database.js';
+import * as itemindex from './pages/itemindex.js';
 import * as play from './pages/play.js';
 import * as community from './pages/community.js';
 import * as admin from './pages/admin.js';
@@ -27,7 +28,7 @@ import { initProfile } from './profile.js';
 import { initAccount, discordSection, bindDiscordSection, openResetModal, staffPc } from './account.js';
 import { initUpdates } from './update.js';
 
-const PAGES = { play, cases, inventory, tradeup, armory, market, database, gamble, trade, stats, community, admin, changelog };
+const PAGES = { play, cases, inventory, tradeup, armory, market, index: itemindex, database, gamble, trade, stats, community, admin, changelog };
 let current = null, currentName = 'cases';
 
 function go(name) {
@@ -196,6 +197,7 @@ async function boot() {
   initProfile();
   initAccount();
   initUpdates();
+  itemindex.initIndex();
   startNpcLoop();
   go('cases');
   setInterval(() => save(), 15000);

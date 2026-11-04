@@ -329,7 +329,7 @@ export class Admin {
       await this.cancelOffers(t.id);
       // (its items and its rewards' items owned elsewhere now are left out: see restoreMerge)
       const elsewhere = await this.ownedElsewhere(t.id, restoreUids(next));
-      const { dropped, rewards } = restoreMerge(e.st, next, { elsewhere });
+      const { dropped, rewards } = restoreMerge(e.st, next, { elsewhere, startOver: what === 'reset' });
       const before = JSON.stringify(e.st);
       const gone = Object.keys(e.st).filter((k) => !(k in next));
       replaceInPlace(e.st, next);

@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="css/loadout.css">
   <link rel="stylesheet" href="css/play.css">
   <link rel="stylesheet" href="css/admin.css">
+  <link rel="stylesheet" href="css/itemindex.css">
   <link rel="stylesheet" href="css/changelog.css">
   <script type="importmap">
     { "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/addons/" } }
@@ -31,6 +32,7 @@
         <button data-page="cases" aria-label="Cases" data-tip="Cases"><i class="ico" data-icon="crate"><svg viewBox="0 0 32 32"><path d="M12.6 4.6h6.8v3.6h-1.8V6.4h-3.2v1.8h-1.8z"/><path fill-rule="evenodd" d="M4.8 8.2h22.4A1.8 1.8 0 0 1 29 10v15.4a1.8 1.8 0 0 1-1.8 1.8H4.8A1.8 1.8 0 0 1 3 25.4V10a1.8 1.8 0 0 1 1.8-1.8zM3 13.4h4.6v1.5H3zm6.4 0h13.2v1.5H9.4zm15 0H29v1.5h-4.6zM7.6 8.2h1.8v19H7.6zm15 0h1.8v19h-1.8zM16 16.4l3.2 3.2-3.2 3.2-3.2-3.2z"/></svg></i><span class="lbl">Cases</span></button>
         <button data-page="inventory" aria-label="Inventory" data-tip="Inventory"><i class="ico" data-icon="inventory"><svg viewBox="0 0 32 32"><path fill-rule="evenodd" d="M12 6h8a2 2 0 0 1 2 2v2h4.5a1.5 1.5 0 0 1 1.5 1.5v13a1.5 1.5 0 0 1-1.5 1.5h-21A1.5 1.5 0 0 1 4 24.5v-13A1.5 1.5 0 0 1 5.5 10H10V8a2 2 0 0 1 2-2zm0 2v2h8V8zM4 16h24v1.6H4z"/></svg></i><span class="lbl">Inventory</span><span class="pill" id="inv-count">0</span></button>
         <button data-page="market" aria-label="Market" data-tip="Market"><i class="ico" data-icon="shoppingcart"><svg viewBox="0 0 32 32"><path d="M2.5 5h4.2l1.1 3.2H29l-3.3 10.6H10.4L6.9 7.6 5.6 7.4H2.5z"/><circle cx="12" cy="24.2" r="2.3"/><circle cx="23.5" cy="24.2" r="2.3"/></svg></i><span class="lbl">Market</span></button>
+        <button data-page="index" aria-label="Index" data-tip="Index"><i class="ico" data-icon="index"><svg viewBox="0 0 32 32"><path fill-rule="evenodd" d="M6 4h16a4 4 0 0 1 4 4v18a2 2 0 0 1-2 2H8a4 4 0 0 1-4-4V6a2 2 0 0 1 2-2zm0 2v15.3c.6-.2 1.3-.3 2-.3h15V8a2 2 0 0 0-2-2zm2 17a1.5 1.5 0 0 0 0 3h15v-3z"/><path d="M14.5 8.5l1.5 3 3.3.5-2.4 2.3.6 3.3-3-1.6-3 1.6.6-3.3L9.7 12l3.3-.5z"/></svg></i><span class="lbl">Index</span><span class="pill" id="index-count" hidden>0</span></button>
         <!-- More: the other sections in a dropdown (menu.js), with your inventory's value on top -->
         <div class="nav-more">
           <button type="button" class="more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="More" data-tip="More"><i class="ico" data-icon="menu"><svg viewBox="0 0 32 32"><path d="M5 8h22v2.6H5zM5 14.7h22v2.6H5zM5 21.4h22V24H5z"/></svg></i><span class="more-cur"></span><span class="lbl">More</span></button>

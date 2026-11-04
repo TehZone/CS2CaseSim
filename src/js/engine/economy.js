@@ -4,6 +4,7 @@ import { freshRank } from './ranks.js';
 import { freshMM } from './matchmaking.js';
 import { freshProfile } from './levels.js';
 import { repairStorage } from './storage.js';
+import { freshIndex, upgradeIndex } from './itemindex.js';
 
 // Auto-sell rules for new drops: sell anything worth less than `below` dollars and/or of the rarity ranks in
 // `ranks` (0 Consumer ... 5 Covert). Knives, gloves and other ★ items are never auto-sold.
@@ -27,6 +28,7 @@ export function freshState() {
     prof: freshProfile(), // your level, XP, Service Medals and level-up rewards waiting (see levels.js)
     play: null, // the Play match you're in: { run, mode, at } (what its reward is checked against)
     social: null, // offline: the NPC players, your chats and offers with them, and your profile (see npcs.js)
+    index: freshIndex(), // the record of what you've unboxed and the rewards claimed for it (see itemindex.js)
     stats: {
       opened: 0, spent: 0, sold: 0,
       bestValue: 0, bestName: '', drops: {}, knives: 0, stickersApplied: 0,
@@ -50,6 +52,7 @@ export function upgradeState(saved) {
   st.prof = { ...freshProfile(), ...(saved.prof || {}) };
   st.serialsBackfilled = !!saved.serialsBackfilled; // saves from before serials get theirs on load (items.backfillSerials)
   repairStorage(st); // saves from before Storage Units have none
+  st.index = upgradeIndex(saved.index); // (saves from before the Index are filled in as they load: itemindex.backfillIndex)
   st.v = base.v;
   return st;
 }

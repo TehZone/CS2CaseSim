@@ -3,6 +3,7 @@
 import { debounce } from './util.js';
 import * as E from './engine/economy.js';
 import { backfillSerials, retireOld } from './engine/items.js';
+import { applyChange, backfillIndex } from './engine/itemindex.js';
 
 const LS_KEY = 'cs2-case-sim-save';
 export const bus = new EventTarget();
@@ -27,6 +28,7 @@ export async function loadState() {
     try {
       S = E.upgradeState(JSON.parse(text));
       backfillSerials(S); // saves from before serial numbers (once)
+      backfillIndex(S); // and from before the Index (after those: it reads the serial counters)
       retiredOnLoad = retireOld(S);
     } catch (e) {
       console.error('Save corrupted, starting fresh', e);
@@ -110,6 +112,7 @@ export function applyDelta(d, { local = false } = {}) {
       const del = new Set(d.sto.del || []);
       S.stored = [...(d.sto.add || []), ...(S.stored || []).filter((i) => !del.has(i.uid))];
     }
+    if (d.ix) S.index = applyChange(S.index, d.ix);
   }
   const set = d.set || {};
   if ('money' in set) emit('money');
@@ -119,6 +122,7 @@ export function applyDelta(d, { local = false } = {}) {
   if ('social' in set) emit('social');
   if ('loadout' in set) emit('inv');
   if ('upg' in set) emit('money');
+  if (d.ix || 'index' in set) emit('index', d.ix || {});
   emit('state', d);
 }
 

@@ -15,6 +15,7 @@ import * as MM from './matchmaking.js';
 import * as L from './levels.js';
 import * as N from './npcs.js';
 import * as SU from './storage.js';
+import * as IX from './itemindex.js';
 import { rand, round2, clamp, pick, pickWeighted, uid as newUid } from './util.js';
 
 export class GameError extends Error {
@@ -56,7 +57,7 @@ export function makeCtx(st, opts = {}) {
   return {
     st, rng: opts.rng || rand, now: opts.now || Date.now(), online: !!opts.online,
     invCap: opts.invCap || Infinity, reserved: opts.reserved || null,
-    add: [], del: [], upd: new Map(), dirty: new Set(), sto: { add: [], del: [] },
+    add: [], del: [], upd: new Map(), dirty: new Set(), sto: { add: [], del: [] }, ix: null,
   };
 }
 
@@ -73,6 +74,8 @@ export function delta(ctx) {
     upd: [...ctx.upd.values()].filter((i) => !removed.has(i.uid) && !added.has(i.uid)),
     // (only what moved in or out of a Storage Unit: their contents are too big to send whole)
     ...(ctx.sto.add.length || ctx.sto.del.length ? { sto: { add: ctx.sto.add, del: ctx.sto.del } } : {}),
+    // (what's new on the Index's record: the whole of it is too big to send)
+    ...(ctx.ix ? { ix: ctx.ix } : {}),
   };
 }
 
@@ -181,6 +184,11 @@ function serialize(ctx, items) {
       it.sn = n;
     }
   }
+}
+// Items that came out of a box or a drop go on the Index's record (see itemindex.js). Nothing else may call this: it's what keeps
+// bought and traded items from counting. Last in an action, after give(): the inventory being full mustn't count as an unboxing.
+export function noteUnboxed(ctx, items) {
+  ctx.ix = IX.record(ctx.st, items, ctx.now) || ctx.ix;
 }
 function earnStars(ctx, spent) {
   const add = starsFromSpend(ctx.st.starSpend || 0, spent);
@@ -344,6 +352,7 @@ export const ACTIONS = {
     stats(ctx).opened += n;
     const autoSold = autoSellDrops(ctx, items, autoSell);
     give(ctx, items.filter((it) => !it.as));
+    noteUnboxed(ctx, items); // (what was auto-sold too: you still unboxed it)
     return { items, autoSold };
   },
   // A Storage Unit from the store. As in CS2 a full inventory can still buy one (it's how you make room), so it doesn't go
@@ -526,7 +535,25 @@ export const ACTIONS = {
     give(ctx, items);
     ctx.st.prof = { ...prof, drops: prof.drops.filter((d) => d !== drop) };
     ctx.dirty.add('prof');
+    noteUnboxed(ctx, items);
     return { items };
+  },
+
+  // A finished case or collection's reward (see itemindex.js), once. Which items you've unboxed is the save's own record,
+  // which nothing here can add to, so all a client can ask for is what it has earned.
+  'index.claim'(ctx, { goal }) {
+    const g = IX.goalOf(String(goal)) || fail('Unknown reward');
+    const ix = ctx.st.index;
+    if (IX.isClaimed(ix, g.key)) fail('That reward was already claimed', 'claimed');
+    if (!IX.goalDone(ix, g)) fail(`${g.n} isn't finished yet`, 'unfinished');
+    ctx.st.index = { ...ix, claimed: { ...ix.claimed, [g.key]: ctx.now } };
+    ctx.ix = { claimed: { [g.key]: ctx.now } };
+    const { xp, stars } = g.reward;
+    if (stars) { ctx.st.stars += stars; ctx.dirty.add('stars'); }
+    const lv = L.addXp(ctx.st.prof, xp, { r: ctx.rng, now: ctx.now });
+    ctx.st.prof = lv.prof;
+    ctx.dirty.add('prof');
+    return { goal: g.key, n: g.n, kind: g.kind, xp, stars, before: lv.before, after: lv.after, levelUps: lv.levelUps, medals: lv.medals, waiting: lv.prof.drops.length };
   },
 
   // Searching for a match. A ranked match still open from before (the game closed during it) was abandoned: settled
@@ -721,6 +748,7 @@ export const ACTIONS = {
     noteDrops(ctx, items);
     const autoSold = autoSellDrops(ctx, items, autoSell);
     give(ctx, items.filter((i) => !i.as));
+    noteUnboxed(ctx, items);
     stats(ctx).armory += n;
     return { item: items[0], items, offer: o, autoSold };
   },
@@ -970,7 +998,7 @@ export const ACTIONS = {
     const prize = won ? res.share[0] : [];
     serialize(ctx, prize); // the drops you take home (the bots' leave with them)
     for (const it of prize) it.nw = true;
-    if (prize.length) give(ctx, prize);
+    if (prize.length) { give(ctx, prize); noteUnboxed(ctx, prize); }
     const value = round2(prize.reduce((s, it) => s + I.itemValue(it), 0));
     const s = stats(ctx);
     s.battles++;
@@ -992,7 +1020,7 @@ export function atomically(ctx, fn) {
   } catch (e) {
     for (const k of Object.keys(st)) if (!(k in snap)) delete st[k];
     Object.assign(st, snap);
-    ctx.add.length = 0; ctx.del.length = 0; ctx.upd.clear(); ctx.dirty.clear(); ctx.sto.add.length = 0; ctx.sto.del.length = 0;
+    ctx.add.length = 0; ctx.del.length = 0; ctx.upd.clear(); ctx.dirty.clear(); ctx.sto.add.length = 0; ctx.sto.del.length = 0; ctx.ix = null;
     throw e;
   }
 }

@@ -3,7 +3,7 @@
 // database transaction, so a crash or restart can never lose or duplicate them: open rounds are refunded at start.
 import crypto from 'node:crypto';
 import { D } from '../src/js/engine/data.js';
-import { makeCtx, delta, give, credit, spend, takeStake, atomically, GameError } from '../src/js/engine/actions.js';
+import { makeCtx, delta, give, credit, spend, takeStake, atomically, noteUnboxed, GameError } from '../src/js/engine/actions.js';
 import { itemValue, serialKey } from '../src/js/engine/items.js';
 import * as G from '../src/js/engine/gamble.js';
 import { round2 } from '../src/js/engine/util.js';
@@ -77,6 +77,7 @@ export class Live {
         const w = winnings[e.id];
         if (w?.cash) credit(ctx, w.cash);
         if (w?.items?.length) give(ctx, w.items.map((it) => ({ ...it, nw: true })));
+        if (w?.unboxed) noteUnboxed(ctx, w.items); // (a case battle's drops, not a stake won from another player)
         const staked = round.escrow[e.id] ? round.escrow[e.id].cash + round.escrow[e.id].items.reduce((s, it) => s + itemValue(it), 0) : 0;
         const won = w ? (w.cash || 0) + (w.items || []).reduce((s, it) => s + itemValue(it), 0) : 0;
         e.st.stats.gambleWon = round2((e.st.stats.gambleWon || 0) + won - staked);
@@ -240,7 +241,7 @@ export class Live {
       const s = b.seats[seat];
       if (s && !s.bot) {
         for (const it of res.share[seat]) it.sn = this.srv.serial(serialKey(it)); // unboxed in the battle
-        winnings[s.userId] = { cash: 0, items: res.share[seat] };
+        winnings[s.userId] = { cash: 0, items: res.share[seat], unboxed: true };
       }
     }
     await this.settle(b, winnings);

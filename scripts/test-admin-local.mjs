@@ -34,7 +34,7 @@ const MIN = 60e3;
   // (what the server hashed before it shared this: node's SHA-256 of the sorted JSON, without inv and social)
   const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
   const canon = (v) => (Array.isArray(v) ? v.map(canon) : isObj(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
-  const oldRev = (st) => { const { inv: _i, stored: _t, social: _s, ...rest } = st; return crypto.createHash('sha256').update(JSON.stringify(canon(rest))).digest('hex').slice(0, 32); };
+  const oldRev = (st) => { const { inv: _i, stored: _t, index: _x, social: _s, ...rest } = st; return crypto.createHash('sha256').update(JSON.stringify(canon(rest))).digest('hex').slice(0, 32); };
   const st = freshState();
   delete st.settings; // (as online states are)
   st.stats.bestName = 'AWP | Dragon Lore ★ 日本 ✓';
@@ -44,7 +44,7 @@ const MIN = 60e3;
   const off = { ...st, settings: { volume: 0.2 }, inv: [{ uid: 'x' }], stored: [{ uid: 'y', su: 'x' }], social: { seed: 1 } };
   check('revOf: leaves out the inventory, what\'s in Storage Units, the NPC world and (offline) the settings; a money change changes it',
     AD.revOf(off) === AD.revOf(st) && AD.revOf({ ...st, money: 1 }) !== AD.revOf(st));
-  check('rawView: the state without inv, social and settings', JSON.stringify(Object.keys(AD.rawView(off)).sort()) === JSON.stringify(Object.keys(st).filter((k) => k !== 'inv' && k !== 'stored' && k !== 'social').sort()));
+  check('rawView: the state without inv, social and settings', JSON.stringify(Object.keys(AD.rawView(off)).sort()) === JSON.stringify(Object.keys(st).filter((k) => k !== 'inv' && k !== 'stored' && k !== 'index' && k !== 'social').sort()));
 }
 
 // ---- argument checks -----------------------------------------------------------------------------------------------------
@@ -506,6 +506,57 @@ const declineAll = (w) => { for (const o of w.st.social.offers.filter((x) => x.s
     check('saveFile: a label loses < > and quotes, and is cut to a label\'s length', !/[<>"]/.test(clean) && clean.length <= SU.UNIT_NAME_MAX, clean);
   }
   check('worthOf counts what you give it: the panels hand it everything owned', (() => { const { st, kept } = box(); return AD.worthOf(SU.ownedItems(st)) === SU.ownedValue(st) && SU.ownedValue(st) >= I.itemValue(kept); })());
+}
+
+// ---- the Index in the admin rules --------------------------------------------------------------------------------------------
+{
+  const IX = await E('itemindex');
+  const skin = Object.keys(D.skins)[0], rec = { at: 1000, n: 2, st: 1, fl: 0.25 };
+  const filled = () => { const st = freshState(); st.index = { ...IX.freshIndex(), items: { [skin]: { ...rec } }, claimed: { 'collection-set-weapons-i': 1000 } }; return st; };
+  const asFile = (st) => JSON.parse(JSON.stringify(st));
+
+  const st = filled(), base = AD.revOf(st);
+  check('revOf: leaves out the Index, as raw edits can\'t touch it (a case opened isn\'t a change to what the panel loaded)', AD.revOf({ ...st, index: IX.freshIndex() }) === base);
+  check('rawView: and it isn\'t in what a raw edit shows', !('index' in AD.rawView(st)));
+  check('edit.raw: the Index is refused, whatever it\'s sent', ['index'].every((k) => /can't be edited/.test(refusal(() => AD.rawEdit(st, { [k]: { items: {}, claimed: {}, filled: true, lost: 0 } }, base))?.message || '')));
+  const json = AD.rawView(st), edited = AD.rawEdit(st, { ...json, stars: 9 }, base);
+  check('edit.raw: and a raw edit keeps it as it was', edited.next.stars === 9 && JSON.stringify(edited.next.index) === JSON.stringify(st.index) && !edited.changed.includes('index'));
+  const big = freshState();
+  for (const id of Object.keys(D.stickers).slice(0, 3000)) big.index.items[id] = { at: 1000, n: 1 };
+  check('edit.raw: a long record doesn\'t push a save over the raw edit\'s limit', JSON.stringify(big.index).length > AD.MAX_JSON && AD.rawEdit(big, { ...AD.rawView(big), stars: 3 }, AD.revOf(big)).next.stars === 3);
+
+  const round = AD.saveFile(asFile(st));
+  check('saveFile: a save with a record comes back as it was', JSON.stringify(round.index) === JSON.stringify(st.index));
+  const mut = (fn) => { const v = asFile(filled()); fn(v); return refusal(() => AD.saveFile(v)); };
+  const says = (e, what) => e?.code === 'bad' && e.message.includes(what);
+  check('saveFile: an index that isn\'t one is refused', says(mut((v) => { v.index = []; }), 'index') && says(mut((v) => { v.index = 'x'; }), 'index'));
+  check('saveFile: nor records and claims of the wrong type', says(mut((v) => { v.index.items = []; }), 'index.items') && says(mut((v) => { v.index.claimed = 5; }), 'index.claimed') && says(mut((v) => { v.index.filled = 'yes'; }), 'index.filled'));
+  check('saveFile: an entry as the game writes it: a count of at least one', says(mut((v) => { v.index.items[skin].n = 0; }), 'index.items') && says(mut((v) => { v.index.items[skin].n = 1.5; }), 'index.items') && says(mut((v) => { delete v.index.items[skin].n; }), 'index.items'));
+  check('saveFile: numbers that are numbers, a float that\'s a float', says(mut((v) => { v.index.items[skin].at = 'soon'; }), 'index.items') && says(mut((v) => { v.index.items[skin].fl = 3; }), 'index.items') && says(mut((v) => { v.index.items[skin].st = -1; }), 'index.items'));
+  check('saveFile: no fields the game doesn\'t write, and plain ids', says(mut((v) => { v.index.items[skin].note = 'hi'; }), 'index.items') && says(mut((v) => { v.index.items['a b'] = { n: 1 }; }), 'index.items'));
+  check('saveFile: a claim is a plain id and a time', says(mut((v) => { v.index.claimed['a b'] = 1; }), 'index.claimed') && says(mut((v) => { v.index.claimed.x = 'now'; }), 'index.claimed'));
+  const dirty = asFile(filled());
+  dirty.index.items['<img src=x>'] = { n: 1 };
+  const cleaned = refusal(() => AD.saveFile(dirty));
+  check('saveFile: what could end up on a page doesn\'t get in', cleaned?.code === 'bad');
+  const proto = AD.saveFile(JSON.parse(JSON.stringify(filled()).replace('"claimed":{', '"claimed":{"__proto__":{"x":1},')));
+  check('saveFile: a __proto__ key goes', !Object.hasOwn(proto.index.claimed, '__proto__') && !({}).x);
+  const { index: _index, ...older } = asFile(freshState());
+  const noIndex = AD.saveFile(older);
+  check('saveFile: a save from before the Index still loads, to be filled in', noIndex.index === undefined && upgradeState(noIndex).index.filled === false);
+
+  const claimedSince = filled(), oldSnap = upgradeState(asFile(freshState()));
+  oldSnap.index = IX.freshIndex();
+  AD.restoreMerge(claimedSince, oldSnap, {});
+  check('restoreMerge: online a snapshot can\'t reopen a claim or shorten the record', oldSnap.index.claimed['collection-set-weapons-i'] === 1000 && oldSnap.index.items[skin].n === 2);
+  const started = upgradeState(asFile(freshState()));
+  started.index = IX.freshIndex();
+  AD.restoreMerge(filled(), started, { startOver: true });
+  check('restoreMerge: a reset online starts the record and its claims over, as it does everything else', !Object.keys(started.index.claimed).length && !Object.keys(started.index.items).length);
+  const offline = upgradeState(asFile(freshState()));
+  offline.index = IX.freshIndex();
+  AD.restoreMerge(filled(), offline, { keepRewards: true });
+  check('restoreMerge: offline a restore or an import is that save, whatever yours held', !Object.keys(offline.index.claimed).length && !Object.keys(offline.index.items).length);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

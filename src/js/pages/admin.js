@@ -18,6 +18,7 @@ import { LEVEL_NAMES, staffPc } from '../account.js';
 import { localAdmin } from '../admin-local.js';
 import { FOCUS } from '../engine/npcs.js';
 import { ownedItems, unitCount, unitsOf } from '../engine/storage.js';
+import { drawAdminIndex, recordSize } from './itemindex.js';
 import { playPrefs, savePlayPrefs } from './play-settings.js';
 import { BINDS_VERSION } from '../play/input.js';
 import { ASPECTS, RESOLUTIONS } from '../play/screen.js';
@@ -29,9 +30,9 @@ const TAB_DATA = { dash: 'overview', players: 'players', bans: 'bans', audit: 'a
 const FILTERS = [['all', 'All'], ['online', 'Online'], ['banned', 'Banned'], ['linked', 'Linked'], ['staff', 'Staff']];
 const OFF_FILTERS = [['all', 'All'], ['online', 'Online'], ['banned', 'Blocked'], ['friends', 'Friends']];
 const filters = () => (online() ? FILTERS : OFF_FILTERS);
-const SUBS = [['overview', 'Overview'], ['inventory', 'Inventory'], ['configs', 'Configs'], ['snapshots', 'Snapshots'], ['history', 'History']];
-// (An NPC trader has no configs, and snapshots are of your own save only.)
-const NPC_SUBS = SUBS.filter(([k]) => k !== 'configs' && k !== 'snapshots');
+const SUBS = [['overview', 'Overview'], ['inventory', 'Inventory'], ['index', 'Index'], ['configs', 'Configs'], ['snapshots', 'Snapshots'], ['history', 'History']];
+// (An NPC trader has no configs or Index, and snapshots are of your own save only.)
+const NPC_SUBS = SUBS.filter(([k]) => k !== 'configs' && k !== 'index' && k !== 'snapshots');
 const KINDS = [['all', 'All items'], ['skin', 'Skins'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['charm', 'Charms'], ['crate', 'Cases'], ['key', 'Keys'], ['unit', 'Storage Units']];
 const GIVE_KINDS = [['skin', 'Skin'], ['crate', 'Case'], ['key', 'Key'], ['sticker', 'Sticker'], ['agent', 'Agent'], ['charm', 'Charm'], ['unit', 'Storage Unit']];
 const DURATIONS = [['60', '1 hour'], ['1440', '1 day'], ['10080', '7 days'], ['43200', '30 days'], ['perm', 'Permanent'], ['custom', 'Custom (minutes)']];
@@ -556,7 +557,7 @@ function drawPlayer(el) {
   // (Offline an NPC trader's block, while it lasts.)
   const ban = online() ? (p.bans || []).map(normBan).find(banActive) || (p.user.ban ? normBan(p.user.ban) : null)
     : p.user.npc?.blocked && banActive(normBan(p.user.npc.blocked)) ? normBan(p.user.npc.blocked) : null;
-  const counts = { inventory: ownedItems(p.state || {}).length, snapshots: (p.snapshots || []).length };
+  const counts = { inventory: ownedItems(p.state || {}).length, index: recordSize(p.state), snapshots: (p.snapshots || []).length };
   const subs = p.user.npc ? NPC_SUBS : SUBS, acts = online() ? PLAYER_ACTIONS : LOCAL_ACTIONS;
   if (!subs.some(([k]) => k === view.sub)) view.sub = 'overview';
   pv.innerHTML = `${online() ? playerHeadHtml(p, ban) : localHeadHtml(p, ban)}
@@ -787,7 +788,7 @@ async function resetSave(btn) {
   return !!(await run(btn, 'reset', { id: 'me' }, 'Your save is a fresh one'));
 }
 
-const SUB_DRAW = { overview: drawOverview, inventory: drawInventory, configs: drawConfigs, snapshots: drawSnapshots, history: drawHistory };
+const SUB_DRAW = { overview: drawOverview, inventory: drawInventory, index: (el, p) => drawAdminIndex(el, p.state), configs: drawConfigs, snapshots: drawSnapshots, history: drawHistory };
 
 // ---- a player: Overview (their numbers, editable by admins) ------------------------------------------
 const getPath = (o, path) => path.split('.').reduce((v, k) => v?.[k], o);
@@ -909,7 +910,7 @@ function drawNpcOverview(el, p) {
 
 // Every top-level part of the state but the inventory and the (offline-only) NPC world, as JSON to edit by hand.
 function rawModal(p) {
-  const u = p.user, restOf = (st) => { const { inv, stored, social, ...rest } = st || {}; return rest; };
+  const u = p.user, restOf = (st) => { const { inv, stored, index, social, ...rest } = st || {}; return rest; };
   // (Offline it's your own save.)
   const own = !online() && isSelf(u), whoseSave = own ? 'your save' : `<b>${esc(u.name)}</b>'s save`;
   // (The save this JSON was made from: the server refuses it when the account has changed since, a sale or a claimed
@@ -917,7 +918,7 @@ function rawModal(p) {
   let base = p.rev;
   const m = formModal({
     title: `Raw JSON: ${own ? 'your save' : esc(u.name)}`, ok: 'Save JSON', danger: true, cls: 'wide',
-    body: `<div class="muted adm-note">Everything in ${own ? 'your' : `${esc(u.name)}'s`} save except the inventory, Storage Units' contents and the NPC world. Keys you leave out are reset to a new account's; an auto snapshot is saved first.</div>
+    body: `<div class="muted adm-note">Everything in ${own ? 'your' : `${esc(u.name)}'s`} save except the inventory, Storage Units' contents, the Index's record and the NPC world. Keys you leave out are reset to a new account's; an auto snapshot is saved first.</div>
       <textarea class="input adm-json" data-json spellcheck="false">${esc(JSON.stringify(restOf(p.state), null, 2))}</textarea>
       <div class="adm-json-bar"><span class="muted" data-size></span><span class="spacer"></span><button class="btn ghost sm" data-fmt>Format</button></div>`,
     submit: async ($, err) => {

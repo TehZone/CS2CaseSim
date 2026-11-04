@@ -7,6 +7,7 @@ import { GameError } from './actions.js';
 import { freshState, upgradeState } from './economy.js';
 import { sha256Hex } from './gamble.js';
 import * as I from './items.js';
+import { indexProblem, mergeIndex } from './itemindex.js';
 import { MAX_LEVEL, MEDALS } from './levels.js';
 import * as N from './npcs.js';
 import { repairStorage, storedOf } from './storage.js';
@@ -35,17 +36,17 @@ export function replaceInPlace(st, next) {
   for (const [k, v] of Object.entries(next)) if (k !== '__proto__') st[k] = v;
 }
 
-// The state as edit.raw replaces it (all but the inventory, what's in Storage Units, the NPC world and, offline, the device's settings), as a
+// The state as edit.raw replaces it (all but the inventory, what's in Storage Units, the Index's record, the NPC world and, offline, the device's settings), as a
 // short hash: the panel sends back the one it loaded, so a raw edit can't put back what changed since. Keys sorted (a
 // state read back from JSONB has them in another order).
 const canon = (v) => (Array.isArray(v) ? v.map(canon) : isObj(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
 export function revOf(st) {
-  const { inv: _inv, stored: _stored, social: _social, settings: _settings, ...rest } = st;
+  const { inv: _inv, stored: _stored, index: _index, social: _social, settings: _settings, ...rest } = st;
   return sha256Hex(JSON.stringify(canon(rest))).slice(0, 32);
 }
 // What a raw edit shows and answers: the state without those.
 export function rawView(st) {
-  const { inv: _inv, stored: _stored, social: _social, settings: _settings, ...rest } = st;
+  const { inv: _inv, stored: _stored, index: _index, social: _social, settings: _settings, ...rest } = st;
   return rest;
 }
 
@@ -158,6 +159,8 @@ export function rawEdit(cur, state, base) {
   const fresh = freshState();
   for (const [k, v] of Object.entries(src)) {
     if (k === 'inv' || k === 'stored' || k === 'social') fail(`${k} can't be edited here (use the inventory tools)`);
+    // (the record is what rewards are earned by, and bigger than a raw edit's limit: nobody writes it by hand)
+    if (k === 'index') fail("index can't be edited here (it's the record of what the player has unboxed)");
     // (own fields only: '__proto__' is `in` every object)
     if (k === 'settings' || !(Object.hasOwn(fresh, k) || Object.hasOwn(cur, k))) fail(`Unknown field: ${k}`);
     const d = Object.hasOwn(fresh, k) ? fresh[k] : cur[k];
@@ -169,13 +172,13 @@ export function rawEdit(cur, state, base) {
     if (NAMED_FIELDS.has(k) && isObj(v)) for (const f of Object.keys(v)) if (!IDENT.test(f)) fail(`${k} has a field with an invalid name: ${JSON.stringify(f.slice(0, 40))}`);
   }
   if (src.money != null && src.money > 1e12) fail('Money must be a number from 0 to 1000000000000');
-  const st = upgradeState({ ...src, inv: cur.inv, stored: cur.stored, social: cur.social });
+  const st = upgradeState({ ...src, inv: cur.inv, stored: cur.stored, index: cur.index, social: cur.social });
   // Never from the JSON: the rewards waiting (their items' uids are handed out as they are), and what keepLive keeps.
   st.prof = { ...st.prof, drops: cur.prof?.drops ?? [] };
   keepLive(st, cur);
   fitLoadout(st);
   if (typeof st.money === 'number') st.money = round2(st.money);
-  const changed = [...new Set([...Object.keys(cur), ...Object.keys(st)])].filter((k) => k !== 'inv' && k !== 'stored' && k !== 'social' && JSON.stringify(cur[k]) !== JSON.stringify(st[k]));
+  const changed = [...new Set([...Object.keys(cur), ...Object.keys(st)])].filter((k) => k !== 'inv' && k !== 'stored' && k !== 'index' && k !== 'social' && JSON.stringify(cur[k]) !== JSON.stringify(st[k]));
   return { next: st, changed, before: pick(cur, changed), after: pick(st, changed) };
 }
 
@@ -188,9 +191,11 @@ export function restoreUids(next) {
 // Makes an upgraded snapshot `next` fit to replace `cur`: retired items sold, no item twice, none in `elsewhere` (uids
 // owned by someone else now: online, other inventories and escrows), loadout fitted, and what keepLive keeps. A level-up
 // reward whose items exist now (elsewhere, or in either inventory) was claimed since, and claiming it again would make
-// second copies: left out, unless keepRewards (offline: nobody else can own them). Changes `next`.
+// second copies: left out, unless keepRewards (offline: nobody else can own them). For the same reason a restore online keeps
+// the Index's record and claims as they are now: rewards can't be claimed twice by going back to before the first time. Not
+// a reset (startOver): that's a new account, everything on it to earn again. Changes `next`.
 // → { dropped (items and rewards left out), rewards }
-export function restoreMerge(cur, next, { elsewhere = new Set(), keepRewards = false } = {}) {
+export function restoreMerge(cur, next, { elsewhere = new Set(), keepRewards = false, startOver = false } = {}) {
   I.retireOld(next);
   const drops = Array.isArray(next.prof?.drops) ? next.prof.drops : [];
   const seen = new Set();
@@ -204,6 +209,7 @@ export function restoreMerge(cur, next, { elsewhere = new Set(), keepRewards = f
   next.stored = stored;
   repairStorage(next); // (a unit left out: what's in it goes back to the inventory)
   if (next.prof) next.prof = { ...next.prof, drops: keep };
+  if (!keepRewards && !startOver) next.index = mergeIndex(next.index, cur.index);
   fitLoadout(next);
   keepLive(next, cur);
   return { dropped, rewards };
@@ -250,6 +256,7 @@ export function saveFile(file, now = Date.now()) {
     d.offers.forEach((it, j) => item(it, `prof.drops[${i}].offers[${j}]`));
   });
   for (const [k, n] of Object.entries(st.serials || {})) if (!Number.isFinite(n)) bad(`serials.${k}`);
+  if (st.index != null) { const why = indexProblem(st.index); if (why) bad(why); }
   if (st.market != null && !(isObj(st.market) && Object.values(st.market).every(Array.isArray))) bad('market');
   const so = st.social;
   if (so == null) return st;

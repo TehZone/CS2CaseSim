@@ -11,6 +11,7 @@ import { playPrefs } from './pages/play-settings.js';
 import { GameError, makeCtx, delta, give, take, takeForStaff } from './engine/actions.js';
 import { freshState, upgradeState } from './engine/economy.js';
 import { backfillSerials } from './engine/items.js';
+import { backfillIndex } from './engine/itemindex.js';
 import * as N from './engine/npcs.js';
 import { ownedItems } from './engine/storage.js';
 import { round2 } from './engine/util.js';
@@ -290,6 +291,7 @@ function npcEditPlan(s, set) {
 function loadable(v) {
   const next = upgradeState(v);
   backfillSerials(next);
+  backfillIndex(next);
   const { dropped, rewards } = restoreMerge(S, next, { keepRewards: true });
   return { next, dropped, rewards };
 }

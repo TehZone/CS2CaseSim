@@ -4,6 +4,7 @@
 // before the request is answered.
 import { upgradeState } from '../src/js/engine/economy.js';
 import { retireOld } from '../src/js/engine/items.js';
+import { backfillIndex } from '../src/js/engine/itemindex.js';
 
 const FLUSH_MS = 2000;
 const IDLE_EVICT_MS = 10 * 60 * 1000;
@@ -23,13 +24,29 @@ export class Store {
     if (e) { e.touched = Date.now(); return e; }
     const { rows } = await this.db.query('SELECT id, name, state FROM users WHERE id = $1', [id]);
     if (!rows.length) throw new Error('No such player');
+    const saved = typeof rows[0].state === 'string' ? JSON.parse(rows[0].state) : rows[0].state;
+    const moved = saved.index?.filled ? null : await this.changedHands(id); // (accounts from before the Index, once)
     e = this.cache.get(id); // loaded meanwhile
     if (e) return e;
-    e = { id: rows[0].id, name: rows[0].name, st: upgradeState(typeof rows[0].state === 'string' ? JSON.parse(rows[0].state) : rows[0].state), dirty: false, touched: Date.now() };
+    e = { id: rows[0].id, name: rows[0].name, st: upgradeState(saved), dirty: false, touched: Date.now() };
     delete e.st.settings;
     if (retireOld(e.st).n) e.dirty = true; // older accounts' chickens and pro cards, sold once
+    if (moved) { backfillIndex(e.st, { moved }); e.dirty = true; }
     this.cache.set(id, e);
     return e;
+  }
+
+  // Every item that's been through a player's accepted trades or live gambling rounds (a trade keeps an item's `src`, so only
+  // this tells what they unboxed from what they were given). One a round gave back is in here too: better a copy left off the
+  // Index than one that was never theirs.
+  async changedHands(id) {
+    const parse = (v) => (typeof v === 'string' ? JSON.parse(v) : v);
+    const out = new Set();
+    const { rows: trades } = await this.db.query("SELECT offer FROM trades WHERE status = 'accepted' AND (from_id = $1 OR to_id = $1)", [id]);
+    for (const { offer } of trades) { const o = parse(offer); for (const u of [...(o.give?.uids || []), ...(o.get?.uids || [])]) out.add(u); }
+    const { rows: rounds } = await this.db.query("SELECT data->'escrow' AS escrow FROM rounds WHERE jsonb_exists(data->'escrow', $1)", [String(id)]);
+    for (const { escrow } of rounds) for (const seat of Object.values(parse(escrow))) for (const it of seat.items || []) out.add(it.uid);
+    return out;
   }
 
   // Runs fn while holding the locks of all the given players (taken in id order, so two requests can't deadlock).

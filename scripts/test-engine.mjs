@@ -1073,5 +1073,307 @@ function tierFreq(box, n) {
   }
 }
 
+// ---- the Index: the record of what you've unboxed, and the rewards for finishing a set ---------------------------------------
+{
+  const IX = await E('itemindex');
+  const L = await E('levels');
+  const MK = await E('market');
+  const N = await E('npcs');
+  const AD = await E('admin');
+  const { upgradeState } = await E('economy');
+  const NOW = Date.UTC(2026, 5, 1);
+  const save = () => { const st = freshState(); st.money = 1e7; return st; };
+  const on = (st, name, args = {}, opts = {}) => { const ctx = ACT.makeCtx(st, { rng, now: NOW, ...opts }); const r = ACT.runAction(ctx, name, args); return { r, d: ACT.delta(ctx) }; };
+  const refusedWith = (fn) => { try { fn(); return null; } catch (e) { return e.code || e.message; } };
+  const box = D.cases.find((c) => c.n === 'Chroma 2 Case');
+  const open = (st, c, n = 1, opts) => {
+    on(st, 'case.buy', { id: c.id, n }, opts);
+    if (keyFor(c)) on(st, 'key.buy', { key: keyFor(c), n }, opts);
+    return on(st, 'case.open', { id: c.id, n }, opts);
+  };
+  const copy = (id, extra = {}) => ({ t: IX.kindOf(id), id, ...extra });
+  const onRecord = (st) => Object.keys(st.index.items);
+
+  // The record.
+  {
+    const st = save();
+    check('Index: a new save has an empty record, nothing to fill in later', JSON.stringify(st.index) === JSON.stringify({ items: {}, claimed: {}, filled: true, lost: 0 }));
+    const first = open(st, box);
+    const it = first.r.items[0], e = st.index.items[it.id];
+    check('Index: a case opened goes on the record: when, how many, its float', e.n === 1 && e.at === NOW && near(e.fl, it.fl, it.fl * 1e-5) && (!!e.st === !!it.stt));
+    check('Index: what reaches the client is the change, not the record', first.d.ix.items[it.id].n === 1 && !('index' in first.d.set));
+    const later = open(st, box, 10, { now: NOW + 5000 }), all = [it, ...later.r.items], same = all.filter((x) => x.id === it.id);
+    const e2 = st.index.items[it.id];
+    check('Index: more copies add up, the first time stays, the float is the lowest yet', e2.n === same.length && e2.at === NOW && near(e2.fl, Math.min(...same.map((x) => x.fl)), 1e-4));
+    check('Index: every copy is counted', Object.values(st.index.items).reduce((s, x) => s + x.n, 0) === all.length);
+    const before = JSON.stringify(st.index);
+    on(st, 'item.sell', { uids: st.inv.filter((x) => x.t === 'skin').map((x) => x.uid) });
+    check('Index: selling takes nothing off it', st.inv.filter((x) => x.t === 'skin').length === 0 && JSON.stringify(st.index) === before);
+
+    const r = { index: IX.freshIndex() }, skin = box.pools[2][0];
+    IX.record(r, [copy(skin, { fl: 0.3, sd: 1, stt: true }), copy(skin, { fl: 0.2, sd: 2 }), copy(skin, { fl: 0.5, sd: 3, sv: true })], NOW);
+    check('Index: StatTrak™ and Souvenir copies are counted apart', r.index.items[skin].n === 3 && r.index.items[skin].st === 1 && r.index.items[skin].sv === 1);
+    const plain = { index: IX.freshIndex() };
+    IX.record(plain, [copy(skin, { fl: 0.3, sd: 1 })], NOW);
+    check('Index: an entry writes nothing it has no use for', JSON.stringify(Object.keys(plain.index.items[skin]).sort()) === JSON.stringify(['at', 'fl', 'n']));
+    const fancy = Object.values(D.skins).find((s) => !s.v && Array.from({ length: 1001 }, (_, sd) => I.patternInfo({ t: 'skin', id: s.id, sd }).mult).some((m) => m > 1));
+    const seeds = Array.from({ length: 1001 }, (_, sd) => sd).sort((a, b) => I.patternInfo({ t: 'skin', id: fancy.id, sd: b }).mult - I.patternInfo({ t: 'skin', id: fancy.id, sd: a }).mult);
+    const pat = { index: IX.freshIndex() };
+    IX.record(pat, [copy(fancy.id, { fl: 0.1, sd: seeds[0] })], NOW);
+    IX.record(pat, [copy(fancy.id, { fl: 0.1, sd: seeds.at(-1) })], NOW);
+    check('Index: the rarest pattern found stays', pat.index.items[fancy.id].pt === seeds[0], I.patternInfo({ t: 'skin', id: fancy.id, sd: seeds[0] }).label);
+    const ch = Object.values(D.charms)[0], pc = { index: IX.freshIndex() };
+    IX.record(pc, [copy(ch.id, { pat: 1 })], NOW);
+    IX.record(pc, [copy(ch.id, { pat: 50000 })], NOW);
+    check('Index: a charm\'s best pattern too', pc.index.items[ch.id].pt === 1 && pc.index.items[ch.id].n === 2);
+    check('Index: only what boxes hold: no cases, keys or tools, no Sticker Slabs', IX.record({ index: IX.freshIndex() }, [I.makeCrateItem(box, 'x'), I.makeKeyItem(keyFor(box), 'x'), { uid: 'x', t: 'tool', id: 'nametag' }, { t: 'charm', id: 'slab', sk: 'sticker-13', pat: 5 }], NOW) === null);
+  }
+
+  // What counts.
+  {
+    const st = save();
+    const none = { on: true, below: 1e6, ranks: [2, 3, 4, 5], keepStt: false, keepRare: false };
+    on(st, 'case.buy', { id: box.id, n: 5 }); on(st, 'key.buy', { key: keyFor(box), n: 5 });
+    const sold = on(st, 'case.open', { id: box.id, n: 5, autoSell: none }).r.items;
+    check('Index: an item auto-sold was still unboxed', sold.some((i) => i.as) && sold.every((i) => st.index.items[i.id]));
+
+    const w = A.armoryWindow(NOW), offer = A.armoryOffers(w.i).offers[0];
+    const arm = save(); arm.stars = 1000;
+    const got = on(arm, 'armory.redeem', { offer: offer.id, n: 3 }).r.items;
+    check('Index: Armory redemptions count', got.every((i) => arm.index.items[i.id]));
+
+    const lvl = save();
+    let drop = null;
+    for (let k = 0; k < 50 && !drop; k++) { const d = L.carePackage({ r: rng, now: NOW }); if (d.offers.some((o) => o.t === 'skin') && d.offers.some((o) => o.t === 'crate')) drop = d; }
+    lvl.prof = { ...lvl.prof, drops: [drop] };
+    const picks = [drop.offers.findIndex((o) => o.t === 'skin'), drop.offers.findIndex((o) => o.t === 'crate')];
+    on(lvl, 'drop.claim', { id: drop.id, picks });
+    check('Index: a level-up reward\'s skin counts, the case in it doesn\'t (what comes out of it will)', onRecord(lvl).length === 1 && onRecord(lvl)[0] === drop.offers[picks[0]].id);
+
+    const bat = save();
+    let won = null, lost = null;
+    for (let k = 0; k < 40 && !(won && lost); k++) {
+      const before = onRecord(bat).length, { r } = on(bat, 'gamble.battle', { cases: [box.id], format: '1v1', mode: 'normal', clientSeed: 'ix' + k });
+      if (r.won) won = r; else if (!lost) lost = { r, same: onRecord(bat).length === before };
+    }
+    check('Index: a case battle: what you take home counts, a lost one adds nothing', won?.prize.every((i) => bat.index.items[i.id]) && lost?.same);
+  }
+
+  // What doesn't.
+  {
+    const st = save(), w = MK.marketWindow(NOW);
+    const listed = Object.values(D.skins).find((s) => !s.star && MK.skinListings(s, w).length);
+    on(st, 'market.buy', { kind: 'skin', id: listed.id, n: 0, window: w });
+    check('Index: an item bought on the Market doesn\'t count', st.inv.some((i) => i.id === listed.id) && !onRecord(st).length);
+
+    const col = Object.values(D.skins).find((s) => !s.v && !s.star && s.r === 2 && s.col && T.tradeupIneligible({ t: 'skin', id: s.id, fl: s.mn }) === '');
+    const up = save(), ten = Array.from({ length: 10 }, () => I.makeSkinItem(col, { stt: false, r: rng, src: 'Market' }));
+    up.inv.push(...ten);
+    const made = on(up, 'tradeup.sign', { uids: ten.map((i) => i.uid) }).r.item;
+    check('Index: a Trade Up Contract\'s result doesn\'t count (what goes in can be bought)', up.inv.some((i) => i.uid === made.uid) && !onRecord(up).length);
+
+    const so = save(), real = Object.values(D.skins).find((s) => !s.v && !s.star);
+    so.social = N.freshSocial(1234, NOW);
+    let target = null, theirs = null;
+    for (const n of N.crowd(so.social.seed)) { if (n.type !== 'player') continue; const it = N.npcState(so.social, n.id).inv.find((x) => I.itemValue(x) > 1); if (it) { target = n; theirs = it; break; } }
+    const r = on(so, 'npc.offer', { npc: target.id, give: { money: round2(N.keepValue(target, theirs) * 3 + 50) }, get: { uids: [theirs.uid] } }).r;
+    check('Index: an item traded from an NPC doesn\'t count', r.result === 'accepted' && so.inv.some((i) => i.uid === theirs.uid) && !onRecord(so).length, r.result);
+
+    const staked = save(), mine = I.makeSkinItem(real, { stt: false, r: rng, src: box.n });
+    staked.inv.push(mine);
+    let back = false;
+    for (let k = 0; k < 40 && !back; k++) {
+      const { r: f } = on(staked, 'gamble.coinflip', { money: 0, uids: [mine.uid], side: 'ct', clientSeed: 'ix' + k });
+      if (f.won) back = true; else staked.inv.push(mine);
+    }
+    check('Index: a stake that comes back isn\'t unboxed again', back && !onRecord(staked).length);
+
+    const given = save();
+    ACT.give(ACT.makeCtx(given), AD.buildItems([AD.itemSpec({ t: 'skin', id: real.id })], AD.localSerial(given)));
+    check('Index: nor is what staff give', given.inv.length === 1 && !onRecord(given).length);
+
+    // The rule holds by there being nowhere else that writes: one call per way of unboxing.
+    const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
+    const calls = (p) => read(p).match(/(?<!function )\bnoteUnboxed\(ctx/g)?.length || 0; // (not its definition)
+    const sources = ['src/js/engine/gamble.js', 'src/js/engine/market.js', 'src/js/engine/npcs.js', 'src/js/engine/tradeup.js', 'src/js/engine/admin.js', 'src/js/admin-local.js', 'server/trade.mjs', 'server/admin.mjs', 'server/index.mjs'];
+    check('Index: only the unboxing actions write to it (case.open, drop.claim, armory.redeem, gamble.battle, a live battle\'s winnings)',
+      calls('src/js/engine/actions.js') === 4 && calls('server/live.mjs') === 1 && sources.every((p) => !calls(p) && !/\bIX\.record\(|\brecord\(st/.test(read(p))));
+  }
+
+  // A failed action leaves it alone.
+  {
+    const st = save();
+    open(st, box);
+    on(st, 'case.buy', { id: box.id }); on(st, 'key.buy', { key: keyFor(box) });
+    const before = st.index, ctx = ACT.makeCtx(st, { rng, now: NOW, invCap: 1 });
+    let failedWith = null;
+    try { ACT.runAction(ctx, 'case.open', { id: box.id }); } catch (e) { failedWith = e.code; }
+    check('Index: an opening that fails (inventory full) adds nothing', failedWith === 'full' && st.index === before && ctx.ix === null);
+  }
+
+  // Sets and goals.
+  {
+    const sets = IX.allSets(), goals = IX.allGoals();
+    check('Index: every case and collection is a set, each with a goal', sets.length === D.cases.length + D.collections.length + D.charmCollections.length && sets.every((s) => IX.goalOf(s.goal) && s.ids.length));
+    check('Index: every goal\'s key is a plain token, as a save keeps it', goals.every((g) => /^[A-Za-z0-9_-]{1,64}$/.test(g.key)));
+    const everyItem = (s) => s.ids.every((id) => IX.kindOf(id));
+    check('Index: every item a set asks for exists', sets.every(everyItem));
+    const inBox = (c) => new Set(Object.values(c.pools).flat());
+    check('Index: nothing is asked for that a box can\'t drop', D.collections.filter((c) => c.caseId).every((c) => { const b = inBox(D.caseById[c.caseId]); return IX.setOf(c.id).ids.every((id) => b.has(id)); }));
+    const hunts = D.collections.find((c) => c.n === 'The Huntsman Collection');
+    check('Index: a collection with a case is that case, the same goal', IX.setOf(hunts.id).goal === IX.setOf(hunts.caseId).goal && IX.setOf(hunts.id).ids.length === IX.setOf(hunts.caseId).ids.length);
+    check('Index: it\'s called by the case you opened, under the collection\'s key (which doesn\'t change)', IX.goalOf(IX.setOf(hunts.caseId).goal).n === 'Huntsman Weapon Case' && IX.setOf(hunts.caseId).goal === hunts.id && IX.setOf(IX.goalOf(hunts.id).face).kind === 'case');
+    const dust = D.collections.find((c) => c.n === 'The Dust 2 Collection'), pkgs = sets.filter((s) => s.goal === dust.id);
+    check('Index: souvenir packages of one collection share its one reward', pkgs.length > 5 && pkgs.filter((s) => s.kind === 'souvenir').length === pkgs.length - 1, `${pkgs.length} sets`);
+    const distinct = new Set(sets.map((s) => [...s.ids].sort().join()));
+    check('Index: one goal for every different set of items, however many boxes hold it', goals.filter((g) => g.kind === 'set').length === distinct.size, `${distinct.size} of ${sets.length}`);
+    const cases = sets.filter((s) => s.kind === 'case');
+    check('Index: a weapon case\'s rare specials aren\'t needed to finish it', cases.every((s) => s.rare.length && s.rareGoal && s.rare.every((id) => !s.ids.includes(id))));
+    check('Index: and many cases share a rare pool, so one bonus each', new Set(cases.map((s) => s.rareGoal)).size < cases.length && goals.filter((g) => g.kind === 'rare').every((g) => g.ids.length && g.reward === IX.RARE_REWARD));
+    check('Index: every weapon case pays the same (they\'re about as hard)', new Set(cases.map((s) => JSON.stringify(IX.goalOf(s.goal).reward))).size === 1, JSON.stringify(IX.goalOf(cases[0].goal).reward));
+    check('Index: a harder set never pays less', IX.GRADES.every(([, xp, stars], i) => !i || (xp > IX.GRADES[i - 1][1] && stars > IX.GRADES[i - 1][2])));
+    check('Index: how hard a set is goes by the odds: a 1-item package takes 1 opening, a weapon case hundreds, a 320-sticker capsule tens of thousands', IX.setOf(D.cases.find((c) => c.n === 'X-Ray P250 Package').id).opens === 1
+      && IX.goalOf(IX.setOf(box.id).goal).opens > 100 && IX.goalOf(IX.setOf(box.id).goal).opens < 1000 && Math.max(...sets.map((s) => s.opens)) > 20000);
+    // The economy: money comes from matches only. Each goal pays once and pays no money, so all a save can ever earn is
+    // this fixed amount, and no set (bar one item worth 500 XP) pays more than a fifth of what opening it takes.
+    const STAR = A.STAR_VALUE, XP = 0.001; // (5,000 XP is a level, and a level-up reward's two items are worth a few dollars)
+    const dear = goals.filter((g) => g.kind === 'set' && g.opens > 1).map((g) => {
+      const boxes = g.sets.map((id) => D.caseById[id]).filter(Boolean);
+      return boxes.length ? (g.reward.stars * STAR + g.reward.xp * XP) / (g.opens * Math.min(...boxes.map(casePrice))) : 0;
+    });
+    check('Index: no reward is worth more than a fifth of what finishing the set costs', Math.max(...dear) < 0.2, `worst ${(Math.max(...dear) * 100).toFixed(1)}%`);
+    check('Index: all the rewards there are, for every set in the game', goals.reduce((s, g) => s + g.reward.stars, 0) < 10000, `${goals.reduce((s, g) => s + g.reward.stars, 0)} stars, ${goals.reduce((s, g) => s + g.reward.xp, 0).toLocaleString()} XP`);
+  }
+
+  // Finishing and claiming.
+  {
+    const st = save(), xray = D.cases.find((c) => c.n === 'X-Ray P250 Package'), s = IX.setOf(xray.id);
+    check('Index: an unfinished set can\'t be claimed', refusedWith(() => on(st, 'index.claim', { goal: s.goal })) === 'unfinished' && st.stars === 0);
+    check('Index: nor something that isn\'t a reward', ['nope', '__proto__', 'constructor', '', null, undefined, 5].every((goal) => refusedWith(() => on(st, 'index.claim', { goal })) === 'bad'));
+    const done = open(st, xray);
+    check('Index: finishing a set says so in the same change', JSON.stringify(done.d.ix.done) === JSON.stringify([s.goal]));
+    check('Index: and it\'s waiting to be claimed', IX.waitingGoals(st.index).map((g) => g.key).includes(s.goal));
+    check('Index: another of the same doesn\'t say it again', open(st, xray).d.ix.done.length === 0);
+    const before = { money: st.money, stars: st.stars, total: st.prof.total }, g = IX.goalOf(s.goal);
+    const paid = on(st, 'index.claim', { goal: s.goal }, { now: NOW + 1 });
+    check('Index: a claim pays its XP and stars, and no money', st.money === before.money && st.stars === before.stars + g.reward.stars && st.prof.total === before.total + g.reward.xp && paid.r.xp === g.reward.xp);
+    check('Index: a claim is sent as a small change too', paid.d.ix.claimed[s.goal] === NOW + 1 && !('index' in paid.d.set));
+    check('Index: the same reward can\'t be claimed twice', refusedWith(() => on(st, 'index.claim', { goal: s.goal })) === 'claimed' && st.prof.total === before.total + g.reward.xp);
+    const col = save();
+    IX.record(col, IX.goalOf(s.goal).ids.map((id) => copy(id)), NOW);
+    on(col, 'index.claim', { goal: IX.setOf(xray.id).goal });
+    check('Index: sets that share a goal are claimed together', IX.isClaimed(col.index, IX.setOf(xray.col).goal) && !IX.waitingGoals(col.index).length);
+
+    // A real set, from nothing to finished, by what it takes in the game.
+    const small = D.cases.filter((c) => c.kind === 'autograph' && Object.values(c.pools).flat().length === 5)[0];
+    const team = save();
+    let tries = 0, finishedBy = null;
+    while (!finishedBy && tries < 200) { tries++; const r = open(team, small); if (r.d.ix.done?.length) finishedBy = r; }
+    check('Index: a small capsule finished by opening it', !!finishedBy && IX.progress(team.index, IX.setOf(small.id)).complete && on(team, 'index.claim', { goal: IX.setOf(small.id).goal }).r.xp > 0, `${tries} openings`);
+
+    // A bought copy can't finish a set.
+    const w = MK.marketWindow(NOW), buys = save();
+    const set = IX.allSets().find((x) => x.kind === 'case' && x.ids.some((id) => MK.skinListings(D.skins[id], w).length));
+    const last = set.ids.find((id) => MK.skinListings(D.skins[id], w).length);
+    IX.record(buys, set.ids.filter((id) => id !== last).map((id) => copy(id)), NOW);
+    on(buys, 'market.buy', { kind: 'skin', id: last, n: 0, window: w });
+    check('Index: the last item bought doesn\'t finish a set', buys.inv.some((i) => i.id === last) && !IX.progress(buys.index, set).complete && refusedWith(() => on(buys, 'index.claim', { goal: set.goal })) === 'unfinished');
+
+    // The bonus for a rare special.
+    const rare = save(), c = IX.setOf(box.id);
+    check('Index: no bonus before a rare special', refusedWith(() => on(rare, 'index.claim', { goal: c.rareGoal })) === 'unfinished');
+    const knife = IX.record(rare, [copy(c.rare[0], { fl: 0.1, sd: 1 })], NOW);
+    check('Index: the first rare special from a pool is a bonus, whatever else you\'ve found', knife.done.includes(c.rareGoal) && !IX.progress(rare.index, c).complete);
+    const b = on(rare, 'index.claim', { goal: c.rareGoal });
+    check('Index: paid once, for the pool', b.r.xp === IX.RARE_REWARD.xp && refusedWith(() => on(rare, 'index.claim', { goal: c.rareGoal })) === 'claimed' && !IX.record(rare, [copy(c.rare[1], { fl: 0.1, sd: 1 })], NOW).done.length);
+  }
+
+  // Older saves.
+  {
+    const skinsOf = (c) => Object.values(c.pools).flat();
+    const a = skinsOf(box)[0], b = skinsOf(box)[1], c = skinsOf(box)[2], d = skinsOf(box)[3], gone = skinsOf(box)[4], bought = skinsOf(box)[5];
+    const old = (extra = {}) => {
+      const { index: _index, ...st } = freshState();
+      return upgradeState({ ...JSON.parse(JSON.stringify(st)), ...extra });
+    };
+    const unit = I.makeUnitItem('Store');
+    const mk = (id, src, more = {}) => ({ ...I.makeSkinItem(D.skins[id], { stt: false, r: rng, src }), at: 1000, ...more });
+    const copyA = mk(a, box.n, { fl: 0.25, at: 2000 }), copyA2 = mk(a, box.n, { fl: 0.1, at: 1000 }), stored = { ...mk(b, 'Armory · ' + box.n), su: unit.uid, sat: 5 };
+    const charm = I.makeCharmItem(Object.values(D.charms)[0], { src: D.charmCollections[0].n, r: rng });
+    const { uid: _u, t: _t, ...kc } = { ...charm, src: 'Armory · ' + D.charmCollections[0].n };
+    const gun = { ...mk(c, 'Level-up reward'), kc };
+    const st = old({
+      inv: [copyA, copyA2, gun, unit, mk(bought, 'Market'), mk(d, 'Trade Up Contract'), mk(d, 'Trade with Someone'), mk(d, 'Admin'), mk(d, '')],
+      stored: [stored], serials: { [`skin:${a}`]: 4, [`skin:${gone}`]: 2, [`skin:${gone}:st`]: 1, 'chicken:x': 3, 'skin:skin-not-in-the-game': 9 },
+      stats: { ...freshState().stats, opened: 20, armory: 1 },
+    });
+    check('Index: a save from before it is marked to be filled in', st.index.filled === false && !onRecord(st).length);
+    IX.backfillIndex(st);
+    const e = st.index.items;
+    check('Index backfill: copies you own that came from a box, with their details', e[a].fl === 0.1 && e[a].at === 1000 && e[c].n === 1);
+    check('Index backfill: what\'s in a Storage Unit, and a charm on a gun', e[b].n === 1 && !!e[kc.id]);
+    check('Index backfill: the serial counters bring back what\'s been sold, in numbers only', e[a].n === 4 && e[gone].n === 3 && e[gone].st === 1 && e[gone].at === undefined && e[gone].fl === undefined);
+    check('Index backfill: bought, contract-made, NPC-traded and staff items stay out', !e[bought] && !e[d]);
+    check('Index backfill: counters for things the game no longer has are ignored', !e['skin-not-in-the-game'] && !e.x);
+    const total = Object.values(e).reduce((s, x) => s + x.n, 0);
+    check('Index backfill: what can\'t be matched to anything is counted', st.index.lost === 21 - total && st.index.filled === true, `${st.index.lost} of 21`);
+    const once = JSON.stringify(st.index);
+    IX.backfillIndex(st);
+    check('Index backfill: happens once', JSON.stringify(st.index) === once);
+    const saved = upgradeState(JSON.parse(JSON.stringify(st)));
+    check('Index backfill: and stays through a save and load', saved.index.filled === true && JSON.stringify(saved.index) === once);
+
+    // Online: the counters are the server's and a trade keeps an item's src, so what changed hands is left out.
+    const traded = mk(a, box.n), mine = mk(b, box.n), acc = old({ inv: [traded, mine], stats: { ...freshState().stats, opened: 5 } });
+    IX.backfillIndex(acc, { moved: new Set([traded.uid]) });
+    check('Index backfill: online, an item that came in a trade stays out though its src says a case', !acc.index.items[a] && acc.index.items[b].n === 1 && acc.index.lost === 4);
+
+    // A set found in an old save can be claimed, with what was recovered.
+    const xray = D.cases.find((x) => x.n === 'X-Ray P250 Package'), won = old({ inv: [mk(IX.setOf(xray.id).ids[0], xray.n)] });
+    IX.backfillIndex(won);
+    check('Index backfill: a set finished long ago is waiting to be claimed', IX.waitingGoals(won.index).some((g) => g.key === IX.setOf(xray.id).goal));
+  }
+
+  // Reading it, and keeping it small.
+  {
+    const st = save();
+    const ids = [...Object.keys(D.skins), ...Object.keys(D.stickers), ...Object.keys(D.agents), ...Object.keys(D.charms)];
+    IX.record(st, ids.map((id) => copy(id, IX.kindOf(id) === 'skin' ? { fl: 0.123456789, sd: 7 } : {})), NOW);
+    const whole = JSON.stringify(st.index).length;
+    check('Index: every item in the game on the record is under a megabyte (a full inventory of items is about that)', whole < 1024 * 1024, `${(whole / 1024).toFixed(0)} KB, ${(whole / ids.length).toFixed(0)} bytes an item`);
+    const t0 = performance.now(), rows = IX.rows(st.index), t1 = performance.now();
+    const view = IX.viewRows(rows, { q: 'ak-47', rank: 'all', type: 'skin', sort: 'rarity' }), t2 = performance.now();
+    check('Index: a record of every item in the game reads quickly', rows.length === ids.length && t1 - t0 < 400 && t2 - t1 < 100, `${(t1 - t0).toFixed(0)} ms to list ${rows.length.toLocaleString()}, ${(t2 - t1).toFixed(0)} ms to search`);
+    check('Index: search and the type filter', view.length > 5 && view.every((r) => r.name.includes('AK-47') && r.item.t === 'skin' && r.rank !== 6));
+    check('Index: rarity order', view.every((r, i) => !i || view[i - 1].rank >= r.rank));
+    const stars = IX.viewRows(rows, { type: 'star' }), stickers = IX.viewRows(rows, { type: 'sticker', rank: '5' });
+    check('Index: the rarity filter, and knives and gloves apart', stars.length > 100 && stars.every((r) => r.rank === 6) && stickers.length > 0 && stickers.every((r) => r.item.t === 'sticker' && r.rank === 5));
+
+    const grind = save(), start = performance.now();
+    for (let k = 0; k < 2000; k++) IX.record(grind, Array.from({ length: 10 }, () => I.rollFromCase(box, rng)), NOW + k);
+    const size = JSON.stringify(grind.index).length, per = Object.keys(grind.index.items).length;
+    check('Index: 20,000 cases opened add a few KB: it grows with what\'s different, not with how much', Object.values(grind.index.items).reduce((s, e) => s + e.n, 0) === 20000 && size < per * 90 && per <= IX.setOf(box.id).ids.length + IX.setOf(box.id).rare.length, `${(size / 1024).toFixed(1)} KB, ${per} entries, ${(performance.now() - start).toFixed(0)} ms`);
+    const change = JSON.stringify(ACT.delta(Object.assign(ACT.makeCtx(st), { ix: IX.record(st, [copy(box.pools[2][0], { fl: 0.2, sd: 1 })], NOW) })).ix).length;
+    check('Index: and what\'s sent for one opening stays tiny however long the record is', change < 200, `${change} bytes`);
+    const copyOf = JSON.parse(JSON.stringify(grind.index));
+    check('Index: an entry\'s float keeps six figures, not seventeen', Object.values(copyOf.items).some((e) => e.fl != null) && Object.values(copyOf.items).every((e) => e.fl == null || Number(e.fl.toPrecision(6)) === e.fl));
+  }
+
+  // Putting an older state back online.
+  {
+    const was = freshState(), now_ = freshState(), id = Object.keys(D.skins)[0], other = Object.keys(D.skins)[1];
+    was.index = { ...IX.freshIndex(), items: { [id]: { at: 500, n: 1, fl: 0.2 } } };
+    now_.index = { ...IX.freshIndex(), items: { [id]: { at: 500, n: 3, st: 1, fl: 0.1 }, [other]: { at: 900, n: 1 } }, claimed: { some: 9 } };
+    const m = IX.mergeIndex(was.index, now_.index);
+    check('Index: a merge keeps the most of everything, and every claim', m.items[id].n === 3 && m.items[id].st === 1 && m.items[id].fl === 0.1 && m.items[id].at === 500 && m.items[other].n === 1 && m.claimed.some === 9);
+    const again = upgradeState({ ...JSON.parse(JSON.stringify(was)) });
+    AD.restoreMerge(now_, again, {});
+    check('Index: an older snapshot put back online can\'t reopen a claim', again.index.claimed.some === 9 && again.index.items[other].n === 1);
+    const off = upgradeState({ ...JSON.parse(JSON.stringify(was)) });
+    AD.restoreMerge(now_, off, { keepRewards: true });
+    check('Index: offline a restore is your own save as it was', !off.index.claimed.some && !off.index.items[other]);
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -84,7 +84,7 @@ function poolSkin(cols, r) {
 
 // A level-up reward: four items, at least one case and one skin, no case twice. You keep two of them.
 export const CARE_OFFERS = 4, CARE_PICKS = 2;
-const SRC = 'Level-up reward';
+export const CARE_SRC = 'Level-up reward';
 export function carePackage({ r = rand, now = Date.now(), level = 0 } = {}) {
   const { cases, collections } = dropPool();
   const kinds = Array.from({ length: CARE_OFFERS }, (_, i) => (i === 0 ? 'case' : i === 1 ? 'skin' : r() < 0.4 ? 'case' : 'skin'));
@@ -94,11 +94,11 @@ export function carePackage({ r = rand, now = Date.now(), level = 0 } = {}) {
     if (k === 'case' && left.length) {
       const c = pick(left, r);
       used.add(c.id);
-      offers.push(makeCrateItem(c, SRC));
+      offers.push(makeCrateItem(c, CARE_SRC));
       continue;
     }
     const s = poolSkin(collections, r);
-    if (s) offers.push(makeSkinItem(s, { src: SRC, stt: false, r }));
+    if (s) offers.push(makeSkinItem(s, { src: CARE_SRC, stt: false, r }));
   }
   return { id: uid(), at: now, level, offers };
 }
