@@ -9,6 +9,7 @@
 //   node scripts/discord-setup.mjs update-log [--apply]  only bring the update log up to date (--apply does it too)
 //   node scripts/discord-setup.mjs release <link> [--apply]  only post this version's GitHub release link in #releases
 //   node scripts/discord-setup.mjs channel <key> [--apply]  only make that channel from the config, if it isn't there yet
+//   node scripts/discord-setup.mjs topic <key> [--apply]  only bring that channel's description up to date from the config
 //   node scripts/discord-setup.mjs onboarding [--apply]  only bring Onboarding up to date (the dry run lists what would change)
 // Options: --guild <id> (the bot is in more than one server), --download <url> (the download link in the messages),
 // --name <name> (rename the server; by default its name is kept).
@@ -376,6 +377,17 @@ async function main() {
     const order = ch.cat.channels.map((c, position) => ({ id: ids.channels.get(c.key), position })).filter((p) => p.id);
     await api('PATCH', `/guilds/${gid}/channels`, order, { reason }).catch((e) => console.log(`! channel order: ${e.message}`));
     console.log(`Created #${ch.name} in ${ch.cat.name}.`);
+    return;
+  }
+  // One channel's description from the config: the channel command leaves a channel that's there alone.
+  if (args[0] === 'topic') {
+    const ch = chanByKey.get(args[1]), cur = ch && chMatch.get(ch.key);
+    if (!cur) { console.log(`Usage: node scripts/discord-setup.mjs topic <key> [--apply], for a channel that's there. Keys: ${[...chanByKey.keys()].join(', ')}`); process.exit(1); }
+    const topic = channelBody(ch, ids, everyoneId, cur.parent_id).topic;
+    if (cur.topic === topic) { console.log(`#${ch.name}'s description is up to date.`); return; }
+    if (!APPLY) { console.log(`#${ch.name}'s description\n  now:  ${cur.topic}\n  will be: ${topic}\n\nNothing was changed. Run again with --apply to do it.`); return; }
+    await api('PATCH', `/channels/${cur.id}`, { topic }, { reason: 'CS2 Case Simulator server setup' });
+    console.log(`Updated #${ch.name}'s description.`);
     return;
   }
   // A new build: its notes and link in a message of its own in #releases, once per version, pinging the role members pick for
