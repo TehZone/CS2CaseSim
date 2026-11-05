@@ -48,7 +48,10 @@ export function tradeupIneligible(item) {
   if (item.sv) return 'Souvenir items cannot be traded up';
   if (d.r > 5) return 'This rarity cannot be traded up';
   if (!d.col) return 'Not part of a collection';
-  if (!outcomeGroups(d, !!item.stt).length) return d.r === 5 ? 'Its collection has no knife or gloves case' : 'Highest rarity in its collection';
+  if (!outcomeGroups(d, !!item.stt).length) {
+    if (d.r !== 5) return 'Highest rarity in its collection';
+    return item.stt && outcomeGroups(d, false).length ? 'Its collection only has gloves, and gloves have no StatTrak' : 'Its collection has no knife or gloves case';
+  }
   return '';
 }
 

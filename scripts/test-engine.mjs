@@ -183,6 +183,7 @@ function tierFreq(box, n) {
   check('and the contract gives one, with a float in its range', D.skins[dg.id].star && deadHand.rare.some((g) => g.includes(dg.id)) && dg.fl >= D.skins[dg.id].mn && dg.fl <= D.skins[dg.id].mx, I.itemName(dg));
   check('a StatTrak Dead Hand contract has nothing to give: gloves have no StatTrak', !T.tradeupContract(dead5.map((x) => ({ ...x, stt: true }))).ok);
   check('a Genesis Covert still can\'t: CS2 gave that Terminal no gold', /no knife or gloves/.test(T.tradeupIneligible(mk(genesis.pools[5][0], 0.2))));
+  check('a StatTrak Covert of a box with only gloves is told why', /gloves have no StatTrak/.test(T.tradeupIneligible({ ...mk(deadHand.pools[5][0], 0.2), stt: true })));
   const mixed = T.tradeupContract([...dead5.slice(0, 3), ...five.slice(0, 2)]);
   check('Dead Hand and a case in one contract share the tickets', mixed.ok && mixed.outcomes.some((o) => D.skins[o.ids[0]].cat === 'gloves') && mixed.outcomes.some((o) => D.skins[o.ids[0]].cat === 'knife'), mixed.error);
   check('the Armory still features the Terminals\' collections', D.collections.filter((c) => /Dead Hand|Genesis/.test(c.n)).every((c) => !c.caseId));
