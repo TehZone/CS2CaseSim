@@ -145,6 +145,8 @@ try {
     check('item database counts every copy on the server', idx.players >= 2 && idx.counts[key] === mine, `${key}: ${idx.counts[key]} (alice has ${mine})`);
     const { copies } = await B.rpc('social', 'db.item', { t: 'skin', id: it.id });
     check('item database lists each copy with its owner and float', copies.length === mine && copies.every((c) => c.owner === 'alice' && !c.me && c.item.fl === A.st.inv.find((x) => x.uid === c.item.uid)?.fl));
+    const { copies: own } = await A.rpc('social', 'db.item', { t: 'skin', id: it.id });
+    check('item database says whose each copy is, for the link to their profile', copies.every((c) => c.id === A.user.id) && own.every((c) => c.id === A.user.id && c.me));
     let e = null; try { await B.rpc('social', 'db.item', { t: 'chicken', id: 'x' }); } catch (x) { e = x; }
     check('item database refuses unknown kinds', /Unknown item/.test(e?.message || ''));
     // Float ranks for your own items, among everyone's copies: as the database page works them out.

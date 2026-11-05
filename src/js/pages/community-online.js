@@ -182,6 +182,14 @@ export function destroy() {
   root = null;
 }
 
+// A player's profile, from another page (an owner in the item database).
+export function openProfile(id) {
+  view.who = id === meId() ? 'me' : id;
+  view.pane = 'profile';
+  view.tab = 'showcase';
+  window.dispatchEvent(new CustomEvent('app:go', { detail: 'community' }));
+}
+
 function drawAll() { drawMe(); drawRows(); drawMain(); }
 // What changed without you doing anything: the parts that show it, and never the box you're typing in.
 function drawLive() {

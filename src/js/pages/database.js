@@ -1,7 +1,7 @@
 // Item Database, like CSFloat's: search every item in the game (skins, knives, gloves, stickers, agents, pro cards) and
 // open one to see every copy that exists: who has it, its float, wear, pattern and stickers, and its float rank (the
 // three lowest and three highest floats of the item, counted apart for StatTrak™ and Souvenir copies). Online that's
-// everyone on the server; offline, you and the NPC players (engine/npcs.js: click an owner to visit their profile). A
+// everyone on the server; offline, you and the NPC players (engine/npcs.js). Click an owner to visit their profile. A
 // skin's current Market listings show under its copies.
 import { esc, money, imgUrl, debounce } from '../util.js';
 import { D, WEARS, wearOf, WEAR_BY_KEY } from '../data.js';
@@ -11,6 +11,7 @@ import { act, online } from '../backend.js';
 import { worldCopies, crowd } from '../engine/npcs.js';
 import { ownedItems } from '../engine/storage.js';
 import { openPerson } from './community.js';
+import { openProfile } from './community-online.js';
 import { openInspect, patternTag, toast } from '../ui.js';
 import { net } from '../net/online.js';
 import { marketWindow, skinListings, localSold, lowestPrice } from '../engine/market.js';
@@ -70,6 +71,7 @@ export function render(r) {
   offs.forEach((o) => o());
   offs = [on('state', () => { if (!online()) { index = null; if (view.key) copiesKey = null; draw(); } })];
   index = null;
+  copiesKey = null; // (an item left open is read again: its owners may be from before you logged in)
   draw();
 }
 export function destroy() { offs.forEach((o) => o()); offs = []; root = null; }
@@ -250,6 +252,7 @@ function drawItem() {
   own?.addEventListener('input', debounce(() => { view.owner = own.value.toLowerCase().trim(); draw(); const n = root?.querySelector('[data-owner]'); n?.focus(); n?.setSelectionRange(n.value.length, n.value.length); }, 220));
   root.querySelectorAll('[data-cinsp]').forEach((b) => b.addEventListener('click', () => inspectCopy(shownRows[+b.dataset.cinsp].item)));
   root.querySelectorAll('[data-npc]').forEach((a) => a.addEventListener('click', (ev) => { ev.preventDefault(); openPerson(a.dataset.npc); }));
+  root.querySelectorAll('[data-player]').forEach((a) => a.addEventListener('click', (ev) => { ev.preventDefault(); openProfile(+a.dataset.player); }));
   root.querySelectorAll('[data-ainsp]').forEach((b) => b.addEventListener('click', () => inspectCopy(copies.applied[+b.dataset.ainsp].item)));
   root.querySelectorAll('[data-linsp]').forEach((b) => b.addEventListener('click', () => inspectCopy(listings[+b.dataset.linsp].item)));
 }
@@ -260,8 +263,12 @@ const itemCell = (it) => {
   return `<span class="db-name ${it.stt ? 'stt' : it.sv ? 'sv' : ''}">${it.stt ? 'StatTrak™' : it.sv ? 'Souvenir' : 'Normal'}</span>${pat.label ? ' ' + patternTag(pat) : ''}${it.sn ? ` <span class="tag sn" title="Serial number">#${it.sn}</span>` : ''}${I.nameTagHtml(it)}
     ${it.stk?.length ? `<span class="db-stk">${it.stk.map((s) => `<img src="${imgUrl(D.stickers[s.id]?.img, 's')}" title="${esc(D.stickers[s.id]?.n || '')}" alt="">`).join('')}</span>` : ''}`;
 };
-const ownerCell = (c) => (c.npc ? `<a href="#" class="db-owner npc" data-npc="${esc(c.npc)}" title="Visit ${esc(c.owner)}'s profile">${esc(c.owner)}</a>`
-  : `<span class="db-owner ${c.me ? 'me' : ''}">${esc(c.owner)}${c.me ? ' <span class="dim">(you)</span>' : ''}</span>`);
+// An owner, as a link to their profile: an NPC's or yours offline, a player's online.
+const ownerCell = (c) => {
+  const to = c.npc ? `data-npc="${esc(c.npc)}"` : !online() ? 'data-npc="me"' : c.id != null ? `data-player="${esc(c.id)}"` : '';
+  const name = `${esc(c.owner)}${c.me ? ' <span class="dim">(you)</span>' : ''}`;
+  return to ? `<a href="#" class="db-owner ${c.me ? 'me' : 'other'}" ${to} title="Visit ${c.me ? 'your' : `${esc(c.owner)}'s`} profile">${name}</a>` : `<span class="db-owner ${c.me ? 'me' : ''}">${name}</span>`;
+};
 function copyRow(c, i, skin, ranks) {
   const it = c.item, r = ranks.get(it.uid);
   return `<tr class="${r ? 'ranked' : ''}">${skin ? `<td class="db-rank-col"><div class="db-ranks">${rankBadges(r, copyCategory(it))}</div></td><td>${floatCell(it)}</td><td>${it.sd ?? '—'}</td>` : ''}

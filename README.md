@@ -446,7 +446,7 @@ What's in a match:
   else lets staff read a chat.
 - Item Database (like CSFloat's): search every skin, knife, glove, sticker, charm and agent in the game; open one to
   see every copy that exists with its owner, float, seed, pattern and stickers (online: everyone on the server;
-  offline: you and the NPC players, each owner a link to their profile), its float rank (#1-#3 lowest and highest, StatTrak™ and Souvenir copies ranked apart), the
+  offline: you and the NPC players; each owner is a link to their profile), its float rank (#1-#3 lowest and highest, StatTrak™ and Souvenir copies ranked apart), the
   guns a sticker is applied to, and a skin's current Market listings. Your own top floats carry the same #1-#3 badge
   in your inventory and the item details (a lone copy has no rank)
 - Rare Special Items (knives and gloves) show CS:GO's classic gold "?" medallion in case contents and the roulette

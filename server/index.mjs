@@ -362,11 +362,11 @@ export async function startServer({
       const t = String(a.t || ''), id = String(a.id || '').slice(0, 80);
       if (!DB_TYPES.includes(t) || !id) throw new GameError('Unknown item');
       await dbFresh();
-      const { rows } = await db.query(`SELECT u.name, it FROM users u, ${OWNED('u')} AS it
+      const { rows } = await db.query(`SELECT u.id, u.name, it FROM users u, ${OWNED('u')} AS it
         WHERE it->>'t' = $1 AND it->>'id' = $2 LIMIT 5000`, [t, id]);
-      const row = (x) => ({ owner: x.name, me: x.name === user.name, item: publicCopy(typeof x.it === 'string' ? JSON.parse(x.it) : x.it) });
+      const row = (x) => ({ owner: x.name, id: x.id, me: x.id === user.id, item: publicCopy(typeof x.it === 'string' ? JSON.parse(x.it) : x.it) });
       // A sticker: also the guns it's applied to.
-      const applied = t !== 'sticker' ? [] : (await db.query(`SELECT u.name, it FROM users u, ${OWNED('u')} AS it
+      const applied = t !== 'sticker' ? [] : (await db.query(`SELECT u.id, u.name, it FROM users u, ${OWNED('u')} AS it
         WHERE it->'stk' @> $1::jsonb LIMIT 5000`, [JSON.stringify([{ id }])])).rows;
       return { r: { copies: rows.map(row), applied: applied.map(row) } };
     }
