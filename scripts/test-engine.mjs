@@ -494,6 +494,8 @@ function tierFreq(box, n) {
 
 // ---- older saves: chickens and pro cards are sold on load ----------------------------------------------------
 {
+  const forgiven = MM.forgive({ ...MM.abandon(MM.abandon(MM.freshMM(), t0).mm, t0).mm, match: { mode: 'premier' } });
+  check('matchmaking: staff taking a cooldown away ends it, the next is the shortest again, and the match you\'re in stays', MM.cooldownLeft(forgiven, t0) === 0 && MM.nextCooldown(forgiven, t0) === 30 * 60e3 && forgiven.match?.mode === 'premier' && MM.cooldownLeft(MM.forgive(null)) === 0);
   const { upgradeState } = await E('economy');
   const pro = Object.values(D.pros)[0];
   const old = { ...freshState(), money: 5, team: { name: 'My Team', slots: {} },

@@ -22,6 +22,7 @@ import { drawAdminIndex, recordSize } from './itemindex.js';
 import { playPrefs, savePlayPrefs } from './play-settings.js';
 import { BINDS_VERSION } from '../play/input.js';
 import { ASPECTS, RESOLUTIONS } from '../play/screen.js';
+import { formatWait } from '../engine/matchmaking.js';
 
 const TABS = [['dash', 'Dashboard'], ['players', 'Players'], ['bans', 'Bans'], ['reports', 'Reports'], ['audit', 'Audit log'], ['server', 'Server']];
 // (Offline the bans are the NPC traders you've blocked, and the server is your save and its NPC world.)
@@ -50,6 +51,7 @@ const ACCESS = [
   [1, 'Ban, kick, warn and sign out players below your level; lift bans'],
   [1, 'Write notes and save snapshots'],
   [1, 'Read and close player reports; clear a reported summary'],
+  [1, 'Remove matchmaking cooldowns'],
   [2, 'Edit money, stats and items; restore and delete snapshots; rename and reset accounts'],
   [2, 'Network bans and Discord bans'],
   [2, 'Server settings and broadcasts'],
@@ -411,7 +413,7 @@ function switchesHtml(s) {
 }
 
 // ---- the audit log (its tab, the Dashboard and a player's history) ---------------------------------
-const actionTone = (a) => (['ban', 'reset', 'items.remove', 'save.import', 'world.reset'].includes(a) ? 'red' : a === 'unban' ? 'green' : ['kick', 'warn', 'signout'].includes(a) ? 'gold' : '');
+const actionTone = (a) => (['ban', 'reset', 'items.remove', 'save.import', 'world.reset'].includes(a) ? 'red' : a === 'unban' || a === 'cooldown.clear' ? 'green' : ['kick', 'warn', 'signout'].includes(a) ? 'gold' : '');
 // (Offline a ban is an NPC trader blocked.)
 const actionName = (a) => (!online() && { ban: 'block', unban: 'unblock' }[a]) || a;
 // A value in a log line: times as dates, a Discord account or player by name, lists by length.
@@ -586,6 +588,7 @@ function playerHeadHtml(p, ban) {
   ];
   const alts = (p.alts || []).map((a) => `${playerLink(a)}${a.banned ? ' <span class="chip red">Banned</span>' : ''}`).join(', ');
   if (alts) facts.push(['Same network', alts]);
+  if (u.cooldown) facts.push(['Ranked cooldown', `${esc(formatWait(u.cooldown))} left`]);
   return `<div class="panel adm-head">
     <div class="adm-head-top">
       ${avatar(u.name, 'adm-av')}
@@ -605,6 +608,7 @@ function actionButtons(u, ban) {
     b.push(`<button class="btn" data-act="kick" ${u.online ? '' : 'disabled title="They aren\'t online"'}>Kick</button>`,
       '<button class="btn" data-act="warn">Warn</button>', '<button class="btn" data-act="signout">Sign out everywhere</button>');
   }
+  if (canTidy(u) && u.cooldown) b.push('<button class="btn" data-act="cooldown">Remove cooldown</button>');
   if (canChange(u)) b.push('<span class="spacer"></span><button class="btn" data-act="rename">Rename</button>', '<button class="btn ghost" data-act="reset">Reset account</button>');
   if (b.length) return (isSelf(u) ? '<span class="muted">That\'s you: you can\'t punish yourself.</span>' : '') + b.join('');
   return `<span class="muted">${isSelf(u) ? "That's you: you can look, but not punish yourself." : `${esc(u.name)} is ${esc(levelName(u.staff))}, the same level as you or above: you can only look.`}</span>`;
@@ -616,6 +620,7 @@ function localHeadHtml(p, ban) {
   const facts = n
     ? [['Trader', esc(typeName(n))], ['Country', n.country ? cc(n.country) : '<span class="dim">—</span>'], ['Friend', esc(friendText(n.friend))], ['Trades with you', num(+n.trades || 0)]]
     : [['Save', 'Offline, on this PC'], ['Unlocked by', `${esc(pc.name)} <span class="dim">(${esc(levelName(pc.level))}) on ${esc(pc.server)}</span>`]];
+  if (u.cooldown) facts.push(['Ranked cooldown', `${esc(formatWait(u.cooldown))} left`]);
   const chips = n
     ? `${u.online != null ? `<span class="chip ${u.online ? 'green' : ''}"><span class="adm-dot ${u.online ? 'on' : ''}"></span>${u.online ? 'Online' : 'Offline'}</span>` : ''}<span class="chip">NPC trader</span>${ban ? '<span class="chip red">Blocked</span>' : ''}`
     : '<span class="chip gold">Your save</span>';
@@ -628,7 +633,7 @@ function localHeadHtml(p, ban) {
     ${ban ? `<div class="adm-banline"><b>Blocked ${esc(untilText(ban.expires))}</b>${ban.by ? ` by ${esc(ban.by)}` : ''}<div>${esc(ban.reason)}</div></div>` : ''}
     <div class="actions adm-actions">${n ? `${ban ? '<button class="btn primary" data-act="unban">Unblock</button>' : '<button class="btn danger" data-act="ban">Block</button>'}
       <span class="spacer"></span><button class="btn ghost" data-act="reset">Reset trader</button>`
-      : '<span class="muted">Your own save on this PC: every change is in the log, and your save is snapshotted before it.</span><span class="spacer"></span><button class="btn ghost" data-act="reset">Reset save</button>'}</div>
+      : `<span class="muted">Your own save on this PC: every change is in the log, and your save is snapshotted before it.</span>${u.cooldown ? '<button class="btn" data-act="cooldown">Remove cooldown</button>' : ''}<span class="spacer"></span><button class="btn ghost" data-act="reset">Reset save</button>`}</div>
   </div>`;
 }
 
@@ -650,7 +655,12 @@ function minutesOf($, err) {
 }
 
 // The actions in a player's header: each a window with a form or a confirmation.
+async function removeCooldown(p, btn) {
+  const u = p.user;
+  if (await run(btn, 'cooldown.clear', { id: u.id }, `Removed <b>${esc(u.name)}</b>'s matchmaking cooldown`)) afterChange();
+}
 const PLAYER_ACTIONS = {
+  cooldown: removeCooldown,
   ban(p) {
     const u = p.user, admin = isAdmin();
     const m = formModal({
@@ -753,6 +763,7 @@ const PLAYER_ACTIONS = {
 
 // Offline: blocking an NPC trader and lifting it, and starting a trader (or your save) over.
 const LOCAL_ACTIONS = {
+  cooldown: removeCooldown,
   ban(p) {
     const u = p.user;
     const m = formModal({

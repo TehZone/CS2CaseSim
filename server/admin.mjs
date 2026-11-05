@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import { makeCtx, delta, takeForStaff, clearNameForStaff, give, GameError } from '../src/js/engine/actions.js';
 import { upgradeState } from '../src/js/engine/economy.js';
 import { customName } from '../src/js/engine/items.js';
+import { cooldownLeft, forgive, formatWait } from '../src/js/engine/matchmaking.js';
 import { ownedItems } from '../src/js/engine/storage.js';
 import { round2 } from '../src/js/engine/util.js';
 // (the checks and rules the offline panel shares)
@@ -30,7 +31,7 @@ const TITLES = {
   'snapshot.save': 'Snapshot saved', 'snapshot.restore': 'Snapshot restored', 'snapshot.delete': 'Snapshot deleted', 'note.add': 'Note added',
   rename: 'Player renamed', reset: 'Account reset', 'settings.set': 'Server settings changed', broadcast: 'Broadcast sent',
   link: 'Discord account linked', unlink: 'Discord account unlinked', resetpassword: 'Password reset through Discord',
-  report: 'Player reported', 'report.close': 'Report closed', 'bio.clear': 'Summary cleared',
+  report: 'Player reported', 'report.close': 'Report closed', 'bio.clear': 'Summary cleared', 'cooldown.clear': 'Matchmaking cooldown removed',
 };
 const RED = 0xeb4b4b, GOLD = 0xe4ae39, BLUE = 0x4b69ff, GREEN = 0x4ade80;
 const COLORS = { ban: RED, kick: RED, signout: RED, reset: RED, warn: GOLD, unban: GREEN, link: GREEN, broadcast: BLUE, 'settings.set': BLUE };
@@ -379,7 +380,7 @@ export class Admin {
       'snapshot.get': this.snapGet, 'snapshot.restore': this.snapRestore, 'snapshot.delete': this.snapDelete, 'config.get': this.configGet,
       ban: this.ban, unban: this.unban, bans: this.bans, kick: this.kick, warn: this.warn, signout: this.signout, 'note.add': this.noteAdd,
       rename: this.rename, reset: this.reset, audit: this.auditList, 'settings.get': this.settingsGet, 'settings.set': this.settingsSet,
-      broadcast: this.broadcast, reports: this.reports, 'report.close': this.reportClose, 'bio.clear': this.bioClear,
+      broadcast: this.broadcast, reports: this.reports, 'report.close': this.reportClose, 'bio.clear': this.bioClear, 'cooldown.clear': this.cooldownClear,
     };
   }
 
@@ -468,7 +469,7 @@ export class Admin {
       user: {
         id: t.id, name: t.name, created: num(t.created), lastSeen: num(t.last_seen), online: this.srv.isOnline(t.id),
         discord: t.discord_id ? { id: t.discord_id, name: t.discord_name || '', linkedAt: num(t.linked_at) } : null,
-        staff: await this.levelOf(t.id, { fast: true }), ban: ban && publicBan(ban),
+        staff: await this.levelOf(t.id, { fast: true }), ban: ban && publicBan(ban), cooldown: cooldownLeft(state.mm),
       },
       state, rev, config: parse(cfg?.config) ?? null, configAt: num(cfg?.config_at),
       bans: bans.map((r) => banRow(r, now)),
@@ -893,6 +894,23 @@ export class Admin {
     await this.db.query(`UPDATE users SET profile = profile || '{"bio":""}'::jsonb WHERE id = $1`, [t.id]);
     await this.audit(actor, 'bio.clear', t, { bio: r.bio });
     this.srv.social.changed(t.id);
+    return {};
+  }
+
+  // A matchmaking cooldown comes off, as a ban can be lifted, and with it the abandons that would make the next one longer.
+  async cooldownClear(actor, a) {
+    const t = await this.target(a.id);
+    await this.canTidy(actor, t);
+    const left = await this.srv.store.withUser(t.id, async (e) => {
+      const ms = cooldownLeft(e.st.mm);
+      if (!ms) fail(`${t.name} has no matchmaking cooldown`);
+      e.st.mm = forgive(e.st.mm);
+      this.srv.store.markDirty(e);
+      await this.srv.store.commit([e]);
+      this.srv.deltaTo(t.id, { set: { mm: e.st.mm }, add: [], del: [], upd: [] }, 'Your matchmaking cooldown was removed');
+      return ms;
+    });
+    await this.audit(actor, 'cooldown.clear', t, { msg: `${formatWait(left)} left` });
     return {};
   }
 

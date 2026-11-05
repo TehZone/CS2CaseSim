@@ -147,7 +147,7 @@ try {
 
   // ---- a player is refused on every admin method --------------------------------------------------------------------
   const METHODS = ['overview', 'players', 'player', 'edit', 'edit.raw', 'items.give', 'items.remove', 'snapshot.save', 'snapshot.list', 'snapshot.get', 'snapshot.restore',
-    'snapshot.delete', 'config.get', 'ban', 'unban', 'bans', 'kick', 'warn', 'signout', 'note.add', 'rename', 'reset', 'audit', 'settings.get', 'settings.set', 'broadcast'];
+    'snapshot.delete', 'config.get', 'ban', 'unban', 'bans', 'kick', 'warn', 'signout', 'note.add', 'rename', 'reset', 'audit', 'settings.get', 'settings.set', 'broadcast', 'cooldown.clear'];
   const notRefused = [];
   for (const m of METHODS) {
     const e = await refused(alice.admin(m, { id: sid, snap: 1, set: { money: 1 }, state: { money: 1 }, items: [{ t: 'crate', id: 'x' }], uids: ['x'], reason: 'x', msg: 'x', text: 'x', name: 'zed', label: 'x', settings: { motd: 'x' } }));
@@ -230,6 +230,21 @@ try {
   const owner = { id: lv.oscar.id, name: 'oscar', discordId: ID.owner, level: 3 };
   check('the owner outranks an admin', (await server.admin.exec(owner, 'warn', { id: sid, msg: 'from the owner' })).delivered === true && !!(await boss.waitFor((m) => m.t === 'admin.msg' && m.from === 'oscar')));
   check('a moderator punishes a player (a note too)', (await bob.admin('note.add', { id: aid, text: 'keeps spamming' })).id > 0);
+
+  // ---- a matchmaking cooldown taken away ---------------------------------------------------------------------------------
+  const giveCooldown = (id) => server.store.withUser(id, async (e) => { e.st.mm = { ...e.st.mm, offenses: 3, lastOffense: Date.now(), until: Date.now() + 3600e3, match: { mode: 'premier', opponent: 1, at: 1 } }; server.store.markDirty(e); });
+  check('cooldown.clear: refused when there isn\'t one', /no matchmaking cooldown/.test((await refused(bob.admin('cooldown.clear', { id: aid })))?.message));
+  await giveCooldown(aid);
+  check('cooldown.clear: the panel shows how long is left', Math.abs((await bob.admin('player', { id: aid })).user.cooldown - 3600e3) < 5000);
+  await bob.admin('cooldown.clear', { id: aid });
+  const freed = (await server.store.load(aid)).st.mm;
+  check('cooldown.clear: a moderator takes it away, and the abandons behind it; the match they\'re in stays', freed.until === 0 && freed.offenses === 0 && freed.lastOffense === 0 && freed.match?.mode === 'premier');
+  check('cooldown.clear: their game is told at once', (await alice.waitFor((m) => m.t === 'delta' && m.d?.set?.mm?.until === 0))?.note === 'Your matchmaking cooldown was removed' && (await bob.admin('player', { id: aid })).user.cooldown === 0);
+  const clearedRow = (await server.db.query("SELECT * FROM audit WHERE action = 'cooldown.clear' ORDER BY id DESC LIMIT 1")).rows[0];
+  check('cooldown.clear: in the audit log, with how long was left', clearedRow?.actor === 'bob' && clearedRow.target_id === aid && /59 minutes|1 hour/.test(JSON.stringify(clearedRow.detail)), JSON.stringify(clearedRow?.detail));
+  await giveCooldown(sid);
+  check('cooldown.clear: not staff at or above your level, but your own', perm(await refused(bob.admin('cooldown.clear', { id: sid }))) && !(await boss.admin('cooldown.clear', { id: sid })).error);
+  for (const id of [aid, sid]) await server.store.withUser(id, async (e) => { e.st.mm = { ...e.st.mm, match: null }; server.store.markDirty(e); });
 
   // ---- overview / players / player --------------------------------------------------------------------------------
   const ov = await boss.admin('overview');

@@ -12,6 +12,7 @@ import { GameError, makeCtx, delta, give, take, takeForStaff, clearNameForStaff 
 import { freshState, upgradeState } from './engine/economy.js';
 import { backfillSerials, customName, itemName } from './engine/items.js';
 import { backfillIndex } from './engine/itemindex.js';
+import { cooldownLeft, forgive, formatWait } from './engine/matchmaking.js';
 import * as N from './engine/npcs.js';
 import { ownedItems } from './engine/storage.js';
 import { round2 } from './engine/util.js';
@@ -339,7 +340,7 @@ const METHODS = {
     if (!t.npc) {
       const { settings, ...state } = S;
       return {
-        user: { id: 'me', name: t.name, created: S.created ?? null, lastSeen: S.lastSeen ?? null, online: true, discord: null, staff: 0, ban: null },
+        user: { id: 'me', name: t.name, created: S.created ?? null, lastSeen: S.lastSeen ?? null, online: true, discord: null, staff: 0, ban: null, cooldown: cooldownLeft(S.mm) },
         state, rev: myRev(), config: { game: settings, play: playPrefs() }, configAt: now,
         bans: [], notes, snapshots, trades: so ? tradesOf(so) : [], audit, alts: [],
       };
@@ -375,6 +376,17 @@ const METHODS = {
       applyEdit(S, p.next);
       announce(pick(S, Object.keys(p.before)));
       return { answer: { state: pick(S, Object.keys(p.next)) }, detail: { changed: p.changed, before: p.before, after: p.after } };
+    });
+  },
+
+  // Yours comes off, as the server does a player's (an NPC trader has none).
+  async 'cooldown.clear'(a) {
+    const t = await who(a.id);
+    const plan = () => { const left = t.npc ? 0 : cooldownLeft(S.mm); if (!left) fail(`${t.npc ? `${t.name} has` : "You have"} no matchmaking cooldown`); return { left }; };
+    return change(t, 'cooldown.clear', 'removing a cooldown', plan, (p) => {
+      S.mm = forgive(S.mm);
+      announce({ mm: S.mm });
+      return { answer: {}, detail: { msg: `${formatWait(p.left)} left` } };
     });
   },
 

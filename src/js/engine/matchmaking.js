@@ -15,6 +15,9 @@ export function freshMM() { return { offenses: 0, lastOffense: 0, until: 0, matc
 
 export const cooldownLeft = (mm, now = Date.now()) => Math.max(0, (mm?.until || 0) - now);
 
+// Staff took a cooldown away: it's over, and the abandons behind it don't count towards the next one. The match you're in stays.
+export const forgive = (mm) => ({ ...freshMM(), ...(mm || {}), offenses: 0, lastOffense: 0, until: 0 });
+
 // How long the next abandon's cooldown would be.
 export function nextCooldown(mm, now = Date.now()) {
   mm = { ...freshMM(), ...(mm || {}) };
