@@ -378,16 +378,18 @@ async function main() {
     console.log(`Created #${ch.name} in ${ch.cat.name}.`);
     return;
   }
-  // A new build's link: a message of its own in #releases, once per version. Nothing else here edits or deletes it.
+  // A new build: its notes and link in a message of its own in #releases, once per version, pinging the role members pick for
+  // that (a mention in an embed doesn't ping: it has to be the message's own text). Nothing else here edits or deletes it.
   if (args[0] === 'release') {
     const url = args[1] || '', version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+    const description = `${fs.readFileSync(path.join(ROOT, 'RELEASE_NOTES.md'), 'utf8').trim()}\n\n**Download:** ${url}`, role = ids.roles.get('release_pings');
     if (!/^https:\/\/github\.com\/\S+$/.test(url)) { console.log("Usage: node scripts/discord-setup.mjs release <the release's GitHub link> [--apply]"); process.exit(1); }
     const cid = ids.channels.get('releases'), name = chanByKey.get('releases').name, title = `CS2 Case Simulator ${version}`;
     if (!cid) { console.log(`There's no #${name} yet: run "node scripts/discord-setup.mjs --apply" to make it.`); process.exit(1); }
     const recent = await api('GET', `/channels/${cid}/messages?limit=100`);
     if (recent.some((m) => m.author?.id === me.id && m.embeds?.some((e) => e.title === title))) { console.log(`${title} is already in #${name}.`); return; }
-    if (!APPLY) { console.log(`Would post in #${name}: ${title}, ${url}\n\nNothing was changed. Run again with --apply to post it.`); return; }
-    await api('POST', `/channels/${cid}/messages`, { embeds: [{ title, url, description: `Download: ${url}`, color: color(CONFIG.updateLog.color) }], allowed_mentions: { parse: [] } });
+    if (!APPLY) { console.log(`Would post in #${name}: ${title}${role ? ', pinging Release Pings' : ''}\n\n${description}\n\nNothing was changed. Run again with --apply to post it.`); return; }
+    await api('POST', `/channels/${cid}/messages`, { content: role ? `<@&${role}>` : '', embeds: [{ title, url, description, color: color(CONFIG.updateLog.color) }], allowed_mentions: { parse: [], roles: role ? [role] : [] } });
     console.log(`Posted ${title} in #${name}.`);
     return;
   }
