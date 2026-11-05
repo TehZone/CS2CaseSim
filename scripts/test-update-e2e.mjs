@@ -137,7 +137,8 @@ async function clickThrough(exe, tag, { corruptFirst = false } = {}) {
   check(`${tag}: the game says it's ${OLD}`, (await p.eval('window.native.build.version')) === OLD);
   await until(() => p.eval(`!!document.querySelector('.update-modal')`), 60000, 'the update window');
   const offer = await p.eval(modalText);
-  check(`${tag}: the window offers the new version, with its notes`, offer.includes(`Version ${NEW}`) && offer.includes(`You have ${OLD}`) && offer.includes('The first version with updates') && /not now/i.test(offer) && /\bupdate\b/i.test(offer), offer.replace(/\s+/g, ' ').slice(0, 160));
+  const notes = JSON.parse(fs.readFileSync(path.join(WORK, 'new', 'latest.json'), 'utf8')).notes.split('\n')[0];
+  check(`${tag}: the window offers the new version, with its notes`, offer.includes(`Version ${NEW}`) && offer.includes(`You have ${OLD}`) && offer.includes(notes) && /not now/i.test(offer) && /\bupdate\b/i.test(offer), offer.replace(/\s+/g, ' ').slice(0, 160));
   await p.shot(`${tag}-1-offer`);
 
   await p.eval(`document.querySelector('.update-modal [data-close]').click()`);
@@ -154,6 +155,9 @@ async function clickThrough(exe, tag, { corruptFirst = false } = {}) {
   const locked = await p.eval(modalText);
   check(`${tag}: the game explains why and offers the update`, /can't play online with other players until you update/.test(locked) && locked.includes(`Version ${NEW}`), locked.replace(/\s+/g, ' ').slice(0, 160));
   await p.shot(`${tag}-2b-refused`);
+
+  // (The installer starts the new version without this test's settings, so a login left here would go to the real server.)
+  await p.eval(`(() => { const s = JSON.parse(localStorage.getItem('cs2sim-online') || '{}'); delete s.token; localStorage.setItem('cs2sim-online', JSON.stringify(s)); return 1; })()`);
 
   // Something to find again afterwards.
   const money = 4242.42;
