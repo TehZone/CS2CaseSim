@@ -13,12 +13,13 @@ import { S, on } from '../state.js';
 import { sfx } from '../audio.js';
 import { toast, openModal, itemCard, openInspect, canInspect, showItemDetail, confirmDialog } from '../ui.js';
 import { medalOf } from '../engine/levels.js';
+import { RANK_FILTERS, SORT_NAMES, UNIT_CAP, viewItems } from '../engine/storage.js';
 import { levelIconHtml } from '../profile.js';
 import { net } from '../net/online.js';
 import { offerTo } from './trade.js';
 import { avatarTag, cc, backdrop, profileHeadHtml, profileDialog } from './community.js';
 
-const MESSAGE_MAX = 300, REPORT_MAX = 500;
+const MESSAGE_MAX = 300, REPORT_MAX = 500, UNIT_PAGE = 150;
 const DMS = [['everyone', 'Everyone'], ['friends', 'Friends only']];
 // (Said as it is: the reason goes to staff and the mod log in these words.)
 const REASONS = ['Harassment or threats', 'Hate speech', 'Scam or a dishonest trade', 'Spam', 'Something else'];
@@ -522,20 +523,22 @@ function drawProfile(el, who) {
   const show = list(p.showcase).length ? list(p.showcase) : items.slice(0, 6);
   const value = +p.value || items.reduce((t, it) => t + I.itemValue(it), 0);
   const count = +p.count || 0, st = mine ? { s: 'online', label: 'Online' } : statusOf(p), showInv = !mine && view.tab === 'inventory';
+  const units = list(p.units), stored = p.stored;
   const top = { name: p.name, country: p.country, joined: esc(yearOf(p.joined)), bio: p.bio || 'No information given.', level: +p.level || 1, medal: medalOf({ medals: +p.medals || 0 }), medals: +p.medals || 0 };
   el.innerHTML = `${head}<div class="sp" data-sp>
     ${profileHeadHtml(top, avatar(p, 120), mine)}
     <div class="sp-body">
       <div class="sp-left">
         ${mine ? '' : `<div class="seg" data-tabs><button data-v="showcase" class="${showInv ? '' : 'active'}">Showcase</button><button data-v="inventory" class="${showInv ? 'active' : ''}">Inventory (${count})</button></div>`}
-        ${showInv ? `<div class="grid">${items.map((it) => itemCard(it)).join('') || '<div class="empty">Empty</div>'}</div>
-          <p class="muted" style="font-size:12px">${count > items.length ? `Their ${items.length} most valuable items. ` : ''}Click an item to inspect it. Want something? <a href="#" data-offer2>Make an offer</a>.</p>`
+        ${showInv ? `<div class="grid">${[...units, ...items].map((it) => itemCard(it)).join('') || '<div class="empty">Empty</div>'}</div>
+          <p class="muted" style="font-size:12px">${count > items.length ? `Their ${items.length} most valuable items. ` : ''}Click an item to inspect it${units.length ? ', or a Storage Unit to look inside' : ''}. Want something? <a href="#" data-offer2>Make an offer</a>.</p>`
         : `<div class="sp-box"><div class="sp-bh">Item showcase${mine && !p.picked ? ' <span class="muted">(your most valuable: pick your own in Edit profile)</span>' : ''}</div><div class="grid showcase">${show.map((it) => itemCard(it)).join('') || '<div class="empty">Nothing to show yet</div>'}</div></div>`}
       </div>
       <div class="sp-right">
         <div class="sp-status st-${st.s}" data-status>${statusHtml(st)}</div>
         <div class="sp-stat"><span>Inventory value</span><b>${money(value)}</b></div>
         <div class="sp-stat"><span>Items</span><b>${count}</b></div>
+        ${!mine && stored?.count ? `<div class="sp-stat"><span>In storage</span><b>${(+stored.count).toLocaleString('en-US')} · ${money(+stored.value || 0)}</b></div>` : ''}
         <div class="sp-stat"><span>Friends</span><b>${+p.friends || 0}</b></div>
         ${mine ? '' : `<button class="btn primary" data-msg ${isBlocked(id) ? 'disabled' : ''}>Message</button><button class="btn gold" data-offer3>Make offer</button>`}
       </div>
@@ -546,10 +549,61 @@ function drawProfile(el, who) {
   el.querySelector('[data-msg]')?.addEventListener('click', () => { view.pane = 'chat'; drawMain(); });
   for (const sel of ['[data-offer2]', '[data-offer3]']) el.querySelector(sel)?.addEventListener('click', (e) => { e.preventDefault(); offerTo(p.name); });
   el.querySelectorAll('.sp .card[data-uid]').forEach((c) => c.addEventListener('click', () => {
+    const unit = units.find((x) => x.uid === c.dataset.uid);
+    if (unit) return unitWindow(p, unit);
     const it = mine ? S.inv.find((x) => x.uid === c.dataset.uid) : [...items, ...show].find((x) => x.uid === c.dataset.uid);
     if (it) mine ? showItemDetail(it) : canInspect(it) && openInspect(it, { preview: true }); // (someone else's: its charm isn't yours to move)
   }));
   backdrop(el.querySelector('[data-sp]'), { bg: p.bg });
+}
+
+// One of their Storage Units to look through, like your own unit's window with nothing to move.
+async function unitWindow(p, unit) {
+  const v = { q: '', rank: 'all', sort: 'new', limit: UNIT_PAGE };
+  const m = openModal({ title: `<bdi>${esc(p.name)}</bdi>'s Storage Unit`, cls: 'wide su-modal', body: '<div data-su><div class="empty">Loading…</div></div>' });
+  windows.add(m);
+  const box = m.el.querySelector('[data-su]');
+  let all;
+  try { all = list((await net.social('unit', { id: p.id, uid: unit.uid })).items); } catch (e) {
+    box.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    return;
+  }
+  if (!box.isConnected) return;
+  const value = all.reduce((t, it) => t + I.itemValue(it), 0);
+  const options = (pairs, on) => pairs.map(([k, t]) => `<option value="${k}" ${on === k ? 'selected' : ''}>${esc(t)}</option>`).join('');
+  box.innerHTML = `<div class="su-head">
+      <img src="${I.itemImage(unit, 'm')}" alt="">
+      <div class="su-who"><h3>${esc(unit.name || 'Not labelled yet')}</h3></div>
+      <div class="su-fill"><div><b>${all.length.toLocaleString('en-US')}</b> / ${UNIT_CAP.toLocaleString('en-US')} items</div><div class="su-bar"><i style="width:${(all.length / UNIT_CAP) * 100}%"></i></div></div>
+      <div class="su-worth"><span class="muted">Value inside</span><b class="green">${money(value)}</b></div>
+    </div>
+    <div class="toolbar su-bar-tools">
+      <input class="input" type="search" data-q placeholder="Search this unit…">
+      <select class="input" data-rank>${options(RANK_FILTERS, v.rank)}</select>
+      <select class="input" data-sort>${options(SORT_NAMES, v.sort)}</select>
+    </div>
+    <div data-items></div>`;
+  const items = box.querySelector('[data-items]');
+  const draw = () => {
+    const shown = viewItems(all, v);
+    items.innerHTML = `${shown.length ? `<div class="grid su-grid">${shown.slice(0, v.limit).map((it) => itemCard(it)).join('')}</div>` : `<div class="empty">${all.length ? 'Nothing matches your filters.' : 'This Storage Unit is empty.'}</div>`}
+      ${shown.length > v.limit ? `<div class="pager"><button class="btn" data-more>Show more (${(shown.length - v.limit).toLocaleString('en-US')} more)</button></div>` : ''}`;
+    items.querySelector('[data-more]')?.addEventListener('click', () => {
+      const top = items.querySelector('.su-grid').scrollTop;
+      v.limit += UNIT_PAGE;
+      draw();
+      items.querySelector('.su-grid').scrollTop = top;
+    });
+    items.querySelectorAll('.card[data-uid]').forEach((c) => c.addEventListener('click', () => {
+      const it = all.find((x) => x.uid === c.dataset.uid);
+      if (it && canInspect(it)) openInspect(it, { preview: true });
+    }));
+  };
+  const q = box.querySelector('[data-q]');
+  q.addEventListener('input', debounce(() => { v.q = q.value; v.limit = UNIT_PAGE; draw(); }, 200));
+  box.querySelector('[data-rank]').addEventListener('change', (e) => { v.rank = e.target.value; v.limit = UNIT_PAGE; draw(); });
+  box.querySelector('[data-sort]').addEventListener('change', (e) => { v.sort = e.target.value; draw(); });
+  draw();
 }
 
 async function editProfile() {

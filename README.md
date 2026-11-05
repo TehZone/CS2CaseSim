@@ -441,7 +441,8 @@ What's in a match:
   crazy), coinflip and jackpot, against bots or, online, other players
 - Online play (optional): accounts on your own server, trading between players, live lobbies; see DEPLOY.md
 - Friends & Chat online: the same page as the NPC players' offline, with real players. Friend requests, private messages
-  (live, or waiting for them if they're offline), a profile with a showcase, inventory and summary, Everyone or Friends
+  (live, or waiting for them if they're offline), a profile with a showcase, inventory, Storage Units to look through and
+  summary, Everyone or Friends
   only for who can message you, block and report. A report gives staff the last 30 messages with that player; nothing
   else lets staff read a chat.
 - Item Database (like CSFloat's): search every skin, knife, glove, sticker, charm and agent in the game; open one to

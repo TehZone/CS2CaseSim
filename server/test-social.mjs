@@ -17,7 +17,7 @@ let failed = 0, passed = 0;
 const check = (name, ok, info = '') => { ok ? passed++ : failed++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  — ' + info : ''}`); };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const refused = async (p) => { try { await p; return null; } catch (e) { return e; } };
-const READS = new Set(['home', 'find', 'profile']);
+const READS = new Set(['home', 'find', 'profile', 'unit']);
 // Asks until a refusal: how many got through, and what stopped it.
 const tries = async (n, fn) => { let ok = 0, stop = null; for (let i = 0; i < n && !stop; i++) { const e = await refused(fn(i)); if (e) stop = e; else ok++; } return { ok, stop }; };
 const logs = [];
@@ -126,6 +126,27 @@ try {
     && pa.joined === new Date().getFullYear(), Object.keys(pa).join());
   check('profile: no money, password or anything else of the account', !('money' in pa) && !('pass' in pa) && !('state' in pa) && !('dms' in pa) && !JSON.stringify(pa).includes('"src"'));
   check('profile: stored items aren\'t shown, in the inventory or its value', !pa.inv.some((i) => i.uid === stored.uid) && itemValue(stored) > 0 && Math.abs(pa.value - pa.inv.reduce((t, i) => t + itemValue(i), 0)) < 0.01, `${pa.value}`);
+  // Their Storage Units: listed with what each holds, and one can be opened.
+  const unitUid = 'test-unit', inside = [aSkin(9), aSkin(10)].map((it, i) => ({ ...it, src: 'a secret', su: unitUid, sat: 1000 + i }));
+  await server.store.withUser(alice.id, async (e) => {
+    e.st.inv.push({ uid: unitUid, t: 'unit', id: 'storage-unit', name: 'my <b>stash', mod: 5, at: 1, src: 'Store' }, { uid: 'test-empty', t: 'unit', id: 'storage-unit', at: 1 });
+    e.st.stored.push(...inside);
+    server.store.markDirty(e);
+  });
+  const withUnits = await bob.s('profile', { id: alice.id });
+  const listed = withUnits.units.find((u) => u.uid === unitUid), worth = inside.reduce((t, i) => t + itemValue(i), 0);
+  check('profile: their Storage Units, with how much is in each and what it\'s worth', withUnits.units.length === 2 && listed?.name === 'my <b>stash' && listed.n === 2 && Math.abs(listed.value - worth) < 0.01 && listed.mod === 5 && !('src' in listed) && withUnits.units.find((u) => u.uid === 'test-empty')?.n === 0, JSON.stringify(listed));
+  check('profile: what\'s stored is added up apart, and isn\'t in the inventory\'s count or value', withUnits.stored.count === 3 && Math.abs(withUnits.stored.value - worth - itemValue(stored)) < 0.01 && withUnits.count === pa.count && !withUnits.inv.some((i) => i.t === 'unit' || i.su) && Math.abs(withUnits.value - pa.value) < 0.01, JSON.stringify(withUnits.stored));
+  const opened = await bob.s('unit', { id: alice.id, uid: unitUid });
+  check('unit: what\'s in it, as a profile shows items, with when each went in', opened.items.length === 2 && opened.items.every((i) => i.uid && i.t && i.id && !('src' in i) && !('su' in i)) && opened.items.map((i) => i.sat).join() === '1000,1001' && !JSON.stringify(opened).includes('a secret'), JSON.stringify(opened.items[0]));
+  check('unit: an empty one opens too', (await bob.s('unit', { id: alice.id, uid: 'test-empty' })).items.length === 0);
+  check('unit: not one they don\'t have, an item that isn\'t a unit, a player who doesn\'t exist, or anything that isn\'t an id', (await refused(bob.s('unit', { id: alice.id, uid: 'nope' })))?.code === 'missing' && (await refused(bob.s('unit', { id: alice.id, uid: pa.inv[0].uid })))?.code === 'missing'
+    && (await refused(bob.s('unit', { id: 999999, uid: unitUid })))?.code === 'missing' && !!(await refused(bob.s('unit', { id: 'x', uid: unitUid }))) && (await refused(bob.s('unit', { id: alice.id, uid: { a: 1 } })))?.code === 'missing' && (await refused(bob.s('unit', { id: alice.id })))?.code === 'missing');
+  await server.store.withUser(alice.id, async (e) => {
+    e.st.inv = e.st.inv.filter((i) => i.t !== 'unit');
+    e.st.stored = e.st.stored.filter((i) => i.su !== unitUid);
+    server.store.markDirty(e);
+  });
   check('profile: items as publicCopy (a uid, what it is, no `src`)', pa.inv.length >= 8 && pa.inv.every((i) => i.uid && i.t && i.id && !('src' in i) && !('lk' in i)));
   check('profile: the showcase is their six most valuable until they pick', pa.showcase.length === 6 && pa.picked === false && pa.value > 0);
   check('profile: an unknown player is refused, and a bad id', (await refused(bob.s('profile', { id: 999999 })))?.code === 'missing' && !!(await refused(bob.s('profile', { id: 'x' }))));
@@ -502,6 +523,11 @@ try {
   fresh();
   const views = await tries(21, () => dave.raw('profile', { id: erin.id }));
   check('rate: profile, 20 in 10 seconds', views.ok === 20 && views.stop?.code === 'rate', `${views.ok}: ${views.stop?.message}`);
+  fresh();
+  await server.store.withUser(erin.id, async (e) => { e.st.inv.push({ uid: 'erin-unit', t: 'unit', id: 'storage-unit', at: 1 }); server.store.markDirty(e); });
+  const peeks = await tries(21, () => dave.raw('unit', { id: erin.id, uid: 'erin-unit' }));
+  check('rate: opening Storage Units, 20 in 10 seconds', peeks.ok === 20 && peeks.stop?.code === 'rate', `${peeks.ok}: ${peeks.stop?.message}`);
+  await server.store.withUser(erin.id, async (e) => { e.st.inv = e.st.inv.filter((i) => i.uid !== 'erin-unit'); server.store.markDirty(e); });
   fresh();
   social.hits.set(`profile:${dave.id}`, Array.from({ length: 120 }, () => social.now() - 30000));
   check('rate: and 120 a minute', /120 profiles a minute/.test((await refused(dave.raw('profile', { id: erin.id })))?.message));

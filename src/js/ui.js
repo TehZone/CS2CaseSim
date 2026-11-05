@@ -193,9 +193,10 @@ function charmBadge(c) {
   return `<span class="kc-badge ${isSlab(c) ? 'slab' : ''}" title="${esc(I.itemName(c))} · Pattern #${c.pat}"><img src="${I.itemImage(c, 's')}" ${slabAttr(c)} alt=""></span>`;
 }
 
-// A Storage Unit's card: its label, how full it is, and when it last changed (click it to open it: pages/storage.js).
+// A Storage Unit's card: its label, how full it is, and when it last changed (click it to open it: pages/storage.js). Another
+// player's comes with its own n and value: what's in it isn't in your save.
 function unitCard(item, { extra = '' } = {}) {
-  const r = I.rarityInfo(item), np = I.nameParts(item), n = unitCount(S, item.uid);
+  const r = I.rarityInfo(item), np = I.nameParts(item), n = item.n ?? unitCount(S, item.uid);
   return `<div class="card unit ${extra}" data-uid="${item.uid}" style="--rc:${r.c}">
     <div class="tags">${item.nw ? '<span class="tag new">New</span>' : ''}${item.name ? '' : '<span class="tag pat">Not in use</span>'}</div>
     <div class="img"><img loading="lazy" src="${I.itemImage(item, 'm')}" alt=""></div>
@@ -204,7 +205,7 @@ function unitCard(item, { extra = '' } = {}) {
     <div class="meta">
       <div class="n1">${esc(np.top)}</div>
       <div class="n2">${esc(np.bottom)}</div>
-      <div class="row"><span class="wear">${n.toLocaleString('en-US')} / ${UNIT_CAP.toLocaleString('en-US')} items</span><span class="val">${money(unitValue(S, item.uid))}</span></div>
+      <div class="row"><span class="wear">${n.toLocaleString('en-US')} / ${UNIT_CAP.toLocaleString('en-US')} items</span><span class="val">${money(item.value ?? unitValue(S, item.uid))}</span></div>
       <div class="row unit-mod"><span>${item.mod ? 'Modified ' + timeAgo(item.mod) : 'Not used yet'}</span></div>
     </div>
   </div>`;

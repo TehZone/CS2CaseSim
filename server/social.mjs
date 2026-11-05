@@ -16,6 +16,7 @@ import { D } from '../src/js/engine/data.js';
 import { publicCopy } from '../src/js/engine/database.js';
 import { isUnit, itemValue } from '../src/js/engine/items.js';
 import { medalOf } from '../src/js/engine/levels.js';
+import { contents, storedOf, unitCount, unitsOf, unitValue } from '../src/js/engine/storage.js';
 import { plainText, textProblem } from '../src/js/engine/tools.js';
 
 const SEC = 1000, MIN = 60 * SEC, HOUR = 60 * MIN;
@@ -34,6 +35,7 @@ const LIMITS = {
   home: [{ max: 30, ms: 10 * SEC, say: 'Slow down: too many requests' }],
   find: [{ max: 10, ms: 5 * SEC, say: 'Slow down: too many searches' }, { max: 60, ms: MIN, say: 'Slow down: at most 60 searches a minute' }],
   profile: [{ max: 20, ms: 10 * SEC, say: 'Slow down: too many profiles' }, { max: 120, ms: MIN, say: 'Slow down: at most 120 profiles a minute' }],
+  unit: [{ max: 20, ms: 10 * SEC, say: 'Slow down: too many Storage Units' }, { max: 120, ms: MIN, say: 'Slow down: at most 120 Storage Units a minute' }],
 };
 // The two directions of one conversation ($1 and $2 are its players).
 const BETWEEN = '((from_id = $1 AND to_id = $2) OR (from_id = $2 AND to_id = $1))';
@@ -159,6 +161,7 @@ export class Social {
       case 'find': return this.find(user, a);
       case 'profile': return this.profile(user, a);
       case 'profile.set': return this.profileSet(user, a);
+      case 'unit': return this.unit(user, a);
       case 'friend': return this.friend(user, a);
       case 'block': return this.block(user, a);
       case 'report': return this.report(user, a);
@@ -209,9 +212,9 @@ export class Social {
   }
 
   // ---- profiles ------------------------------------------------------------------------------------------------------
-  // Items as shownItem has them; what's in a Storage Unit stays private, the units themselves too. `inv` is the most valuable
-  // 300 and `count` and `value` are all of them. `picked`: the showcase is the owner's choice, not their most valuable (Edit
-  // profile starts from what they chose).
+  // Items as shownItem has them. `inv` is the most valuable 300 and `count` and `value` are all of them, none of which counts
+  // what's in a Storage Unit: `units` lists those with what each holds, `stored` adds them up, and `unit` opens one. `picked`:
+  // the showcase is the owner's choice, not their most valuable (Edit profile starts from what they chose).
   async profile(user, a) {
     const id = playerId(a.id), me = user.id;
     this.limit('profile', me);
@@ -229,8 +232,20 @@ export class Social {
     return {
       ...who, level: st.prof?.level || 1, bio: p.bio, bg: p.bg, medal: medalOf(st.prof), medals: st.prof?.medals || 0, joined: new Date(Number(row.created)).getFullYear(),
       showcase: (chosen.length ? chosen : top.slice(0, SHOWCASE_MAX)).map(shownItem), picked: chosen.length > 0, inv: top.map(shownItem), count: inv.length, value: worthOf(inv), friends: pals.n,
+      units: unitsOf(st).map((u) => ({ ...publicCopy(u), mod: u.mod, n: unitCount(st, u.uid), value: unitValue(st, u.uid) })), stored: { count: storedOf(st).length, value: worthOf(storedOf(st)) },
       relation: relationOf(x, me), blockedByMe: x.mine,
     };
+  }
+
+  // What's in one of a player's Storage Units, to look through. → { items }: all of it, 1,000 at most. (`sat`: when each went in,
+  // which the unit's sort goes by.)
+  async unit(user, a) {
+    const id = playerId(a.id);
+    this.limit('unit', user.id);
+    if (!(await this.people([id])).has(id)) fail('No such player', 'missing');
+    const st = await this.srv.store.peek(id);
+    if (!unitsOf(st).some((u) => u.uid === a.uid)) fail('That Storage Unit is gone', 'missing');
+    return { items: contents(st, a.uid).map((it) => ({ ...shownItem(it), sat: it.sat })) };
   }
 
   // What's sent changes, what isn't stays. → the saved profile
