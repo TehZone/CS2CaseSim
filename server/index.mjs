@@ -42,9 +42,9 @@ const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boole
 // Actions saved in a transaction before they're answered (others are written within a couple of seconds): what moves
 // items in and out of a Storage Unit, uses up a tool or claims an Index reward is never left only in memory.
 const IN_TRANSACTION = /^(storage|tools|index)\./;
-// What a player opens themselves: the rare ones go to the Discord server (see drops.mjs). Not a case battle's drops, which
-// another seat may have opened, and not a level-up reward, which isn't opened.
-const OPENED = new Set(['case.open', 'armory.redeem']);
+// What a player opens or trades up to themselves: the rare ones go to the Discord server (see drops.mjs). Not a case battle's
+// drops, which another seat may have opened, and not a level-up reward, which isn't opened.
+const OPENED = new Set(['case.open', 'armory.redeem', 'tradeup.sign']);
 
 // The bot's options from the environment (false: no token, no bot). The token is read, never logged.
 export function discordFromEnv({ env = process.env, tokenFile = env.DISCORD_TOKEN_FILE, log = console.log } = {}) {
@@ -481,7 +481,7 @@ export async function startServer({
           reply(true, { r: out.r, d: out.d });
           for (const [w, lid] of boughtNow) for (const id of sockets.keys()) srv.sendTo(id, { t: 'market', w, lid });
           srv.sendTo(user.id, { t: 'delta', d: out.d }, ws); // other tabs of the same player
-          if (OPENED.has(String(msg.m))) announceDrops(user.name, out.r.items);
+          if (OPENED.has(String(msg.m))) announceDrops(user.name, out.r.items || [out.r.item]);
           return;
         }
         if (msg.ns === 'social') {

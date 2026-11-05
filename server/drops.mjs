@@ -1,8 +1,9 @@
-// Rare unboxings for the Discord server: a Blue Gem or Gold Gem knife or weapon, or a Doppler, opened by a player online.
+// Rare drops for the Discord server: a Blue Gem or Gold Gem knife or weapon, or a Doppler, opened or traded up to online.
 // What counts comes from the game's own pattern analysis (src/js/engine/patterns.js), the labels players see on the item.
 import { D } from '../src/js/engine/data.js';
 import { analyzePattern } from '../src/js/engine/patterns.js';
 import { itemName, itemValue, wearName } from '../src/js/engine/items.js';
+import { TRADEUP_SRC } from '../src/js/engine/tradeup.js';
 
 const STEAM = 'https://community.akamai.steamstatic.com/economy/image/';
 const BLUE = 0x4b69ff, GOLD = 0xffd700, DOPPLER = 0xd32ce6;
@@ -20,7 +21,7 @@ export function rareDrop(item) {
   return null;
 }
 
-// The post for a rare item that `player` just opened, or null for any other item.
+// The post for a rare item that `player` just opened or traded up to, or null for any other item.
 export function dropEmbed(player, item) {
   const rare = rareDrop(item);
   if (!rare) return null;
@@ -34,9 +35,10 @@ export function dropEmbed(player, item) {
   if (pattern.label && !title.includes(pattern.label)) fields.push(field('Pattern type', pattern.label));
   if (item.sn) fields.push(field('Serial', `#${item.sn}`));
   const img = skin.img?.startsWith('~') ? STEAM + skin.img.slice(1) + '/256fx192f' : null;
+  const traded = item.src === TRADEUP_SRC;
   return {
     title, color, fields, timestamp: new Date().toISOString(),
-    description: `**${md(player)}** unboxed **${md(itemName(item))}**${item.src ? ` from **${md(item.src)}**` : ''}`,
+    description: `**${md(player)}** ${traded ? 'traded up to' : 'unboxed'} **${md(itemName(item))}**${item.src && !traded ? ` from **${md(item.src)}**` : ''}`,
     ...(img ? { thumbnail: { url: img } } : {}),
   };
 }

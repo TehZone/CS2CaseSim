@@ -1237,6 +1237,26 @@ try {
     check('rare drops: an Armory redeem posts too, and says so', redeemed.items[0].id === ruby.id && /Armory · /.test(armoryPost?.body.embeds?.[0]?.description || ''), armoryPost?.body.embeds?.[0]?.description);
     const { discordFromEnv } = await import('./index.mjs');
     check('rare drops: DISCORD_DROPS_CHANNEL picks the channel', discordFromEnv({ env: { DISCORD_BOT_TOKEN: 'x', DISCORD_DROPS_CHANNEL: '123' } }).dropChannel === '123');
+    // A trade up counts by the same rule, and it says so: there's no case to name.
+    const chroma = D.cases.find((c) => c.n === 'Chroma 2 Case'), goldList = chroma.rare;
+    const knife = skins.find((s) => s.cat === 'knife' && !s.v && !/Doppler|Case Hardened|Heat Treated/.test(s.fin || ''));
+    let inputs = 0;
+    const tradeUp = async (gold) => {
+      const uids = Array.from({ length: 5 }, () => 'test-covert-' + ++inputs);
+      await server.store.withUser(op.user.id, async (e) => {
+        for (const uid of uids) e.st.inv.push({ uid, t: 'skin', id: chroma.pools[5][0], fl: 0.2, sd: 1, stt: false, stk: [], at: Date.now(), src: '' });
+        server.store.markDirty(e);
+      });
+      chroma.rare = [[gold.id]];
+      return op.act('tradeup.sign', { uids }).finally(() => { chroma.rare = goldList; });
+    };
+    const signed = await tradeUp(ruby);
+    const tradePost = await until(() => posts()[4]);
+    const tradeText = tradePost?.body.embeds?.[0]?.description || '';
+    check('rare drops: a rare trade up posts, and says it was one', signed.item.id === ruby.id && /lucky\\_opener\*\* traded up to \*\*/.test(tradeText) && !/unboxed| from /.test(tradeText), tradeText);
+    const plainUp = await tradeUp(knife);
+    await wait(400);
+    check('rare drops: any other trade up posts nothing', plainUp.item.id === knife.id && posts().length === 5, String(posts().length));
     const real = server.discord.rareDrop;
     server.discord.rareDrop = async () => { throw new Error('Discord is down'); };
     const still = await open('test-doppler').catch((err) => err);
