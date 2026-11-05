@@ -7,7 +7,7 @@
 // radio voices play on channels that hold one sound at a time: a new track fades out the last (CS2 cuts the round's
 // music when the next part starts).
 import { cs2Play } from '../cs2/api.js';
-import { S } from '../state.js';
+import { S, on } from '../state.js';
 import { renderReverb, ROOM_EQ } from './reverb.js';
 
 // How far the events CS2 has no distance curve for carry (game units), like CS2's sound levels: past that a sound
@@ -88,6 +88,7 @@ export class SoundBank {
     this.room = null; // the one you're in
     this.roomOut();
     this.setVolume();
+    this.offVolume = on('volume', () => this.setVolume()); // (changed in the settings, with a match running)
   }
 
   // The room comes out through CS2's reverb compressor (ducker.worklet.js), turned down while the sounds themselves are
@@ -340,5 +341,5 @@ export class SoundBank {
     }
   }
 
-  dispose() { this.ctx.close().catch(() => {}); }
+  dispose() { this.offVolume(); this.ctx.close().catch(() => {}); }
 }

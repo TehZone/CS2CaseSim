@@ -2,6 +2,7 @@
 // radio volume, the fps counter and video (aspect ratio and resolution, render scale, frame rate cap). Saved with the
 // other Play preferences; a match reads them when it starts (and from the match's menu, at once).
 import { esc } from '../util.js';
+import { S, save, emit } from '../state.js';
 import { CROSSHAIR, crosshairHtml } from '../play/hud.js';
 import { ACTIONS, BINDS_VERSION, COMMANDS, bindTable, keyName, keyLabel } from '../play/input.js';
 import { tierOf } from '../play/skill.js';
@@ -50,6 +51,8 @@ export function settingsHtml(p, show = {}) {
         ${range('y', 'Offset Y (forward)', -2, 2, 0.5, v.y, 'viewmodel')}${range('z', 'Offset Z (height)', -2, 2, 0.5, v.z, 'viewmodel')}
         ${check('leftHanded', 'Left hand (cl_prefer_lefthanded; Switch hands swaps it in a match)', !!p.leftHanded, 'root')}
         <h4>Sound and HUD</h4>
+        <label class="ps-range">Volume <b data-volume-out>${S.settings.volume}</b>
+          <input type="range" min="0" max="1" step="0.05" value="${S.settings.volume}" data-volume></label>
         ${range('musicVolume', 'Music', 0, 1, 0.05, p.musicVolume ?? 1, 'root')}${range('voiceVolume', 'Radio voices', 0, 1, 0.05, p.voiceVolume ?? 1, 'root')}
         <label>Show fps (cl_showfps)<select class="input" data-s="root.showFps">${[['0', 'Off'], ['1', 'Frame rate'], ['2', 'Frame rate and frame-time graph (stutters show as red spikes)']]
           .map(([val, n]) => `<option value="${val}" ${String(p.showFps === false ? 0 : p.showFps === 2 ? 2 : 1) === val ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
@@ -100,6 +103,14 @@ export function bindSettings(el, prefs, savePrefs, rerender) {
     // (Another aspect ratio has its own resolutions; picking one leaves the render scale out.)
     if (s === 'root.aspect' || s === 'root.resolution') { if (s === 'root.aspect') write('root.resolution', 'native'); rerender(); }
   }));
+  // The game's own volume (the same one as on the Settings page), which a running match follows.
+  const volume = el.querySelector('[data-volume]');
+  volume?.addEventListener('input', () => {
+    S.settings.volume = Number(volume.value);
+    el.querySelector('[data-volume-out]').textContent = volume.value;
+    save();
+    emit('volume');
+  });
   // The unlocked frame rate is the app's (it needs a restart), not the match's.
   el.querySelectorAll('[data-display]').forEach((input) => input.addEventListener('change', async () => {
     await window.native.setDisplay({ [input.dataset.display]: input.checked });

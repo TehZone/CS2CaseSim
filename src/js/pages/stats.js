@@ -1,7 +1,7 @@
 import { esc, money } from '../util.js';
 import { D, RARITY, rarityColor, CASE_ODDS } from '../data.js';
 import * as I from '../items.js';
-import { S, save, resetSave } from '../state.js';
+import { S, save, resetSave, emit } from '../state.js';
 import { toast, confirmDialog } from '../ui.js';
 import { online } from '../backend.js';
 import { autoSellLabel, autoSellModal } from '../autosell.js';
@@ -96,7 +96,7 @@ function draw() {
     const k = el.dataset.s;
     S.settings[k] = el.type === 'checkbox' ? el.checked : +el.value;
     save();
-    if (k === 'volume') sfx.click();
+    if (k === 'volume') { emit('volume'); sfx.click(); }
   }));
   root.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', () => action(b.dataset.a, b)));
   const bgSel = root.querySelector('[data-menubg]');
