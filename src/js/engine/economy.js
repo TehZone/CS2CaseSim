@@ -7,7 +7,9 @@ import { repairStorage } from './storage.js';
 import { freshIndex, upgradeIndex } from './itemindex.js';
 
 // Auto-sell rules for new drops: sell anything worth less than `below` dollars and/or of the rarity ranks in
-// `ranks` (0 Consumer ... 5 Covert). Knives, gloves and other ★ items are never auto-sold.
+// `ranks` (0 Consumer ... 5 Covert). Knives, gloves and other ★ items are never auto-sold. keepRare keeps rare patterns, and
+// keepBlue and keepFloat Blue Gems and floats of 0.000-something: until they're set they follow keepRare, which used to mean
+// all three (older saves and older games have only that).
 export const AUTO_SELL_DEFAULT = { on: false, below: 0, ranks: [], keepStt: true, keepRare: true };
 
 export function freshState() {

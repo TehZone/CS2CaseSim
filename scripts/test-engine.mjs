@@ -261,6 +261,20 @@ function tierFreq(box, n) {
     check('auto-sell off keeps everything', off.r.items.every((i) => !i.as) && !off.r.autoSold);
     const knife = { uid: 'k', t: 'skin', id: box.rare[0][0], fl: 0.3, sd: 1, stt: false, stk: [] };
     check('knives and gloves are never auto-sold', !I.autoSellMatch(knife, { on: true, below: 1e9, ranks: [0, 1, 2, 3, 4, 5] }));
+    // What each keep option saves, and only that.
+    const sells = (it, keep) => I.autoSellMatch(it, { on: true, below: 1e9, ranks: [], keepStt: false, keepRare: false, keepBlue: false, keepFloat: false, ...keep });
+    const skinOf = (fn) => Object.values(D.skins).find(fn), drop = (s, fl, sd) => ({ t: 'skin', id: s.id, fl, sd, stt: false, stk: [] });
+    const akCh = skinOf((s) => s.wid === 'weapon_ak47' && s.fin === 'Case Hardened'), fadeGun = skinOf((s) => s.fin === 'Fade' && !s.star);
+    const plainGun = skinOf((s) => !s.star && !s.v && s.mn === 0 && s.mx >= 0.5 && !/Doppler|Case Hardened|Heat Treated|Fade|Crimson Web|Slaughter/.test(s.fin || ''));
+    const gem = drop(akCh, 0.2, 661), fadeSeed = Array.from({ length: 1001 }, (_, i) => i).find((i) => I.patternInfo(drop(fadeGun, 0.02, i)).mult > 1), fade = drop(fadeGun, 0.02, fadeSeed);
+    check('auto-sell: Keep Blue Gems saves a Blue Gem and nothing else', !sells(gem, { keepBlue: true }) && sells(gem, { keepRare: true }) && sells(fade, { keepBlue: true }));
+    check('auto-sell: Keep other rare patterns saves a fade, not a Blue Gem', !sells(fade, { keepRare: true }) && I.patternInfo(fade).mult > 1);
+    check('auto-sell: Keep low floats saves a 0.000 float and nothing above it, whatever else is on', !sells(drop(plainGun, 0.0009, 1), { keepFloat: true }) && !sells(drop(plainGun, 0.00001, 1), { keepFloat: true })
+      && sells(drop(plainGun, 0.001, 1), { keepFloat: true }) && sells(drop(plainGun, 0.0015, 1), { keepFloat: true }) && sells(drop(plainGun, 0.005, 1), { keepRare: true, keepBlue: true, keepFloat: true }));
+    check('auto-sell: a plain drop with a float premium isn\'t kept by any of them', I.floatMultiplier(drop(plainGun, 0.009, 1)) > 1 && sells(drop(plainGun, 0.009, 1), { keepRare: true, keepBlue: true, keepFloat: true }));
+    const rules = (r) => I.cleanAutoSell({ on: true, below: 5, ...r });
+    check('auto-sell: an older game or save has keepRare alone, which still covers all three', rules({ keepRare: true }).keepBlue === true && rules({ keepRare: true }).keepFloat === true && rules({ keepRare: false }).keepBlue === false && rules({}).keepFloat === false);
+    check('auto-sell: once they\'re set they stand alone', rules({ keepRare: true, keepBlue: false, keepFloat: false }).keepBlue === false && rules({ keepRare: true, keepBlue: false, keepFloat: false }).keepFloat === false && rules({ keepRare: false, keepBlue: true }).keepBlue === true);
   }
   {
     // A failure part-way (inventory full after using the cases) leaves the state untouched.

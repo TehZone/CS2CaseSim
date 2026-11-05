@@ -48,7 +48,9 @@ export function autoSellModal(onChange) {
       </div>
       <div style="display:grid;gap:6px">
         <label class="check"><input type="checkbox" data-stt ${r.keepStt ? 'checked' : ''}> Always keep StatTrak™ items</label>
-        <label class="check"><input type="checkbox" data-rare ${r.keepRare ? 'checked' : ''}> Always keep rare patterns and premium floats (blue gems, fades, very low floats…)</label>
+        <label class="check"><input type="checkbox" data-blue ${r.keepBlue ?? r.keepRare ? 'checked' : ''}> Always keep Blue Gems</label>
+        <label class="check"><input type="checkbox" data-rare ${r.keepRare ? 'checked' : ''}> Always keep other rare patterns (fades, Fire &amp; Ice…)</label>
+        <label class="check"><input type="checkbox" data-float ${r.keepFloat ?? r.keepRare ? 'checked' : ''}> Always keep low floats (0.000…)</label>
       </div>
     </div>`,
     foot: '<button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-save>Save</button>',
@@ -61,6 +63,8 @@ export function autoSellModal(onChange) {
       ranks: [...m.el.querySelectorAll('[data-rank]:checked')].map((x) => +x.dataset.rank),
       keepStt: q('[data-stt]').checked,
       keepRare: q('[data-rare]').checked,
+      keepBlue: q('[data-blue]').checked,
+      keepFloat: q('[data-float]').checked,
     };
     save();
     m.close();

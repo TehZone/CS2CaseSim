@@ -1321,7 +1321,7 @@ const ADOPT_GAME = {
   volume: clampTo([0, 1]), fast: isBool, caseIntro: isBool, confirmSellAbove: clampTo([0, 1e9]), showOdds: isBool, keepPrepared: isBool,
   menuBg: mapId, inspectBg: mapId,
   autoSell: {
-    on: isBool, below: clampTo([0, 1e9]), keepStt: isBool, keepRare: isBool,
+    on: isBool, below: clampTo([0, 1e9]), keepStt: isBool, keepRare: isBool, keepBlue: isBool, keepFloat: isBool,
     ranks: (v) => (Array.isArray(v) && v.length <= 6 && v.every((x) => Number.isInteger(x) && x >= 0 && x <= 5) ? [...new Set(v)] : undefined),
   },
 };
