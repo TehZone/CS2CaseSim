@@ -1,4 +1,5 @@
-// Rare drops for the Discord server: a Blue Gem or Gold Gem knife or weapon, or a Doppler, opened or traded up to online.
+// Rare drops for the Discord server: anything gold (every knife and pair of gloves), a Doppler, or a Blue Gem or Gold Gem
+// pattern on a weapon, opened or traded up to online.
 // What counts comes from the game's own pattern analysis (src/js/engine/patterns.js), the labels players see on the item.
 import { D } from '../src/js/engine/data.js';
 import { analyzePattern } from '../src/js/engine/patterns.js';
@@ -10,14 +11,16 @@ const BLUE = 0x4b69ff, GOLD = 0xffd700, DOPPLER = 0xd32ce6;
 // (A player's name in Discord's markdown: no styles, no links.)
 const md = (s) => String(s).replace(/[\\*_~`|<>[\]()]/g, '\\$&');
 
-// Why an item is worth a post: { title, color, skin, pattern }, or null. Gloves aren't a knife or weapon.
+// Why an item is worth a post: { title, color, skin, pattern }, or null. The most special reason wins.
 export function rareDrop(item) {
   const skin = item?.t === 'skin' ? D.skins[item.id] : null;
-  if (!skin || skin.cat === 'gloves') return null;
+  if (!skin) return null;
   const pattern = analyzePattern(skin, item.sd);
   if (/Doppler/.test(skin.fin || '')) return { title: `✨ ${skin.fin}${skin.ph ? ` · ${skin.ph}` : ''}`, color: DOPPLER, skin, pattern };
   if (pattern.label.includes('Blue Gem')) return { title: `💎 ${pattern.label}`, color: BLUE, skin, pattern };
   if (pattern.label === 'Gold Gem') return { title: '🥇 Gold Gem', color: GOLD, skin, pattern };
+  if (skin.cat === 'knife') return { title: '🔪 Gold Knife', color: GOLD, skin, pattern };
+  if (skin.cat === 'gloves') return { title: '🧤 Gold Gloves', color: GOLD, skin, pattern };
   return null;
 }
 

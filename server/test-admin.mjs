@@ -1197,7 +1197,10 @@ try {
     check('rare drops: the AK-47\'s #1 Blue Gem counts', rareDrop(it(ak, 661))?.title === '💎 #1 Blue Gem', rareDrop(it(ak, 661))?.title);
     check('rare drops: a knife\'s Blue Gem and a Gold Gem count', /Blue Gem/.test(rareDrop(it(karambit, blueSeed))?.title) && rareDrop(it(ak, goldSeed))?.title === '🥇 Gold Gem');
     check('rare drops: every Doppler counts, the Glock-18\'s Gamma Doppler too', rareDrop(it(ruby, 5))?.title === '✨ Doppler · Ruby' && /Gamma Doppler/.test(rareDrop(it(glock, 5))?.title));
-    check('rare drops: nothing else does', [it(ak, dull), it(plain, 661), it(glove, 661), { t: 'sticker', id: Object.keys(D.stickers)[0] }, { t: 'crate', id: 'x' }, null].every((x) => !rareDrop(x) && !dropEmbed('someone', x)));
+    const vanilla = skins.find((s) => s.cat === 'knife' && s.v), plainKnife = skins.find((s) => s.cat === 'knife' && !s.v && !/Doppler|Case Hardened|Heat Treated/.test(s.fin || ''));
+    check('rare drops: every knife and pair of gloves is gold, plain ones and vanilla knives too', rareDrop(it(plainKnife, 5))?.title === '🔪 Gold Knife' && rareDrop(it(glove, 5))?.title === '🧤 Gold Gloves'
+      && rareDrop({ t: 'skin', id: vanilla.id, fl: null, sd: null, src: 'Test Case' })?.title === '🔪 Gold Knife' && /\$/.test(dropEmbed('someone', { t: 'skin', id: vanilla.id, fl: null, sd: null, src: 'Test Case', stt: false, stk: [] })?.fields[0]?.value));
+    check('rare drops: nothing else does', [it(ak, dull), it(plain, 661), { t: 'sticker', id: Object.keys(D.stickers)[0] }, { t: 'crate', id: 'x' }, null].every((x) => !rareDrop(x) && !dropEmbed('someone', x)));
     const shown = dropEmbed('a_b*c', it(ak, 661, { stt: true, kills: 0 }));
     const value = (n) => shown.fields.find((f) => f.name === n)?.value;
     check('rare drops: the post says who, what, where from and the rest, with the name escaped',
@@ -1239,7 +1242,6 @@ try {
     check('rare drops: DISCORD_DROPS_CHANNEL picks the channel', discordFromEnv({ env: { DISCORD_BOT_TOKEN: 'x', DISCORD_DROPS_CHANNEL: '123' } }).dropChannel === '123');
     // A trade up counts by the same rule, and it says so: there's no case to name.
     const chroma = D.cases.find((c) => c.n === 'Chroma 2 Case'), goldList = chroma.rare;
-    const knife = skins.find((s) => s.cat === 'knife' && !s.v && !/Doppler|Case Hardened|Heat Treated/.test(s.fin || ''));
     let inputs = 0;
     const tradeUp = async (gold) => {
       const uids = Array.from({ length: 5 }, () => 'test-covert-' + ++inputs);
@@ -1254,9 +1256,18 @@ try {
     const tradePost = await until(() => posts()[4]);
     const tradeText = tradePost?.body.embeds?.[0]?.description || '';
     check('rare drops: a rare trade up posts, and says it was one', signed.item.id === ruby.id && /lucky\\_opener\*\* traded up to \*\*/.test(tradeText) && !/unboxed| from /.test(tradeText), tradeText);
-    const plainUp = await tradeUp(knife);
+    const goldUp = await tradeUp(plainKnife);
+    const goldPost = await until(() => posts()[5]);
+    check('rare drops: so does any Covert trade up, as it gives a knife or gloves', goldUp.item.id === plainKnife.id && goldPost?.body.embeds?.[0]?.title === '🔪 Gold Knife', goldPost?.body.embeds?.[0]?.title);
+    const low = skins.find((s) => s.r === 2 && !s.star && (D.colById[s.col]?.tiers[3] || []).length && D.colById[s.col].tiers[3].every((id) => !/Doppler|Case Hardened|Heat Treated/.test(D.skins[id].fin || '')));
+    const tenUids = Array.from({ length: 10 }, () => 'test-low-' + ++inputs);
+    await server.store.withUser(op.user.id, async (e) => {
+      for (const uid of tenUids) e.st.inv.push({ uid, t: 'skin', id: low.id, fl: 0.2, sd: 1, stt: false, stk: [], at: Date.now(), src: '' });
+      server.store.markDirty(e);
+    });
+    const classic = await op.act('tradeup.sign', { uids: tenUids });
     await wait(400);
-    check('rare drops: any other trade up posts nothing', plainUp.item.id === knife.id && posts().length === 5, String(posts().length));
+    check('rare drops: an ordinary trade up posts nothing', D.skins[classic.item.id].r === 3 && posts().length === 6, String(posts().length));
     const real = server.discord.rareDrop;
     server.discord.rareDrop = async () => { throw new Error('Discord is down'); };
     const still = await open('test-doppler').catch((err) => err);
