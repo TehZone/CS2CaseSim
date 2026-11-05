@@ -241,8 +241,9 @@ function createWindow() {
     icon: path.join(__dirname, 'build', 'icon.png'),
     autoHideMenuBar: true,
     show: false,
-    // Smoke runs keep animating while the window is covered by other windows (they capture animations).
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, backgroundThrottling: !SMOKE },
+    // Smoke runs keep animating while the window is covered by other windows (they capture animations). F12's DevTools are
+    // for development only: a packaged game has none (they'd show the server's address and let a match result be faked).
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, backgroundThrottling: !SMOKE, devTools: !app.isPackaged },
   });
   win.once('ready-to-show', () => win.show());
   win.webContents.on('before-input-event', (event, input) => {
@@ -2912,6 +2913,11 @@ function runSmokeTest(win) {
     console.log('SMOKE seconds to model', ((Date.now() - t0) / 1000).toFixed(1));
     console.log('SMOKE sounds', await win.webContents.executeJavaScript(`window.native.cs2Sounds().then((s) => Object.keys(s).join(','))`));
     console.log('SMOKE inspect', insp);
+    // F12, pressed for real: DevTools open while developing and never in a packaged game.
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'F12' });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'F12' });
+    await new Promise((r) => setTimeout(r, 1500));
+    console.log('SMOKE devtools', JSON.stringify({ packaged: app.isPackaged, openedByF12: win.webContents.isDevToolsOpened() }));
     const img = await win.webContents.capturePage();
     const shot = path.join(app.getPath('userData'), 'smoke.png');
     fs.writeFileSync(shot, img.toPNG());
