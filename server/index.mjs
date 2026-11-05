@@ -287,7 +287,8 @@ export async function startServer({
   log(hops ? `[server] client addresses: X-Forwarded-For, ${hops} proxy hop${hops === 1 ? '' : 's'} (TRUST_PROXY)` : '[server] client addresses: the connection\'s own (no TRUST_PROXY)');
 
   const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://x');
+    let url;
+    try { url = new URL(req.url, 'http://x'); } catch { res.writeHead(400, cors); return res.end(); }
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
     try {
       if (url.pathname === '/health') return json(res, 200, { ok: true, online: sockets.size, data: D.generatedAt, pricedAt: D.pricedAt, requiredVersion: release.required, discord: { connected: !!discord.status().connected } });
@@ -410,10 +411,14 @@ export async function startServer({
     const refuse = (m) => { send(m); setTimeout(() => { if (!user && ws.readyState === 1) ws.close(1000); }, 1000).unref?.(); };
     const hello = setTimeout(() => { if (!user) ws.close(); }, 15000);
 
-    ws.on('message', async (raw) => {
+    // (A frame the socket can't read, too long or broken: ws closes the connection itself, but an error nobody listens for ends
+    // the server.)
+    ws.on('error', () => {});
+    const onMessage = async (raw) => {
       if (ws.kicked) return; // (thrown off: what was already on its way is ignored)
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
+      if (!msg || typeof msg !== 'object') return;
       // Token bucket: 20 requests per second on average, bursts of 60.
       const now = Date.now();
       tokens = Math.min(60, tokens + ((now - lastRefill) / 1000) * 20);
@@ -509,7 +514,9 @@ export async function startServer({
         log('[rpc]', msg.ns, msg.m, e);
         reply(false, { err: 'Server error, please try again' });
       }
-    });
+    };
+    // (Whatever one connection sends, it's the connection that ends and not the server.)
+    ws.on('message', (raw) => onMessage(raw).catch((e) => { log('[ws]', e); ws.close(1011); }));
 
     ws.on('close', () => {
       clearTimeout(hello);

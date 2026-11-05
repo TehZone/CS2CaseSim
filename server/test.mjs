@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import net from 'node:net';
 import WebSocket from 'ws';
 
 process.env.JACKPOT_MS = '1500';
@@ -633,6 +634,31 @@ try {
   const held = A2.st.stored.filter((i) => i.t === 'sticker');
   check('storage: the item database counts stored copies (a fresh count after the restart)', counted.counts['sticker:' + held[0].id] >= held.filter((i) => i.id === held[0].id).length, String(counted.counts['sticker:' + held[0].id]));
   A2.close();
+
+  // What anyone can send with no login: none of it may end the server. (If it does, this run ends here with it.)
+  const stranger = async (act) => {
+    const ws = new WebSocket(base().replace('http', 'ws') + '/ws');
+    await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+    ws.on('error', quiet);
+    act(ws);
+    await wait(80);
+    ws.terminate();
+  };
+  for (const frame of ['null', '1', '"x"', 'true', '[]', '{}', 'not json', '{"t":"hello"}', '{"t":"rpc"}']) await stranger((ws) => ws.send(frame));
+  await stranger((ws) => ws.send('x'.repeat(70000))); // (over the server's limit for a message)
+  await stranger((ws) => ws.send(Buffer.alloc(70000), { binary: true }));
+  await stranger((ws) => ws.send(Buffer.from([0xff, 0xfe, 0xfd]), { binary: false })); // (text that isn't UTF-8)
+  await stranger((ws) => ws._socket.write(Buffer.from([0xc1, 0x00]))); // (a frame with a reserved bit set, unmasked)
+  const rawGet = (target) => new Promise((res) => {
+    const s = net.connect(server.port, 'localhost', () => s.write(`GET ${target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`));
+    let got = '';
+    s.on('data', (d) => { got += d; });
+    s.on('close', () => res(got.split('\r\n')[0]));
+    s.on('error', () => res(got.split('\r\n')[0]));
+  });
+  const odd = [await rawGet('//'), await rawGet('///'), await rawGet('//?x=1'), await rawGet('http://')];
+  check('a stranger: an address that isn\'t one is refused', odd.every((l) => / 400 /.test(l)), odd.join(' | '));
+  check('a stranger: nothing they send ends the server', (await fetch(base() + '/health')).ok);
 } catch (e) {
   failed++;
   console.error('FAIL  test crashed:', e);
