@@ -667,6 +667,15 @@ function tierFreq(box, n) {
   check('claiming a reward: exactly two picks, into your inventory, once', bad instanceof ACT.GameError && got.r.items.length === 2 && st.inv.length === n0 + 2
     && got.r.items[0].uid === drop.offers[1].uid && again?.code === 'missing' && !st.prof.drops.some((d) => d.id === drop.id));
   const t0 = Date.now();
+  // A match with cheats in it pays nothing, online or offline, and closes its run.
+  for (const online of [false, true]) {
+    const cheatRun = run('play.start', { mode: 'deathmatch' }, { online }).r.run;
+    const before = JSON.stringify([st.money, st.prof, st.stats]);
+    const none = run('play.reward', { run: cheatRun, mode: 'deathmatch', result: 'win', kills: 40, assists: 5, cheats: true }, { online }).r;
+    check(`cheats: no money, XP or record for that match (${online ? 'online' : 'offline'})`, none.cheats === true && none.earned === 0 && !none.xp && JSON.stringify([st.money, st.prof, st.stats]) === before && !st.play);
+    let again = null; try { run('play.reward', { run: cheatRun, mode: 'deathmatch', result: 'win', kills: 1 }, { online: true }); } catch (e) { again = e; }
+    check('cheats: and asking again without the flag pays nothing either', again?.code === 'match');
+  }
   let unseen = null; try { run('play.reward', { result: 'win', kills: 1, roundsWon: 13, rounds: 20 }, { online: true }); } catch (e) { unseen = e; }
   const { run: id } = run('play.start', { mode: 'wingman' }, { now: t0 }).r;
   let quick = null; try { run('play.reward', { run: id, result: 'win', kills: 5, roundsWon: 9, rounds: 14 }, { online: true, now: t0 + 60e3 }); } catch (e) { quick = e; }

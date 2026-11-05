@@ -40,6 +40,7 @@ export function xpBarHtml(prof, { from = null } = {}) {
 // What a finished match earned (the play.reward result), for the end of the match: the money, the XP and the level.
 export function matchRewardHtml(r) {
   if (!r) return '';
+  if (r.cheats) return '<span class="muted">Cheats were used, so this match pays nothing</span>';
   const p = r.pay, x = r.xp;
   const parts = [p.result && `${{ win: 'Win', draw: 'Draw', loss: 'Loss' }[r.result] || 'Result'} $${p.result}`, p.kills && `kills $${p.kills}`, p.assists && `assists $${p.assists}`].filter(Boolean).join(' · ');
   const prof = { ...S.prof, ...r.after };

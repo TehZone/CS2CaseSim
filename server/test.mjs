@@ -107,6 +107,18 @@ try {
     unseen?.code === 'match' && tooFast?.code === 'match' && twice?.code === 'match' && Math.abs(m1 - m0 - 680) < 0.011 && paid.earned === 680 && paid.xp.total > 0,
     `${m0} -> ${m1}`);
 
+  // A match with cheats in it pays nothing online, and its run can't be paid afterwards.
+  {
+    const { run: cheatRun } = await A.act('play.start', { mode: 'competitive' });
+    await server.store.withUser(A.user.id, async (e) => { e.st.play = { ...e.st.play, at: Date.now() - 30 * 60 * 1000 }; server.store.markDirty(e); });
+    const before = await serverState(A.user.id);
+    const none = await A.act('play.reward', { run: cheatRun, mode: 'competitive', result: 'win', kills: 20, assists: 3, roundsWon: 13, rounds: 22, cheats: true });
+    const after = await serverState(A.user.id);
+    let again = null; try { await A.act('play.reward', { run: cheatRun, mode: 'competitive', result: 'win', kills: 20, assists: 3, roundsWon: 13, rounds: 22 }); } catch (e) { again = e; }
+    check('online match with cheats: no money, no XP, and no paying it again without the flag',
+      none.cheats === true && none.earned === 0 && after.money === before.money && JSON.stringify(after.prof) === JSON.stringify(before.prof) && again?.code === 'match' && (await serverState(A.user.id)).money === before.money);
+  }
+
   // ---- market: one shared stock ------------------------------------------------------------------------
   {
     const MK = await import('../src/js/engine/market.js');

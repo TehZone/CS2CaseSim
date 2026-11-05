@@ -810,6 +810,36 @@ function fakeGame() {
   look.con.cmds = commands(look.g, look.con);
   look.con.run('status');
   ok(/77 hp/.test(look.out[0]) && /4200/.test(look.out[1]) && !/hp|4200/.test(look.out[2]) && /Foe/.test(look.out[2]), "console: status doesn't show enemies' health and money in a matchmaking match");
+
+  // A private match with cheats in it pays nothing: whatever a matchmaking match refuses, once it's actually used.
+  const used = (...lines) => {
+    const t = fresh(true);
+    Object.assign(t.g, { hud: hud(), setBotTier: () => {}, setBinds: () => {}, say: () => {}, setSensitivity: () => {}, input: { binds: {} } });
+    t.con.cmds = commands(t.g, t.con);
+    for (const l of lines) t.con.run(l);
+    return t;
+  };
+  for (const line of ['sv_cheats 1', 'bot_kill', 'bot_kill t', 'mp_startmoney 16000', 'mp_maxmoney 60000', 'mp_buy_anywhere 1', 'mp_roundtime 1', 'mp_freezetime 0', 'mp_buytime 90', 'mp_c4timer 10', 'fps_max 5', 'cl_drawhud 0', 'r_drawviewmodel 0']) {
+    ok(used(line).g.cheated === true, `console: "${line}" makes a private match pay nothing`);
+  }
+  for (const line of ['mp_startmoney', 'mp_buy_anywhere', 'cl_drawhud', 'mp_startmoney abc', 'mp_restartgame 1', 'mp_warmup_end', 'mp_friendlyfire 1', 'bot_difficulty 0', 'fps_max 144', 'fps_max 0', 'sv_cheats 0', 'god', 'give weapon_awp', 'status', 'say hi', 'sensitivity 2', 'bind k "say hi"']) {
+    ok(!used(line).g.cheated, `console: "${line}" doesn't cost a private match its pay`);
+  }
+  const told = used('sv_cheats 1', 'god', 'bot_kill');
+  ok(told.out.filter((t) => /won't pay/.test(t)).length === 1, 'console: you are told a match stopped paying, once');
+  ok(used('sv_cheats 1', 'sv_cheats 0', 'mp_restartgame 1').g.cheated === true, "console: turning cheats off or restarting doesn't make the match pay again");
+  ok(used('sv_cheats 1; god').g.cheated === true, "console: a chain of commands (a bind's) counts too");
+  const queued = fresh(false);
+  queued.g.hud = hud(); queued.con.cmds = commands(queued.g, queued.con);
+  for (const line of ['sv_cheats 1', 'bot_kill', 'mp_startmoney 16000', 'fps_max 5', 'cl_drawhud 0']) queued.con.run(line);
+  ok(!queued.g.cheated, 'console: a refused command in a matchmaking match changes nothing, so that match still pays');
+  // ...and its kills don't count, and its end says so.
+  const { Game } = await import('../src/js/play/game.js');
+  const { matchRewardHtml } = await import('../src/js/profile.js');
+  let looked = false;
+  await Game.prototype.countStatTrak.call({ cheated: true }, { get id() { looked = true; return 'ak47'; } });
+  ok(!looked, 'console: a kill in a cheated match never reaches the StatTrak™ counter');
+  ok(/pays nothing/.test(matchRewardHtml({ cheats: true })) && !/\$/.test(matchRewardHtml({ cheats: true })), 'console: the end of a cheated match says it pays nothing');
 }
 
 // ---- H switches hands (CS2's switchhands, cl_prefer_lefthanded): bound for older saved binds too, saved -------------------

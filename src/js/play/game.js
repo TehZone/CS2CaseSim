@@ -134,6 +134,7 @@ export class Game {
   constructor(root, { map = 'de_dust2', mode = 'competitive', team = 'CT', teamSize = 5, difficulty = 'gold', length = 'short', overtime = true, friendlyFire = false,
     site = 'A', minutes = 10, ffa = true, sensitivity = 1.25, quality = 'balanced', settings = {}, roster = null, ranked = false, quiet = false, cheats = false, onStatus = () => {} } = {}) {
     Object.assign(this, { root, mapId: map, team, onStatus, ranked: !!ranked, quiet: !!quiet, cheatsAllowed: !!cheats });
+    this.cheated = false; // (cheats were used in this match, however it goes on: see DevConsole.markCheated)
     quietKeyframes(); // (the bots' animation: see keyframes.js)
     this.enemyTeam = team === 'T' ? 'CT' : 'T';
     this.mode = MODES[mode] ? mode : 'competitive';
@@ -1217,11 +1218,12 @@ export class Game {
 
   // A finished match is the only thing that pays (online too): the result (a draw pays as a win), your kills of enemies
   // (a teamkill isn't one) and assists, and XP for those and the rounds your team won (see engine/levels.js). Paid against
-  // the match's run (see load); an abandoned match never gets here. { error } when it wasn't paid.
+  // the match's run (see load); an abandoned match never gets here. { error } when it wasn't paid. With cheats in the
+  // match it pays nothing, and the run is closed.
   async payReward(won, draw) {
     const me = this.me, m = this.match;
     try {
-      return await act('play.reward', { run: await this.started, mode: this.mode, result: draw ? 'draw' : won ? 'win' : 'loss',
+      return await act('play.reward', { run: await this.started, mode: this.mode, result: draw ? 'draw' : won ? 'win' : 'loss', cheats: this.cheated,
         kills: Math.min(400, this.enemyKills || 0), assists: Math.min(400, Math.max(0, me.assists)),
         roundsWon: this.respawnMode ? 0 : Math.min(60, m.score.A), rounds: this.respawnMode ? 0 : Math.min(60, m.round) });
     } catch (e) { console.warn('match reward', e); return { error: e.message || 'No reward for this match' }; }
@@ -2153,9 +2155,10 @@ export class Game {
   }
 
   // A kill with your own StatTrak™ gun or knife counts on its counter: saved on the item and shown on the weapon. With
-  // a gun of someone else's (picked up), it doesn't, as in CS2; nor does a bot's kill with yours.
+  // a gun of someone else's (picked up), it doesn't, as in CS2; nor does a bot's kill with yours, or any in a match with
+  // cheats in it.
   async countStatTrak(gun) {
-    if (!gun?.id || NADES[gun.id] || gun.skin?.owner !== LOCAL) return;
+    if (this.cheated || !gun?.id || NADES[gun.id] || gun.skin?.owner !== LOCAL) return;
     const item = S.inv.find((i) => i.uid === gun.skin.item.uid);
     if (!item?.stt) return;
     try {

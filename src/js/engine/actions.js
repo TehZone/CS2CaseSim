@@ -576,13 +576,18 @@ export const ACTIONS = {
   },
   // A finished Play match pays and gives XP (see levels.js): its result, your kills and assists, and the rounds your team
   // won. Online the server can't see the match, so it only pays one it saw start (play.start), once, and only what that
-  // match could have earned: long enough for its rounds, and no more kills than there were enemies to kill.
-  'play.reward'(ctx, { run = null, mode = null, result = null, won = false, kills = 0, assists = 0, roundsWon = null, rounds = 0 }) {
+  // match could have earned: long enough for its rounds, and no more kills than there were enemies to kill. cheats: the
+  // match had cheats in it (see play/console.js), so it pays nothing, gives no XP and isn't on your record.
+  'play.reward'(ctx, { run = null, mode = null, result = null, won = false, kills = 0, assists = 0, roundsWon = null, rounds = 0, cheats = false }) {
     result ??= won ? 'win' : 'loss'; // (callers from before draws were paid)
     if (!L.RESULTS.includes(result)) fail('Invalid result');
     kills = int(kills, 0, 400, 'kills'); assists = int(assists, 0, 400, 'assists'); rounds = int(rounds, 0, 60, 'rounds');
     roundsWon = roundsWon == null ? rounds : int(roundsWon, 0, 60, 'rounds'); // (older callers sent the rounds won as rounds)
     const cur = ctx.st.play?.run && ctx.st.play.run === run ? ctx.st.play : null;
+    if (cheats) {
+      if (cur) { ctx.st.play = null; ctx.dirty.add('play'); }
+      return { result, earned: 0, cheats: true };
+    }
     if (ctx.online && !cur) fail("The server didn't see that match start, so it can't pay for it", 'match');
     const ffa = FFA_MODES.has(cur?.mode || mode);
     if (cur) {
