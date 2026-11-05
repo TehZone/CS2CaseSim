@@ -21,6 +21,7 @@ const SERVER_COMMAND = /^(mp|bot)_/;
 // don't count on StatTrak™, like sv_cheats 1 in CS2: otherwise bot_kill is a free win. fair: not those that gain nothing,
 // or that a private match's own options already offer.
 const NO_PAY_MSG = "Cheats used: this match won't pay money or XP, and StatTrak™ won't count its kills.";
+const NO_PAY_HUD = "Cheats used: this match won't pay"; // (on screen too: a bind runs with the console closed)
 // (Slower than 10 frames a second the match itself slows down, the frame time being capped: fps_max as host_timescale.)
 const MIN_FPS = 30;
 
@@ -68,8 +69,8 @@ export function commands(g, con) {
     echo: { help: 'Prints text: echo <text>', run: (a) => con.print(a.join(' ')) },
     status: { help: 'Lists the players', run: () => {
       for (const c of g.combatants) {
-        // (In a matchmaking match, not your enemies' health and money: CS2's status doesn't show them.)
-        const hidden = !g.cheatsAllowed && c !== me() && (g.ffa || c.team !== me().team);
+        // (Not your enemies' health and money: CS2's status doesn't show them. With cheats on in a private match it does.)
+        const hidden = !(g.cheatsAllowed && g.cv.sv_cheats) && c !== me() && (g.ffa || c.team !== me().team);
         con.print(`${c.team.padEnd(3)} ${c.name.padEnd(16)} ${hidden ? '' : `${c.alive ? String(Math.max(0, Math.round(c.health))).padStart(3) + ' hp' : ' dead '}  $${c.money}  `}${c.kills} / ${c.deaths}`);
       }
     } },
@@ -280,6 +281,7 @@ export class DevConsole {
     if (this.game.cheated) return;
     this.game.cheated = true;
     this.print(NO_PAY_MSG, 'dim');
+    this.game.hud?.message?.(NO_PAY_HUD, 5000);
   }
 
   print(text, cls = '') {

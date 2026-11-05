@@ -23,6 +23,8 @@
   },
   "rewrite": {
     "Play console: cheats and server commands in private matches only": "Play: console cheats and server commands only work in private matches",
+    "Play: a private match with cheats in it pays nothing": "Play: a private match where console cheats are used pays no money or XP",
+    "Updates: a stuck old installer can't block the next update, and the server link shows only in the admin panel": "Updates: a stuck old installer can't block the next update",
     "Updates: the game updates itself from GitHub, only the latest version plays online, one server": "Updates: the game updates itself, and only the latest version plays online",
     "Remove the Team manager, chickens and pro cards; the inventory sorts by CS2's Quality": "Inventory: the Team manager, chickens and pro cards are gone, and the inventory sorts by CS2's Quality",
     "Inspect: the model and backdrop just say Loading… (not extracting from CS2)": "Inspect: the model and backdrop just say Loading… while they get ready",

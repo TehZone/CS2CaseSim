@@ -810,6 +810,13 @@ function fakeGame() {
   look.con.cmds = commands(look.g, look.con);
   look.con.run('status');
   ok(/77 hp/.test(look.out[0]) && /4200/.test(look.out[1]) && !/hp|4200/.test(look.out[2]) && /Foe/.test(look.out[2]), "console: status doesn't show enemies' health and money in a matchmaking match");
+  const peek = fresh(true);
+  Object.assign(peek.g, { me, combatants: [me, mate, foe] });
+  peek.con.cmds = commands(peek.g, peek.con);
+  peek.con.run('status');
+  const plain = peek.out[2];
+  peek.out.length = 0; peek.con.run('sv_cheats 1'); peek.out.length = 0; peek.con.run('status');
+  ok(!/hp|4200/.test(plain) && /Foe/.test(plain) && /77 hp/.test(peek.out[2]) && /4200/.test(peek.out[2]), "console: nor in a private match, unless cheats are on (and then that match doesn't pay)");
 
   // A private match with cheats in it pays nothing: whatever a matchmaking match refuses, once it's actually used.
   const used = (...lines) => {
@@ -827,6 +834,11 @@ function fakeGame() {
   }
   const told = used('sv_cheats 1', 'god', 'bot_kill');
   ok(told.out.filter((t) => /won't pay/.test(t)).length === 1, 'console: you are told a match stopped paying, once');
+  const shown = [], bound = fresh(true);
+  bound.g.hud = { ...hud(), message: (t) => shown.push(t) };
+  bound.con.cmds = commands(bound.g, bound.con);
+  bound.con.run('bot_kill'); bound.con.run('mp_startmoney 16000');
+  ok(shown.length === 1 && /won't pay/.test(shown[0]), "console: and on screen, as a bind runs with the console closed");
   ok(used('sv_cheats 1', 'sv_cheats 0', 'mp_restartgame 1').g.cheated === true, "console: turning cheats off or restarting doesn't make the match pay again");
   ok(used('sv_cheats 1; god').g.cheated === true, "console: a chain of commands (a bind's) counts too");
   const queued = fresh(false);
@@ -840,6 +852,10 @@ function fakeGame() {
   await Game.prototype.countStatTrak.call({ cheated: true }, { get id() { looked = true; return 'ak47'; } });
   ok(!looked, 'console: a kill in a cheated match never reaches the StatTrak™ counter');
   ok(/pays nothing/.test(matchRewardHtml({ cheats: true })) && !/\$/.test(matchRewardHtml({ cheats: true })), 'console: the end of a cheated match says it pays nothing');
+  globalThis.window ??= {}; // (act saves, debounced, and saving reads window)
+  const paid = (cheated) => Game.prototype.payReward.call({ me: { assists: 1 }, match: { score: { A: 0 }, round: 1 }, started: Promise.resolve(null), mode: 'deathmatch', respawnMode: true, enemyKills: 5, cheated }, true, false);
+  const [cheatedPay, fairPay] = [await paid(true), await paid(false)];
+  ok(cheatedPay.cheats === true && cheatedPay.earned === 0 && fairPay.earned > 0, 'console: a finished match tells the economy about its cheats, and a clean one still pays: ' + [cheatedPay.earned, fairPay.earned]);
 }
 
 // ---- H switches hands (CS2's switchhands, cl_prefer_lefthanded): bound for older saved binds too, saved -------------------
