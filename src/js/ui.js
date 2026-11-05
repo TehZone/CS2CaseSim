@@ -475,7 +475,7 @@ function detailBody(item) {
       <h3>${I.nameHtml(item)}</h3>
       <div class="rar">${esc(r.n)}${d.ph ? ' · ' + esc(d.ph) : ''}</div>
       ${d.desc ? `<p class="muted" style="margin:-6px 0 12px;line-height:1.5">${esc(d.desc)}</p>` : ''}
-      ${vb.pat.label ? `<div style="margin-bottom:10px">${patternTag(vb.pat)} ${vb.pat.tier ? `<span class="muted" style="font-size:12px">${TIER_LABEL[vb.pat.tier] || ''}</span>` : ''}</div>` : ''}
+      ${vb.pat.label ? `<div style="margin-bottom:10px">${patternTag(vb.pat)} ${vb.pat.tier && !/Tier \d/.test(vb.pat.label) ? `<span class="muted" style="font-size:12px">${TIER_LABEL[vb.pat.tier] || ''}</span>` : ''}</div>` : ''}
       <dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
       <div class="valbox">
         <div class="muted" style="font-size:11px;letter-spacing:1px;text-transform:uppercase">Value</div>

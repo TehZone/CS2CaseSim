@@ -462,7 +462,13 @@ What's in a match:
   Stars once, by how hard it is: a weapon case 5,000 XP and 12 stars, a 320-sticker capsule 40,000 and 100. The first
   knife or gloves from a pool pays a bonus. Sets with the same items share one reward. Offline and online are kept apart,
   and online the server keeps the record
-- Floats (CS2 wear distribution), pattern seeds 0-1000 with rare patterns (blue gems, Fire & Ice, full fades, Doppler phases...)
+- Floats (CS2 wear distribution), pattern seeds 0-1000 with rare patterns (blue gems, Fire & Ice, full fades, Doppler phases...).
+  Case Hardened and Heat Treated show each seed's real share of playside blue and gold, measured from CS2's own pattern
+  (`scripts/build-case-hardened.mjs`, into `src/js/engine/case-hardened-data.js`) on the part the community goes by, a
+  knife's blade or the AK-47's dust cover. Their labels go by it, weapon by weapon: Blue Gems are each skin's bluest seeds,
+  with the community's Tier 1 lists on top for the AK-47, Karambit and Five-SeveN, High Blue the bluest 5%, Above-average blue
+  the bluest 20%, and Gold Gem what's almost all gold. Hydra Gloves can't be measured, so they show no numbers and go by the
+  community's tier list (Blue, Gold and Blaze Gems and Tier 4). The 3D inspect opens these skins on that side
 - StatTrak™, knives and gloves, stickers with free placement, scraping, and craft bonuses
 - Loadout (Inventory → Loadout, or Equip on an item): gloves, knife, a T and a CT agent, and one skin per gun
 - 3D inspect (drag, zoom, F to inspect, B to flip)

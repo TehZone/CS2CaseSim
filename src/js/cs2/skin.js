@@ -226,12 +226,17 @@ function bakeQuad() {
   return bakeMesh;
 }
 
-async function bakeSkin(renderer, prep, item) {
+// kept: a Map to keep the textures in between bakes of one skin, for the caller to dispose (scripts/case-hardened bakes
+// every seed of a skin, and uploading them is most of a bake's time).
+// exact: also bakes in the seed's rolls of the kit's exposed params and the model's normal map. A Heat Treated ramp is made
+// of those, and without them every seed comes out the same pale colours.
+export async function bakeSkin(renderer, prep, item, kept = null, exact = false) {
   const { kit, inputs, shader } = prep;
   const rolled = rollInstance(kit, item.sd ?? 0);
   const resolved = resolveVars(kit.color, inputs, rolled, item);
   const style = resolved.F_PAINT_STYLE | 0;
   const p = { ...defaults(style), ...resolved };
+  if (exact) for (const [k, v] of Object.entries(rolled)) if (k.startsWith('exposed_params.')) p[k.slice('exposed_params.'.length)] = v;
   const dbg = globalThis.__cs2Debug || {};
   // The shader's variants for position-projected styles (spray, airbrush, all-masks, trilinear case
   // hardening) scale by weapon length; every other style scales by the model's UV density.
@@ -269,7 +274,7 @@ async function bakeSkin(renderer, prep, item) {
     const texName = m ? m[1] : u;
     const samp = m ? m[2] : '';
     const vpk = p[texName];
-    const url = vpk && prep.textures[vpk];
+    const url = exact && texName === 'g_tNormal' ? prep.materials[prep.material]?.normal : vpk && prep.textures[vpk];
     let wrapS = THREE.RepeatWrapping, wrapT = THREE.RepeatWrapping;
     if (/Clamp/.test(samp)) wrapS = wrapT = THREE.ClampToEdgeWrapping;
     else if (/dynamic/.test(samp)) {
@@ -277,7 +282,8 @@ async function bakeSkin(renderer, prep, item) {
       wrapT = WRAP[p.g_nPatternTextureVerticalSampling | 0] ?? THREE.RepeatWrapping;
     }
     const srgb = SRGB_TEX.has(texName) || (texName === 'g_tPattern' && patternSrgb);
-    uniforms[u] = { value: url ? await texture(url, { srgb, wrapS, wrapT }) : whiteTex() };
+    uniforms[u] = { value: kept?.get(u) ?? (url ? await texture(url, { srgb, wrapS, wrapT }) : whiteTex()) };
+    kept?.set(u, uniforms[u].value);
   }));
 
   const mat = new THREE.RawShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader: BAKE_VS, fragmentShader: adaptFragment(src), uniforms, depthTest: false, depthWrite: false });
@@ -308,7 +314,7 @@ async function bakeSkin(renderer, prep, item) {
   } finally {
     renderer.setRenderTarget(prev);
     mat.dispose();
-    for (const { value } of Object.values(uniforms)) if (value?.isTexture && value !== whiteTex()) value.dispose(); // (made for this bake)
+    if (!kept) for (const { value } of Object.values(uniforms)) if (value?.isTexture && value !== whiteTex()) value.dispose(); // (made for this bake)
   }
   if (globalThis.__cs2Debug) globalThis.__cs2LastBake = { colorRT, rmRT, params: p, rolled, renderer };
   return { colorRT, rmRT, params: p, rolled };
@@ -455,7 +461,7 @@ export async function buildCS2Model(item, def, renderer, { statTrak = true, quic
 
   let skin = null;
   if (prep.kit && prep.inputs) {
-    const baked = await bakeSkin(renderer, prep, item);
+    const baked = await bakeSkin(renderer, prep, item, null, def.fin === 'Heat Treated');
     const [normal, orm] = await Promise.all([
       prep.materials[prep.material]?.normal ? texture(prep.materials[prep.material].normal, { shared: true }) : null,
       prep.materials[prep.material]?.orm ? texture(prep.materials[prep.material].orm, { shared: true }) : null,

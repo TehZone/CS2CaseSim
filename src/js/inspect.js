@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { composeItem, bleedEdges, normalMapFrom, wearAmount } from './composite.js';
 import { itemDef } from './items.js';
+import { playside } from './engine/patterns.js';
 import { cs2Status } from './cs2/api.js';
 import { buildCS2Model } from './cs2/skin.js';
 import { buildCharmModel } from './cs2/charm.js';
@@ -270,6 +271,9 @@ function shadowBlob() {
 // Viewer
 // ---------------------------------------------------------------------------------------------
 const DEFAULT_VIEW = { yaw: 0.22, pitch: 0.12 };
+// Case Hardened and Heat Treated open on the side their Playside numbers and labels are of: most knives' isn't the one their
+// icon shows, and the AK-47's is its dust cover, from above.
+const PLAYSIDE_VIEW = { back: { ...DEFAULT_VIEW, yaw: DEFAULT_VIEW.yaw + Math.PI }, top: { ...DEFAULT_VIEW, pitch: 0.85 } };
 const easeOutBack = (t) => 1 + 2.2 * Math.pow(t - 1, 3) + 1.2 * Math.pow(t - 1, 2);
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
@@ -583,7 +587,7 @@ class InspectView {
       try {
         if ((await cs2Status()).available) {
           const real = await buildCS2Model(item, def, this.renderer);
-          if (real) { this.source = 'cs2'; return real; }
+          if (real) { this.source = 'cs2'; real.userData.view = PLAYSIDE_VIEW[playside(def)]; return real; }
         }
       } catch (e) {
         console.warn('CS2 model unavailable, using the icon model instead:', e);

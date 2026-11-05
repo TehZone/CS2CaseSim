@@ -142,6 +142,119 @@ function tierFreq(box, n) {
   check('listings from old restocks are refused', e3?.code === 'expired');
 }
 
+// ---- Case Hardened and Heat Treated: every label comes from what the seed really shows --------------------------------
+{
+  const { analyzePattern, playside } = await E('patterns');
+  const { CASE_HARDENED } = await E('case-hardened-data');
+  const seeds = Array.from({ length: 1001 }, (_, i) => i);
+  const hardened = Object.values(D.skins).filter((s) => s.fin === 'Case Hardened' || s.fin === 'Heat Treated');
+  const measured = hardened.filter((s) => s.cat !== 'gloves');
+  const skin = (wid, fin = 'Case Hardened') => hardened.find((s) => s.wid === wid && s.fin === fin);
+  const ak = skin('weapon_ak47'), karambit = skin('weapon_knife_karambit'), five = skin('weapon_fiveseven'), daggers = skin('weapon_knife_push');
+  const fiveHeat = skin('weapon_fiveseven', 'Heat Treated'), deagleHeat = skin('weapon_deagle', 'Heat Treated'), hydra = hardened.find((s) => s.cat === 'gloves');
+  const data = (s) => CASE_HARDENED[s.wid][s.fid];
+  const digit = (text, sd) => parseInt(text.slice(sd * 2, sd * 2 + 2), 32) / 10;
+  const blueOf = (s, sd) => digit(data(s).b, sd), goldOf = (s, sd) => digit(data(s).g, sd);
+  const bluest = (s) => seeds.reduce((a, b) => (blueOf(s, b) > blueOf(s, a) ? b : a));
+  const typical = new Map(measured.map((s) => [s, seeds.map((sd) => blueOf(s, sd)).sort((a, b) => a - b)[500]]));
+  const label = (s, sd) => analyzePattern(s, sd).label;
+  const count = (s, test) => seeds.filter((sd) => test(label(s, sd))).length;
+  const gem = (l) => l.includes('Blue Gem');
+  const each = (test) => measured.flatMap((s) => seeds.filter((sd) => !test(s, sd)).map((sd) => `${s.n} ${sd}`));
+  const shown = (list) => (list.length ? `${list.length}: ${list.slice(0, 5).join(', ')}` : '');
+
+  check('Case Hardened: all skins but the gloves are measured, all 1001 seeds', hardened.length === 26 && measured.length === 25 && measured.every((s) => data(s)?.b.length === 2002 && data(s).g.length === 2002));
+  let bad = each((s, sd) => { const p = analyzePattern(s, sd); return p.blue === blueOf(s, sd) / 100 && p.gold === goldOf(s, sd) / 100; });
+  check('Case Hardened: blue and gold are the file\'s numbers, every seed of every skin', !bad.length, shown(bad));
+  bad = each((s, sd) => { const { info } = analyzePattern(s, sd); return info.length === 2 && info[0][0] === 'Playside blue' && info[0][1] === blueOf(s, sd).toFixed(1) + '%' && info[1][0] === 'Playside gold' && info[1][1] === goldOf(s, sd).toFixed(1) + '%'; });
+  check('Case Hardened: and so is the info line', !bad.length, shown(bad));
+  check('Case Hardened: blue and gold never come to more than the whole', !each((s, sd) => blueOf(s, sd) + goldOf(s, sd) <= 100.1).length);
+  // Pinned from the measuring, so a number made up per seed can't pass for it.
+  const pinned = [[ak, 661, 99.8, 0], [ak, 784, 2.6, 91.2], [karambit, 387, 98.7, 0], [five, 690, 95.6, 1.7], [fiveHeat, 904, 88.3, 3.5], [deagleHeat, 490, 76.6, 8.1]];
+  check('Case Hardened: known seeds read what CS2\'s pattern gave', pinned.every(([s, sd, b, g]) => blueOf(s, sd) === b && goldOf(s, sd) === g), JSON.stringify(pinned.map(([s, sd]) => [sd, blueOf(s, sd), goldOf(s, sd)])));
+
+  check('Case Hardened: 661 is the AK-47\'s bluest seed, its #1 Blue Gem', bluest(ak) === 661 && label(ak, 661) === '#1 Blue Gem' && analyzePattern(ak, 661).mult === 500 && analyzePattern(ak, 661).tier === 't0');
+  check('Case Hardened: the community\'s best seeds come out first on their own weapons', bluest(karambit) === 387 && [278, 690].includes(bluest(five)) && bluest(skin('weapon_knife_falchion')) === 494 && bluest(skin('weapon_knife_m9_bayonet')) === 601);
+
+  // (The community's Tier 1 names, which go on top of the bluest seeds.)
+  const tierOne = new Map([[ak, [670, 321, 151, 955, 179, 387, 555, 592, 760, 809, 828, 868, 617]], [five, [278, 690, 868, 363, 872, 648, 151]], [karambit, [387, 269, 463, 470, 868, 853, 442, 73, 902]]]);
+  bad = each((s, sd) => {
+    const m = data(s), blue = blueOf(s, sd), gold = goldOf(s, sd), l = label(s, sd), goldEnough = gold - blue >= m.gold;
+    if (l === '#1 Blue Gem') return s === ak && sd === 661;
+    if (l === 'Blue Gem Tier 1') return blue >= m.t1 || tierOne.get(s)?.includes(sd);
+    if (l === 'Blue Gem Tier 2') return blue >= m.t2 && blue < m.t1;
+    if (l === 'High Blue') return blue >= m.high && blue < m.t2 && blue > gold;
+    if (l === 'Above-average blue') return blue >= m.above && blue < m.high && blue >= typical.get(s) + 10;
+    if (l === 'Gold Gem') return goldEnough && gold >= 75 && blue <= 8;
+    return l === '' && blue < m.above && !goldEnough;
+  });
+  check('Case Hardened: every label agrees with the seed\'s numbers, and every seed that earns one has it', !bad.length, shown(bad));
+  bad = measured.filter((s) => { const most = Math.max(...seeds.map((sd) => goldOf(s, sd) - blueOf(s, sd))); return Math.abs(data(s).gold - Math.max(75, most - 14)) > 0.05; }).map((s) => s.n);
+  check('Case Hardened: a Gold Gem goes by the look of the skin\'s goldest seed, not by how many seeds there are', !bad.length, shown(bad));
+  bad = each((s, sd) => label(s, sd) !== 'Above-average blue' && label(s, sd) !== 'High Blue' || blueOf(s, sd) < data(s).t2);
+  check('Case Hardened: nothing bluer than the skin\'s Blue Gems is left at High Blue or below', !bad.length, shown(bad));
+
+  const share = (s, test) => count(s, test) / 1001;
+  bad = measured.filter((s) => share(s, gem) > 0.03).map((s) => s.n);
+  check('Case Hardened: Blue Gems are 3% of a skin\'s seeds at most', !bad.length, shown(bad));
+  bad = measured.filter((s) => { const x = share(s, (l) => l === 'High Blue'); return x < 0.02 || x > 0.05; }).map((s) => s.n);
+  check('Case Hardened: High Blue is what\'s left of the bluest 5% after the Blue Gems: 2% to 5% of seeds', !bad.length, shown(bad));
+  bad = measured.filter((s) => { const x = share(s, (l) => l === 'Above-average blue'); return x < 0.04 || x > 0.16; }).map((s) => s.n);
+  check('Case Hardened: Above-average blue is 4% to 16%: the next of the bluest 20%, less where seeds sit close together', !bad.length, shown(bad));
+  bad = measured.filter((s) => share(s, (l) => l === 'Gold Gem') > 0.06).map((s) => s.n);
+  check('Case Hardened: Gold Gem is rare: 6% of a skin\'s seeds at most (it was 30%)', !bad.length, shown(bad));
+  const labelled = measured.reduce((n, s) => n + count(s, (l) => l !== ''), 0) / (measured.length * 1001);
+  check('Case Hardened: about a fifth of seeds have a label at all (it was over half)', labelled > 0.19 && labelled < 0.25, `${(labelled * 100).toFixed(1)}%`);
+
+  const named = [[ak, 219], [ak, 784], [skin('weapon_bayonet'), 395], [skin('weapon_bayonet'), 359], [skin('weapon_bayonet'), 848], [skin('weapon_knife_flip'), 731], [skin('weapon_knife_gut'), 837], [karambit, 939], [karambit, 388],
+    [skin('weapon_knife_m9_bayonet'), 739], [skin('weapon_knife_falchion'), 926], [skin('weapon_knife_falchion'), 279], [skin('weapon_knife_falchion'), 386], [skin('weapon_knife_butterfly'), 75], [skin('weapon_knife_cord'), 521], [skin('weapon_knife_widowmaker'), 757], [five, 691]];
+  bad = named.filter(([s, sd]) => label(s, sd) !== 'Gold Gem').map(([s, sd]) => `${s.n} ${sd}`);
+  check('Case Hardened: the Gold Gems the community names are Gold Gems', !bad.length, shown(bad));
+  check('Case Hardened: no Gold Gem on the Shadow Daggers, or on Heat Treated, which never gets near all gold', [daggers, fiveHeat, deagleHeat].every((s) => !count(s, (l) => l === 'Gold Gem')));
+
+  // What's painted beside the blade or the dust cover decides nothing. These seeds, by what the part shows, not the rest:
+  const butterfly = skin('weapon_knife_butterfly'), navaja = skin('weapon_knife_gypsy_jackknife'), stiletto = skin('weapon_knife_stiletto');
+  const each_ = (list, test) => list.filter(([s, sds]) => sds.some((sd) => !test(label(s, sd))));
+  const goldParts = [[butterfly, [572, 926, 84, 279, 462, 599]], [navaja, [317, 137, 636]], [stiletto, [15, 36, 186]], [karambit, [653, 78, 543, 145, 679]], [ak, [315, 925, 343]]];
+  check('Case Hardened: a gold blade is a Gold Gem whatever colour its handle or ring is', !each_(goldParts, (l) => l === 'Gold Gem').length);
+  const halfParts = [[butterfly, [587, 842, 826, 399, 436, 369, 475, 911, 382]], [navaja, [278, 690]], [stiletto, [374, 501]], [ak, [838, 790, 608, 113, 675]]];
+  check('Case Hardened: and a half gold one has no label for a blue handle', !each_(halfParts, (l) => l === '').length);
+  const blueParts = [[butterfly, [42, 256, 34]], [navaja, [615, 20, 893]], [stiletto, [953, 644]], [ak, [985, 497, 557, 782]]];
+  check('Case Hardened: a blue blade has a label for it under a gold handle', !each_(blueParts, (l) => l !== '' && l !== 'Gold Gem').length);
+  check('Case Hardened: solid blue blades are Blue Gems, and a blade that isn\'t blue isn\'t for its handles', [[butterfly, 330], [butterfly, 838], [butterfly, 263], [butterfly, 800], [ak, 512]].every(([s, sd]) => gem(label(s, sd))) && !gem(label(butterfly, 808)));
+
+  const off = [[ak, [32, 589, 735, 784, 341, 442]], [karambit, [151, 592, 760, 555, 179]], [five, [179, 592]]];
+  check('Case Hardened: seeds the old lists had that aren\'t blue aren\'t Blue Gems', off.every(([s, list]) => list.every((sd) => !gem(label(s, sd)))) && label(ak, 784) === 'Gold Gem');
+  check('Case Hardened: the community\'s Tier 1 stands, whatever the playside shows', [...tierOne].every(([s, list]) => list.every((sd) => label(s, sd) === 'Blue Gem Tier 1')));
+  check('Case Hardened: a seed that\'s blue enough is a Blue Gem on a list\'s skin too', [[karambit, 888, 'Blue Gem Tier 1'], [karambit, 776, 'Blue Gem Tier 1'], [five, 689, 'Blue Gem Tier 1'], [five, 532, 'Blue Gem Tier 2'], [ak, 13, 'Blue Gem Tier 2']].every(([s, sd, l]) => label(s, sd) === l));
+  bad = measured.filter((s) => !['front', 'back', 'top'].includes(playside(s))).map((s) => s.n);
+  check('Case Hardened: every measured skin says which side its numbers are of, for the inspect to open on', !bad.length && playside(ak) === 'top' && playside(karambit) === 'front' && playside(butterfly) === 'back' && playside(hydra) === null, shown(bad));
+  check('Case Hardened: a seed guessed for every knife isn\'t a Blue Gem where it isn\'t blue', [[skin('weapon_knife_survival_bowie'), 592], [skin('weapon_knife_widowmaker'), 463], [skin('weapon_mac10'), 661]].every(([s, sd]) => blueOf(s, sd) < 10 && !gem(label(s, sd))));
+  check('Case Hardened: knives without a list get about as many Blue Gems as the one they had, at its price', measured.filter((s) => s.cat === 'knife' && s !== karambit).every((s) => Math.abs(count(s, gem) - 19) <= 2) && analyzePattern(skin('weapon_knife_m9_bayonet'), 601).mult === 15 && label(skin('weapon_knife_m9_bayonet'), 601) === 'Blue Gem Tier 1');
+  check('Heat Treated: has its own Blue Gems, not the Case Hardened list', !gem(label(fiveHeat, 690)) && !gem(label(fiveHeat, 278)) && label(fiveHeat, 904) === 'Blue Gem Tier 1' && analyzePattern(fiveHeat, 904).mult === 35 && label(deagleHeat, 490) === 'Blue Gem Tier 1' && analyzePattern(deagleHeat, 490).mult === 4);
+
+  const mults = { 'High Blue': 1.6, 'Above-average blue': 1.15, 'Gold Gem': 1.3, '': 1 };
+  bad = each((s, sd) => { const p = analyzePattern(s, sd); return gem(p.label) || p.mult === mults[p.label]; });
+  check('Case Hardened: each label keeps its multiplier', !bad.length, shown(bad));
+  bad = each((s, sd) => { const p = analyzePattern(s, sd); return gem(p.label) || p.tier === (p.label === 'High Blue' || p.label === 'Gold Gem' ? 't3' : ''); });
+  check('Case Hardened: High Blue and Gold Gem are t3 and Above-average has no tier, for what reads them', !bad.length, shown(bad));
+
+  const gloves = seeds.map((sd) => analyzePattern(hydra, sd));
+  check('Hydra Gloves can\'t be measured: no blue or gold numbers on any seed', gloves.every((p) => p.blue === undefined && p.gold === undefined && !p.info.some(([k]) => /Playside/.test(k))));
+  const hydraSeeds = (want) => seeds.filter((sd) => label(hydra, sd) === want);
+  const hydraCounts = ['Blue Gem Tier 1', 'Blue Gem Tier 2', 'Blue Gem Tier 3', 'Gold Gem', 'Blaze Gem Tier 1', 'Blaze Gem Tier 2', 'Blaze Gem Tier 3', 'Tier 4', ''].map((l) => hydraSeeds(l).length);
+  check('Hydra Gloves: the guide\'s tier list, every label', hydraCounts.join() === '11,50,55,5,9,20,44,236,571', hydraCounts.join());
+  check('Hydra Gloves: its ranks show in the info', analyzePattern(hydra, 310).info.join() === 'Tier list,P1' && analyzePattern(hydra, 505).info.join() === 'Tier list,P10' && analyzePattern(hydra, 28).info.join() === 'Tier list,High' && analyzePattern(hydra, 974).info.join() === 'Tier list,Low' && analyzePattern(hydra, 896).info.join() === 'Tier list,P1');
+  check('Hydra Gloves: a seed it gives twice is the better list', label(hydra, 226) === 'Gold Gem' && label(hydra, 808) === 'Blaze Gem Tier 3' && label(hydra, 780) === 'Blue Gem Tier 2' && label(hydra, 85) === 'Blaze Gem Tier 3' && label(hydra, 361) === 'Blue Gem Tier 3' && label(hydra, 414) === 'Blaze Gem Tier 2');
+  check('Hydra Gloves: Blue Gem Tier 1 is worth the most, and a seed off the list is a plain pair', analyzePattern(hydra, 310).mult === 4 && analyzePattern(hydra, 442).mult === 1.8 && label(hydra, 442) === 'Blue Gem Tier 2' && analyzePattern(hydra, 3).mult === 1 && !label(hydra, 3) && !analyzePattern(hydra, 3).tier);
+  check('Hydra Gloves: the guide\'s table ranks what its lists don\'t name, and a seed under review stays plain', label(hydra, 29) === 'Blue Gem Tier 2' && label(hydra, 5) === 'Blue Gem Tier 3' && label(hydra, 102) === 'Blaze Gem Tier 2' && label(hydra, 22) === 'Blaze Gem Tier 3' && label(hydra, 734) === 'Gold Gem' && label(hydra, 2) === 'Tier 4' && !label(hydra, 716) && !label(hydra, 867) && !label(hydra, 988));
+  check('Hydra Gloves: where the table and a list disagree, the list stands', label(hydra, 399) === 'Blue Gem Tier 1' && label(hydra, 28) === 'Blue Gem Tier 2');
+  check('Hydra Gloves: a blue gem hunter never rates a Blaze Gem above a Blue Gem', seeds.every((sd) => !/Blaze/.test(label(hydra, sd)) || analyzePattern(hydra, sd).tier === 't3') && !analyzePattern(hydra, 896).tier);
+  check('Hydra Gloves: every label\'s worth at least a plain pair, and nothing else reads the guide\'s list', gloves.every((p) => p.mult >= 1) && !gloves.some((p) => /High Blue|Above-average/.test(p.label)) && !/Blaze|Tier 4/.test(label(karambit, 15)) && label(skin('weapon_mac10', 'Case Hardened'), 174) !== 'Blaze Gem Tier 1');
+  check('Case Hardened: a seed past the end of the measuring shows nothing rather than break', [-1, 1001, 5000].every((sd) => { const p = analyzePattern(ak, sd); return p.label === '' && p.blue === undefined && p.mult === 1; }));
+  check('Case Hardened: the data stays small', fs.statSync(path.join(ROOT, 'src/js/engine/case-hardened-data.js')).size < 120e3);
+}
+
 // ---- trade-ups ----------------------------------------------------------------------------------
 {
   const col = D.collections.find((c) => c.n === 'The Cobblestone Collection');
@@ -384,6 +497,8 @@ function tierFreq(box, n) {
   const later = MM.abandon(mm, t0 + 30 * 864e5);
   check('matchmaking: each abandon\'s cooldown is longer, and a week later the shortest again', lens.join() === [30 * 60e3, 2 * 3600e3, 864e5, 7 * 864e5, 7 * 864e5].join()
     && later.ms === 30 * 60e3 && MM.cooldownLeft(later.mm, t0 + 30 * 864e5 + 60e3) === 29 * 60e3 && MM.formatWait(2 * 3600e3 - 60e3) === '1 hour 59 minutes');
+  const forgiven = MM.forgive({ ...MM.abandon(MM.abandon(MM.freshMM(), t0).mm, t0).mm, match: { mode: 'premier' } });
+  check('matchmaking: staff taking a cooldown away ends it, the next is the shortest again, and the match you\'re in stays', MM.cooldownLeft(forgiven, t0) === 0 && MM.nextCooldown(forgiven, t0) === 30 * 60e3 && forgiven.match?.mode === 'premier' && MM.cooldownLeft(MM.forgive(null)) === 0);
   // The actions, on a save.
   const st = freshState(), t = Date.now();
   const run = (name, args, now) => { const ctx = ACT.makeCtx(st, { rng, now }); const res = ACT.runAction(ctx, name, args); return { res, d: ACT.delta(ctx) }; };
@@ -494,8 +609,6 @@ function tierFreq(box, n) {
 
 // ---- older saves: chickens and pro cards are sold on load ----------------------------------------------------
 {
-  const forgiven = MM.forgive({ ...MM.abandon(MM.abandon(MM.freshMM(), t0).mm, t0).mm, match: { mode: 'premier' } });
-  check('matchmaking: staff taking a cooldown away ends it, the next is the shortest again, and the match you\'re in stays', MM.cooldownLeft(forgiven, t0) === 0 && MM.nextCooldown(forgiven, t0) === 30 * 60e3 && forgiven.match?.mode === 'premier' && MM.cooldownLeft(MM.forgive(null)) === 0);
   const { upgradeState } = await E('economy');
   const pro = Object.values(D.pros)[0];
   const old = { ...freshState(), money: 5, team: { name: 'My Team', slots: {} },
@@ -762,12 +875,14 @@ function tierFreq(box, n) {
     && new Set(people.filter((n) => n.focus).map((n) => n.focus)).size === 12 && world.length === 2000 && new Set(world.map((n) => n.name)).size === 2000 && N.crowd(4242) === world
     && N.npcOf(4242, 'n400') === world[400] && !world[400].active && N.npcOf(4242, 'n1999') === world[1999]
     && N.startingState(4242, people[2]).inv.map((it) => it.id + it.fl).join() === N.startingState(4242, people[2]).inv.map((it) => it.id + it.fl).join());
-  // (Saves know their NPCs by their place in the list: the first 420 and what they start with stay as they first were.)
+  // (Saves know their NPCs by their place in the list: the first 420 and what they start with stay as they first were. An
+  // NPC stops collecting at a value, so what patterns are worth moves it for those holding one, until they're in the save:
+  // the real Case Hardened numbers did that to 79 of the 2,000.)
   const { hashStr, mulberry32 } = await E('util');
   const first = world.slice(0, 420);
   const fp = hashStr(JSON.stringify(first.map((n) => [n.id, n.name, n.type, n.focus, n.country, n.avatar, n.joined, n.level, n.medals, n.bio, n.fav, n.g, n.premium, n.patience, n.sharp, n.active]))) >>> 0;
   const fpInv = hashStr(first.slice(0, 60).map((n) => N.startingState(4242, n).inv.map((it) => it.id + ':' + it.fl + ':' + (it.sn || '')).join()).join('|')) >>> 0;
-  check('NPCs: the first 420 (and what they own) are who they were before there were more', fp === 717510250 && fpInv === 976647370, `${fp} ${fpInv}`);
+  check('NPCs: the first 420 (and what they own) are who they were before there were more', fp === 717510250 && fpInv === 1911864576, `${fp} ${fpInv}`);
 
   // Beginners: new, gullible, and blind to what makes an item special (theirs and yours).
   const newbies = world.filter((n) => n.type === 'beginner');

@@ -1223,6 +1223,7 @@ try {
     check('rare drops: the post says who, what, where from and the rest, with the name escaped',
       /\*\*a\\_b\\\*c\*\*/.test(shown.description) && /StatTrak™ AK-47/.test(shown.description) && /Test Case/.test(shown.description)
       && value('Pattern') === '#661' && /0\.030000/.test(value('Wear')) && /^\$(?!0\.00)/.test(value('Value')) && value('Serial') === '#7' && /steamstatic/.test(shown.thumbnail?.url), JSON.stringify(shown));
+    check('rare drops: the post has the seed\'s real blue and gold', value('Playside blue') === '99.8%' && value('Playside gold') === '0.0%', JSON.stringify(shown.fields));
 
     const reg = await post('/api/register', { name: 'lucky_opener', password: 'luckypass1' }, '10.0.9.3');
     const op = await client(reg.body.token, '10.0.9.3');
