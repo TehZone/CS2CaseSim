@@ -174,6 +174,18 @@ function tierFreq(box, n) {
   check('5 Covert -> knife/gloves from the case', kc.ok && kc.outcomes.every((o) => D.skins[o.ids[0]].star), kc.outcomes.length + ' outcomes');
   const out = T.rollTradeup(kc, rng);
   check('covert trade-up gives a ★ item', D.skins[out.id].star, I.itemName(out));
+  // The Terminals: Dead Hand has gold of its own, gloves only, as CS2's file says. Genesis has none.
+  const deadHand = D.cases.find((x) => x.n === 'Sealed Dead Hand Terminal'), genesis = D.cases.find((x) => x.n === 'Sealed Genesis Terminal');
+  const dead5 = deadHand.pools[5].flatMap((id) => [mk(id, 0.2), mk(id, 0.3), mk(id, 0.4)]).slice(0, 5);
+  const dc = T.tradeupContract(dead5);
+  check('5 Dead Hand Coverts -> its gloves', dc.ok && dc.outcomes.length === deadHand.rare.length && dc.outcomes.every((o) => D.skins[o.ids[0]].cat === 'gloves'), dc.error || dc.outcomes.length + ' outcomes');
+  const dg = T.rollTradeup(dc, rng);
+  check('and the contract gives one, with a float in its range', D.skins[dg.id].star && deadHand.rare.some((g) => g.includes(dg.id)) && dg.fl >= D.skins[dg.id].mn && dg.fl <= D.skins[dg.id].mx, I.itemName(dg));
+  check('a StatTrak Dead Hand contract has nothing to give: gloves have no StatTrak', !T.tradeupContract(dead5.map((x) => ({ ...x, stt: true }))).ok);
+  check('a Genesis Covert still can\'t: CS2 gave that Terminal no gold', /no knife or gloves/.test(T.tradeupIneligible(mk(genesis.pools[5][0], 0.2))));
+  const mixed = T.tradeupContract([...dead5.slice(0, 3), ...five.slice(0, 2)]);
+  check('Dead Hand and a case in one contract share the tickets', mixed.ok && mixed.outcomes.some((o) => D.skins[o.ids[0]].cat === 'gloves') && mixed.outcomes.some((o) => D.skins[o.ids[0]].cat === 'knife'), mixed.error);
+  check('the Armory still features the Terminals\' collections', D.collections.filter((c) => /Dead Hand|Genesis/.test(c.n)).every((c) => !c.caseId));
   const sttFive = five.map((x) => ({ ...x, stt: true }));
   const gloveCase = D.cases.find((x) => x.rareKind === 'gloves' && x.pools[5]);
   if (gloveCase) {

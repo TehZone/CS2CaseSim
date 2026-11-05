@@ -3,7 +3,8 @@
 // Classic contract: 10 skins of the same rarity (Consumer to Classified), all StatTrak or all not, no souvenirs.
 //   You get one skin of the next rarity from the collections of the inputs.
 // Covert contract: 5 Covert skins (all StatTrak or all not) give a knife or gloves from the case of an input's
-//   collection. Gloves have no StatTrak, so StatTrak contracts can only give knives.
+//   collection, or its Terminal: the Dead Hand Terminal has gold of its own (CS2's "unusuals"), the Genesis Terminal has none.
+//   Gloves have no StatTrak, so StatTrak contracts can only give knives.
 //
 // Odds ("tickets"): every input adds one ticket for each possible outcome in its own collection, then one ticket
 //   is drawn. So P(outcome) = inputs from the outcome's collection / total tickets.
@@ -32,7 +33,8 @@ function outcomeGroups(def, stt) {
     }
     return [...byName.values()];
   }
-  const box = col.caseId && D.caseById[col.caseId];
+  // (Not by filling in caseId for a Terminal: the Armory features the collections that have none.)
+  const box = col.caseId ? D.caseById[col.caseId] : D.cases.find((c) => c.col === def.col && c.rare?.length);
   if (!box?.rare) return [];
   return box.rare.filter((g) => !stt || (D.skins[g[0]].cat !== 'gloves' && D.skins[g[0]].stt));
 }
