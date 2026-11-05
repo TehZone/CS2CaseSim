@@ -10,7 +10,8 @@
       "Discord server setup: the game's server built from a config by a setup bot",
       "Discord: a command that posts a new build's link in the releases channel",
       "Discord: a new build's post has its notes and pings who asked for it",
-      "Discord: a command that brings one channel's description up to date"
+      "Discord: a command that brings one channel's description up to date",
+      "Discord: Gold Gems no longer post to the rare drops channel"
     ],
     "internal work": [
       "Server: messages it can't read are ignored",

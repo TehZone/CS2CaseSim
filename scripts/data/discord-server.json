@@ -255,7 +255,7 @@
           "key": "rare_drops",
           "type": "text",
           "name": "💎・rare-drops",
-          "topic": "Every knife and pair of gloves, plus Blue Gems and Gold Gems, opened or traded up to online, posted by the game as it happens. Show off your own pulls in {{channel:unboxings}}.",
+          "topic": "Every knife and pair of gloves, plus Blue Gems and Dopplers, opened or traded up to online, posted by the game as it happens. Show off your own pulls in {{channel:unboxings}}.",
           "postingPolicy": "readOnly",
           "slowmodeSeconds": 0
         },

@@ -1179,7 +1179,7 @@ try {
     for (const c of [nc, tidy, pal]) c.close();
   }
 
-  // ---- rare drops: a Blue Gem, Gold Gem or Doppler opened online goes to the read-only channel ---------------------------
+  // ---- rare drops: a Blue Gem or Doppler opened online goes to the read-only channel --------------------------------------
   {
     const { rareDrop, dropEmbed } = await import('./drops.mjs');
     const { analyzePattern } = await import('../src/js/engine/patterns.js');
@@ -1195,7 +1195,9 @@ try {
     const blueSeed = seeds.find((i) => /Blue Gem/.test(analyzePattern(karambit, i).label));
     const it = (skin, sd, more) => ({ t: 'skin', id: skin.id, fl: 0.03, sd, stt: false, stk: [], src: 'Test Case', sn: 7, ...more });
     check('rare drops: the AK-47\'s #1 Blue Gem counts', rareDrop(it(ak, 661))?.title === '💎 #1 Blue Gem', rareDrop(it(ak, 661))?.title);
-    check('rare drops: a knife\'s Blue Gem and a Gold Gem count', /Blue Gem/.test(rareDrop(it(karambit, blueSeed))?.title) && rareDrop(it(ak, goldSeed))?.title === '🥇 Gold Gem');
+    check('rare drops: a knife\'s Blue Gem counts', /Blue Gem/.test(rareDrop(it(karambit, blueSeed))?.title));
+    const goldKnife = seeds.find((i) => analyzePattern(karambit, i).label === 'Gold Gem');
+    check('rare drops: a Gold Gem doesn\'t: a gun with one posts nothing, and a knife with one posts as any knife', goldSeed != null && !rareDrop(it(ak, goldSeed)) && rareDrop(it(karambit, goldKnife))?.title === '🔪 Gold Knife', rareDrop(it(karambit, goldKnife))?.title);
     check('rare drops: every Doppler counts, the Glock-18\'s Gamma Doppler too', rareDrop(it(ruby, 5))?.title === '✨ Doppler · Ruby' && /Gamma Doppler/.test(rareDrop(it(glock, 5))?.title));
     const vanilla = skins.find((s) => s.cat === 'knife' && s.v), plainKnife = skins.find((s) => s.cat === 'knife' && !s.v && !/Doppler|Case Hardened|Heat Treated/.test(s.fin || ''));
     check('rare drops: every knife and pair of gloves is gold, plain ones and vanilla knives too', rareDrop(it(plainKnife, 5))?.title === '🔪 Gold Knife' && rareDrop(it(glove, 5))?.title === '🧤 Gold Gloves'

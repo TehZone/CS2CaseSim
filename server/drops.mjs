@@ -1,5 +1,5 @@
-// Rare drops for the Discord server: anything gold (every knife and pair of gloves), a Doppler, or a Blue Gem or Gold Gem
-// pattern on a weapon, opened or traded up to online.
+// Rare drops for the Discord server: anything gold (every knife and pair of gloves), a Doppler, or a Blue Gem pattern on a
+// weapon, opened or traded up to online.
 // What counts comes from the game's own pattern analysis (src/js/engine/patterns.js), the labels players see on the item.
 import { D } from '../src/js/engine/data.js';
 import { analyzePattern } from '../src/js/engine/patterns.js';
@@ -18,7 +18,6 @@ export function rareDrop(item) {
   const pattern = analyzePattern(skin, item.sd);
   if (/Doppler/.test(skin.fin || '')) return { title: `✨ ${skin.fin}${skin.ph ? ` · ${skin.ph}` : ''}`, color: DOPPLER, skin, pattern };
   if (pattern.label.includes('Blue Gem')) return { title: `💎 ${pattern.label}`, color: BLUE, skin, pattern };
-  if (pattern.label === 'Gold Gem') return { title: '🥇 Gold Gem', color: GOLD, skin, pattern };
   if (skin.cat === 'knife') return { title: '🔪 Gold Knife', color: GOLD, skin, pattern };
   if (skin.cat === 'gloves') return { title: '🧤 Gold Gloves', color: GOLD, skin, pattern };
   return null;
