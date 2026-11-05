@@ -133,6 +133,8 @@ every four hours and offers it (`shared/updater.cjs`, `src/js/update.js`). Only 
 3. Push `main` and wait for Render to deploy it. Nobody is locked out by this: the server goes by the published release.
 4. On GitHub: **Releases → Draft a new release**, tag `v<version>`, attach those three files, **Publish release**. A draft
    or a prerelease changes nothing: only publishing does, and only with `latest.json` attached.
+5. On Discord: `node scripts/discord-setup.mjs update-log --apply` brings the update log up to date, and
+   `node scripts/discord-setup.mjs release <the release's link> --apply` posts the link in the releases channel.
 
 What happens then:
 

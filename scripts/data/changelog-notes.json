@@ -7,7 +7,8 @@
     ],
     "the Discord server, not the game": [
       "Discord: an update log channel with every update to the game and when it landed",
-      "Discord server setup: the game's server built from a config by a setup bot"
+      "Discord server setup: the game's server built from a config by a setup bot",
+      "Discord: a command that posts a new build's link in the releases channel"
     ],
     "internal work": [
       "README: the NPC players are Play's bots by name, country and avatar (their skins were taken out of matches)",

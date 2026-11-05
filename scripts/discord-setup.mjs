@@ -7,6 +7,7 @@
 //   node scripts/discord-setup.mjs --apply            create and update what's in the config (deletes nothing)
 //   node scripts/discord-setup.mjs --apply --replace  also delete the channels, roles and AutoMod rules not in it
 //   node scripts/discord-setup.mjs update-log [--apply]  only bring the update log up to date (--apply does it too)
+//   node scripts/discord-setup.mjs release <link> [--apply]  only post this version's GitHub release link in #releases
 // Options: --guild <id> (the bot is in more than one server), --download <url> (the download link in the messages),
 // --name <name> (rename the server; by default its name is kept).
 // Run again after changing the config: channels and roles are matched by name and updated in place, and the bot edits
@@ -306,6 +307,19 @@ async function main() {
     if (!cid) { console.log(`There's no #${chanByKey.get(CONFIG.updateLog.channelKey).name} yet: run "node scripts/discord-setup.mjs --apply" to make it.`); process.exit(1); }
     await syncUpdateLog(cid, ids, me, APPLY);
     if (!APPLY) console.log('\nNothing was changed. Run again with --apply to post it.');
+    return;
+  }
+  // A new build's link: a message of its own in #releases, once per version. Nothing else here edits or deletes it.
+  if (args[0] === 'release') {
+    const url = args[1] || '', version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+    if (!/^https:\/\/github\.com\/\S+$/.test(url)) { console.log("Usage: node scripts/discord-setup.mjs release <the release's GitHub link> [--apply]"); process.exit(1); }
+    const cid = ids.channels.get('releases'), name = chanByKey.get('releases').name, title = `CS2 Case Simulator ${version}`;
+    if (!cid) { console.log(`There's no #${name} yet: run "node scripts/discord-setup.mjs --apply" to make it.`); process.exit(1); }
+    const recent = await api('GET', `/channels/${cid}/messages?limit=100`);
+    if (recent.some((m) => m.author?.id === me.id && m.embeds?.some((e) => e.title === title))) { console.log(`${title} is already in #${name}.`); return; }
+    if (!APPLY) { console.log(`Would post in #${name}: ${title}, ${url}\n\nNothing was changed. Run again with --apply to post it.`); return; }
+    await api('POST', `/channels/${cid}/messages`, { embeds: [{ title, url, description: `Download: ${url}`, color: color(CONFIG.updateLog.color) }], allowed_mentions: { parse: [] } });
+    console.log(`Posted ${title} in #${name}.`);
     return;
   }
   const ourChanIds = new Set([...chMatch.values(), ...catMatch.values()].map((c) => c.id));
