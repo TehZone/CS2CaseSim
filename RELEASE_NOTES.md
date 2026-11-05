@@ -5,5 +5,5 @@ Friends & Chat comes to online play: add real players as friends, message them a
 - Profiles: your avatar, country, summary, level and item showcase. Look through other players' inventories and make them an offer straight from their profile.
 - You decide who can message you, Everyone or Friends only, in Edit profile.
 - Block anyone, and report players to the staff from their profile or your chat.
-- Trade Up: Covert skins from the Dead Hand Terminal can now go for its gloves.
-- Knives, gloves, Dopplers and rare patterns opened online now show up in the rare drops channel on the Discord.
+- Trade Up: non-StatTrak Dead Hand Terminal Coverts can now go for its gloves.
+- Knives, gloves, Dopplers and rare patterns opened online now post to our Discord.

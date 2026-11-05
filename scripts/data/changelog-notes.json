@@ -8,9 +8,12 @@
     "the Discord server, not the game": [
       "Discord: an update log channel with every update to the game and when it landed",
       "Discord server setup: the game's server built from a config by a setup bot",
-      "Discord: a command that posts a new build's link in the releases channel"
+      "Discord: a command that posts a new build's link in the releases channel",
+      "Discord: a new build's post has its notes and pings who asked for it"
     ],
     "internal work": [
+      "Server: messages it can't read are ignored",
+      "Tests: the update test reads this release's notes and leaves no login behind",
       "README: the NPC players are Play's bots by name, country and avatar (their skins were taken out of matches)",
       "README: charms follow their pattern's colours and rest against the gun",
       "Smoke: the rounds run also counts draw calls, materials, the bots' objects, audio nodes and listeners",
@@ -23,6 +26,7 @@
     ]
   },
   "rewrite": {
+    "Trade Up: Covert skins from the Dead Hand Terminal can go for its gloves": "Trade Up: non-StatTrak Covert skins from the Dead Hand Terminal can go for its gloves",
     "Play console: cheats and server commands in private matches only": "Play: console cheats and server commands only work in private matches",
     "Play: a private match with cheats in it pays nothing": "Play: a private match where console cheats are used pays no money or XP",
     "Updates: a stuck old installer can't block the next update, and the server link shows only in the admin panel": "Updates: a stuck old installer can't block the next update",
