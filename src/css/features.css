@@ -451,6 +451,7 @@ body:not(.is-staff) .staff-only { display: none !important; }
 .ep-av.on { border-color: #57cbde; }
 /* online (community-online.js): the rest is the classes above; a real player's summary can be one very long word */
 .fr-groups { display: grid; gap: 8px; }
+.fr-panel, .fr-groups, .fr-group { grid-template-columns: minmax(0, 1fr); } /* (a long last message shortens: it doesn't widen the list) */
 .fr-line { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fr-none { font-size: 12px; line-height: 1.4; padding: 6px 4px; }
 .community.live .sp-bio { overflow-wrap: anywhere; }

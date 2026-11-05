@@ -137,6 +137,14 @@ export class Social {
     if (t.theirs || (t.dms === 'friends' && !t.pal)) fail(`${t.name} isn't taking messages from you right now`, 'dms');
   }
 
+  // A player's last connection closed, so that's when they were last online: a save only says when they last changed something,
+  // and someone who just chats never does. Friends with the page open see it.
+  async left(id) {
+    await this.db.query('UPDATE users SET last_seen = $1 WHERE id = $2', [Date.now(), id]);
+    const { rows } = await this.db.query("SELECT CASE WHEN a = $1 THEN b ELSE a END AS id FROM friends WHERE (a = $1 OR b = $1) AND status = 'friends'", [id]);
+    this.changed(...rows.map((r) => r.id));
+  }
+
   // A player's name changed: their lists are kept by id, but a game finds who's online and who to offer to by name.
   async renamed(id) {
     const { rows } = await this.db.query(`SELECT CASE WHEN a = $1 THEN b ELSE a END AS id FROM friends WHERE a = $1 OR b = $1
@@ -300,7 +308,7 @@ export class Social {
   }
 
   // Saves the last 30 messages between you and their summary as it stands for staff (`reports` in admin.mjs), and tells the mod
-  // log. The messages themselves don't go to Discord.
+  // log there's a new one (`reported`).
   async report(user, a) {
     const t = await this.other(user, a.id, "You can't report yourself");
     const clean = (v) => (typeof v === 'string' ? plainText(v) : v);
@@ -309,7 +317,7 @@ export class Social {
     const msgs = await this.conversation(user.id, t.id, REPORT_COPY);
     const { rows: [r] } = await this.db.query('INSERT INTO reports (from_id, about_id, reason, text, messages, bio, at) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7) RETURNING id',
       [user.id, t.id, reason, details, JSON.stringify(msgs), t.bio, Date.now()]);
-    await this.srv.admin.audit({ name: user.name }, 'report', { id: t.id, name: t.name }, { report: r.id, reason, msg: details, messages: msgs.length });
+    this.srv.admin.reported(t, { report: r.id, reason });
     return { id: r.id };
   }
 

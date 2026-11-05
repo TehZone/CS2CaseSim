@@ -846,6 +846,15 @@ export class Admin {
     return { sent };
   }
 
+  // A player sent a report. Staff hear of it here and read it in `reports`, the one place that says who sent it: the mod log and
+  // the audit log are read by a moderator it may be about. (It's no staff action, so it isn't in the audit log at all.)
+  reported(t, { report, reason }) {
+    if (!this.discord.enabled) return;
+    Promise.resolve()
+      .then(() => this.discord.modLog({ title: TITLES.report, description: `**${md(t.name)}**`, fields: [{ name: 'Reason', value: md(reason) }, { name: 'Report', value: `#${report}`, inline: true }], color: GOLD }))
+      .catch((e) => this.log('[discord] mod log failed', e?.message || e));
+  }
+
   // Players' reports, the newest first: the open ones, or with `closed` the closed ones. The copy of the messages a report
   // saved is the only way staff ever see a conversation: there's no request that reads the messages table, and that stays.
   // Below admin you don't see one about yourself: the player who sent it could be read off the messages even with their name

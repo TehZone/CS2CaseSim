@@ -1565,7 +1565,7 @@ function reportDetail(r) {
       <div><span class="muted">Reason</span> ${esc(r.reason)}</div>${r.text ? `<div class="adm-said" dir="auto">${esc(r.text)}</div>` : ''}<div>${reportStatus(r)}</div></div>
       ${r.bio ? `<div class="section-title">Their summary, saved with the report</div><div class="adm-said" dir="auto">${esc(r.bio)}</div>` : ''}
       ${bioNow && bioNow !== r.bio ? `<div class="section-title">Their summary now</div><div class="adm-said" dir="auto">${esc(bioNow)}</div>` : ''}
-      <div class="section-title">Their last messages, saved with the report (${list.length})</div>
+      <div class="section-title">Their last messages together, saved with the report (${list.length})</div>
       <div class="adm-chatlog">${list.map((x) => `<div><b><bdi>${esc(nameOf(x.from))}</bdi></b> <span class="muted">${when(x.at)}</span><div dir="auto">${esc(x.text)}</div></div>`).join('') || '<div class="muted">They had no messages together.</div>'}</div>`,
     foot: `<button class="btn ghost" data-close>Back</button>${canClearBio(r) ? '<button class="btn danger" data-unbio>Clear summary</button>' : ''}${canClose(r) ? '<button class="btn primary" data-shut>Close report</button>' : ''}`,
   });

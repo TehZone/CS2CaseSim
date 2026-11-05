@@ -529,7 +529,8 @@ try {
   const copy = typeof saved1.messages === 'string' ? JSON.parse(saved1.messages) : saved1.messages;
   check('report: saves the last 30 messages between you, oldest first', copy.length === 30 && copy[0].text === 'said 11' && copy.at(-1).text === 'said 40' && Object.keys(copy[0]).sort().join() === 'at,from,id,text,to', `${copy.length} ${copy[0]?.text}`);
   check('report: the reason and text, without what can\'t be shown', saved1.reason === 'harassment' && saved1.text === "he <b>won't</b> stop please" && saved1.from_id === bob.id && saved1.about_id === frank.id && saved1.closed_at == null, JSON.stringify(saved1.text));
-  check('report: posts to the mod log: who, about whom, the reason, and no messages', modLog.length === 1 && modLog[0].title === 'Player reported' && JSON.stringify(modLog[0].fields).includes('harassment') && modLog[0].fields.some((f) => f.value === 'frank') && modLog[0].fields.some((f) => f.value === 'bob') && !JSON.stringify(modLog[0]).includes('said 40'), JSON.stringify(modLog[0]));
+  const logged = JSON.stringify(modLog[0] || {});
+  check('report: tells the mod log who it\'s about and the reason, and not who sent it, what they wrote or the messages', modLog.length === 1 && modLog[0].title === 'Player reported' && logged.includes('harassment') && logged.includes('frank') && logged.includes('#' + rep.id) && !/bob|stop|said \d/.test(logged), logged);
   check('report: not told to the player reported', !frank.events.some((e) => JSON.stringify(e).includes('report')));
   await server.db.query('DELETE FROM messages WHERE from_id IN ($1, $2) AND to_id IN ($1, $2)', [bob.id, frank.id]);
   check('report: not yourself, nobody, or without a reason', !!(await refused(bob.s('report', { id: bob.id, reason: 'x' }))) && (await refused(bob.s('report', { id: 999999, reason: 'x' })))?.code === 'missing' && !!(await refused(bob.s('report', { id: frank.id }))) && !!(await refused(bob.s('report', { id: frank.id, reason: 'x'.repeat(81) }))));
@@ -560,6 +561,8 @@ try {
   check('reports: staff can\'t close one about themselves', (await refused(frank.admin('report.close', { id: rep.id })))?.code === 'perm');
   const ownList = await frank.admin('reports');
   check('reports: below admin one about yourself isn\'t shown, in the rows or the counts: it names the player who sent it', !ownList.rows.some((r) => r.id === rep.id) && ownList.open === 0 && ownList.total === 0 && list1.open === 1, JSON.stringify({ open: ownList.open, total: ownList.total }));
+  const ownReads = JSON.stringify([await frank.admin('audit', { q: 'frank' }), await frank.admin('overview'), await frank.admin('player', { id: frank.id })]);
+  check('reports: and no other screen of theirs has it: the audit log, the dashboard or their own player page', !ownReads.includes('"action":"report"') && !ownReads.includes(String(rep.id) + ',"reason"'), ownReads.slice(0, 200));
   check('reports: the panel is told how the player reported ranks', (await moddy.admin('reports')).rows.find((r) => r.id === rep.id)?.about.staff === 1);
   check('reports: a moderator can\'t close one about staff of their own level', (await refused(moddy.admin('report.close', { id: rep.id })))?.code === 'perm' && (await moddy.admin('reports')).open === 1);
   const aboutBoss = await bob.s('report', { id: boss.id, reason: 'abusing his powers' });
@@ -575,8 +578,8 @@ try {
   const closed = (await moddy.admin('reports', { closed: true })).rows.find((r) => r.id === rep.id);
   check('report.close: it leaves the open list, and the closed one has who and when', !list2.rows.some((r) => r.id === rep.id) && list2.open === 0 && closed?.closedBy === 'moddy' && Math.abs(closed.closedAt - Date.now()) < 5000);
   const audit = (await server.db.query("SELECT * FROM audit WHERE action = 'report.close' ORDER BY id DESC LIMIT 1")).rows[0];
-  const audited = (await server.db.query("SELECT * FROM audit WHERE action = 'report' AND target_name = 'frank'")).rows;
-  check('report.close: audited like other staff actions, and in the mod log', audit?.actor === 'moddy' && audit.target_id === frank.id && audited.length >= 1 && modLog[0]?.title === 'Report closed', JSON.stringify(audit));
+  const audited = (await server.db.query("SELECT * FROM audit WHERE action = 'report'")).rows;
+  check('report.close: audited like other staff actions, and in the mod log', audit?.actor === 'moddy' && audit.target_id === frank.id && audited.length === 0 && modLog[0]?.title === 'Report closed', JSON.stringify(audit));
   check('report.close: closing twice is refused, an unknown one too', /already closed/.test((await refused(moddy.admin('report.close', { id: rep.id })))?.message) && (await refused(moddy.admin('report.close', { id: 999999 })))?.code === 'missing' && !!(await refused(moddy.admin('report.close', {}))));
 
   // A summary the filter let through comes off, by staff.
@@ -661,6 +664,24 @@ try {
   await erin.s('block', { id: renamee.id, on: false });
   await bob.s('friend', { id: renamee.id, on: false });
   renamee.close();
+
+  // ---- last online --------------------------------------------------------------------------------------------------
+  // (Set far back, as a player who only chats leaves it: a save is the only other thing that moves it.)
+  const seenOf = async (c) => Number((await server.db.query('SELECT last_seen FROM users WHERE id = $1', [c.id])).rows[0].last_seen);
+  fresh();
+  const leaver = await client(tok.zedxy), secondTab = await client(tok.zedxy);
+  await leaver.s('friend', { id: dave.id, on: true });
+  await dave.s('friend', { id: leaver.id, on: true });
+  await server.db.query('UPDATE users SET last_seen = 1000 WHERE id = $1', [leaver.id]);
+  dave.forget();
+  leaver.close();
+  await wait(150);
+  check('last online: not while another of their tabs is still connected', await seenOf(leaver) === 1000 && !dave.pushed('friends').length, String(await seenOf(leaver)));
+  secondTab.close();
+  const leftPush = await dave.waitFor((e) => e.t === 'friends');
+  const gone = (await dave.s('home')).friends.find((p) => p.id === leaver.id);
+  check('last online: their last connection closing sets it, and friends are told so a page that\'s open shows it', !!leftPush && Math.abs(await seenOf(leaver) - Date.now()) < 5000 && Math.abs(gone?.seen - Date.now()) < 5000 && gone?.online === false, JSON.stringify(gone));
+  await dave.s('friend', { id: leaver.id, on: false });
 
   // ---- deleted accounts, restarts ---------------------------------------------------------------------------------
   const goner = await register('goner');

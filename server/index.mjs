@@ -527,6 +527,7 @@ export async function startServer({
         sockets.delete(user.id);
         store.online.delete(user.id);
         broadcastPlayers();
+        socials.left(user.id).catch((e) => log('[social] left failed', e?.message || e));
       }
     });
   });

@@ -353,7 +353,7 @@ async function unfriend(p) {
 // (They aren't told, and nothing they see changes but that their messages are refused like anyone's can be.)
 async function setBlock(p) {
   const yes = !isBlocked(p.id);
-  if (yes && !(await confirmDialog(`Block ${named(p)}? Neither of you can message the other, they can't friend you, and if you're friends that ends. They aren't told.`, { title: 'Block player', ok: 'Block', danger: true }))) return;
+  if (yes && !(await confirmDialog(`Block ${named(p)}? Neither of you can send the other messages or trade offers, they can't friend you, and if you're friends that ends. They aren't told.`, { title: 'Block player', ok: 'Block', danger: true }))) return;
   try { await net.social('block', { id: p.id, on: yes }); } catch (e) { return failed(e); }
   toast(`${named(p)} ${yes ? 'is blocked' : 'is no longer blocked'}`, yes ? '' : 'good');
   await loadHome();
@@ -539,7 +539,7 @@ function drawProfile(el, who) {
   for (const sel of ['[data-offer2]', '[data-offer3]']) el.querySelector(sel)?.addEventListener('click', (e) => { e.preventDefault(); offerTo(p.name); });
   el.querySelectorAll('.sp .card[data-uid]').forEach((c) => c.addEventListener('click', () => {
     const it = mine ? S.inv.find((x) => x.uid === c.dataset.uid) : [...items, ...show].find((x) => x.uid === c.dataset.uid);
-    if (it) mine ? showItemDetail(it) : canInspect(it) && openInspect(it);
+    if (it) mine ? showItemDetail(it) : canInspect(it) && openInspect(it, { preview: true }); // (someone else's: its charm isn't yours to move)
   }));
   backdrop(el.querySelector('[data-sp]'), { bg: p.bg });
 }
