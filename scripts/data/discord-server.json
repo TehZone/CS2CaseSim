@@ -252,6 +252,14 @@
           "slowmodeSeconds": 5
         },
         {
+          "key": "rare_drops",
+          "type": "text",
+          "name": "💎・rare-drops",
+          "topic": "Blue Gems, Gold Gems and Dopplers unboxed online, posted by the game the moment they're opened. Show off your own pulls in {{channel:unboxings}}.",
+          "postingPolicy": "readOnly",
+          "slowmodeSeconds": 0
+        },
+        {
           "key": "loadouts",
           "type": "text",
           "name": "🎨・loadouts",
@@ -578,6 +586,7 @@
       "update_log",
       "general",
       "unboxings",
+      "rare_drops",
       "loadouts",
       "play_mode",
       "clips",

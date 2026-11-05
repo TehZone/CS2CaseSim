@@ -838,7 +838,7 @@ try {
   await until(() => mock.messages.some((m) => m.channel === mock.modLogChannel && m.body.embeds?.[0]?.title === 'Discord account unlinked'));
   const logged = mock.messages.filter((m) => m.channel === mock.modLogChannel).map((m) => m.body.embeds?.[0]);
   const titles = new Set(logged.map((e) => e?.title));
-  const strayChannels = mock.messages.filter((m) => !m.channel.startsWith('dm') && m.channel !== mock.modLogChannel);
+  const strayChannels = mock.messages.filter((m) => !m.channel.startsWith('dm') && m.channel !== mock.modLogChannel && m.channel !== mock.rareDropChannel);
   check('mod-log messages posted to the mod-log text channel (embeds with the player, actor and reason)', ['Player banned', 'Player unbanned', 'Account edited', 'Items given', 'Snapshot restored', 'Player kicked', 'Player warned', 'Discord account linked', 'Server settings changed', 'Broadcast sent'].every((t) => titles.has(t))
     && !strayChannels.length && logged.some((e) => e.title === 'Player banned' && e.fields.some((f) => f.name === 'By' && f.value === '@BobD') && e.fields.some((f) => f.name === 'Reason' && f.value === 'toxic'))
     && logged.every((e) => e.timestamp && Number.isInteger(e.color)), [...titles].join(', '));
@@ -1177,6 +1177,75 @@ try {
     const snapRow = (await boss.admin('snapshot.get', { snap: snap.id }));
     check('panel: a snapshot keeps names as they were', !snapRow.state.inv.find((i) => i.uid === s1.uid).name && snapRow.state.inv.some((i) => i.t === 'tool'));
     for (const c of [nc, tidy, pal]) c.close();
+  }
+
+  // ---- rare drops: a Blue Gem, Gold Gem or Doppler opened online goes to the read-only channel ---------------------------
+  {
+    const { rareDrop, dropEmbed } = await import('./drops.mjs');
+    const { analyzePattern } = await import('../src/js/engine/patterns.js');
+    const skins = Object.values(D.skins);
+    const ak = skins.find((s) => s.wid === 'weapon_ak47' && s.fin === 'Case Hardened');
+    const karambit = skins.find((s) => s.wid === 'weapon_knife_karambit' && s.fin === 'Case Hardened');
+    const ruby = skins.find((s) => s.fin === 'Doppler' && s.ph === 'Ruby');
+    const glock = skins.find((s) => s.fin === 'Gamma Doppler' && s.cat !== 'knife');
+    const glove = skins.find((s) => s.cat === 'gloves' && !s.v);
+    const plain = skins.find((s) => !s.v && !s.star && !/Doppler|Case Hardened|Heat Treated/.test(s.fin || ''));
+    const seeds = Array.from({ length: 1001 }, (_, i) => i);
+    const goldSeed = seeds.find((i) => analyzePattern(ak, i).label === 'Gold Gem'), dull = seeds.find((i) => !analyzePattern(ak, i).label);
+    const blueSeed = seeds.find((i) => /Blue Gem/.test(analyzePattern(karambit, i).label));
+    const it = (skin, sd, more) => ({ t: 'skin', id: skin.id, fl: 0.03, sd, stt: false, stk: [], src: 'Test Case', sn: 7, ...more });
+    check('rare drops: the AK-47\'s #1 Blue Gem counts', rareDrop(it(ak, 661))?.title === '💎 #1 Blue Gem', rareDrop(it(ak, 661))?.title);
+    check('rare drops: a knife\'s Blue Gem and a Gold Gem count', /Blue Gem/.test(rareDrop(it(karambit, blueSeed))?.title) && rareDrop(it(ak, goldSeed))?.title === '🥇 Gold Gem');
+    check('rare drops: every Doppler counts, the Glock-18\'s Gamma Doppler too', rareDrop(it(ruby, 5))?.title === '✨ Doppler · Ruby' && /Gamma Doppler/.test(rareDrop(it(glock, 5))?.title));
+    check('rare drops: nothing else does', [it(ak, dull), it(plain, 661), it(glove, 661), { t: 'sticker', id: Object.keys(D.stickers)[0] }, { t: 'crate', id: 'x' }, null].every((x) => !rareDrop(x) && !dropEmbed('someone', x)));
+    const shown = dropEmbed('a_b*c', it(ak, 661, { stt: true, kills: 0 }));
+    const value = (n) => shown.fields.find((f) => f.name === n)?.value;
+    check('rare drops: the post says who, what, where from and the rest, with the name escaped',
+      /\*\*a\\_b\\\*c\*\*/.test(shown.description) && /StatTrak™ AK-47/.test(shown.description) && /Test Case/.test(shown.description)
+      && value('Pattern') === '#661' && /0\.030000/.test(value('Wear')) && /^\$(?!0\.00)/.test(value('Value')) && value('Serial') === '#7' && /steamstatic/.test(shown.thumbnail?.url), JSON.stringify(shown));
+
+    const reg = await post('/api/register', { name: 'lucky_opener', password: 'luckypass1' }, '10.0.9.3');
+    const op = await client(reg.body.token, '10.0.9.3');
+    const box = (id, skin) => { D.caseById[id] = { id, n: 'Lucky Test Case', kind: 'case', key: false, price: 1, rare: [[skin.id]], pools: {} }; };
+    let crates = 0;
+    const open = async (id, n = 1) => {
+      await server.store.withUser(op.user.id, async (e) => { for (let i = 0; i < n; i++) e.st.inv.push({ uid: 'test-crate-' + ++crates, t: 'crate', id, at: Date.now(), src: '' }); server.store.markDirty(e); });
+      return op.act('case.open', { id, n });
+    };
+    box('test-doppler', ruby); box('test-plain', plain);
+    const dropsBefore = mock.messages.length; // (a real case opened earlier can be rare too)
+    const posts = () => mock.messages.slice(dropsBefore).filter((m) => m.channel === mock.rareDropChannel);
+    await until(() => op.st);
+    const got = await open('test-doppler');
+    const sent = await until(() => posts()[0]);
+    const e = sent?.body.embeds?.[0];
+    check('rare drops: opening one online posts it, with no ping', got.items[0].id === ruby.id && e?.title === '✨ Doppler · Ruby' && /lucky\\_opener/.test(e.description) && /Lucky Test Case/.test(e.description)
+      && sent.body.allowed_mentions?.parse?.length === 0, JSON.stringify(e));
+    await open('test-plain');
+    const gaveOne = await boss.admin('items.give', { id: op.user.id, items: [{ t: 'skin', id: ruby.id }] });
+    await wait(400);
+    check('rare drops: a plain item, or one staff gave, posts nothing', gaveOne.added === 1 && posts().length === 1, String(posts().length));
+    await open('test-doppler', 2);
+    check('rare drops: opening several posts each one', !!(await until(() => posts().length === 3)), String(posts().length));
+    const { armoryOffers, armoryWindow } = await import('../src/js/engine/armory.js');
+    const offer = armoryOffers(armoryWindow(Date.now()).i).offers.find((o) => o.type === 'drop');
+    const col = D.colById[offer.col];
+    D.colById[offer.col] = { ...col, tiers: Object.fromEntries(Object.keys(col.tiers).map((k) => [k, [ruby.id]])) };
+    await server.store.withUser(op.user.id, async (e) => { e.st.stars = 100; server.store.markDirty(e); });
+    const redeemed = await op.act('armory.redeem', { offer: offer.id }).finally(() => { D.colById[offer.col] = col; });
+    const armoryPost = await until(() => posts()[3]);
+    check('rare drops: an Armory redeem posts too, and says so', redeemed.items[0].id === ruby.id && /Armory · /.test(armoryPost?.body.embeds?.[0]?.description || ''), armoryPost?.body.embeds?.[0]?.description);
+    const { discordFromEnv } = await import('./index.mjs');
+    check('rare drops: DISCORD_DROPS_CHANNEL picks the channel', discordFromEnv({ env: { DISCORD_BOT_TOKEN: 'x', DISCORD_DROPS_CHANNEL: '123' } }).dropChannel === '123');
+    const real = server.discord.rareDrop;
+    server.discord.rareDrop = async () => { throw new Error('Discord is down'); };
+    const still = await open('test-doppler').catch((err) => err);
+    server.discord.rareDrop = () => { throw new Error('Discord is down'); };
+    const again = await open('test-doppler').catch((err) => err);
+    server.discord.rareDrop = real;
+    await wait(100);
+    check('rare drops: Discord failing never touches the opening', still.items?.[0]?.id === ruby.id && again.items?.[0]?.id === ruby.id, String(still?.message || again?.message));
+    delete D.caseById['test-doppler']; delete D.caseById['test-plain'];
   }
 
   for (const c of [boss, alice, bob]) c.close();

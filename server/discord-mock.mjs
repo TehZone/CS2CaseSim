@@ -22,6 +22,7 @@ export async function startDiscordMock({ token = 'test-token', guildId = '100000
     { id: '500000000000000001', type: 0, name: 'general' },
     { id: '500000000000000002', type: 4, name: 'mod-log' }, // (a category: not where messages go)
     { id: '500000000000000003', type: 0, name: '📋・mod-log' },
+    { id: '500000000000000004', type: 0, name: '💎・rare-drops' },
   ];
   const guild = { id: guildId, name: 'Test Guild', owner_id: ownerId };
   const members = new Map(); // discord id -> { user, roles }
@@ -137,6 +138,7 @@ export async function startDiscordMock({ token = 'test-token', guildId = '100000
     api: `http://127.0.0.1:${port}/api/v10`,
     gatewayUrl: `ws://127.0.0.1:${port}/gateway`,
     modLogChannel: channels[2].id,
+    rareDropChannel: channels[3].id,
     get commands() { return commands; },
 
     // A member of the guild (roles: keys of `roles`).

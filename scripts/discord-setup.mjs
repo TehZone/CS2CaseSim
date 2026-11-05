@@ -8,6 +8,8 @@
 //   node scripts/discord-setup.mjs --apply --replace  also delete the channels, roles and AutoMod rules not in it
 //   node scripts/discord-setup.mjs update-log [--apply]  only bring the update log up to date (--apply does it too)
 //   node scripts/discord-setup.mjs release <link> [--apply]  only post this version's GitHub release link in #releases
+//   node scripts/discord-setup.mjs channel <key> [--apply]  only make that channel from the config, if it isn't there yet
+//   node scripts/discord-setup.mjs onboarding [--apply]  only bring Onboarding up to date (the dry run lists what would change)
 // Options: --guild <id> (the bot is in more than one server), --download <url> (the download link in the messages),
 // --name <name> (rename the server; by default its name is kept).
 // Run again after changing the config: channels and roles are matched by name and updated in place, and the bot edits
@@ -202,6 +204,48 @@ async function syncUpdateLog(cid, ids, me, apply) {
   console.log(`update log: ${count} updates; ${todo.post} posted, ${todo.edit} edited${todo.delete ? `, ${todo.delete} deleted` : ''}`);
 }
 
+// ---- onboarding --------------------------------------------------------------------------------------------------
+// Prompts and options keep their ids by title (members' answers point at them); new ones need ids Discord hasn't seen:
+// snowflakes from now. Its docs don't say whether voice channels may be offered, so if they're refused it's tried again
+// without them (they stay browsable). Without apply it says what would change: the config replaces what's on the server.
+async function syncOnboarding(gid, ids, apply, reason) {
+  const O = CONFIG.onboarding;
+  const curOnb = await api('GET', `/guilds/${gid}/onboarding`).catch(() => null);
+  let next = BigInt(Date.now() - 1420070400000) << 22n;
+  const sid = () => String(next++);
+  const onboarding = (noVoice) => {
+    const chans = (keys) => (keys || []).filter((k) => !(noVoice && ['voice', 'stage'].includes(chanByKey.get(k)?.type))).map((k) => ids.channels.get(k)).filter(Boolean);
+    return {
+      enabled: true, mode: 0, default_channel_ids: chans(O.defaultChannelKeys),
+      prompts: O.prompts.map((p) => {
+        const old = curOnb?.prompts?.find((x) => x.title === p.title.slice(0, 100));
+        return {
+          id: old?.id ?? sid(), type: 0, title: p.title.slice(0, 100), single_select: !!p.singleSelect, required: !!p.required, in_onboarding: p.inOnboarding !== false,
+          options: p.options.map((o) => ({
+            id: old?.options?.find((x) => x.title === o.title.slice(0, 50))?.id ?? sid(), title: o.title.slice(0, 50), description: o.description?.slice(0, 100) || null, ...emojiOf(o.emoji),
+            role_ids: (o.roleKeys || []).map((k) => ids.roles.get(k)).filter(Boolean), channel_ids: chans(o.channelKeys),
+          })).filter((o) => o.role_ids.length || o.channel_ids.length),
+        };
+      }),
+    };
+  };
+  if (!apply) {
+    const nameOf = (id) => [...ids.channels].find(([, v]) => v === id)?.[0] ?? id;
+    const want = onboarding(false), have = new Set(curOnb?.default_channel_ids || []), wanted = new Set(want.default_channel_ids);
+    const shape = (ps) => JSON.stringify((ps || []).map((p) => [p.title, (p.options || []).map((o) => [o.title, [...(o.channel_ids || [])].sort(), [...(o.role_ids || [])].sort()])]));
+    console.log(`default channels to add: ${want.default_channel_ids.filter((c) => !have.has(c)).map(nameOf).join(', ') || 'none'}`);
+    console.log(`default channels to remove: ${[...have].filter((c) => !wanted.has(c)).map(nameOf).join(', ') || 'none'}`);
+    console.log(`prompts: ${shape(curOnb?.prompts) === shape(want.prompts) ? 'the same' : 'would change'}`);
+    return;
+  }
+  try {
+    await api('PUT', `/guilds/${gid}/onboarding`, onboarding(false), { reason });
+    console.log('onboarding set');
+  } catch (e) {
+    try { await api('PUT', `/guilds/${gid}/onboarding`, onboarding(true), { reason }); console.log(`onboarding set, without the voice channels (${e.message})`); } catch (e2) { console.log(`! onboarding: ${e2.message}`); }
+  }
+}
+
 // ---- the plan ----------------------------------------------------------------------------------------------------
 function overwritesFor(ch, ids, everyoneId) {
   // The category's access, then the channel's posting policy, as explicit overwrites (so each channel stands alone and
@@ -307,6 +351,31 @@ async function main() {
     if (!cid) { console.log(`There's no #${chanByKey.get(CONFIG.updateLog.channelKey).name} yet: run "node scripts/discord-setup.mjs --apply" to make it.`); process.exit(1); }
     await syncUpdateLog(cid, ids, me, APPLY);
     if (!APPLY) console.log('\nNothing was changed. Run again with --apply to post it.');
+    return;
+  }
+  if (args[0] === 'onboarding') {
+    await syncOnboarding(gid, ids, APPLY, 'CS2 Case Simulator server setup');
+    if (!APPLY) console.log('\nNothing was changed. Run again with --apply to do it.');
+    return;
+  }
+  // One new channel from the config: nothing else on the server is touched, and a channel that's already there is left alone.
+  if (args[0] === 'channel') {
+    const ch = chanByKey.get(args[1]);
+    if (!ch) { console.log(`Usage: node scripts/discord-setup.mjs channel <key> [--apply]. Keys: ${[...chanByKey.keys()].join(', ')}`); process.exit(1); }
+    if (chMatch.has(ch.key)) {
+      const everyone = chMatch.get(ch.key).permission_overwrites?.find((o) => o.id === everyoneId);
+      console.log(`#${ch.name} is already there. @everyone ${BigInt(everyone?.deny || 0) & P('SEND_MESSAGES') ? "can't" : 'can'} post in it.`);
+      return;
+    }
+    const parent = catMatch.get(ch.cat.name)?.id;
+    if (!parent) { console.log(`There's no ${ch.cat.name} category yet: run "node scripts/discord-setup.mjs --apply" to make it.`); process.exit(1); }
+    const body = channelBody(ch, ids, everyoneId, parent);
+    if (!APPLY) { console.log(`Would create #${ch.name} in ${ch.cat.name}${ch.postingPolicy === 'readOnly' ? ', where only staff and the bot can post' : ''}.\n\nNothing was changed. Run again with --apply to make it.`); return; }
+    const reason = 'CS2 Case Simulator server setup';
+    ids.channels.set(ch.key, (await api('POST', `/guilds/${gid}/channels`, body, { reason })).id);
+    const order = ch.cat.channels.map((c, position) => ({ id: ids.channels.get(c.key), position })).filter((p) => p.id);
+    await api('PATCH', `/guilds/${gid}/channels`, order, { reason }).catch((e) => console.log(`! channel order: ${e.message}`));
+    console.log(`Created #${ch.name} in ${ch.cat.name}.`);
     return;
   }
   // A new build's link: a message of its own in #releases, once per version. Nothing else here edits or deletes it.
@@ -489,35 +558,7 @@ async function main() {
     enabled: true, description: fill(W.description, ids).slice(0, 140),
     welcome_channels: W.channels.slice(0, 5).map((c) => ({ channel_id: ids.channels.get(c.channelKey), description: c.description.slice(0, 50), ...emojiOf(c.emoji) })),
   }, { reason }).then(() => console.log('welcome screen set'), (e) => console.log(`! welcome screen (Discord may no longer let it be edited; onboarding replaces it): ${e.message}`));
-  // Prompts and options keep their ids by title (members' answers point at them); new ones need ids Discord hasn't seen:
-  // snowflakes from now. Its docs don't say whether voice channels may be offered, so if they're refused it's tried again
-  // without them (they stay browsable).
-  const O = CONFIG.onboarding;
-  const curOnb = await api('GET', `/guilds/${gid}/onboarding`).catch(() => null);
-  let next = BigInt(Date.now() - 1420070400000) << 22n;
-  const sid = () => String(next++);
-  const onboarding = (noVoice) => {
-    const chans = (keys) => (keys || []).filter((k) => !(noVoice && ['voice', 'stage'].includes(chanByKey.get(k)?.type))).map((k) => ids.channels.get(k)).filter(Boolean);
-    return {
-      enabled: true, mode: 0, default_channel_ids: chans(O.defaultChannelKeys),
-      prompts: O.prompts.map((p) => {
-        const old = curOnb?.prompts?.find((x) => x.title === p.title.slice(0, 100));
-        return {
-          id: old?.id ?? sid(), type: 0, title: p.title.slice(0, 100), single_select: !!p.singleSelect, required: !!p.required, in_onboarding: p.inOnboarding !== false,
-          options: p.options.map((o) => ({
-            id: old?.options?.find((x) => x.title === o.title.slice(0, 50))?.id ?? sid(), title: o.title.slice(0, 50), description: o.description?.slice(0, 100) || null, ...emojiOf(o.emoji),
-            role_ids: (o.roleKeys || []).map((k) => ids.roles.get(k)).filter(Boolean), channel_ids: chans(o.channelKeys),
-          })).filter((o) => o.role_ids.length || o.channel_ids.length),
-        };
-      }),
-    };
-  };
-  try {
-    await api('PUT', `/guilds/${gid}/onboarding`, onboarding(false), { reason });
-    console.log('onboarding set');
-  } catch (e) {
-    try { await api('PUT', `/guilds/${gid}/onboarding`, onboarding(true), { reason }); console.log(`onboarding set, without the voice channels (${e.message})`); } catch (e2) { console.log(`! onboarding: ${e2.message}`); }
-  }
+  await syncOnboarding(gid, ids, true, reason);
 
   // 8. The bot's messages. Its earlier ones are the first it posted in each channel (read from the oldest, a few pages at
   // most): those are edited in order, and an extra deleted only if it's one of these (by its embed's title), so anything

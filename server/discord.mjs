@@ -110,7 +110,7 @@ const message = ({ content, embeds, components } = {}) => ({
 });
 
 export function createDiscord({ token, guildId, api = 'https://discord.com/api/v10', gatewayUrl, log = console.log,
-  adminRoles = ['★ Developer'], modRoles = ['Moderator'], logChannel, linkedRole = '🔗 Linked', gateway = true } = {}) {
+  adminRoles = ['★ Developer'], modRoles = ['Moderator'], logChannel, dropChannel, linkedRole = '🔗 Linked', gateway = true } = {}) {
   const TOKEN = typeof token === 'string' ? token.trim().replace(/^Bot\s+/i, '') : '';
   const enabled = !!TOKEN;
   const API = String(api || 'https://discord.com/api/v10').replace(/\/+$/, '');
@@ -260,14 +260,16 @@ export function createDiscord({ token, guildId, api = 'https://discord.com/api/v
     }
     return e.p;
   }
-  // The mod log's channel: the configured id, else the first text channel with mod-log in its name (or null).
-  const modLogChannel = cached(ROLES_MS, async () => {
-    if (logChannel) return String(logChannel);
+  // A channel the bot posts to: the configured id, else the first text channel with `part` in its name (or null).
+  const channelNamed = (id, part, env) => cached(ROLES_MS, async () => {
+    if (id) return String(id);
     const chans = await rest('GET', `/guilds/${await resolveGid()}/channels`);
-    const c = (chans || []).find((ch) => ch.type === 0 && String(ch.name || '').toLowerCase().includes('mod-log'));
-    if (!c) say('no mod-log channel: set DISCORD_LOG_CHANNEL or add a text channel with mod-log in its name');
+    const c = (chans || []).find((ch) => ch.type === 0 && String(ch.name || '').toLowerCase().includes(part));
+    if (!c) say(`no ${part} channel: set ${env} or add a text channel with ${part} in its name`);
     return c ? String(c.id) : null;
   });
+  const modLogChannel = channelNamed(logChannel, 'mod-log', 'DISCORD_LOG_CHANNEL');
+  const rareDropChannel = channelNamed(dropChannel, 'rare-drops', 'DISCORD_DROPS_CHANNEL');
 
   // A member's staff level from their roles; throws when the server or its roles can't be loaded.
   async function levelFrom(m) {
@@ -591,7 +593,30 @@ export function createDiscord({ token, guildId, api = 'https://discord.com/api/v
   }
 
   // ---- the bot's object ------------------------------------------------------------------------------------------
-  let logQ = Promise.resolve(), logWaiting = 0;
+  // Posts one after another, so a burst waits its turn behind the channel's rate limit. Never rejects.
+  const poster = (label, channel) => {
+    let q = Promise.resolve(), waiting = 0;
+    return (embed) => {
+      if (!usable) return Promise.resolve(false);
+      if (waiting >= 100) { say(`${label}: too many messages waiting, one was dropped`); return Promise.resolve(false); }
+      waiting++;
+      q = q.then(async () => {
+        try {
+          const cid = await channel();
+          if (!cid) return false;
+          await rest('POST', `/channels/${cid}/messages`, message({ embeds: [embed] }));
+          return true;
+        } catch (e) {
+          say(`${label}: ${e.message}`);
+          return false;
+        } finally {
+          waiting--;
+        }
+      });
+      return q;
+    };
+  };
+  const postModLog = poster('mod log', modLogChannel), postRareDrop = poster('rare drops', rareDropChannel);
   const dmChannels = new Map(); // discord id -> DM channel id
 
   return {
@@ -729,27 +754,11 @@ export function createDiscord({ token, guildId, api = 'https://discord.com/api/v
       }
     },
 
-    // Posts one after another, so a burst of staff actions waits its turn behind the channel's rate limit.
     modLog({ title, description, fields, color } = {}) {
-      if (!usable) return Promise.resolve(false);
-      if (logWaiting >= 100) { say('mod log: too many messages waiting, one was dropped'); return Promise.resolve(false); }
-      logWaiting++;
-      const p = logQ.then(async () => {
-        try {
-          const cid = await modLogChannel();
-          if (!cid) return false;
-          const embed = { title, description, fields, color: Number.isInteger(color) ? color : 0xeb4b4b, timestamp: new Date().toISOString() };
-          await rest('POST', `/channels/${cid}/messages`, message({ embeds: [embed] }));
-          return true;
-        } catch (e) {
-          say(`mod log: ${e.message}`);
-          return false;
-        } finally {
-          logWaiting--;
-        }
-      });
-      logQ = p;
-      return p;
+      return postModLog({ title, description, fields, color: Number.isInteger(color) ? color : 0xeb4b4b, timestamp: new Date().toISOString() });
     },
+
+    // A rare unboxing (see drops.mjs) in the rare drops channel.
+    rareDrop(embed) { return postRareDrop(embed); },
   };
 }

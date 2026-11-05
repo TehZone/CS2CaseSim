@@ -79,6 +79,8 @@ Who gets what in the game's admin panel:
   Other role names: set `DISCORD_ADMIN_ROLES` and `DISCORD_MOD_ROLES` (comma-separated).
 - Nobody can act on staff at or above their own level, or ban themselves. Every action is in the audit log, and
   posted to a text channel with `mod-log` in its name (or the channel id in `DISCORD_LOG_CHANNEL`).
+- Rare unboxings online (Blue Gems, Gold Gems and Dopplers, see `server/drops.mjs`) go to a text channel with `rare-drops`
+  in its name (or the channel id in `DISCORD_DROPS_CHANNEL`). With no such channel they just aren't posted.
 
 Linking: in the game, click your name → **Link Discord**. The game shows a code; in the Discord server type `/link`,
 paste the code and press **Link** on the bot's reply. Staff powers come with the link, so staff should only link their

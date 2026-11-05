@@ -5,7 +5,7 @@
 // HTTP: GET /health, POST /api/register | /api/login | /api/logout | /api/reset, GET /api/prices
 // WebSocket: /ws (protocol described in src/js/net/online.js)
 // Staff, bans and the Discord bot: server/admin.mjs and server/discord.mjs (env: ADMIN_USERS, DISCORD_BOT_TOKEN or
-// DISCORD_TOKEN_FILE, DISCORD_GUILD_ID, DISCORD_ADMIN_ROLES, DISCORD_MOD_ROLES, DISCORD_LOG_CHANNEL, DISCORD_LINKED_ROLE,
+// DISCORD_TOKEN_FILE, DISCORD_GUILD_ID, DISCORD_ADMIN_ROLES, DISCORD_MOD_ROLES, DISCORD_LOG_CHANNEL, DISCORD_DROPS_CHANNEL, DISCORD_LINKED_ROLE,
 // DISCORD_GATEWAY=0 for an instance that must not run the bot's gateway). TRUST_PROXY=<hops>: only behind reverse
 // proxies (Render: 1), the client's address is taken from X-Forwarded-For, that many entries from the right.
 // The version lock: server/release.mjs (env: RELEASE_FEED; on by itself when NODE_ENV is production).
@@ -25,6 +25,7 @@ import { Admin, banText, networkBanText } from './admin.mjs';
 import { Release, releaseFromEnv } from './release.mjs';
 import { D, initData } from '../src/js/engine/data.js';
 import { makeCtx, runAction, delta, GameError } from '../src/js/engine/actions.js';
+import { dropEmbed } from './drops.mjs';
 import { marketWindow } from '../src/js/engine/market.js';
 import { DB_TYPES, publicCopy } from '../src/js/engine/database.js';
 import { ownedValue } from '../src/js/engine/storage.js';
@@ -41,6 +42,9 @@ const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boole
 // Actions saved in a transaction before they're answered (others are written within a couple of seconds): what moves
 // items in and out of a Storage Unit, uses up a tool or claims an Index reward is never left only in memory.
 const IN_TRANSACTION = /^(storage|tools|index)\./;
+// What a player opens themselves: the rare ones go to the Discord server (see drops.mjs). Not a case battle's drops, which
+// another seat may have opened, and not a level-up reward, which isn't opened.
+const OPENED = new Set(['case.open', 'armory.redeem']);
 
 // The bot's options from the environment (false: no token, no bot). The token is read, never logged.
 export function discordFromEnv({ env = process.env, tokenFile = env.DISCORD_TOKEN_FILE, log = console.log } = {}) {
@@ -57,7 +61,7 @@ export function discordFromEnv({ env = process.env, tokenFile = env.DISCORD_TOKE
     token, guildId: env.DISCORD_GUILD_ID || undefined,
     adminRoles: env.DISCORD_ADMIN_ROLES ? list(env.DISCORD_ADMIN_ROLES) : undefined,
     modRoles: env.DISCORD_MOD_ROLES ? list(env.DISCORD_MOD_ROLES) : undefined,
-    logChannel: env.DISCORD_LOG_CHANNEL || undefined, linkedRole: env.DISCORD_LINKED_ROLE || undefined,
+    logChannel: env.DISCORD_LOG_CHANNEL || undefined, dropChannel: env.DISCORD_DROPS_CHANNEL || undefined, linkedRole: env.DISCORD_LINKED_ROLE || undefined,
     gateway: env.DISCORD_GATEWAY !== '0',
   };
 }
@@ -70,7 +74,7 @@ function noDiscord() {
     status: () => ({ enabled: false, connected: false, ready: false, bot: null, guild: null, guildId: null, error: null }),
     start: async () => null, close() {}, onInteraction() {},
     memberLevel: async () => 0, levelOf: async () => 0, member: async () => null, setLinkedRole: async () => false,
-    dm: async () => false, ban: async () => off, unban: async () => off, modLog: async () => null,
+    dm: async () => false, ban: async () => off, unban: async () => off, modLog: async () => null, rareDrop: async () => null,
   };
 }
 
@@ -98,6 +102,15 @@ export async function startServer({
   let kickSeq = 0;
   const pricing = require('../shared/pricing.cjs');
   const discord = await openDiscord(discordOpt, log);
+  // Tells the Discord server about what was just opened. Nothing here may touch the opening itself: it's already paid for.
+  const announceDrops = (name, items) => {
+    try {
+      for (const it of items || []) {
+        const embed = dropEmbed(name, it);
+        if (embed) Promise.resolve(discord.rareDrop(embed)).catch((e) => log('[discord] rare drop failed', e?.message || e));
+      }
+    } catch (e) { log('[discord] rare drop failed', e?.message || e); }
+  };
   log(discord.enabled ? '[discord] bot configured' : '[discord] no bot (set DISCORD_BOT_TOKEN to link accounts and use Discord roles)');
 
   const srv = {
@@ -468,6 +481,7 @@ export async function startServer({
           reply(true, { r: out.r, d: out.d });
           for (const [w, lid] of boughtNow) for (const id of sockets.keys()) srv.sendTo(id, { t: 'market', w, lid });
           srv.sendTo(user.id, { t: 'delta', d: out.d }, ws); // other tabs of the same player
+          if (OPENED.has(String(msg.m))) announceDrops(user.name, out.r.items);
           return;
         }
         if (msg.ns === 'social') {
