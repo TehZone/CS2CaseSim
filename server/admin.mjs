@@ -30,6 +30,7 @@ const TITLES = {
   'snapshot.save': 'Snapshot saved', 'snapshot.restore': 'Snapshot restored', 'snapshot.delete': 'Snapshot deleted', 'note.add': 'Note added',
   rename: 'Player renamed', reset: 'Account reset', 'settings.set': 'Server settings changed', broadcast: 'Broadcast sent',
   link: 'Discord account linked', unlink: 'Discord account unlinked', resetpassword: 'Password reset through Discord',
+  report: 'Player reported', 'report.close': 'Report closed', 'bio.clear': 'Summary cleared',
 };
 const RED = 0xeb4b4b, GOLD = 0xe4ae39, BLUE = 0x4b69ff, GREEN = 0x4ade80;
 const COLORS = { ban: RED, kick: RED, signout: RED, reset: RED, warn: GOLD, unban: GREEN, link: GREEN, broadcast: BLUE, 'settings.set': BLUE };
@@ -75,6 +76,11 @@ function banRow(r, now = Date.now()) {
   };
 }
 const snapRow = (r) => ({ id: r.id, label: r.label, kind: r.kind, by: r.by_name, created: num(r.created), size: Number(r.size) || 0 });
+// (bio: their summary when reported; about.bio: as it is now. about.staff: what the panel offers, the server still checks.)
+const reportRow = (r, staff) => ({
+  id: r.id, from: { id: r.from_id, name: r.from_name }, about: { id: r.about_id, name: r.about_name, staff, bio: r.about_bio || '' }, reason: r.reason, text: r.text, bio: r.bio || '',
+  messages: parse(r.messages) ?? [], at: num(r.at), closedAt: num(r.closed_at), closedBy: r.closed_by || null,
+});
 
 // What a restore left out: items now owned by others, and level-up rewards claimed since.
 function droppedText({ dropped, rewards = 0 }) {
@@ -256,6 +262,7 @@ export class Admin {
     if (detail.dropped) fields.push({ name: 'Dropped', value: droppedText(detail), inline: true });
     if (action === 'rename') fields.push({ name: 'Name', value: `${md(detail.before)} → ${md(detail.after)}` });
     if (action === 'items.unname') fields.push({ name: 'Name', value: `${md(detail.item)}: ${md(detail.name)}` });
+    if (action === 'bio.clear') fields.push({ name: 'Summary', value: md(String(detail.bio).slice(0, 1000)) });
     Promise.resolve()
       .then(() => this.discord.modLog({ title: TITLES[action] || action, description: t ? `**${md(t.name)}**` : '', fields, color: COLORS[action] ?? GOLD }))
       .catch((e) => this.log('[discord] mod log failed', e?.message || e));
@@ -372,7 +379,7 @@ export class Admin {
       'snapshot.get': this.snapGet, 'snapshot.restore': this.snapRestore, 'snapshot.delete': this.snapDelete, 'config.get': this.configGet,
       ban: this.ban, unban: this.unban, bans: this.bans, kick: this.kick, warn: this.warn, signout: this.signout, 'note.add': this.noteAdd,
       rename: this.rename, reset: this.reset, audit: this.auditList, 'settings.get': this.settingsGet, 'settings.set': this.settingsSet,
-      broadcast: this.broadcast,
+      broadcast: this.broadcast, reports: this.reports, 'report.close': this.reportClose, 'bio.clear': this.bioClear,
     };
   }
 
@@ -773,6 +780,9 @@ export class Admin {
     if (offers.length) await this.srv.trades.pushLists(...offers.flatMap((o) => [o.from_id, o.to_id]));
     this.srv.notice(t.id, `Your username is now <b>${name}</b>`);
     await this.audit(actor, 'rename', { id: t.id, name }, { before: t.name, after: name });
+    // (After the audit: it is done whatever happens to these.)
+    if (this.srv.isOnline(t.id)) this.srv.broadcastPlayers(); // (who's online is by name)
+    await this.srv.social.renamed(t.id);
     return { name };
   }
 
@@ -834,6 +844,47 @@ export class Admin {
     const sent = this.srv.broadcastMsg({ t: 'admin.msg', kind: 'broadcast', msg, from: actor.name });
     await this.audit(actor, 'broadcast', null, { msg, sent });
     return { sent };
+  }
+
+  // Players' reports, the newest first: the open ones, or with `closed` the closed ones. The copy of the messages a report
+  // saved is the only way staff ever see a conversation: there's no request that reads the messages table, and that stays.
+  // Below admin you don't see one about yourself: the player who sent it could be read off the messages even with their name
+  // gone, and they're a player you could act on.
+  async reports(actor, a) {
+    const page = a.page == null ? 0 : int(a.page, 'Page', 0, 1e6), closed = optBool(a.closed, 'closed');
+    const [seen, args] = actor.level >= 2 ? ['TRUE', []] : ['NOT COALESCE(t.id = $1::int OR t.discord_id = $2::text, FALSE)', [actor.id ?? null, actor.discordId ?? null]];
+    const { rows: [c] } = await this.db.query(`SELECT count(*)::int AS total, count(r.closed_at)::int AS closed FROM reports r JOIN users t ON t.id = r.about_id WHERE ${seen}`, args);
+    const { rows } = await this.db.query(`SELECT r.*, f.name AS from_name, t.name AS about_name, t.profile->>'bio' AS about_bio FROM reports r
+      JOIN users f ON f.id = r.from_id JOIN users t ON t.id = r.about_id WHERE ${seen} AND r.closed_at IS ${closed ? 'NOT ' : ''}NULL
+      ORDER BY r.at DESC, r.id DESC LIMIT ${PAGE} OFFSET ${page * PAGE}`, args);
+    const open = c.total - c.closed;
+    return { rows: rows.map((r) => reportRow(r, this.knownLevel({ id: r.about_id, name: r.about_name }))), total: closed ? c.closed : open, open, page };
+  }
+
+  // Not a report about yourself, or about staff at or above your level.
+  async reportClose(actor, a) {
+    const id = int(a.id, 'Report id', 1, 2 ** 31 - 1);
+    const { rows: [r] } = await this.db.query('SELECT about_id, reason FROM reports WHERE id = $1', [id]);
+    if (!r) fail('That report is gone', 'missing');
+    const t = await this.target(r.about_id);
+    if (this.isSelf(actor, t)) fail("You can't close a report about yourself", 'perm');
+    await this.canTidy(actor, t);
+    const { rows } = await this.db.query('UPDATE reports SET closed_at = $1, closed_by = $2 WHERE id = $3 AND closed_at IS NULL RETURNING id', [Date.now(), actor.name, id]);
+    if (!rows.length) fail('That report is already closed');
+    await this.audit(actor, 'report.close', t, { report: id, reason: r.reason });
+    return {};
+  }
+
+  // A bad summary comes off a profile (no word list stops them all): only the summary changes, and what it said is on record.
+  async bioClear(actor, a) {
+    const t = await this.target(a.id);
+    await this.canTidy(actor, t);
+    const { rows: [r] } = await this.db.query("SELECT profile->>'bio' AS bio FROM users WHERE id = $1", [t.id]);
+    if (!r?.bio) fail(`${t.name} has no summary`);
+    await this.db.query(`UPDATE users SET profile = profile || '{"bio":""}'::jsonb WHERE id = $1`, [t.id]);
+    await this.audit(actor, 'bio.clear', t, { bio: r.bio });
+    this.srv.social.changed(t.id);
+    return {};
   }
 
   // ---- ns 'account' (any player) -------------------------------------------------------------------------------------

@@ -44,6 +44,27 @@ const MIGRATIONS = [
      detail JSONB NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS audit_at ON audit (at)`,
   `CREATE INDEX IF NOT EXISTS audit_target ON audit (target_id, at)`,
+  // Friends & Chat (server/social.mjs). A friendship or a request is one row per pair, a < b; status 'pending' or 'friends'.
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS profile JSONB`,
+  `CREATE TABLE IF NOT EXISTS friends (
+     a INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, b INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     status TEXT NOT NULL, asked_by INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, since BIGINT NOT NULL, PRIMARY KEY (a, b), CHECK (a < b))`,
+  `CREATE INDEX IF NOT EXISTS friends_b ON friends (b)`,
+  `CREATE TABLE IF NOT EXISTS blocks (
+     user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, blocked_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     at BIGINT NOT NULL, PRIMARY KEY (user_id, blocked_id))`,
+  `CREATE INDEX IF NOT EXISTS blocks_blocked ON blocks (blocked_id)`,
+  `CREATE TABLE IF NOT EXISTS messages (
+     id BIGSERIAL PRIMARY KEY, from_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, to_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     text TEXT NOT NULL, at BIGINT NOT NULL, read BOOLEAN NOT NULL DEFAULT FALSE)`,
+  // (a conversation is both directions: each is read through one of these)
+  `CREATE INDEX IF NOT EXISTS messages_from ON messages (from_id, to_id, id)`,
+  `CREATE INDEX IF NOT EXISTS messages_to ON messages (to_id, from_id, id)`,
+  `CREATE TABLE IF NOT EXISTS reports (
+     id SERIAL PRIMARY KEY, from_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, about_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     reason TEXT NOT NULL, text TEXT NOT NULL, messages JSONB NOT NULL, at BIGINT NOT NULL, closed_at BIGINT, closed_by TEXT)`,
+  `CREATE INDEX IF NOT EXISTS reports_open ON reports (closed_at, at)`,
+  `ALTER TABLE reports ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT ''`, // (the summary of the player reported, at that moment)
 ];
 
 export async function openDb({ url = process.env.DATABASE_URL, dataDir = process.env.PGLITE_DIR } = {}) {

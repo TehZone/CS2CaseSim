@@ -440,6 +440,10 @@ What's in a match:
 - Gambling (virtual money, no house edge, provably fair with a verify button): case battles (1v1 to 2v2, normal or
   crazy), coinflip and jackpot, against bots or, online, other players
 - Online play (optional): accounts on your own server, trading between players, live lobbies; see DEPLOY.md
+- Friends & Chat online: the same page as the NPC players' offline, with real players. Friend requests, private messages
+  (live, or waiting for them if they're offline), a profile with a showcase, inventory and summary, Everyone or Friends
+  only for who can message you, block and report. A report gives staff the last 30 messages with that player; nothing
+  else lets staff read a chat.
 - Item Database (like CSFloat's): search every skin, knife, glove, sticker, charm and agent in the game; open one to
   see every copy that exists with its owner, float, seed, pattern and stickers (online: everyone on the server;
   offline: you and the NPC players, each owner a link to their profile), its float rank (#1-#3 lowest and highest, StatTrak™ and Souvenir copies ranked apart), the
@@ -479,6 +483,7 @@ node scripts/test-play.mjs              # Play mode checks (traces, movement, la
 cd server && npm install && cd ..       # multiplayer server dependencies
 PGLITE_DIR=server/.data node server/index.mjs   # run the server locally (port 8787)
 node server/test.mjs                    # server checks (accounts, trading, live gambling, restarts)
+node server/test-social.mjs             # Friends & Chat checks (friends, messages, blocks, reports, rate limits)
 node scripts/cs2/dev-index.cjs           # build the CS2 index from your install (dev)
 node scripts/cs2/dev-prepare.cjs weapon_ak47 aq_oiled   # extract one skin's assets (dev)
 ```

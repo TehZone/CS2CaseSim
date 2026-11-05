@@ -24,16 +24,37 @@ const LOOKS_LIKE = new Map(Object.entries({
   a: 'аαɑ@4', b: 'вβ8', c: 'сϲς', d: 'ԁ', e: 'еε3', f: 'ғϝ', g: 'ɡ69', h: 'һн', i: 'іιɩı1!|', k: 'кκ', l: 'ӏ', m: 'м', n: 'пη',
   o: 'оοօ0', p: 'рρ', s: 'ѕ$5', t: 'тτ7', u: 'սυμу', v: 'νѵ', z: 'ᴢ2',
 }).flatMap(([letter, like]) => [...like].map((c) => [c, letter])));
-// A text as it reads: one width, no accents, no invisible characters (the blank letters too), Latin letters for lookalikes.
-// Any sign between letters goes. Words stay apart ("push it" isn't a rude word), but letters spaced out one by one are read
-// as the word they spell.
+// One width, no accents, no invisible characters (the blank letters too); and Latin letters for lookalikes.
+const flat = (text) => String(text).normalize('NFKD').replace(/[\p{M}\p{Cf}\p{DI}]/gu, '').toLowerCase();
+const unmask = (s) => [...s].map((c) => LOOKS_LIKE.get(c) ?? c).join('');
+// A text as it reads: both of those, and any sign between letters goes. Words stay apart ("push it" isn't a rude word), but
+// letters spaced out one by one are read as the word they spell.
 function asRead(text) {
-  const s = [...String(text).normalize('NFKD').replace(/[\p{M}\p{Cf}\p{DI}]/gu, '').toLowerCase()].map((c) => LOOKS_LIKE.get(c) ?? c).join('');
-  return s.replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/(?<![\p{L}\p{N}])([\p{L}\p{N}])[\s_-]+(?=[\p{L}\p{N}])/gu, '$1').replace(/^[\s_-]+|[\s_-]+$/g, '').replaceAll('-', '_');
+  return unmask(flat(text)).replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/(?<![\p{L}\p{N}])([\p{L}\p{N}])[\s_-]+(?=[\p{L}\p{N}])/gu, '$1').replace(/^[\s_-]+|[\s_-]+$/g, '').replaceAll('-', '_');
 }
 export function refusedWord(text) {
   const s = asRead(text);
   return RESERVED.some((w) => s === w || s.startsWith(w + '_')) || RUDE.test(s);
+}
+
+// RUDE's words in a sentence, whole and with the endings they take (a change to one is a change to both). RUDE finds them
+// inside anything, which is right for a name and wrong here: "grape", "Scunthorpe" and "rapeseed" are fine in a message. The
+// ones with no innocent use go by how they start, whatever's stuck on the end ("snigger", "niggardly" and "Ashkenazi" aren't).
+const RUDE_WORD = /^(?:\p{L}*fuck\p{L}*|\p{L}*shit+(?:s|e|ty|ted|ter|ters|ting|head|heads|hole|holes)?|cunt\p{L}*|nigg(?:er|a(?!rd))\p{L}*|fags?|fag+ot\p{L}*|rape[drs]?|rapers|hitler\p{L}*|(?:neo)?nazi(?:s|sm)?)$/u;
+const SIGNS = /[^\p{L}\p{N}]+/gu;
+// asRead joins too much for a sentence (its "a shit" is one word), so each word is read on its own: with the signs drawn as
+// letters as letters ("sh!t", "$hit") and as breaks ("shit!"), each of those with its digits as letters ("sh1t") and with them
+// gone ("shit1"). Any other sign is a break ("ok,shit"), or "push,it" would be a rude word. Letters spaced out one by one are
+// read as what they spell.
+function rudeSentence(text) {
+  const s = flat(text), parts = s.split(SIGNS).map(unmask);
+  const words = [s, s.replace(/\p{N}/gu, '')].flatMap((t) => [...unmask(t).split(SIGNS), ...t.split(SIGNS).map(unmask)]);
+  let spelled = '';
+  for (const w of [...parts, '']) {
+    if (w.length === 1) spelled += w;
+    else { words.push(spelled); spelled = ''; }
+  }
+  return words.some((w) => RUDE_WORD.test(w));
 }
 
 // Why a text can't be a name ('' if it can). CS2's SetNameToolString: 1 to 20 UTF-16 units (JS's .length: an emoji is 2), no
@@ -50,6 +71,20 @@ export function nameProblem(name) {
   if (name[0] === ' ' || name.at(-1) === ' ' || CONTROL.test(name) || REORDERS.test(name) || !name.isWellFormed() || BLANK.test(name)) return BAD_NAME;
   return refusedWord(name) ? 'Please pick another name' : '';
 }
+
+// Why a text can't go to other players ('' if it can): a chat message or a profile's summary, already trimmed. The characters
+// a name can't hold, and the rude words read as a sentence reads. < > and quotes go through, as in a name: whoever shows it
+// uses esc(). Emoji and other alphabets are fine.
+export function textProblem(text, what = 'A message', max = 300) {
+  if (typeof text !== 'string') return `${what} must be text`;
+  if (text.length > max) return `${what} is at most ${max} characters`;
+  if (CONTROL.test(text) || REORDERS.test(text) || !text.isWellFormed()) return `${what} can't hold control or text direction characters`;
+  if (BLANK.test(text)) return `${what} needs something in it`;
+  return rudeSentence(text) ? `${what} can't have that word in it` : '';
+}
+// A text only staff read (a report's reason and details): what can't be shown goes rather than refusing it, and rude words
+// stay, since a report may have to quote them.
+export const plainText = (text) => text.replace(new RegExp(CONTROL.source, 'g'), ' ').replace(new RegExp(REORDERS.source, 'g'), '');
 
 // Why these two can't swap counters ('' if they can): CS2's check, which is the same item (or any two knives), both
 // StatTrak™, and two different counts. An AK swaps with an AK only: an M4A4 doesn't with an M4A1-S, nor a USP-S with a P2000,

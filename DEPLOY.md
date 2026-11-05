@@ -75,7 +75,8 @@ Who gets what in the game's admin panel:
 - The Discord server's owner: **Owner** (everything).
 - A role with the Administrator permission, or the **★ Developer** role: **Admin** (edit accounts and items,
   snapshots and restores, rename, reset, server settings, broadcasts, network and Discord bans).
-- The **Moderator** role: **Moderator** (look up players, ban, kick, warn, sign out, notes, save snapshots).
+- The **Moderator** role: **Moderator** (look up players, ban, kick, warn, sign out, notes, save snapshots, read and
+  close player reports, clear a reported summary).
   Other role names: set `DISCORD_ADMIN_ROLES` and `DISCORD_MOD_ROLES` (comma-separated).
 - Nobody can act on staff at or above their own level, or ban themselves. Every action is in the audit log, and
   posted to a text channel with `mod-log` in its name (or the channel id in `DISCORD_LOG_CHANNEL`).

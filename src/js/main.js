@@ -20,6 +20,7 @@ import * as database from './pages/database.js';
 import * as itemindex from './pages/itemindex.js';
 import * as play from './pages/play.js';
 import * as community from './pages/community.js';
+import { initFriends } from './pages/community-online.js';
 import * as admin from './pages/admin.js';
 import * as changelog from './pages/changelog.js';
 import { npcOf, crowd, inventoryOf } from './engine/npcs.js';
@@ -57,9 +58,9 @@ const updateInv = debounce(() => {
   $('#net-worth').textContent = money(ownedValue(S));
 }, 150);
 const updateStars = () => { $('#star-count').textContent = S.stars || 0; };
-// Unread messages and friend requests from the NPC players (offline).
+// Unread messages and friend requests: from the NPC players offline, from real players online.
 const updateMessages = () => {
-  const n = online() ? 0 : community.unreadCount(), el = $('#msg-count');
+  const n = community.unreadCount(), el = $('#msg-count');
   el.hidden = !n;
   el.textContent = n;
 };
@@ -176,6 +177,7 @@ async function boot() {
   on('inv', updateInv);
   on('stars', updateStars);
   on('social', updateMessages);
+  window.addEventListener('app:unread', updateMessages);
   on('reset', () => { lastMoney = S.money; updateBalance(); updateInv(); updateStars(); updateMessages(); go(currentName); });
   net.on('status', updateAccount);
   net.on('players', () => { updateAccount(); $$('[data-online-text]').forEach((el) => { el.textContent = net.onlineText(); }); });
@@ -197,6 +199,7 @@ async function boot() {
   initProfile();
   initAccount();
   initUpdates();
+  initFriends();
   itemindex.initIndex();
   startNpcLoop();
   go('cases');

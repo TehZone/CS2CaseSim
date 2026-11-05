@@ -10,15 +10,23 @@ import { mountPicker } from '../picker.js';
 import { net } from '../net/online.js';
 
 const view = { with: null, theirInv: [], mine: new Set(), theirs: new Set(), myMoney: 0, theirMoney: 0, msg: '', q: '', loading: false };
-let root = null, offs = [];
+let root = null, offs = [], startWith = null;
 
 export function render(r) {
   root = r;
   offs.forEach((o) => o());
   offs = [net.on('players', () => drawPlayers()), net.on('trades', () => drawOffers()), on('inv', () => drawCompose())];
   draw();
+  if (startWith && online()) { view.counterOf = null; view.msg = ''; pickPlayer(startWith); }
+  startWith = null;
 }
 export function destroy() { offs.forEach((o) => o()); offs = []; root = null; }
+
+// Make offer on a player's profile: this page, with an offer to them started.
+export function offerTo(name) {
+  startWith = name;
+  window.dispatchEvent(new CustomEvent('app:go', { detail: 'trade' }));
+}
 
 function draw() {
   if (!root) return;
@@ -111,7 +119,11 @@ async function send() {
     toast(`Offer sent to ${esc(view.with)}`, 'good');
     view.mine.clear(); view.theirs.clear(); view.myMoney = 0; view.theirMoney = 0; view.msg = '';
     drawCompose();
-  } catch (e) { sfx.error(); toast(esc(e.message), 'bad'); }
+  } catch (e) {
+    sfx.error();
+    // (Only the words are refused: the same offer goes through without them.)
+    toast(`${esc(e.message)}${e.code === 'dms' ? '. Send the offer without a message.' : ''}`, 'bad');
+  }
 }
 
 function sideHTML(side, label) {

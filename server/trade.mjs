@@ -4,9 +4,10 @@ import crypto from 'node:crypto';
 import { makeCtx, delta, take, give, spend, credit, GameError } from '../src/js/engine/actions.js';
 import { isUnit, itemName, tradable } from '../src/js/engine/items.js';
 import { storedItem } from '../src/js/engine/storage.js';
+import { textProblem } from '../src/js/engine/tools.js';
 import { round2 } from '../src/js/engine/util.js';
 
-const MAX_ITEMS = 100, MAX_OPEN = 20, MAX_LIST = 30;
+const MAX_ITEMS = 100, MAX_OPEN = 20, MAX_LIST = 30, MSG_MAX = 140;
 const fail = (m) => { throw new GameError(m); };
 const money = (v) => { const n = round2(Number(v) || 0); if (!(n >= 0) || n > 1e12) fail('Invalid amount'); return n; };
 const uidList = (v) => {
@@ -35,10 +36,10 @@ export class Trades {
     return s;
   }
 
-  // uids of a player's that other players' open trades ask for.
+  // uids of a player's that other players' open trades ask for. (Not a hidden offer's: see offer.)
   asked(userId) {
     const s = new Set();
-    for (const t of this.open.values()) if (t.to_id === userId) for (const u of t.offer.get.uids) s.add(u);
+    for (const t of this.open.values()) if (t.to_id === userId && !t.offer.hidden) for (const u of t.offer.get.uids) s.add(u);
     return s;
   }
   // Staff took a bad name off an item: the copies of it in offers lose it too, closed ones as well (Recent trades shows them).
@@ -57,7 +58,7 @@ export class Trades {
 
   async list(userId) {
     const { rows } = await this.srv.db.query(
-      'SELECT * FROM trades WHERE from_id = $1 OR to_id = $1 ORDER BY updated DESC LIMIT ' + MAX_LIST, [userId]);
+      "SELECT * FROM trades WHERE from_id = $1 OR (to_id = $1 AND offer->>'hidden' IS NULL) ORDER BY updated DESC LIMIT " + MAX_LIST, [userId]);
     return rows.map(norm).map((t) => this.view(t));
   }
   view(t) {
@@ -98,11 +99,23 @@ export class Trades {
   async offer(user, a) {
     const other = await this.findUser(a.to);
     if (other.id === user.id) fail("You can't trade with yourself");
+    const who = await this.srv.social.other(user, other.id);
+    if (who.mine) fail(`Unblock ${other.name} to send them an offer`);
+    // Someone who blocked you never gets it, and you aren't told: it stays open on your side until you cancel it.
+    const hidden = who.theirs;
     if ([...this.open.values()].filter((t) => t.from_id === user.id).length >= MAX_OPEN) fail(`You have ${MAX_OPEN} open offers. Cancel some first.`);
     const give = { uids: uidList(a.give?.uids), money: money(a.give?.money) };
     const get = { uids: uidList(a.get?.uids), money: money(a.get?.money) };
     if (!give.uids.length && !get.uids.length && !give.money && !get.money) fail('The offer is empty');
-    const msg = String(a.msg || '').replace(/[<>]/g, '').slice(0, 140);
+    // The words with it reach the other player, so they're a message: the same filter, and the same refusal whether the setting
+    // or a block is why (an offer without any still goes, as a block's must).
+    const msg = String(a.msg || '').replace(/[<>]/g, '').trim();
+    if (msg) {
+      const bad = textProblem(msg, 'A trade message', MSG_MAX);
+      if (bad) fail(bad);
+      this.srv.social.mayWrite(who);
+    }
+    this.srv.social.limit('offer', user.id);
     const reserved = this.reserved(user.id);
     return this.srv.store.lock([user.id, other.id], async (entries) => {
       const me = entries.find((e) => e.id === user.id), them = entries.find((e) => e.id === other.id);
@@ -121,17 +134,17 @@ export class Trades {
       const now = Date.now();
       const t = {
         id: crypto.randomUUID(), from_id: user.id, to_id: other.id, status: 'open', version: 1, created: now, updated: now,
-        offer: { give, get, msg, fromName: me.name, toName: them.name, giveItems, getItems },
+        offer: { give, get, msg, fromName: me.name, toName: them.name, giveItems, getItems, ...(hidden ? { hidden } : {}) },
       };
       await this.srv.db.query('INSERT INTO trades (id, from_id, to_id, status, version, offer, created, updated) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8)',
         [t.id, t.from_id, t.to_id, t.status, t.version, JSON.stringify(t.offer), now, now]);
       this.open.set(t.id, t);
       if (a.counterOf) {
         const c = this.open.get(String(a.counterOf));
-        if (c && c.to_id === user.id) await this.close(c, 'countered');
+        if (c && c.to_id === user.id && !c.offer.hidden) await this.close(c, 'countered');
       }
       await this.pushLists(user.id, other.id);
-      this.srv.notice(other.id, `New trade offer from <b>${me.name}</b>`);
+      if (!hidden) this.srv.notice(other.id, `New trade offer from <b>${me.name}</b>`);
       return { id: t.id };
     });
   }
@@ -144,7 +157,8 @@ export class Trades {
 
   async setStatus(user, { id }, status, side) {
     const t = this.open.get(String(id));
-    if (!t || t[side + '_id'] !== user.id) fail('That offer is no longer open');
+    // (a hidden offer never reached the player it's to, so it isn't theirs to answer)
+    if (!t || t[side + '_id'] !== user.id || (side === 'to' && t.offer.hidden)) fail('That offer is no longer open');
     await this.close(t, status);
     await this.pushLists(t.from_id, t.to_id);
     if (status === 'declined') this.srv.notice(t.from_id, `<b>${t.offer.toName}</b> declined your trade offer`);
@@ -153,7 +167,7 @@ export class Trades {
 
   async accept(user, { id, version }) {
     const t = this.open.get(String(id));
-    if (!t || t.to_id !== user.id) fail('That offer is no longer open');
+    if (!t || t.to_id !== user.id || t.offer.hidden) fail('That offer is no longer open');
     if (version != null && Number(version) !== t.version) fail('The offer changed. Check it again.');
     const result = await this.srv.store.lock([t.from_id, t.to_id], async (entries) => {
       if (!this.open.has(t.id)) fail('That offer is no longer open');

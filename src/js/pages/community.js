@@ -2,7 +2,8 @@
 // friends by status, friend requests and people you may know; on the right a chat (their offers inline, to accept,
 // decline or haggle over: a price and an argument for it, or just type, "would you do $500? it's a 0.01 float") or a
 // profile: their level and medal, item showcase, comments and inventory (make them an offer from it), or yours, which
-// you set up yourself (name, avatar, country, a map behind it, a bio and up to six items to show off).
+// you set up yourself (name, avatar, country, a map behind it, a bio and up to six items to show off). Online the page is
+// about real players instead: community-online.js takes over, and uses what's exported here so it looks the same.
 import { esc, money, timeAgo, imgUrl } from '../util.js';
 import { D } from '../data.js';
 import * as I from '../items.js';
@@ -17,6 +18,7 @@ import { MEDALS, medalOf } from '../engine/levels.js';
 import { levelIconHtml, medalHtml } from '../profile.js';
 import { cs2Play } from '../cs2/api.js';
 import { backgroundMaps } from '../menu.js';
+import { render as renderOnline, destroy as destroyOnline, unreadCount as unreadOnline } from './community-online.js';
 
 const view = { pane: 'chat', who: null, q: '', tab: 'showcase', haggle: null };
 let root = null, offs = [];
@@ -25,37 +27,36 @@ const so = () => S.social;
 const people = () => (so() ? N.crowd(so().seed) : []);
 const stateOf = (id) => so()?.npcs[id] || null;
 const npc = (id) => (so() ? N.npcOf(so().seed, id) : null);
-export const unreadCount = () => Object.values(so()?.unread || {}).reduce((t, n) => t + n, 0) + people().filter((n) => stateOf(n.id)?.friend === 2).length;
+export const unreadCount = () => (online() ? unreadOnline() : Object.values(so()?.unread || {}).reduce((t, n) => t + n, 0) + people().filter((n) => stateOf(n.id)?.friend === 2).length);
 
 export function openChat(id) { view.pane = 'chat'; view.who = id; view.haggle = null; window.dispatchEvent(new CustomEvent('app:go', { detail: 'community' })); }
 export function openPerson(id) { view.pane = 'profile'; view.who = id; view.tab = 'showcase'; window.dispatchEvent(new CustomEvent('app:go', { detail: 'community' })); }
 
 export function render(r) {
-  root = r;
   offs.forEach((o) => o());
+  offs = [];
+  // (Nothing here draws online: `root` stays empty, so the page on screen is only ever the other file's.)
+  if (online()) { root = null; renderOnline(r); return; }
+  root = r;
   offs = [on('social', () => drawAll()), on('inv', () => view.pane === 'profile' && drawMain())];
-  if (online()) {
-    root.innerHTML = '<div class="page"><div class="empty">Friends, chat and NPC traders are part of offline play. Online, trade with real players on the <b>Trade</b> page.</div></div>';
-    return;
-  }
   root.innerHTML = '<div class="page community"><div class="cm-grid"><aside class="fr-panel" data-list></aside><section class="cm-main" data-main></section></div></div>';
   if (!so()) act('npc.tick').then(drawAll).catch((e) => toast(esc(e.message), 'bad'));
   if (!view.who) { const first = people().find((n) => so()?.unread[n.id]) || people().find((n) => stateOf(n.id)?.friend === 1); view.who = first?.id || 'me'; view.pane = first ? 'chat' : 'profile'; }
   drawAll();
 }
-export function destroy() { offs.forEach((o) => o()); offs = []; root = null; }
+export function destroy() { offs.forEach((o) => o()); offs = []; root = null; destroyOnline(); }
 
 function drawAll() { if (!root || online() || !so()) return; drawList(); drawMain(); }
 
 // ---- avatars and names -------------------------------------------------------------------------------------------------
+export const avatarTag = (agent, name, size = 32, status = '') => `<span class="av ${status}" style="--s:${size}px">${agent ? `<img src="${imgUrl(agent.img, 's')}" alt="">` : `<b>${esc(name.slice(0, 2).toUpperCase())}</b>`}</span>`;
 function avatarHtml(id, size = 32, status = '') {
   const agent = id === 'me' ? D.agents[so()?.me?.avatar] : D.agents[npc(id)?.avatar];
-  const name = id === 'me' ? myName() : npc(id)?.name || '?';
-  return `<span class="av ${status}" style="--s:${size}px">${agent ? `<img src="${imgUrl(agent.img, 's')}" alt="">` : `<b>${esc(name.slice(0, 2).toUpperCase())}</b>`}</span>`;
+  return avatarTag(agent, id === 'me' ? myName() : npc(id)?.name || '?', size, status);
 }
 const myName = () => so()?.me?.name || 'You';
 // A country, as a small tag (Windows draws flag emoji as two letters anyway).
-const cc = (c) => (c ? `<span class="cc">${esc(c)}</span>` : '');
+export const cc = (c) => (c ? `<span class="cc">${esc(c)}</span>` : '');
 const kindLabel = (n) => (n.type === 'collector' ? N.FOCUS[n.focus].n : n.type === 'beginner' ? 'New to trading' : 'Player');
 const kindTag = (n) => (n.type === 'collector' ? ' <span class="fr-tag">Collector</span>' : n.type === 'beginner' ? ' <span class="fr-tag new">New</span>' : '');
 
@@ -293,15 +294,17 @@ function profileData(id) {
     bg: null, mapSeed: n.id,
   };
 }
+// The top of a profile: who they are, their level and medal. (avatar: its HTML; mine: yours, with Edit profile.)
+export const profileHeadHtml = (p, avatar, mine) => `<div class="sp-head">${avatar}
+      <div class="sp-who"><h2>${esc(p.name)}</h2><div class="muted">${cc(p.country)}${p.kind ? esc(p.kind) + ' · ' : ''}Member since ${p.joined}</div><p class="sp-bio">${esc(p.bio)}</p></div>
+      <div class="sp-level"><div class="lvl-big">${levelIconHtml(p.level, 46)}<span>Level <b>${p.level}</b></span></div>${p.medal ? `<div class="sp-medal">${medalHtml(p.medal, 54)}<span>${esc(p.medal.y)} Service Medal<br><small>${p.medals} medal${p.medals === 1 ? '' : 's'}</small></span></div>` : ''}
+        ${mine ? '<button class="btn sm" data-edit>Edit profile</button>' : ''}</div></div>`;
 function drawProfile(el, id) {
   const p = profileData(id), mine = id === 'me';
   const value = p.inv.reduce((t, it) => t + I.itemValue(it), 0);
   const showInv = !mine && view.tab === 'inventory';
   el.innerHTML = `${mine ? '' : headerHtml(npc(id))}<div class="sp" data-sp>
-    <div class="sp-head">${avatarHtml(id, 120)}
-      <div class="sp-who"><h2>${esc(p.name)}</h2><div class="muted">${cc(p.country)}${p.kind ? esc(p.kind) + ' · ' : ''}Member since ${p.joined}</div><p class="sp-bio">${esc(p.bio)}</p></div>
-      <div class="sp-level"><div class="lvl-big">${levelIconHtml(p.level, 46)}<span>Level <b>${p.level}</b></span></div>${p.medal ? `<div class="sp-medal">${medalHtml(p.medal, 54)}<span>${esc(p.medal.y)} Service Medal<br><small>${p.medals} medal${p.medals === 1 ? '' : 's'}</small></span></div>` : ''}
-        ${mine ? '<button class="btn sm" data-edit>Edit profile</button>' : ''}</div></div>
+    ${profileHeadHtml(p, avatarHtml(id, 120), mine)}
     <div class="sp-body">
       <div class="sp-left">
         ${mine ? '' : `<div class="seg" data-tabs><button data-v="showcase" class="${showInv ? '' : 'active'}">Showcase</button><button data-v="inventory" class="${showInv ? 'active' : ''}">Inventory (${p.inv.length})</button></div>`}
@@ -333,7 +336,7 @@ function drawProfile(el, id) {
   backdrop(el.querySelector('[data-sp]'), p);
 }
 // A CS2 map's main-menu picture behind the profile (from the install), like a Steam profile background.
-async function backdrop(el, p) {
+export async function backdrop(el, p) {
   const maps = await backgroundMaps().catch(() => []);
   if (!maps.length || !el?.isConnected) return;
   const id = p.bg && maps.some((m) => m.id === p.bg) ? p.bg : p.mapSeed ? maps[[...p.mapSeed].reduce((a, c) => a + c.charCodeAt(0), 0) % maps.length].id : null;
@@ -343,17 +346,20 @@ async function backdrop(el, p) {
 }
 
 const COUNTRY_LIST = ['', 'US', 'CA', 'GB', 'DE', 'FR', 'SE', 'DK', 'NO', 'FI', 'PL', 'CZ', 'UA', 'RU', 'BR', 'AR', 'AU', 'NL', 'ES', 'PT', 'IT', 'TR', 'KZ', 'RO', 'HU', 'IL', 'IN', 'JP', 'KR', 'CN', 'MX', 'ZA'];
-async function editProfile() {
-  const me = so().me, show = new Set(me.showcase);
+const editProfile = () => profileDialog({ me: so().me, save: (f) => act('persona.set', f) });
+// The Edit profile window. me: { name, bio, country, avatar, bg, showcase: uids }. named: with the Name box (an online name
+// is the account's). extra: more fields for the top row. save(fields, window's element) runs on Save; a throw is a toast.
+export async function profileDialog({ me, named = true, extra = '', save }) {
+  const show = new Set(me.showcase);
   let avatar = me.avatar;
   const maps = await backgroundMaps().catch(() => []);
   const agents = Object.values(D.agents).sort((a, b) => b.r - a.r || a.n.localeCompare(b.n));
   const m = openModal({
     title: 'Edit profile', cls: 'xwide',
     body: `<div class="edit-prof">
-      <div class="ep-row"><label>Name<input class="input" data-name maxlength="32" value="${esc(me.name)}" placeholder="Your name"></label>
+      <div class="ep-row">${named ? `<label>Name<input class="input" data-name maxlength="32" value="${esc(me.name)}" placeholder="Your name"></label>` : ''}
         <label>Country<select class="input" data-country>${COUNTRY_LIST.map((c) => `<option value="${c}" ${c === me.country ? 'selected' : ''}>${c || 'None'}</option>`).join('')}</select></label>
-        ${maps.length ? `<label>Background<select class="input" data-bg><option value="">None</option>${maps.map((x) => `<option value="${esc(x.id)}" ${x.id === me.bg ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : ''}</div>
+        ${maps.length ? `<label>Background<select class="input" data-bg><option value="">None</option>${maps.map((x) => `<option value="${esc(x.id)}" ${x.id === me.bg ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : ''}${extra}</div>
       <label>Summary<textarea class="input" data-bio maxlength="300" rows="3" placeholder="A few words about you">${esc(me.bio)}</textarea></label>
       <div class="section-title">Avatar</div><div class="ep-avatars">${agents.map((a) => `<button class="ep-av ${a.id === avatar ? 'on' : ''}" data-av="${a.id}" title="${esc(a.n)}"><img loading="lazy" src="${imgUrl(a.img, 's')}"></button>`).join('')}</div>
       <div class="section-title">Item showcase <span class="muted" style="font-size:12px;text-transform:none;letter-spacing:0">up to 6</span></div><div data-show></div></div>`,
@@ -363,10 +369,11 @@ async function editProfile() {
   mountPicker(m.el.querySelector('[data-show]'), { items: () => S.inv.filter((it) => !I.isUnit(it)), selected: show, onChange: (sel) => { while (sel.size > 6) sel.delete([...sel][0]); }, empty: 'Your inventory is empty' });
   m.el.querySelector('[data-save]').addEventListener('click', async () => {
     try {
-      await act('persona.set', { name: m.el.querySelector('[data-name]').value, bio: m.el.querySelector('[data-bio]').value, country: m.el.querySelector('[data-country]').value,
-        avatar, showcase: [...show].slice(0, 6), bg: m.el.querySelector('[data-bg]')?.value || null });
+      await save({ ...(named ? { name: m.el.querySelector('[data-name]').value } : {}), bio: m.el.querySelector('[data-bio]').value, country: m.el.querySelector('[data-country]').value,
+        avatar, showcase: [...show].slice(0, 6), bg: m.el.querySelector('[data-bg]')?.value || null }, m.el);
       m.close();
       toast('Profile saved', 'good');
     } catch (e) { toast(esc(e.message), 'bad'); }
   });
+  return m;
 }

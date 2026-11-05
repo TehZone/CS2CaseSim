@@ -25,6 +25,7 @@ export function toast(msg, type = '') {
   el.innerHTML = msg;
   document.getElementById('toasts').appendChild(el);
   setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 300); }, 3200);
+  return el;
 }
 
 // Runs a game action and shows its error (not enough money, item locked...) as a toast. Returns null on failure.

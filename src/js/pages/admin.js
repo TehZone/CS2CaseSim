@@ -23,10 +23,10 @@ import { playPrefs, savePlayPrefs } from './play-settings.js';
 import { BINDS_VERSION } from '../play/input.js';
 import { ASPECTS, RESOLUTIONS } from '../play/screen.js';
 
-const TABS = [['dash', 'Dashboard'], ['players', 'Players'], ['bans', 'Bans'], ['audit', 'Audit log'], ['server', 'Server']];
+const TABS = [['dash', 'Dashboard'], ['players', 'Players'], ['bans', 'Bans'], ['reports', 'Reports'], ['audit', 'Audit log'], ['server', 'Server']];
 // (Offline the bans are the NPC traders you've blocked, and the server is your save and its NPC world.)
 const OFF_TABS = { bans: 'Blocked traders', server: 'Save & world' };
-const TAB_DATA = { dash: 'overview', players: 'players', bans: 'bans', audit: 'audit', server: 'settings' };
+const TAB_DATA = { dash: 'overview', players: 'players', bans: 'bans', reports: 'reports', audit: 'audit', server: 'settings' };
 const FILTERS = [['all', 'All'], ['online', 'Online'], ['banned', 'Banned'], ['linked', 'Linked'], ['staff', 'Staff']];
 const OFF_FILTERS = [['all', 'All'], ['online', 'Online'], ['banned', 'Blocked'], ['friends', 'Friends']];
 const filters = () => (online() ? FILTERS : OFF_FILTERS);
@@ -49,6 +49,7 @@ const ACCESS = [
   [1, 'See every player: stats, items, configs, snapshots and history'],
   [1, 'Ban, kick, warn and sign out players below your level; lift bans'],
   [1, 'Write notes and save snapshots'],
+  [1, 'Read and close player reports; clear a reported summary'],
   [2, 'Edit money, stats and items; restore and delete snapshots; rename and reset accounts'],
   [2, 'Network bans and Discord bans'],
   [2, 'Server settings and broadcasts'],
@@ -56,7 +57,7 @@ const ACCESS = [
 ];
 
 const view = {
-  tab: 'dash', q: '', filter: 'all', page: 0, player: null, sub: 'overview', bansActive: true, auditQ: '', auditPage: 0,
+  tab: 'dash', q: '', filter: 'all', page: 0, player: null, sub: 'overview', bansActive: true, reportsOpen: true, reportPage: 0, auditQ: '', auditPage: 0,
   inv: { q: '', kind: 'all', sort: 'value', where: 'all', page: 0, sel: new Set() },
 };
 // (shownOnline: whether the page on screen is the server's or this PC's; switches: how many times that changed.)
@@ -286,7 +287,8 @@ function draw() {
     switches++;
     for (const k of Object.keys(store)) delete store[k];
     for (const k of Object.keys(pageBase)) delete pageBase[k];
-    Object.assign(view, { filter: 'all', page: 0, player: null, sub: 'overview', auditPage: 0 });
+    Object.assign(view, { filter: 'all', page: 0, player: null, sub: 'overview', reportPage: 0, auditPage: 0 });
+    if (view.tab === 'reports' && !online()) view.tab = 'dash';
   }
   const lvl = shownLevel = myLevel();
   if (lvl < 1) {
@@ -298,7 +300,7 @@ function draw() {
   root.innerHTML = `<div class="page adm">
     <div class="page-head"><h1>Admin</h1><span class="sub">${pc ? `Offline save on this PC · unlocked by ${esc(pc.name)} (${esc(levelName(pc.level))}) on <span class="fair">${esc(pc.server)}</span>`
       : `${esc(net.me()?.name || '')} ${staffChip(lvl)} on <span class="fair">${esc(net.serverUrl())}</span> · <span data-online-text>${esc(net.onlineText())}</span>`}</span></div>
-    <div class="seg adm-tabs" data-tabs>${TABS.map(([k, n]) => `<button data-v="${k}" class="${view.tab === k ? 'active' : ''}">${pc ? OFF_TABS[k] || n : n}</button>`).join('')}</div>
+    <div class="seg adm-tabs" data-tabs>${TABS.filter(([k]) => !pc || k !== 'reports').map(([k, n]) => `<button data-v="${k}" class="${view.tab === k ? 'active' : ''}">${pc ? OFF_TABS[k] || n : n}</button>`).join('')}</div>
     <div class="adm-body" data-body></div>
   </div>`;
   root.querySelectorAll('[data-tabs] button').forEach((b) => b.addEventListener('click', () => {
@@ -315,7 +317,7 @@ function drawBody() {
   if (!el) return;
   if (online() && net.status() !== 'online') { el.innerHTML = '<div class="empty adm-empty">Connecting to the server…</div>'; return; }
   if (view.tab === 'players') return view.player != null ? drawPlayer(el) : drawPlayers(el);
-  ({ dash: drawDash, bans: drawBans, audit: drawAudit, server: drawServer })[view.tab]?.(el);
+  ({ dash: drawDash, bans: drawBans, reports: drawReports, audit: drawAudit, server: drawServer })[view.tab]?.(el);
 }
 
 function openPlayer(id) {
@@ -1497,6 +1499,82 @@ function drawBanList() {
       refresh('bans', drawBanList);
     }
   }));
+}
+
+// ---- Reports -------------------------------------------------------------------------------------------------------
+// What players sent in from a profile or a chat, with the copy of their last 30 messages together saved at that moment.
+// Private means private: that copy is the only way staff ever see a message. There's no screen here, and no request on the
+// server, for reading anyone's chats.
+// (Not one about yourself or staff at or above you: the server refuses those. Below admin one about yourself never gets here.)
+const canClose = (r) => !r.closedAt && !isSelf(r.about) && canTidy(r.about);
+const canClearBio = (r) => !!r.about?.bio && canTidy(r.about);
+const reportStatus = (r) => (r.closedAt ? `<span class="chip">Closed</span> <span class="muted">${r.closedBy ? `by ${esc(r.closedBy)} ` : ''}${when(r.closedAt)}</span>` : '<span class="chip gold">Open</span>');
+function drawReports(el) {
+  el.innerHTML = `<div class="toolbar adm-bar"><div class="seg" data-rseg><button data-v="1" class="${view.reportsOpen ? 'active' : ''}">Open</button><button data-v="0" class="${view.reportsOpen ? '' : 'active'}">Closed</button></div>
+    <span class="spacer"></span><span class="muted" data-rcount></span><button class="btn sm" data-refresh>Refresh</button></div><div data-rlist></div>`;
+  el.querySelectorAll('[data-rseg] button').forEach((b) => b.addEventListener('click', () => {
+    view.reportsOpen = b.dataset.v === '1';
+    view.reportPage = 0;
+    el.querySelectorAll('[data-rseg] button').forEach((x) => x.classList.toggle('active', x === b));
+    drawReportList();
+  }));
+  el.querySelector('[data-refresh]').addEventListener('click', () => refresh('reports', drawReportList));
+  drawReportList();
+}
+function drawReportList() {
+  const el = root?.querySelector('[data-rlist]');
+  if (!el) return;
+  const idx = view.reportPage;
+  const d = need('reports', 'reports', { ...(view.reportsOpen ? {} : { closed: true }), ...pageArg('reports', idx) }, el, drawReportList);
+  if (!d) return;
+  notePage('reports', idx, d);
+  const rows = Array.isArray(d.rows) ? d.rows : [];
+  root.querySelector('[data-rcount]').textContent = plural(d.total ?? rows.length, 'report');
+  if (!rows.length) { el.innerHTML = `<div class="empty adm-empty">${view.reportsOpen ? 'No open reports.' : 'No closed reports yet.'}</div>`; return; }
+  el.innerHTML = `<div class="db-table-wrap"><table class="price-table adm-table"><thead><tr><th>When</th><th>About</th><th>From</th><th>Reason</th><th>Status</th><th></th></tr></thead><tbody>
+    ${rows.map((r, i) => `<tr><td class="nw">${when(r.at)}</td><td class="nw">${playerLink(r.about)}</td><td class="nw">${playerLink(r.from)}</td>
+      <td class="adm-detail">${esc(r.reason)}${r.text ? ` “${esc(clip(r.text, 140))}”` : ''}</td><td class="nw">${reportStatus(r)}</td>
+      <td><div class="adm-rowbtns"><button class="btn sm" data-read="${i}">Read</button>${canClose(r) ? `<button class="btn sm ghost" data-shut="${i}">Close</button>` : ''}</div></td></tr>`).join('')}
+    </tbody></table></div>${pagerHtml(d.total, idx)}`;
+  wireOpen(el);
+  wirePager(el, (i) => { view.reportPage = i; drawReportList(); });
+  el.querySelectorAll('[data-read]').forEach((b) => b.addEventListener('click', () => reportDetail(rows[+b.dataset.read])));
+  el.querySelectorAll('[data-shut]').forEach((b) => b.addEventListener('click', () => closeReport(b, rows[+b.dataset.shut])));
+}
+async function closeReport(btn, r) {
+  if (!(await run(btn, 'report.close', { id: r.id }, 'Report closed'))) return false;
+  invalidate('audit', 'overview');
+  refresh('reports', drawReportList);
+  return true;
+}
+// A summary that shouldn't be there comes off (the rest of the profile stays, and it's logged).
+async function clearBio(btn, r) {
+  if (!(await confirmDialog(`Clear <b><bdi>${esc(r.about.name)}</bdi></b>'s summary? The rest of their profile stays as it is, and this goes in the audit log.`, { ok: 'Clear summary', danger: true }))) return false;
+  if (!(await run(btn, 'bio.clear', { id: r.about.id }, 'Summary cleared'))) return false;
+  invalidate('audit', 'overview');
+  refresh('reports', drawReportList);
+  return true;
+}
+function reportDetail(r) {
+  const nameOf = (id) => (+id === r.from?.id ? r.from.name : +id === r.about?.id ? r.about.name : `#${id}`);
+  const list = Array.isArray(r.messages) ? r.messages : [];
+  const bioNow = r.about?.bio || '';
+  const m = openModal({
+    title: `Report #${esc(r.id)}`, cls: 'wide',
+    body: `<div class="adm-report"><div><span class="muted">About</span> ${playerLink(r.about)}</div><div><span class="muted">From</span> ${playerLink(r.from)} · ${when(r.at)}</div>
+      <div><span class="muted">Reason</span> ${esc(r.reason)}</div>${r.text ? `<div class="adm-said" dir="auto">${esc(r.text)}</div>` : ''}<div>${reportStatus(r)}</div></div>
+      ${r.bio ? `<div class="section-title">Their summary, saved with the report</div><div class="adm-said" dir="auto">${esc(r.bio)}</div>` : ''}
+      ${bioNow && bioNow !== r.bio ? `<div class="section-title">Their summary now</div><div class="adm-said" dir="auto">${esc(bioNow)}</div>` : ''}
+      <div class="section-title">Their last messages, saved with the report (${list.length})</div>
+      <div class="adm-chatlog">${list.map((x) => `<div><b><bdi>${esc(nameOf(x.from))}</bdi></b> <span class="muted">${when(x.at)}</span><div dir="auto">${esc(x.text)}</div></div>`).join('') || '<div class="muted">They had no messages together.</div>'}</div>`,
+    foot: `<button class="btn ghost" data-close>Back</button>${canClearBio(r) ? '<button class="btn danger" data-unbio>Clear summary</button>' : ''}${canClose(r) ? '<button class="btn primary" data-shut>Close report</button>' : ''}`,
+  });
+  wireOpen(m.el);
+  m.el.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => m.close()));
+  const shut = m.el.querySelector('[data-shut]');
+  shut?.addEventListener('click', async () => { if (await closeReport(shut, r)) m.close(); });
+  const unbio = m.el.querySelector('[data-unbio]');
+  unbio?.addEventListener('click', async () => { if (await clearBio(unbio, r)) m.close(); });
 }
 
 // ---- Server --------------------------------------------------------------------------------------------------------

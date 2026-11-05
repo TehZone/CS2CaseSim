@@ -11,6 +11,8 @@
 //                     { t: 'admin.msg', kind, msg, from }    a moderator's warning or a broadcast
 //                     { t: 'fatal', code, error, ban? }      refused or thrown off (auth, version, outdated, banned, kicked, maintenance)
 //                     { t: 'update', version }               a new release is out: this game is about to be locked out
+//                     { t: 'chat', msg, who }                a message to you, or one you sent from another tab
+//                     { t: 'friends' }                       your friends, requests or blocks changed: ask for `home` again
 //                     { t: 'lobbies' | 'players' | 'trades' | 'gamble.result' | 'notice', ... }
 import { D } from '../data.js';
 import { S, applyDelta, enterOnline, leaveOnline } from '../state.js';
@@ -252,6 +254,8 @@ function handle(msg) {
     case 'account': setAccount(msg.account); return;
     case 'admin.msg': emit('admin.msg', { kind: msg.kind, msg: msg.msg || '', from: msg.from || '' }); return;
     case 'update': emit('update', { version: msg.version || '' }); return;
+    case 'chat': emit('chat', { msg: msg.msg, who: msg.who }); return;
+    case 'friends': emit('friends'); return;
   }
 }
 

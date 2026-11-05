@@ -19,6 +19,7 @@ import { WebSocketServer } from 'ws';
 import { openDb } from './db.mjs';
 import { Store } from './store.mjs';
 import { Trades } from './trade.mjs';
+import { Social } from './social.mjs';
 import { Live } from './live.mjs';
 import * as A from './accounts.mjs';
 import { Admin, banText, networkBanText } from './admin.mjs';
@@ -155,10 +156,13 @@ export async function startServer({
       for (const id of sockets.keys()) srv.sendTo(id, msg);
       return sockets.size;
     },
+    broadcastPlayers: () => broadcastPlayers(),
   };
   const trades = new Trades(srv);
   srv.trades = trades;
   await trades.init();
+  const socials = new Social(srv);
+  srv.social = socials;
   const live = new Live(srv);
   srv.live = live;
   await live.refundOpen();
@@ -340,7 +344,8 @@ export async function startServer({
   // Everything a player owns, for a FROM clause: what's in their Storage Units counts as much as their inventory.
   const OWNED = (u) => `jsonb_array_elements(COALESCE(${u}.state->'inv', '[]'::jsonb) || COALESCE(${u}.state->'stored', '[]'::jsonb))`;
 
-  async function social(user, m, a) {
+  // (ws: the connection asking, which a push to the player's other tabs leaves out)
+  async function social(user, m, a, ws) {
     // The item database: how many copies of each item there are on the server, and every copy of one with its owner.
     if (m === 'db.index') {
       if (!dbIndex || Date.now() - dbIndex.at > 15000) {
@@ -384,7 +389,7 @@ export async function startServer({
       for (const x of rows) out[x.uid] = { ...(x.low <= 3 ? { low: x.low } : {}), ...(x.high <= 3 ? { high: x.high } : {}), of: x.n, cat: x.cat };
       return { r: out };
     }
-    throw new GameError('Unknown request');
+    return { r: await socials.rpc(user, m, a, ws) }; // (friends, chat and profiles)
   }
 
   // ---- WebSocket ------------------------------------------------------------------------------------
@@ -485,7 +490,7 @@ export async function startServer({
           return;
         }
         if (msg.ns === 'social') {
-          const out = await social(user, String(msg.m), msg.args || {});
+          const out = await social(user, String(msg.m), msg.args || {}, ws);
           return reply(true, { r: out.r, d: out.d });
         }
         if (msg.ns === 'trade') {
@@ -539,6 +544,7 @@ export async function startServer({
     clearInterval(ping); clearInterval(priceTimer); clearInterval(saveMarket); clearInterval(serialTimer);
     admin.close();
     release.close();
+    socials.close();
     try { discord.close(); } catch (e) { log('[discord] close failed', e?.message || e); }
     await saveSerials();
     if (marketDirty) await db.query("INSERT INTO kv (k, v) VALUES ('market', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(marketSnapshot())]).catch(() => {});

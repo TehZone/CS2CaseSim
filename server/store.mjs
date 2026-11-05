@@ -36,6 +36,18 @@ export class Store {
     return e;
   }
 
+  // A player's state to look at and let go: load's, without keeping it, so that looking at a lot of players doesn't hold them
+  // all in memory. (Not for changing: unless they're in memory it isn't the copy that gets saved.)
+  async peek(id) {
+    const e = this.cache.get(id);
+    if (e) return e.st;
+    const { rows } = await this.db.query('SELECT state FROM users WHERE id = $1', [id]);
+    if (!rows.length) throw new Error('No such player');
+    const st = upgradeState(typeof rows[0].state === 'string' ? JSON.parse(rows[0].state) : rows[0].state);
+    retireOld(st);
+    return st;
+  }
+
   // Every item that's been through a player's accepted trades or live gambling rounds (a trade keeps an item's `src`, so only
   // this tells what they unboxed from what they were given). One a round gave back is in here too: better a copy left off the
   // Index than one that was never theirs.

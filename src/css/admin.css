@@ -48,6 +48,11 @@
 .adm-lvl { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
 .adm-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 12px; font-size: 12px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
 .adm-rowbtns { display: flex; gap: 6px; justify-content: flex-end; }
+/* A report: what was said about it, and the messages saved with it (a player's text can be one very long word). */
+.adm-report { display: grid; gap: 6px; font-size: 13px; }
+.adm-said { padding: 8px 10px; background: rgba(0, 0, 0, .3); white-space: pre-wrap; overflow-wrap: anywhere; }
+.adm-chatlog { display: grid; gap: 8px; max-height: 340px; overflow: auto; padding: 10px; background: rgba(0, 0, 0, .3); font-size: 13px; line-height: 1.4; }
+.adm-chatlog [dir] { white-space: pre-wrap; overflow-wrap: anywhere; }
 .adm-label { width: 320px; }
 .adm-count { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; font-size: 10px; line-height: 15px; text-align: center; background: rgba(255, 255, 255, .1); color: var(--muted); letter-spacing: 0; }
 
