@@ -76,15 +76,33 @@ export async function openUnit(unit, mode = 'contents') {
     draw();
   };
 
-  function draw() {
+  // The line under the list: picking items changes this and the card, and nothing else moves. (Its text says what's picked.)
+  function drawFoot(items, all, room) {
+    const picked = v.sel.size, over = !retrieving() && picked > room;
+    const pickedValue = all.filter((it) => v.sel.has(it.uid)).reduce((s, it) => s + I.itemValue(it), 0);
+    const el = box.querySelector('.su-foot');
+    el.innerHTML = `<span class="muted">${retrieving() ? `${plural(items.length)} shown` : `Room for ${plural(room)}. Anything equipped comes off when it's stored.`}${picked ? ` · ${plural(picked)} selected · <b class="green">${money(pickedValue)}</b>` : ''}</span>
+        <span class="spacer"></span>
+        <button class="btn" data-all ${items.length ? '' : 'disabled'}>Select all shown</button>
+        <button class="btn ghost" data-none ${picked ? '' : 'disabled'}>Clear</button>
+        <button class="btn gold" data-go ${picked && !over ? '' : 'disabled'}>${over ? `Only room for ${room.toLocaleString('en-US')}` : `${retrieving() ? 'Retrieve' : 'Deposit'} ${picked ? plural(picked) : 'Items'}`}</button>`;
+    el.querySelector('[data-all]').addEventListener('click', () => {
+      for (const it of (retrieving() ? items : items.slice(0, room))) v.sel.add(it.uid);
+      draw();
+    });
+    el.querySelector('[data-none]').addEventListener('click', () => { v.sel.clear(); draw(); });
+    el.querySelector('[data-go]').addEventListener('click', () => move([...v.sel]));
+  }
+
+  // fromTop: it's a different list now. Otherwise the list stays where you'd scrolled to.
+  function draw({ fromTop = false } = {}) {
     const u = liveUnit(uid);
     if (!u) { m.close(); return; }
+    const scrolled = fromTop ? 0 : box.querySelector('.su-grid')?.scrollTop || 0;
     const n = SU.unitCount(S, uid), room = SU.UNIT_CAP - n, all = source();
     const have = new Set(all.map((it) => it.uid));
     for (const id of [...v.sel]) if (!have.has(id)) v.sel.delete(id);
     const items = SU.viewItems(all, v), shown = items.slice(0, v.limit);
-    const picked = v.sel.size, over = !retrieving() && picked > room;
-    const pickedValue = all.filter((it) => v.sel.has(it.uid)).reduce((s, it) => s + I.itemValue(it), 0);
     const hadFocus = document.activeElement?.matches?.('[data-q]');
     box.innerHTML = `<div class="su-head">
         <img src="${I.itemImage(u, 'm')}" alt="">
@@ -102,32 +120,28 @@ export async function openUnit(unit, mode = 'contents') {
       ${shown.length ? `<div class="grid su-grid">${shown.map((it) => itemCard(it, { selectable: true, selected: v.sel.has(it.uid) })).join('')}</div>`
         : `<div class="empty">${all.length ? 'Nothing matches your filters.' : retrieving() ? 'This Storage Unit is empty. Deposit items from your inventory to keep them here, out of the way.' : 'You have nothing to store.'}</div>`}
       ${items.length > v.limit ? `<div class="pager"><button class="btn" data-more>Show more (${(items.length - v.limit).toLocaleString('en-US')} more)</button></div>` : ''}
-      <div class="su-foot">
-        <span class="muted">${retrieving() ? `${plural(items.length)} shown` : `Room for ${plural(room)}. Anything equipped comes off when it's stored.`}${picked ? ` · ${plural(picked)} selected · <b class="green">${money(pickedValue)}</b>` : ''}</span>
-        <span class="spacer"></span>
-        <button class="btn" data-all ${items.length ? '' : 'disabled'}>Select all shown</button>
-        <button class="btn ghost" data-none ${picked ? '' : 'disabled'}>Clear</button>
-        <button class="btn gold" data-go ${picked && !over ? '' : 'disabled'}>${over ? `Only room for ${room.toLocaleString('en-US')}` : `${retrieving() ? 'Retrieve' : 'Deposit'} ${picked ? plural(picked) : 'Items'}`}</button>
-      </div>`;
+      <div class="su-foot"></div>`;
+    const grid = box.querySelector('.su-grid');
+    if (grid) grid.scrollTop = scrolled;
+    drawFoot(items, all, room);
 
     box.querySelector('[data-a=label]').addEventListener('click', async () => { if (await labelUnit(u)) draw(); });
     box.querySelector('[data-a=delete]')?.addEventListener('click', async () => { if (await deleteUnit(u)) m.close(); });
-    box.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => { v.mode = b.dataset.mode; v.sel.clear(); v.limit = PAGE; v.q = ''; v.rank = 'all'; draw(); }));
+    box.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => { v.mode = b.dataset.mode; v.sel.clear(); v.limit = PAGE; v.q = ''; v.rank = 'all'; draw({ fromTop: true }); }));
     const q = box.querySelector('[data-q]');
-    q.addEventListener('input', debounce(() => { v.q = q.value; v.limit = PAGE; draw(); }, 200));
+    q.addEventListener('input', debounce(() => { v.q = q.value; v.limit = PAGE; draw({ fromTop: true }); }, 200));
     if (hadFocus) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
-    box.querySelector('[data-rank]').addEventListener('change', (e) => { v.rank = e.target.value; v.limit = PAGE; draw(); });
-    box.querySelector('[data-sort]').addEventListener('change', (e) => { v.sort = e.target.value; draw(); });
+    box.querySelector('[data-rank]').addEventListener('change', (e) => { v.rank = e.target.value; v.limit = PAGE; draw({ fromTop: true }); });
+    box.querySelector('[data-sort]').addEventListener('change', (e) => { v.sort = e.target.value; draw({ fromTop: true }); });
     box.querySelector('[data-more]')?.addEventListener('click', () => { v.limit += PAGE; draw(); });
-    box.querySelector('[data-all]').addEventListener('click', () => {
-      for (const it of (retrieving() ? items : items.slice(0, room))) v.sel.add(it.uid);
-      draw();
-    });
-    box.querySelector('[data-none]').addEventListener('click', () => { v.sel.clear(); draw(); });
-    box.querySelector('[data-go]').addEventListener('click', () => move([...v.sel]));
     const find = (c) => shown.find((it) => it.uid === c.dataset.uid);
     box.querySelectorAll('.card[data-uid]').forEach((c) => {
-      c.addEventListener('click', () => { if (v.sel.has(c.dataset.uid)) v.sel.delete(c.dataset.uid); else v.sel.add(c.dataset.uid); draw(); });
+      c.addEventListener('click', () => {
+        const id = c.dataset.uid;
+        if (v.sel.has(id)) v.sel.delete(id); else v.sel.add(id);
+        c.classList.toggle('selected', v.sel.has(id));
+        drawFoot(items, all, room);
+      });
       c.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         const it = find(c);
