@@ -191,6 +191,7 @@ body:not(.is-staff) .staff-only { display: none !important; }
 .result.autosold .val { text-decoration: line-through; text-decoration-color: rgba(255, 255, 255, .35); }
 
 /* auto open progress panel (stays visible on every page) */
+.inv-acts { display: contents; } /* (the Inventory toolbar's buttons, drawn apart from its filters) */
 .auto-panel { position: fixed; left: 18px; bottom: 18px; z-index: 55; width: 380px; background: linear-gradient(180deg, rgba(42, 50, 60, .97), rgba(28, 34, 41, .97)); border: 1px solid rgba(228, 174, 57, .55); border-top: 3px solid var(--gold); border-radius: var(--radius); padding: 12px 14px; box-shadow: 0 12px 40px rgba(0, 0, 0, .6); display: grid; gap: 8px; }
 .auto-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .auto-stats div { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }

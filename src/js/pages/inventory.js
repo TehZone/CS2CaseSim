@@ -44,7 +44,7 @@ export function render(r) {
   root = r;
   off?.();
   off = on('inv', debounce(() => draw(), 120));
-  draw();
+  drawPage();
 }
 
 export function destroy() {
@@ -57,6 +57,35 @@ export function destroy() {
   root = null;
 }
 
+// The page around the list, drawn once: the filters stay as they are while items come and go. Auto open changes the inventory
+// a few times a second, and a dropdown that's drawn again while it's open closes.
+function drawPage() {
+  root.innerHTML = `<div class="page">
+    <div class="page-head"><h1>Inventory</h1></div>
+    <div class="summary" data-sum></div>
+    <div class="toolbar">
+      <div class="seg">${TYPES.map(([k, n]) => `<button data-type="${k}" class="${view.type === k ? 'active' : ''}">${n}</button>`).join('')}</div>
+      <input class="input" type="search" placeholder="Search inventory…" value="${esc(view.q)}">
+      <select class="input" data-sort>${[['new', 'Newest'], ['old', 'Oldest'], ['vdesc', 'Value: high → low'], ['vasc', 'Value: low → high'], ['quality', 'Quality'], ['float', 'Float: low → high']].map(([k, n]) => `<option value="${k}" ${view.sort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      <span class="spacer"></span>
+      <span class="inv-acts" data-acts></span>
+    </div>
+    <div data-list></div>
+  </div>`;
+  const types = root.querySelectorAll('[data-type]');
+  types.forEach((b) => b.addEventListener('click', () => {
+    view.type = b.dataset.type;
+    view.limit = 150;
+    types.forEach((x) => x.classList.toggle('active', x === b));
+    draw();
+  }));
+  root.querySelector('[data-sort]').addEventListener('change', (e) => { view.sort = e.target.value; draw(); });
+  const q = root.querySelector('input[type=search]');
+  q.addEventListener('input', debounce(() => { view.q = q.value.toLowerCase(); draw(); }, 200));
+  draw();
+}
+
+// What changes with the inventory: the totals, the buttons that count what's selected, and the list.
 function draw() {
   if (!root || !root.querySelector || root.dataset.page !== 'inventory') return;
   // (Storage Units first, whatever the order: they hold more than anything else here.)
@@ -71,36 +100,21 @@ function draw() {
   const scroll = root.scrollTop;
   refreshRanks().then((changed) => { if (changed && root) draw(); }); // (the float rank badges)
 
-  root.innerHTML = `<div class="page">
-    <div class="page-head"><h1>Inventory</h1></div>
-    <div class="summary">
-      <div>Items<b>${S.inv.length}</b></div>
-      <div>Inventory value<b class="green">${money(totalValue)}</b></div>
-      ${stored.length ? `<div>In storage<b>${stored.length.toLocaleString('en-US')} · ${money(stored.reduce((s, i) => s + I.itemValue(i), 0))}</b></div>` : ''}
-      <div>Showing<b>${items.length} · ${money(shownValue)}</b></div>
-      <div>Most valuable<b>${best ? I.nameHtml(best) + ' · ' + money(I.itemValue(best)) : '—'}</b></div>
-    </div>
-    <div class="toolbar">
-      <div class="seg">${TYPES.map(([k, n]) => `<button data-type="${k}" class="${view.type === k ? 'active' : ''}">${n}</button>`).join('')}</div>
-      <input class="input" type="search" placeholder="Search inventory…" value="${esc(view.q)}">
-      <select class="input" data-sort>${[['new', 'Newest'], ['old', 'Oldest'], ['vdesc', 'Value: high → low'], ['vasc', 'Value: low → high'], ['quality', 'Quality'], ['float', 'Float: low → high']].map(([k, n]) => `<option value="${k}" ${view.sort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
-      <span class="spacer"></span>
-      ${view.select
-        ? `<button class="btn" data-a="all">Select all shown</button><button class="btn" data-a="none">Clear</button>
-           <button class="btn" data-a="storesel" ${selItems.length ? '' : 'disabled'}>Store ${selItems.length}…</button>
-           <button class="btn primary" data-a="sellsel" ${selItems.length ? '' : 'disabled'}>Sell ${selItems.length} (${money(selValue)})</button>
-           <button class="btn ghost" data-a="done">Done</button>`
-        : `<button class="btn" data-a="loadout">Loadout</button><button class="btn" data-a="bulk">Bulk sell…</button><button class="btn" data-a="select">Select</button>`}
-    </div>
-    ${items.length ? `<div class="grid">${items.slice(0, view.limit).map((i) => itemCard(i, { selectable: view.select, selected: view.selected.has(i.uid) })).join('')}</div>` : `<div class="empty">${S.inv.length ? 'Nothing matches your filters.' : 'Your inventory is empty. Open some cases!'}</div>`}
-    ${items.length > view.limit ? `<div class="pager"><button class="btn" data-a="more">Show more (${items.length - view.limit} more)</button></div>` : ''}
-  </div>`;
+  root.querySelector('[data-sum]').innerHTML = `<div>Items<b>${S.inv.length}</b></div>
+    <div>Inventory value<b class="green">${money(totalValue)}</b></div>
+    ${stored.length ? `<div>In storage<b>${stored.length.toLocaleString('en-US')} · ${money(stored.reduce((s, i) => s + I.itemValue(i), 0))}</b></div>` : ''}
+    <div>Showing<b>${items.length} · ${money(shownValue)}</b></div>
+    <div>Most valuable<b>${best ? I.nameHtml(best) + ' · ' + money(I.itemValue(best)) : '—'}</b></div>`;
+  root.querySelector('[data-acts]').innerHTML = view.select
+    ? `<button class="btn" data-a="all">Select all shown</button><button class="btn" data-a="none">Clear</button>
+       <button class="btn" data-a="storesel" ${selItems.length ? '' : 'disabled'}>Store ${selItems.length}…</button>
+       <button class="btn primary" data-a="sellsel" ${selItems.length ? '' : 'disabled'}>Sell ${selItems.length} (${money(selValue)})</button>
+       <button class="btn ghost" data-a="done">Done</button>`
+    : `<button class="btn" data-a="loadout">Loadout</button><button class="btn" data-a="bulk">Bulk sell…</button><button class="btn" data-a="select">Select</button>`;
+  root.querySelector('[data-list]').innerHTML = `${items.length ? `<div class="grid">${items.slice(0, view.limit).map((i) => itemCard(i, { selectable: view.select, selected: view.selected.has(i.uid) })).join('')}</div>` : `<div class="empty">${S.inv.length ? 'Nothing matches your filters.' : 'Your inventory is empty. Open some cases!'}</div>`}
+    ${items.length > view.limit ? `<div class="pager"><button class="btn" data-a="more">Show more (${items.length - view.limit} more)</button></div>` : ''}`;
   root.scrollTop = scroll;
 
-  root.querySelectorAll('[data-type]').forEach((b) => b.addEventListener('click', () => { view.type = b.dataset.type; view.limit = 150; draw(); }));
-  root.querySelector('[data-sort]').addEventListener('change', (e) => { view.sort = e.target.value; draw(); });
-  const q = root.querySelector('input[type=search]');
-  q.addEventListener('input', debounce(() => { view.q = q.value.toLowerCase(); draw(); const nq = root.querySelector('input[type=search]'); nq.focus(); nq.setSelectionRange(nq.value.length, nq.value.length); }, 200));
   root.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', () => action(b.dataset.a, items)));
   root.querySelectorAll('.card[data-uid]').forEach((c) => c.addEventListener('click', () => {
     const it = S.inv.find((i) => i.uid === c.dataset.uid);
