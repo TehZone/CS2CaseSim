@@ -13,6 +13,7 @@
 //
 // The rest are the cut-offs for that skin, from its own seeds, because each weapon's range is its own (a MAC-10's bluest is
 // 70%, a Talon's 100%). What each one is and why:
+//   (high and above are no longer labels: since 2026-11-10 only Blue Gems and Gold Gems are named. They stay in the data.)
 //   high   High Blue: the bluest 5% of the weapon's seeds. Every one of them shows more blue than gold, on every skin.
 //   above  Above-average blue: the bluest 20%, and at least 10 points over the weapon's typical seed. On most skins that
 //          second part changes nothing, but Heat Treated seeds sit in one tight hump: on the Desert Eagle the 20% mark is 5

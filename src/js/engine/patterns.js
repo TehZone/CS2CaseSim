@@ -114,11 +114,8 @@ export function analyzePattern(skin, seed) {
       out.label = tier === 't0' ? '#1 Blue Gem' : `Blue Gem ${TIER_LABEL[tier]}`;
     } else if (!measured) {
       return out;
-    } else if (blue >= m.high) {
-      out.tier = 't3'; out.mult = 1.6; out.label = 'High Blue';
-    } else if (blue >= m.above) {
-      out.mult = 1.15; out.label = 'Above-average blue';
     } else if (gold - blue >= m.gold) {
+      // (Only Blue Gems and Gold Gems are named: the user had High Blue and Above-average blue taken off on 2026-11-10.)
       out.tier = 't3'; out.mult = 1.3; out.label = 'Gold Gem';
     }
     return out;

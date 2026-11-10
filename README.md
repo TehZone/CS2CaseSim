@@ -478,8 +478,8 @@ What's in a match:
   Case Hardened and Heat Treated show each seed's real share of playside blue and gold, measured from CS2's own pattern
   (`scripts/build-case-hardened.mjs`, into `src/js/engine/case-hardened-data.js`) on the part the community goes by, a
   knife's blade or the AK-47's dust cover. Their labels go by it, weapon by weapon: Blue Gems are each skin's bluest seeds,
-  with the community's Tier 1 lists on top for the AK-47, Karambit and Five-SeveN, High Blue the bluest 5%, Above-average blue
-  the bluest 20%, and Gold Gem what's almost all gold. Hydra Gloves can't be measured, so they show no numbers and go by the
+  with the community's Tier 1 lists on top for the AK-47, Karambit and Five-SeveN, and Gold Gem what's almost all gold; no
+  other seed is named (the info still shows every seed's blue and gold). Hydra Gloves can't be measured, so they show no numbers and go by the
   community's tier list (Blue, Gold and Blaze Gems and Tier 4). The 3D inspect opens these skins on that side
 - StatTrak™, knives and gloves, stickers with free placement, scraping, and craft bonuses
 - Loadout (Inventory → Loadout, or Equip on an item): gloves, knife, a T and a CT agent, and one skin per gun

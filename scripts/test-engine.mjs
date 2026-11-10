@@ -184,28 +184,24 @@ function tierFreq(box, n) {
     if (l === '#1 Blue Gem') return s === ak && sd === 661;
     if (l === 'Blue Gem Tier 1') return blue >= m.t1 || tierOne.get(s)?.includes(sd);
     if (l === 'Blue Gem Tier 2') return blue >= m.t2 && blue < m.t1;
-    if (l === 'High Blue') return blue >= m.high && blue < m.t2 && blue > gold;
-    if (l === 'Above-average blue') return blue >= m.above && blue < m.high && blue >= typical.get(s) + 10;
     if (l === 'Gold Gem') return goldEnough && gold >= 75 && blue <= 8;
-    return l === '' && blue < m.above && !goldEnough;
+    return l === '' && blue < m.t2 && !goldEnough;
   });
   check('Case Hardened: every label agrees with the seed\'s numbers, and every seed that earns one has it', !bad.length, shown(bad));
   bad = measured.filter((s) => { const most = Math.max(...seeds.map((sd) => goldOf(s, sd) - blueOf(s, sd))); return Math.abs(data(s).gold - Math.max(75, most - 14)) > 0.05; }).map((s) => s.n);
   check('Case Hardened: a Gold Gem goes by the look of the skin\'s goldest seed, not by how many seeds there are', !bad.length, shown(bad));
-  bad = each((s, sd) => label(s, sd) !== 'Above-average blue' && label(s, sd) !== 'High Blue' || blueOf(s, sd) < data(s).t2);
-  check('Case Hardened: nothing bluer than the skin\'s Blue Gems is left at High Blue or below', !bad.length, shown(bad));
+  bad = each((s, sd) => label(s, sd) !== '' || blueOf(s, sd) < data(s).t2);
+  check('Case Hardened: nothing as blue as the skin\'s Blue Gems goes without a label', !bad.length, shown(bad));
 
   const share = (s, test) => count(s, test) / 1001;
   bad = measured.filter((s) => share(s, gem) > 0.03).map((s) => s.n);
   check('Case Hardened: Blue Gems are 3% of a skin\'s seeds at most', !bad.length, shown(bad));
-  bad = measured.filter((s) => { const x = share(s, (l) => l === 'High Blue'); return x < 0.02 || x > 0.05; }).map((s) => s.n);
-  check('Case Hardened: High Blue is what\'s left of the bluest 5% after the Blue Gems: 2% to 5% of seeds', !bad.length, shown(bad));
-  bad = measured.filter((s) => { const x = share(s, (l) => l === 'Above-average blue'); return x < 0.04 || x > 0.16; }).map((s) => s.n);
-  check('Case Hardened: Above-average blue is 4% to 16%: the next of the bluest 20%, less where seeds sit close together', !bad.length, shown(bad));
+  bad = measured.filter((s) => count(s, (l) => /High Blue|Above-average/.test(l))).map((s) => s.n);
+  check('Case Hardened: no High Blue or Above-average blue labels: only Blue Gems and Gold Gems are named', !bad.length, shown(bad));
   bad = measured.filter((s) => share(s, (l) => l === 'Gold Gem') > 0.06).map((s) => s.n);
   check('Case Hardened: Gold Gem is rare: 6% of a skin\'s seeds at most (it was 30%)', !bad.length, shown(bad));
   const labelled = measured.reduce((n, s) => n + count(s, (l) => l !== ''), 0) / (measured.length * 1001);
-  check('Case Hardened: about a fifth of seeds have a label at all (it was over half)', labelled > 0.19 && labelled < 0.25, `${(labelled * 100).toFixed(1)}%`);
+  check('Case Hardened: only a few seeds have a label at all, the Blue and Gold Gems (it was over half, then a fifth)', labelled > 0.01 && labelled < 0.09, `${(labelled * 100).toFixed(1)}%`);
 
   const named = [[ak, 219], [ak, 784], [skin('weapon_bayonet'), 395], [skin('weapon_bayonet'), 359], [skin('weapon_bayonet'), 848], [skin('weapon_knife_flip'), 731], [skin('weapon_knife_gut'), 837], [karambit, 939], [karambit, 388],
     [skin('weapon_knife_m9_bayonet'), 739], [skin('weapon_knife_falchion'), 926], [skin('weapon_knife_falchion'), 279], [skin('weapon_knife_falchion'), 386], [skin('weapon_knife_butterfly'), 75], [skin('weapon_knife_cord'), 521], [skin('weapon_knife_widowmaker'), 757], [five, 691]];
@@ -221,7 +217,7 @@ function tierFreq(box, n) {
   const halfParts = [[butterfly, [587, 842, 826, 399, 436, 369, 475, 911, 382]], [navaja, [278, 690]], [stiletto, [374, 501]], [ak, [838, 790, 608, 113, 675]]];
   check('Case Hardened: and a half gold one has no label for a blue handle', !each_(halfParts, (l) => l === '').length);
   const blueParts = [[butterfly, [42, 256, 34]], [navaja, [615, 20, 893]], [stiletto, [953, 644]], [ak, [985, 497, 557, 782]]];
-  check('Case Hardened: a blue blade has a label for it under a gold handle', !each_(blueParts, (l) => l !== '' && l !== 'Gold Gem').length);
+  check('Case Hardened: a blue blade under a gold handle is never called a Gold Gem', !each_(blueParts, (l) => l !== 'Gold Gem').length);
   check('Case Hardened: solid blue blades are Blue Gems, and a blade that isn\'t blue isn\'t for its handles', [[butterfly, 330], [butterfly, 838], [butterfly, 263], [butterfly, 800], [ak, 512]].every(([s, sd]) => gem(label(s, sd))) && !gem(label(butterfly, 808)));
 
   const off = [[ak, [32, 589, 735, 784, 341, 442]], [karambit, [151, 592, 760, 555, 179]], [five, [179, 592]]];
@@ -234,11 +230,11 @@ function tierFreq(box, n) {
   check('Case Hardened: knives without a list get about as many Blue Gems as the one they had, at its price', measured.filter((s) => s.cat === 'knife' && s !== karambit).every((s) => Math.abs(count(s, gem) - 19) <= 2) && analyzePattern(skin('weapon_knife_m9_bayonet'), 601).mult === 15 && label(skin('weapon_knife_m9_bayonet'), 601) === 'Blue Gem Tier 1');
   check('Heat Treated: has its own Blue Gems, not the Case Hardened list', !gem(label(fiveHeat, 690)) && !gem(label(fiveHeat, 278)) && label(fiveHeat, 904) === 'Blue Gem Tier 1' && analyzePattern(fiveHeat, 904).mult === 35 && label(deagleHeat, 490) === 'Blue Gem Tier 1' && analyzePattern(deagleHeat, 490).mult === 4);
 
-  const mults = { 'High Blue': 1.6, 'Above-average blue': 1.15, 'Gold Gem': 1.3, '': 1 };
+  const mults = { 'Gold Gem': 1.3, '': 1 };
   bad = each((s, sd) => { const p = analyzePattern(s, sd); return gem(p.label) || p.mult === mults[p.label]; });
   check('Case Hardened: each label keeps its multiplier', !bad.length, shown(bad));
-  bad = each((s, sd) => { const p = analyzePattern(s, sd); return gem(p.label) || p.tier === (p.label === 'High Blue' || p.label === 'Gold Gem' ? 't3' : ''); });
-  check('Case Hardened: High Blue and Gold Gem are t3 and Above-average has no tier, for what reads them', !bad.length, shown(bad));
+  bad = each((s, sd) => { const p = analyzePattern(s, sd); return gem(p.label) || p.tier === (p.label === 'Gold Gem' ? 't3' : ''); });
+  check('Case Hardened: Gold Gem is t3, for what reads it', !bad.length, shown(bad));
 
   const gloves = seeds.map((sd) => analyzePattern(hydra, sd));
   check('Hydra Gloves can\'t be measured: no blue or gold numbers on any seed', gloves.every((p) => p.blue === undefined && p.gold === undefined && !p.info.some(([k]) => /Playside/.test(k))));
@@ -957,12 +953,12 @@ function tierFreq(box, n) {
     && N.startingState(4242, people[2]).inv.map((it) => it.id + it.fl).join() === N.startingState(4242, people[2]).inv.map((it) => it.id + it.fl).join());
   // (Saves know their NPCs by their place in the list: the first 420 and what they start with stay as they first were. An
   // NPC stops collecting at a value, so what patterns are worth moves it for those holding one, until they're in the save:
-  // the real Case Hardened numbers did that to 79 of the 2,000.)
+  // the real Case Hardened numbers did that to 79 of the 2,000, and taking High Blue and Above-average blue off again.)
   const { hashStr, mulberry32 } = await E('util');
   const first = world.slice(0, 420);
   const fp = hashStr(JSON.stringify(first.map((n) => [n.id, n.name, n.type, n.focus, n.country, n.avatar, n.joined, n.level, n.medals, n.bio, n.fav, n.g, n.premium, n.patience, n.sharp, n.active]))) >>> 0;
   const fpInv = hashStr(first.slice(0, 60).map((n) => N.startingState(4242, n).inv.map((it) => it.id + ':' + it.fl + ':' + (it.sn || '')).join()).join('|')) >>> 0;
-  check('NPCs: the first 420 (and what they own) are who they were before there were more', fp === 717510250 && fpInv === 1911864576, `${fp} ${fpInv}`);
+  check('NPCs: the first 420 (and what they own) are who they were before there were more', fp === 717510250 && fpInv === 976647370, `${fp} ${fpInv}`);
 
   // Beginners: new, gullible, and blind to what makes an item special (theirs and yours).
   const newbies = world.filter((n) => n.type === 'beginner');
