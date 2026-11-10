@@ -10,6 +10,7 @@
 //   node scripts/discord-setup.mjs release <link> [--apply]  only post this version's GitHub release link in #releases
 //   node scripts/discord-setup.mjs channel <key> [--apply]  only make that channel from the config, if it isn't there yet
 //   node scripts/discord-setup.mjs topic <key> [--apply]  only bring that channel's description up to date from the config
+//   node scripts/discord-setup.mjs messages <key>... [--apply]  only bring the bot's messages in those channels up to date
 //   node scripts/discord-setup.mjs onboarding [--apply]  only bring Onboarding up to date (the dry run lists what would change)
 // Options: --guild <id> (the bot is in more than one server), --download <url> (the download link in the messages),
 // --name <name> (rename the server; by default its name is kept).
@@ -291,6 +292,62 @@ function channelBody(ch, ids, everyoneId, parentId) {
   return b;
 }
 
+// The bot's messages in the config's channels (keys: which channels; null, all of them). Its earlier ones are the first it
+// posted in each channel (read from the oldest, a few pages at most): those are edited in order, and an extra deleted only if
+// it's one of these (by its embed's title), so anything else the bot posts there later stays. Without apply, it only says
+// which would change.
+async function syncMessages(keys, ids, me, icon, apply, reason) {
+  const byChannel = new Map();
+  for (const m of CONFIG.messages) {
+    if (keys && !keys.includes(m.channelKey)) continue;
+    if (!byChannel.has(m.channelKey)) byChannel.set(m.channelKey, []);
+    byChannel.get(m.channelKey).push(m);
+  }
+  // (What a message shows, to compare: titles, texts and fields.)
+  const shown = (embeds) => JSON.stringify((embeds || []).map((e) => [e.title || '', e.description || '', (e.fields || []).map((f) => [f.name, f.value])]));
+  for (const [key, msgs] of byChannel) {
+    const cid = ids.channels.get(key);
+    const titles = new Set(msgs.flatMap((m) => m.embeds.map((e) => fill(e.title, ids))));
+    let old = [];
+    for (let after = '0', page = 0; page < 5; page++) {
+      const got = await api('GET', `/channels/${cid}/messages?limit=100&after=${after}`);
+      old.push(...got.filter((m) => m.author?.id === me.id && m.type === 0));
+      if (got.length < 100) break;
+      after = got.reduce((a, m) => (BigInt(m.id) > BigInt(a) ? m.id : a), after);
+    }
+    old = old.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+    const will = [];
+    const mine = old.filter((m, i) => i < msgs.length || m.embeds?.some((e) => titles.has(e.title)));
+    for (let i = 0; i < Math.max(mine.length, msgs.length); i++) {
+      if (i >= msgs.length) {
+        if (!apply) { will.push(`delete message ${i + 1}`); continue; }
+        await api('DELETE', `/channels/${cid}/messages/${mine[i].id}`, undefined, { reason }); continue;
+      }
+      const m = msgs[i];
+      const usesIcon = m.embeds.some((e) => e.thumbnail === '{{icon}}');
+      const body = {
+        content: m.content ? fill(m.content, ids) : '',
+        embeds: m.embeds.map((e) => ({
+          title: fill(e.title, ids)?.slice(0, 256) || undefined,
+          description: fill(e.description, ids)?.slice(0, 4096) || undefined,
+          color: color(e.color) || undefined,
+          thumbnail: e.thumbnail === '{{icon}}' ? { url: 'attachment://icon.png' } : undefined,
+          fields: (e.fields || []).slice(0, 25).map((f) => ({ name: fill(f.name, ids).slice(0, 256), value: fill(f.value, ids).slice(0, 1024) || '​', inline: !!f.inline })),
+          footer: e.footer ? { text: fill(e.footer, ids).slice(0, 2048) } : undefined,
+        })),
+        allowed_mentions: { parse: [] },
+        attachments: usesIcon ? [{ id: 0, filename: 'icon.png' }] : [],
+      };
+      const files = usesIcon ? [{ name: 'icon.png', type: 'image/png', data: icon }] : undefined;
+      if (!apply) { if (!mine[i]) will.push(`post message ${i + 1}`); else if (shown(mine[i].embeds) !== shown(body.embeds) || (mine[i].content || '') !== body.content) will.push(`edit message ${i + 1} (${m.embeds.map((e) => fill(e.title, ids)).join(', ')})`); continue; }
+      if (mine[i]) await api('PATCH', `/channels/${cid}/messages/${mine[i].id}`, body, { files });
+      else await api('POST', `/channels/${cid}/messages`, { ...body, flags: 4096 }, { files });
+    }
+    if (!apply) console.log(`#${chanByKey.get(key).name}: ${will.length ? will.join('; ') : 'up to date'}`);
+    else console.log(`messages ${mine.length ? 'updated' : 'posted'}: #${chanByKey.get(key).name}`);
+  }
+}
+
 async function main() {
   const me = await api('GET', '/users/@me');
   if (args[0] === 'invite') {
@@ -377,6 +434,16 @@ async function main() {
     const order = ch.cat.channels.map((c, position) => ({ id: ids.channels.get(c.key), position })).filter((p) => p.id);
     await api('PATCH', `/guilds/${gid}/channels`, order, { reason }).catch((e) => console.log(`! channel order: ${e.message}`));
     console.log(`Created #${ch.name} in ${ch.cat.name}.`);
+    return;
+  }
+  // Only the bot's messages in these channels, from the config (new text in them): nothing else on the server is touched.
+  if (args[0] === 'messages') {
+    const keys = [];
+    for (const a of args.slice(1)) { if (a.startsWith('--')) break; keys.push(a); }
+    const known = [...new Set(CONFIG.messages.map((m) => m.channelKey))];
+    if (!keys.length || keys.some((k) => !known.includes(k) || !ids.channels.get(k))) { console.log(`Usage: node scripts/discord-setup.mjs messages <key>... [--apply], for channels that are there. Keys: ${known.join(', ')}`); process.exit(1); }
+    await syncMessages(keys, ids, me, fs.readFileSync(path.join(ROOT, 'build/icon.png')), APPLY, 'CS2 Case Simulator server setup');
+    if (!APPLY) console.log('\nNothing was changed. Run again with --apply to do it.');
     return;
   }
   // One channel's description from the config: the channel command leaves a channel that's there alone.
@@ -574,46 +641,8 @@ async function main() {
   }, { reason }).then(() => console.log('welcome screen set'), (e) => console.log(`! welcome screen (Discord may no longer let it be edited; onboarding replaces it): ${e.message}`));
   await syncOnboarding(gid, ids, true, reason);
 
-  // 8. The bot's messages. Its earlier ones are the first it posted in each channel (read from the oldest, a few pages at
-  // most): those are edited in order, and an extra deleted only if it's one of these (by its embed's title), so anything
-  // else the bot posts there later stays.
-  const byChannel = new Map();
-  for (const m of CONFIG.messages) { if (!byChannel.has(m.channelKey)) byChannel.set(m.channelKey, []); byChannel.get(m.channelKey).push(m); }
-  for (const [key, msgs] of byChannel) {
-    const cid = ids.channels.get(key);
-    const titles = new Set(msgs.flatMap((m) => m.embeds.map((e) => fill(e.title, ids))));
-    let old = [];
-    for (let after = '0', page = 0; page < 5; page++) {
-      const got = await api('GET', `/channels/${cid}/messages?limit=100&after=${after}`);
-      old.push(...got.filter((m) => m.author?.id === me.id && m.type === 0));
-      if (got.length < 100) break;
-      after = got.reduce((a, m) => (BigInt(m.id) > BigInt(a) ? m.id : a), after);
-    }
-    old = old.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
-    const mine = old.filter((m, i) => i < msgs.length || m.embeds?.some((e) => titles.has(e.title)));
-    for (let i = 0; i < Math.max(mine.length, msgs.length); i++) {
-      if (i >= msgs.length) { await api('DELETE', `/channels/${cid}/messages/${mine[i].id}`, undefined, { reason }); continue; }
-      const m = msgs[i];
-      const usesIcon = m.embeds.some((e) => e.thumbnail === '{{icon}}');
-      const body = {
-        content: m.content ? fill(m.content, ids) : '',
-        embeds: m.embeds.map((e) => ({
-          title: fill(e.title, ids)?.slice(0, 256) || undefined,
-          description: fill(e.description, ids)?.slice(0, 4096) || undefined,
-          color: color(e.color) || undefined,
-          thumbnail: e.thumbnail === '{{icon}}' ? { url: 'attachment://icon.png' } : undefined,
-          fields: (e.fields || []).slice(0, 25).map((f) => ({ name: fill(f.name, ids).slice(0, 256), value: fill(f.value, ids).slice(0, 1024) || '​', inline: !!f.inline })),
-          footer: e.footer ? { text: fill(e.footer, ids).slice(0, 2048) } : undefined,
-        })),
-        allowed_mentions: { parse: [] },
-        attachments: usesIcon ? [{ id: 0, filename: 'icon.png' }] : [],
-      };
-      const files = usesIcon ? [{ name: 'icon.png', type: 'image/png', data: icon }] : undefined;
-      if (mine[i]) await api('PATCH', `/channels/${cid}/messages/${mine[i].id}`, body, { files });
-      else await api('POST', `/channels/${cid}/messages`, { ...body, flags: 4096 }, { files });
-    }
-    console.log(`messages ${mine.length ? 'updated' : 'posted'}: #${chanByKey.get(key).name}`);
-  }
+  // 8. The bot's messages (syncMessages, below).
+  await syncMessages(null, ids, me, icon, true, reason);
   if (CONFIG.updateLog) await syncUpdateLog(ids.channels.get(CONFIG.updateLog.channelKey), ids, me, true);
 
   // 9. With --replace the old invite links went with their channels: a permanent one to the welcome channel.
