@@ -41,6 +41,10 @@ const NO_LADDERS = new Set(); // bots climb ladders on their paths themselves (c
 const _chest = [0, 0, 0];
 // A path point that's a jump it hasn't made yet (b: the bot).
 const jumpAhead = (p, b) => p.jump && b.pos[2] < p[2] + p.jump - STEP_HEIGHT;
+// A way through it hasn't gone through yet (a crouch gap, a drop off a ledge: see NavMesh.path cross), though it's near
+// the point (d away): it doesn't cut past it to the next one, which is round the corner of it (Vertigo's scaffold frame:
+// heading on for the stairs below, it slid along the wall beside the gap).
+const shortOf = (p, b, d) => !!p.cross && d > 4 && (b.pos[0] - p[0]) * p.cross[0] + (b.pos[1] - p[1]) * p.cross[1] < -4;
 
 // A gun's inaccuracy (as yours, weapons.js): standing or crouched, the firing penalty, moving faster than a third of its
 // top speed, in the air. m: its mode (1 scoped). The bullets' spread adds to it.
@@ -70,7 +74,7 @@ export class Brain {
     this.game = game;
     this.bot = bot;
     this.d = skillParams(typeof skill === 'number' ? skill : LEVEL_SKILL[skill] ?? 0.42);
-    this.path = null; this.pi = 0; this.goal = null;
+    this.path = null; this.pi = 0; this.goal = null; this.near = 32; this.closest = null;
     this.target = null; this.lastSeen = null; this.heard = null;
     this.nextThink = 0; this.nextScan = (bot.index % 4) * (1 / 64);
     this.stuckT = 0; this.lastProgress = [0, 0, 0]; this.stuckTries = 0; this.restUntil = 0;
@@ -94,6 +98,7 @@ export class Brain {
     this.approach = null; this.lineupAim = null; this.lineupFace = null; this.trade = null; this.spots = {}; this.retaking = false; this.fellBack = null; this.retakeX = null;
     this.hurtBy = null; this.hurtAt = -99; this.holdPitch = null;
     this.dodge = 0; this.dodgeUntil = 0; this.dodgeFor = null; this.dodgeFlips = 0; this.viaDone = false;
+    this.closest = null; this.badPlant = null; this.fetch = null; this.skip = new WeakSet(); this.after = null;
     this.aim = new Aim();
   }
 
@@ -487,17 +492,17 @@ export class Brain {
     if (this.heard?.peek && t - this.heard.t < 3 && !this.target?.visible && bomb.state !== 'planted' && dist2(this.heard.pos, b.pos) > 120) return this.setTask('goto', this.heard.pos);
     // No rifle? Grab one lying nearby.
     if (!b.weapons.primary && !this.target?.visible && (bomb.state !== 'planted' || c.team === 'T')) {
-      const loot = g.drops.list.filter((it) => it.id !== 'defuser' && !/^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/.test(it.id) && !g.nades.inFire(it.pos))
+      const loot = g.drops.list.filter((it) => it.id !== 'defuser' && !this.skip.has(it) && !/^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/.test(it.id) && !g.nades.inFire(it.pos))
         .map((it) => ({ it, d: Math.hypot(it.pos[0] - b.pos[0], it.pos[1] - b.pos[1]) })).filter((x) => x.d < 700).sort((x, y) => x.d - y.d)[0];
-      if (loot) return this.setTask('goto', loot.it.pos);
+      if (loot && this.fetching(loot.it, t)) return this.setTask('goto', loot.it.pos, 16);
     }
     // A CT without a kit picks one up lying nearby.
     if (c.team === 'CT' && !c.defuser && !this.target?.visible) {
-      const kit = g.drops.list.find((it) => it.id === 'defuser' && Math.hypot(it.pos[0] - b.pos[0], it.pos[1] - b.pos[1]) < 600);
-      if (kit) return this.setTask('goto', kit.pos);
+      const kit = g.drops.list.find((it) => it.id === 'defuser' && !this.skip.has(it) && Math.hypot(it.pos[0] - b.pos[0], it.pos[1] - b.pos[1]) < 600);
+      if (kit && this.fetching(kit, t)) return this.setTask('goto', kit.pos, 16);
     }
     if (c.team === 'T') {
-      if (bomb.state === 'dropped' && g.nearestTo(bomb.pos, 'T') === c) return this.setTask('pickup', bomb.pos);
+      if (bomb.state === 'dropped' && g.nearestTo(bomb.pos, 'T') === c) return this.setTask('pickup', bomb.pos, 8);
       if (bomb.state === 'planted') {
         // Get clear before it goes off.
         if (m.rules.bombTime - (g.now - bomb.plantedAt) < 9) return this.flee(bomb.pos);
@@ -519,7 +524,8 @@ export class Brain {
       if (c.hasC4 && site) {
         if (!this.calledSite && Math.hypot(site.min[0] - b.pos[0], site.min[1] - b.pos[1]) < 2200) { this.calledSite = true; g.radio.chatter(c, 'goingToPlant', { site: site.site }); }
         if (m.siteAt(b.pos) && !this.recentlySawEnemy(t, 2.5)) { this.setTask('plant'); g.botPlant(b, t); return; }
-        if (stage === 'execute' && (going || plan.rush)) return this.setTask('goto', this.siteSpot(site, 'plant'));
+        // (Right onto its spot: near isn't enough, it has to be in the site.)
+        if (stage === 'execute' && (going || plan.rush)) return this.setTask('goto', this.plantSpot(site), 4);
         return this.holdGather(plan.site, t, plan.route);
       }
       if (stage === 'setup') return this.setupHold(plan, role, t);
@@ -533,7 +539,11 @@ export class Brain {
       const d = Math.hypot(bomb.pos[0] - b.pos[0], bomb.pos[1] - b.pos[1], bomb.pos[2] - b.pos[2]);
       const timeLeft = m.rules.bombTime - (g.now - bomb.plantedAt);
       const need = c.defuser ? m.rules.defuseKitTime : m.rules.defuseTime;
-      if (d < 50 && (!this.recentlySawEnemy(t, 1.5) || timeLeft < need + 1.5) && timeLeft > need - 0.3) { this.setTask('defuse'); g.botDefuse(b, t); return; }
+      // At the bomb; or stopped as near as it gets to it (on a ledge it can't get onto, past a crate) and within your reach
+      // of it (eye to bomb, as you defuse: see Game.useKey).
+      const eye = b.eye(), reach = Math.hypot(bomb.pos[0] - eye[0], bomb.pos[1] - eye[1], bomb.pos[2] - eye[2]);
+      const at = d < 50 || (!this.path && this.task === 'goto' && this.goal && dist2(this.goal, bomb.pos) < 1 && reach < 90);
+      if (at && (!this.recentlySawEnemy(t, 1.5) || timeLeft < need + 1.5) && timeLeft > need - 0.3) { this.setTask('defuse'); g.botDefuse(b, t); return; }
       // Too late to get there and defuse: save yourself.
       if (b.mode !== 'defuse' && timeLeft < need + d / 230 - 0.5) return this.flee(bomb.pos);
       if (bomb.defuser && bomb.defuser !== c) return this.holdNear(bomb.pos, 350, 'cover', t);
@@ -547,7 +557,7 @@ export class Brain {
       if (!this.retaking && timeLeft > need + d / 200 + 12 && this.retakeUtility(bomb, t)) return;
       if (!rush && d > 700 && !this.retaking) return this.holdAt(spot, t, bomb.pos);
       this.retaking = true;
-      return this.setTask('goto', bomb.pos);
+      return this.setTask('goto', bomb.pos, 8);
     }
     const assigned = this.plan.assign?.get(c) || 'A', site = this.ctSite();
     // Its utility at the choke it holds: a smoke early (the first half minute), a molotov or HE as they come (seen on its
@@ -777,8 +787,11 @@ export class Brain {
 
   // Runs away from the bomb (towards your own spawn), out of the blast.
   flee(from) {
-    const b = this.bot;
-    if (this.task === 'flee' && this.goal) return;
+    const b = this.bot, now = this.game.now;
+    // On its way, it keeps going. One whose way ran out short of there (stuck, or no way all the way) looks again, once a
+    // second, rather than standing in the blast.
+    if (this.task === 'flee' && this.goal && (this.path || dist2(b.pos, this.goal) < 48 || now < Math.max(this.restUntil || 0, (this.fledAt ?? -Infinity) + 1))) return;
+    this.fledAt = now;
     const home = this.game.enemySpawnCenter(this.c.team === 'T' ? 'CT' : 'T'); // your own spawn
     const away = this.game.nav.randomPointIn([home[0] - 400, home[1] - 400, home[2] - 200], [home[0] + 400, home[1] + 400, home[2] + 200]);
     const d = Math.hypot(b.pos[0] - from[0], b.pos[1] - from[1]);
@@ -787,13 +800,22 @@ export class Brain {
     this.goTo(away?.point || home);
   }
 
-  setTask(task, goal) {
+  // near: how close counts as there (see goTo).
+  setTask(task, goal, near = 32) {
     const b = this.bot;
     if (task !== 'plant' && task !== 'defuse' && (b.mode === 'plant' || b.mode === 'defuse')) this.game.botCancelObjective(b);
     this.task = task;
     // A bot that couldn't get anywhere waits a moment before trying the same goal again.
     if (!goal || (this.game.now < this.restUntil && this.goal && dist2(goal, this.goal) <= 48)) return;
-    if (!this.goal || dist2(goal, this.goal) > 48 || !this.path) this.goTo(goal);
+    if (!this.goal || dist2(goal, this.goal) > 48 || !this.path || (near < this.near && dist2(goal, this.goal) > near)) this.goTo(goal, near);
+  }
+  // Going for something lying about (a gun, a kit): for as long as getting there should take, then it gives up on it
+  // for the round (it's somewhere it can't get to, or can't get near enough to pick up).
+  fetching(it, t) {
+    if (this.fetch?.it !== it) this.fetch = { it, until: t + 3 + dist2(it.pos, this.bot.pos) / 150 };
+    if (t < this.fetch.until) return true;
+    this.skip.add(it); this.fetch = null;
+    return false;
   }
 
   // A spot in a bomb site: planting spot for the carrier, a holding spot otherwise (both kept for the round).
@@ -801,11 +823,24 @@ export class Brain {
     const key = site.site + kind;
     this.spots ||= {};
     if (!this.spots[key]) {
-      // A planting spot has to be inside the bomb site's trigger (not up on a box above it).
-      const r = this.game.nav.randomPointIn(site.min, site.max, (a, p) => kind !== 'plant' || !!this.game.match.siteAt(p));
+      const g = this.game, m = g.match, bad = this.badPlant || [];
+      // A planting spot has to be inside the bomb site's trigger (not up on a box above it), and well inside it, a body's
+      // width from its edges where there's room, so stopping a little short of it (or sliding past it) is still in it;
+      // not where it couldn't get onto one before.
+      const inside = (p, k) => [[0, 0], [k, 0], [-k, 0], [0, k], [0, -k]].every(([x, y]) => !!m.siteAt([p[0] + x, p[1] + y, p[2]]));
+      const plant = (k, avoid) => (a, p) => inside(p, k) && !(avoid && bad.some((q) => dist2(q, p) < 64));
+      const r = kind !== 'plant' ? g.nav.randomPointIn(site.min, site.max)
+        : g.nav.randomPointIn(site.min, site.max, plant(24, true)) || g.nav.randomPointIn(site.min, site.max, plant(0, true)) || g.nav.randomPointIn(site.min, site.max, plant(0, false));
       this.spots[key] = r ? r.point : [(site.min[0] + site.max[0]) / 2, (site.min[1] + site.max[1]) / 2, site.min[2]];
     }
     return this.spots[key];
+  }
+  // The carrier's planting spot (siteSpot): another one once it has stopped on (or as near as it gets to) this one and is
+  // still outside the site (something in the way, a kerb or a crate).
+  plantSpot(site) {
+    const b = this.bot, key = site.site + 'plant', s = this.spots[key];
+    if (s && !this.path && this.task === 'goto' && dist2(s, b.pos) < 48 && !this.game.match.siteAt(b.pos)) { (this.badPlant ||= []).push(s); delete this.spots[key]; }
+    return this.siteSpot(site, 'plant');
   }
   // Holding a bomb site: the CTs' spots watch the terrorists' ways in, the terrorists' (once they've taken it) the CTs'.
   holdIn(site, t, attacking) {
@@ -817,7 +852,9 @@ export class Brain {
   holdAt(spot, t, faceTo = null, look = null) {
     const b = this.bot;
     const d = Math.hypot(spot[0] - b.pos[0], spot[1] - b.pos[1]);
-    if (d > 40 && !(d < 90 && this.occupied(spot))) return this.setTask('goto', spot); // (someone on it: near enough)
+    // (Someone on it: near enough. No way onto it: as near as there's a way to is.)
+    const got = this.closest && dist2(this.closest.goal, spot) < 1 && dist2(this.closest.at, b.pos) < 40;
+    if (d > 40 && !(d < 90 && this.occupied(spot)) && !got) return this.setTask('goto', spot);
     this.task = 'hold';
     if (this.holdYaw != null) return;
     if (look) { this.holdPitch = look[0]; this.holdYaw = look[1]; return; }
@@ -840,10 +877,19 @@ export class Brain {
   }
 
   // ---- movement over the nav mesh ---------------------------------------------------------------------------------
-  goTo(goal) {
-    const p = this.game.nav.path(this.bot.pos, goal);
+  // near: how close to the goal counts as there (closer for what it has to be right on: a planting spot, the bomb).
+  goTo(goal, near = 32) {
+    // Halfway up (or down) a ladder: the climb first, then this (a way from where it is would start inside the wall the
+    // ladder is on, and it would stand there).
+    if (this.bot.climbing && this.path?.[this.pi]?.ladder) { this.after = [goal.slice(), near]; return; }
+    this.after = null;
+    const p = this.game.nav.path(this.bot.pos, goal, true);
     this.goal = goal.slice();
-    this.path = p ? p.points : [Object.assign(goal.slice(), { direct: true })]; // no way there on the mesh: straight at it
+    this.near = near;
+    // No way there on the mesh (a spot on a box nobody gets onto): as near to it as there is a way to. No way anywhere (it's
+    // somewhere off the mesh itself): straight at it.
+    this.closest = p?.partial ? { goal: this.goal, at: p.points[p.points.length - 1] } : null;
+    this.path = p ? p.points : [Object.assign(goal.slice(), { direct: true })];
     this.pi = 0;
     this.stuckT = 0;
     this.holdYaw = null; this.holdPitch = null;
@@ -861,12 +907,14 @@ export class Brain {
     this.heading = null;
     if (moving && this.path && this.pi < this.path.length && this.task !== 'hold') {
       if (t >= (this.smoothAt || 0)) { this.smoothAt = t + 0.2; this.skipAhead(); }
+      // (Up against something short of a way through for a moment, though: as near as it gets, on to the next point.)
+      const held = t - (this.movedAt ?? t) > 0.3;
       let wp = this.path[this.pi];
       let dx = wp[0] - b.pos[0], dy = wp[1] - b.pos[1];
       let d = Math.hypot(dx, dy);
-      while (d < 24 && !wp.ladder && !jumpAhead(wp, b) && this.pi < this.path.length - 1) { this.pi++; wp = this.path[this.pi]; dx = wp[0] - b.pos[0]; dy = wp[1] - b.pos[1]; d = Math.hypot(dx, dy); }
+      while (d < 24 && !wp.ladder && !jumpAhead(wp, b) && !(!held && shortOf(wp, b, d)) && this.pi < this.path.length - 1) { this.pi++; wp = this.path[this.pi]; dx = wp[0] - b.pos[0]; dy = wp[1] - b.pos[1]; d = Math.hypot(dx, dy); }
       // Someone standing on the point it's making for (a teammate in a doorway, on its spot): as good as there.
-      while (d < 80 && !wp.ladder && !jumpAhead(wp, b) && this.pi < this.path.length - 1 && this.occupied(wp)) { this.pi++; wp = this.path[this.pi]; dx = wp[0] - b.pos[0]; dy = wp[1] - b.pos[1]; d = Math.hypot(dx, dy); }
+      while (d < 80 && !wp.ladder && !jumpAhead(wp, b) && !(!held && shortOf(wp, b, d)) && this.pi < this.path.length - 1 && this.occupied(wp)) { this.pi++; wp = this.path[this.pi]; dx = wp[0] - b.pos[0]; dy = wp[1] - b.pos[1]; d = Math.hypot(dx, dy); }
       const last = this.pi >= this.path.length - 1;
       // There once it's close, and up on the same level: a goal on a box isn't reached from the foot of it, so it keeps
       // on (slowing down near it) into the box, which it then jumps onto.
@@ -878,7 +926,7 @@ export class Brain {
         // up against it, then up (and on that way in the air until it's on top).
         const [ix, iy] = wp.into || [dx / (d || 1), dy / (d || 1)];
         want = [ix * max, iy * max]; wpZ = wp[2] + wp.jump;
-      } else if (d > (last ? 32 : 8) || below) { want = [(dx / d) * s, (dy / d) * s]; wpZ = wp[2]; direct = !!wp.direct; } else if (last) this.path = null;
+      } else if (d > (last ? this.near : 8) || below || (!held && shortOf(wp, b, d))) { want = [(dx / d) * s, (dy / d) * s]; wpZ = wp[2]; direct = !!wp.direct; } else if (last) this.path = null;
     } else if (this.approach && moving) {
       // The last few units onto a lineup's spot, slowing to stop on it.
       const dx = this.approach[0] - b.pos[0], dy = this.approach[1] - b.pos[1], d = Math.hypot(dx, dy);
@@ -932,12 +980,28 @@ export class Brain {
     // walls, walks up steps and stairs, can't get up into a ceiling, and falls off ledges. A ledge in the way up is
     // jumped onto (crouch-jumping the highest, the legs tucked once it's off the ground).
     const body = this.physics();
-    const air = !body.onGround, go = Math.hypot(want[0], want[1]);
-    let jump = false;
-    if (!air && go > 0 && wpZ !== null && wpZ > b.pos[2] + STEP_HEIGHT / 2 && t >= (this.jumpAt || 0) + 0.3) {
+    const air = !body.onGround;
+    let go = Math.hypot(want[0], want[1]), jump = false;
+    // (Up onto a ledge the path climbs; or one it's up against and getting nowhere, that the mesh has nothing about: from
+    // on top of a barrel up onto the crate beside it, whose lip is higher than a step.)
+    if (go === 0 || air || Math.hypot(b.vel[0], b.vel[1]) >= 20) this.movedAt = t;
+    const stalled = t - (this.movedAt ?? t) > 0.4;
+    if (!air && go > 0 && wpZ !== null && (wpZ > b.pos[2] + STEP_HEIGHT / 2 || stalled) && t >= (this.jumpAt || 0) + 0.3) {
       const rise = this.ledgeAhead(want[0] / go, want[1] / go);
       if (rise) { jump = true; this.jumpAt = t; b.jumped = true; b.tuck = rise > JUMP_HEIGHT ? CROUCH_JUMP_HEIGHT - JUMP_HEIGHT : 0; }
+      // Up against the foot of its path's jump and nothing there it could get onto (too high, an overhang over it): it
+      // won't make it however often it tries (see below).
+      else if (stalled && jumpAhead(this.path?.[this.pi] || {}, b)) this.cantJump = this.path[this.pi];
+      // Caught on something it can't get onto or over (the corner of a post on its way past, pushed off its line by a
+      // teammate: Nuke's T side outside): a moment along its face, the side nearer where it's going, as you'd sidestep.
+      // (Twice at most on the way to a point: in a dead end the stuck handling below finds another way.)
+      else if (stalled && !(t < this.sideUntil) && (this.sides || 0) < 2) {
+        const ux = want[0] / go, uy = want[1] / go, n = g.collision.traceBox(b.pos, [b.pos[0] + ux * 4, b.pos[1] + uy * 4, b.pos[2]], [-16, -16, STEP_HEIGHT], [16, 16, 54], FLAG_PLAYER).normal;
+        const sl = n && Math.abs(n[2]) < 0.7 ? Math.hypot(n[0], n[1]) : 0;
+        if (sl) { const k = -n[1] * ux + n[0] * uy < 0 ? -1 : 1; this.side = [(-n[1] / sl) * k, (n[0] / sl) * k]; this.sideUntil = t + 0.3; this.sides = (this.sides || 0) + 1; }
+      }
     }
+    if (t < this.sideUntil && this.side && go > 0 && !jump) { want = [this.side[0] * max, this.side[1] * max]; go = max; }
     const tucking = !!b.tuck && air && t > this.jumpAt;
     const cmd = (this.cmd ||= {}); // (one each, filled in each tick)
     cmd.yaw = (Math.atan2(want[1], want[0]) * 180) / Math.PI; cmd.forward = Math.min(1, go / max); cmd.side = 0; cmd.pitch = 0;
@@ -956,7 +1020,7 @@ export class Brain {
       // Getting no nearer the point it's making for in 3 s is stuck too, though it moves: going back and forth under a
       // jump it keeps missing (into Nuke's vent from B), sliding off a ledge.
       const aim = this.path[this.pi];
-      if (aim !== this.aimWp) { this.aimWp = aim; this.aimBest = Infinity; this.aimSince = this.aimGain = t; }
+      if (aim !== this.aimWp) { this.aimWp = aim; this.aimBest = Infinity; this.aimSince = this.aimGain = t; this.sides = 0; }
       const gap = aim ? Math.hypot(aim[0] - b.pos[0], aim[1] - b.pos[1], aim[2] - b.pos[2]) : 0;
       if (gap < this.aimBest - 8) { this.aimBest = gap; this.aimSince = this.aimGain = t; }
       const noHeadway = !!aim && t - this.aimSince > 3;
@@ -972,16 +1036,20 @@ export class Brain {
           // off): every bot goes another way from now on.
           const wp = this.path[this.pi];
           if (this.pi >= this.path.length - 1 && dist2(b.pos, wp) < 40 && Math.abs(wp[2] - b.pos[2]) < STEP_HEIGHT) { this.path = null; this.stuckTries = 0; } // as near as it gets (a spot close to a wall): there
-          else if (this.stuckTries >= 1 && wp?.jump && b.pos[2] < wp[2] + wp.jump - STEP_HEIGHT) { nav.failed.add(wp.link); this.stuckTries = 0; this.goTo(this.goal); }
+          else if ((this.stuckTries >= 1 || this.cantJump === wp) && wp?.jump && b.pos[2] < wp[2] + wp.jump - STEP_HEIGHT) { nav.failJump(wp); this.stuckTries = 0; this.goTo(this.goal, this.near); }
           // Stuck at the same way through again and again (a vent it can't get along, a gap something fills): every bot
           // goes round it for the rest of the round, if there's another way; else it stands a moment and tries again.
-          else if (++this.stuckTries >= 3) {
+          else if (++this.stuckTries >= (t - (this.movedAt ?? t) > 0.9 ? 2 : 3)) { // (2: wedged, not moving at all)
             this.stuckTries = 0;
-            const other = wp?.link && !nav.blocked.has(wp.link) && (nav.blocked.add(wp.link), nav.path(b.pos, this.goal));
-            if (other) this.goTo(this.goal);
-            else { if (wp?.link) nav.blocked.delete(wp.link); this.path = null; this.restUntil = t + 2 + Math.random() * 2; b.vel[0] = b.vel[1] = 0; }
+            // (And the way through before it, if it never got through that: it went on for this one from short of it.)
+            const prev = this.pi > 0 && this.path[this.pi - 1];
+            const ways = [wp?.link, prev?.cross && (b.pos[0] - prev[0]) * prev.cross[0] + (b.pos[1] - prev[1]) * prev.cross[1] < 0 && prev.link].filter((l) => l && !nav.blocked.has(l));
+            for (const l of ways) nav.blocked.add(l);
+            const other = ways.length && nav.path(b.pos, this.goal);
+            if (other) this.goTo(this.goal, this.near);
+            else { for (const l of ways) nav.blocked.delete(l); this.path = null; this.restUntil = t + 2 + Math.random() * 2; b.vel[0] = b.vel[1] = 0; }
           }
-          else this.goTo(this.goal);
+          else this.goTo(this.goal, this.near);
         } else if (t - this.aimGain < 1.5) { this.stuckTries = 0; this.dodgeFlips = 0; } // (getting somewhere)
         this.lastProgress = b.pos.slice();
         this.stuckT = 0;
@@ -1070,7 +1138,9 @@ export class Brain {
 
   // How far up the ledge right in front (direction dx, dy; up against it, as you jump onto one: in the air you can
   // hardly speed up towards it) is, if it's one to jump onto: higher than a step, no higher than a crouch-jump, with
-  // room to stand on it. 0 otherwise.
+  // room to stand on it. Or, with nothing to stand on just past it and the floor beyond as low as here, something low
+  // across the way to jump over (a pipe, a kerb higher than a step: on Nuke outside, bots stood against one): how high
+  // it is, if a jump clears it and there's floor past it. 0 otherwise.
   ledgeAhead(dx, dy) {
     const g = this.game, [x, y, z] = this.bot.pos;
     const tr = g.collision.traceBox([x, y, z], [x + dx * 6, y + dy * 6, z], [-16, -16, STEP_HEIGHT], [16, 16, 70], FLAG_PLAYER);
@@ -1078,11 +1148,16 @@ export class Brain {
     const nl = Math.hypot(tr.normal[0], tr.normal[1]);
     if ((tr.normal[0] * dx + tr.normal[1] * dy) / nl > -0.5) return 0; // a wall it's going along, not at
     // Its top, from above where the body would stand on it (part of it over the edge, as you can).
-    const px = tr.endpos[0] + dx * 24, py = tr.endpos[1] + dy * 24;
-    const down = g.collision.traceBox([px, py, z + CROUCH_JUMP_HEIGHT + 2], [px, py, z + STEP_HEIGHT], [-16, -16, 0], [16, 16, 54], FLAG_PLAYER);
-    if (down.startsolid || down.fraction <= 0.01 || down.fraction >= 1 || !down.normal || down.normal[2] < 0.7) return 0;
-    const rise = down.endpos[2] - z;
-    return rise > STEP_HEIGHT && rise <= CROUCH_JUMP_HEIGHT ? rise : 0;
+    const top = (k) => g.collision.traceBox([tr.endpos[0] + dx * k, tr.endpos[1] + dy * k, z + CROUCH_JUMP_HEIGHT + 2], [tr.endpos[0] + dx * k, tr.endpos[1] + dy * k, z + STEP_HEIGHT], [-16, -16, 0], [16, 16, 54], FLAG_PLAYER);
+    const down = top(24);
+    if (!down.startsolid && down.fraction > 0.01 && down.fraction < 1 && down.normal?.[2] >= 0.7) {
+      const rise = down.endpos[2] - z;
+      if (rise > STEP_HEIGHT && rise <= CROUCH_JUMP_HEIGHT) return rise;
+    }
+    const over = top(4), rise = over.endpos[2] - z;
+    if (over.startsolid || over.fraction <= 0.01 || over.fraction >= 1 || rise <= STEP_HEIGHT || rise > CROUCH_JUMP_HEIGHT - 2) return 0;
+    const clear = g.collision.traceBox([x, y, z + rise + 2], [x + dx * 48, y + dy * 48, z + rise + 2], [-16, -16, 0], [16, 16, 54], FLAG_PLAYER);
+    return clear.fraction >= 1 && !clear.startsolid && g.floorAt([x + dx * 48, y + dy * 48, z + rise], 64 + rise) !== null ? rise : 0;
   }
 
   // String pulling: the path runs through the middles of the nav areas' shared edges (a zig-zag), so head for the
@@ -1148,6 +1223,7 @@ export class Brain {
         return true;
       }
       this.pi++; b.climbing = null; b.vel = [0, 0, 0];
+      this.climbed();
       return true;
     }
     const step = Math.sign(dz) * Math.min(Math.abs(dz), 156 * dt);
@@ -1155,9 +1231,12 @@ export class Brain {
     b.pos[1] += (wp[1] - b.pos[1]) * Math.min(1, dt * 8);
     b.pos[2] += step;
     b.vel = [0, 0, step / dt];
-    if (Math.abs(dz) < 1) { this.pi++; b.climbing = null; b.vel = [0, 0, 0]; }
+    if (Math.abs(dz) < 1) { this.pi++; b.climbing = null; b.vel = [0, 0, 0]; this.climbed(); }
     return true;
   }
+
+  // Off the ladder: where it was sent meanwhile (see goTo).
+  climbed() { if (this.after) { const [goal, near] = this.after; this.after = null; this.goTo(goal, near); } }
 
   walking(t) { return !this.plan?.rush && (this.task === 'hold' || (this.lastSeen && t - this.lastSeen.t < 6 && !this.target?.visible)); }
 }

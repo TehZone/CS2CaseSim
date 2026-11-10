@@ -20,6 +20,7 @@ export class NavMesh {
     this.byId = new Map(this.areas.map((a) => [a.id, a]));
     this.failed = new Set(); // jumps ("from>to" area ids) a bot couldn't make this match (something in the way): paths go round
     this.blocked = new Set(); // ways ("from>to") a bot got stuck on again and again this round (see Brain.move): paths go round
+    this.ledges = new Set(); // ids of the areas that are slivers over nothing (see markLedges): paths don't go onto them
 
     // How far each link climbs where the two areas meet: up to a step is a walk, up to a crouch-jump a jump, higher
     // can't be climbed (the link is only for coming down).
@@ -93,10 +94,95 @@ export class NavMesh {
     return this.areas.some((a) => a.max[0] >= min[0] && a.min[0] <= max[0] && a.max[1] >= min[1] && a.min[1] <= max[1] && a.max[2] >= min[2] - 40 && a.min[2] <= max[2] + 40);
   }
 
-  // A random spot inside a box (e.g. a bomb site) on walkable ground.
+  // The main part of the map: the biggest set of areas that all reach each other (walking, jumping, dropping down,
+  // climbing ladders), where the spawns are. Bits of mesh nobody gets onto (a box top with only a way down from it, a
+  // ledge outside the map: CS2's mesh has hiding spots on some) and pits nobody gets out of are left out of where bots
+  // are sent.
+  get reach() { return (this._reach ||= this.mainReach()); }
+  canReach(a) { return !!a && this.reach.has(a.id); }
+  reachable(p) { return this.canReach(this.nearestArea(p)); }
+
+  // Ledges over nothing: a sliver of mesh narrower than a body across, with on one side no more mesh level with it, no
+  // wall and no floor within 300 units below (the guard rails and parapets round the edges of Vertigo's roofs, a sill
+  // over a drop off the map). A bot that gets onto one carries its speed on over the edge: on Vertigo's B, jumping onto
+  // the stair rail and dropping onto the guard rail at the building's edge, it went off the building, and on A one
+  // walking along the parapet at the east edge did. Paths never go onto one from off one (a bot already on one gets off),
+  // and what's only reached over them (their hiding spots) is out of where bots are sent (reach). col: the map's
+  // CollisionWorld; mask: what a player collides with.
+  markLedges(col, mask) {
+    const BODY = 32, DEEP = 300;
+    // Past (x, y) the way u (at the height of b's top): no wall within 64 units, and a gap with no floor.
+    const overNothing = (x, y, z, u) => {
+      const wall = col.raycast([x, y, z + 24], [u[0], u[1], 0], 64, mask), room = wall ? wall.t : 64;
+      for (let k = 16; k <= room - 8; k += 16) {
+        const q = [x + u[0] * k, y + u[1] * k, z + 24], tr = col.traceBox(q, [q[0], q[1], q[2] - 24 - DEEP], [-8, -8, 0], [8, 8, 8], mask);
+        if (tr.startsolid) return false;
+        if (tr.fraction >= 1) return true;
+      }
+      return false;
+    };
+    for (const b of this.areas) {
+      const c = b.corners, n = c.length;
+      for (let i = 0; i < n && !this.ledges.has(b.id); i++) {
+        const p = c[i], q = c[(i + 1) % n], l = Math.hypot(q[0] - p[0], q[1] - p[1]);
+        if (l < 1) continue;
+        // This edge's outward way, the area's width that way, and anything level past it.
+        let u = [(q[1] - p[1]) / l, (p[0] - q[0]) / l];
+        if ((b.center[0] - (p[0] + q[0]) / 2) * u[0] + (b.center[1] - (p[1] + q[1]) / 2) * u[1] > 0) u = [-u[0], -u[1]];
+        let lo = Infinity, hi = -Infinity;
+        for (const k of c) { const d = k[0] * u[0] + k[1] * u[1]; lo = Math.min(lo, d); hi = Math.max(hi, d); }
+        if (hi - lo >= BODY || (b.edges[i] || []).some((id) => Math.abs(b.rise.get(id) ?? Infinity) <= STEP_HEIGHT)) continue;
+        // (Along the edge, every 64 units or so: a pillar past one point of a long rail isn't the whole rail.)
+        const m = Math.min(8, Math.max(1, Math.round(l / 64)));
+        for (let s = 0; s < m; s++) {
+          const f = (s + 0.5) / m;
+          if (overNothing(p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f, Math.max(p[2], q[2]), u)) { this.ledges.add(b.id); break; }
+        }
+      }
+    }
+    this._reach = null;
+    return this;
+  }
+  // Onto a ledge (see markLedges) from off one: no path goes that way.
+  ontoLedge(from, to) { return this.ledges.size > 0 && this.ledges.has(to) && !this.ledges.has(from); }
+
+  mainReach() {
+    const n = this.areas.length, idx = new Map(this.areas.map((a, i) => [a.id, i]));
+    const fwd = this.areas.map((a) => {
+      const out = [];
+      for (const id of a.links) { const j = idx.get(id); if (j != null && (a.rise.get(id) || 0) <= CROUCH_JUMP_HEIGHT && !this.ontoLedge(a.id, id)) out.push(j); }
+      for (const lk of this.ladderLinks.get(a.id) || []) { const j = idx.get(lk.to); if (j != null && !this.ontoLedge(a.id, lk.to)) out.push(j); }
+      return out;
+    });
+    const rev = this.areas.map(() => []);
+    fwd.forEach((out, i) => { for (const j of out) rev[j].push(i); });
+    // Kosaraju: finishing order over the links, then the components over them reversed.
+    const order = [], seen = new Uint8Array(n);
+    for (let s = 0; s < n; s++) {
+      if (seen[s]) continue;
+      const stack = [[s, 0]];
+      seen[s] = 1;
+      while (stack.length) {
+        const top = stack[stack.length - 1], out = fwd[top[0]];
+        if (top[1] < out.length) { const j = out[top[1]++]; if (!seen[j]) { seen[j] = 1; stack.push([j, 0]); } } else { order.push(top[0]); stack.pop(); }
+      }
+    }
+    const comp = new Int32Array(n).fill(-1), size = [];
+    for (let k = n - 1; k >= 0; k--) {
+      const s = order[k];
+      if (comp[s] >= 0) continue;
+      const c = size.length, stack = [s];
+      comp[s] = c; size.push(0);
+      while (stack.length) { const i = stack.pop(); size[c] += this.areas[i].size; for (const j of rev[i]) if (comp[j] < 0) { comp[j] = c; stack.push(j); } }
+    }
+    const main = size.indexOf(Math.max(...size));
+    return new Set(this.areas.filter((a, i) => comp[i] === main).map((a) => a.id));
+  }
+
+  // A random spot inside a box (e.g. a bomb site) on walkable ground (that can be got to).
   randomPointIn(min, max, accept = () => true, tries = 80) {
     const list = this.areas.filter((a) => a.max[0] >= min[0] && a.min[0] <= max[0] && a.max[1] >= min[1] && a.min[1] <= max[1]
-      && a.max[2] >= min[2] - 40 && a.min[2] <= max[2] + 40 && !(a.flags & (FLAG_CROUCH | FLAG_JUMP)) && a.size > 400);
+      && a.max[2] >= min[2] - 40 && a.min[2] <= max[2] + 40 && !(a.flags & (FLAG_CROUCH | FLAG_JUMP)) && a.size > 400 && this.reach.has(a.id));
     if (!list.length) return null;
     const total = list.reduce((s, a) => s + a.size, 0);
     for (let t = 0; t < tries; t++) {
@@ -109,9 +195,11 @@ export class NavMesh {
     return null;
   }
 
-  // The nearest area to a position (falls back to the closest centre).
+  // The nearest area to a position: the one it stands on; else the one whose edge it's just off (its middle over the lip
+  // of a ledge, a body's width beside a platform's area: not the floor far below it, from where a path would start
+  // under the platform); else the one below it; else the closest centre.
   nearestArea(p) {
-    const a = this.findArea(p, 200);
+    const a = this.findArea(p, STEP_HEIGHT + 6) || this.edgeArea(p) || this.findArea(p, 200);
     if (a) return a;
     let best = null, bd = Infinity;
     for (const x of this.areas) {
@@ -121,67 +209,105 @@ export class NavMesh {
     return best;
   }
 
+  // A jump a bot couldn't make (p: its path point, see path: link "from>to"): paths go round it from now on, and round
+  // the jumps onto the same area beside it (the same ledge a little way along, that the same overhang or rail keeps you
+  // off: on Vertigo's A site, three in a row).
+  failJump(p) {
+    if (!p?.link) return;
+    this.failed.add(p.link);
+    const to = this.byId.get(+p.link.split('>')[1]);
+    if (!to) return;
+    for (const a of this.areas) {
+      const rise = a.rise.get(to.id);
+      if (rise == null || rise <= STEP_HEIGHT || a.id === +p.link.split('>')[0]) continue;
+      const q = portal(a, to);
+      if (Math.hypot(q[0] - p[0], q[1] - p[1]) < 96 && Math.abs(q[2] - p[2]) < 24) this.failed.add(a.id + '>' + to.id);
+    }
+  }
+
+  // The area within r units sideways of p (a body's half width) with its floor about level with p, or null.
+  edgeArea(p, r = 16) {
+    let best = null, bd = r;
+    for (let gx = Math.floor((p[0] - r) / CELL); gx <= Math.floor((p[0] + r) / CELL); gx++) {
+      for (let gy = Math.floor((p[1] - r) / CELL); gy <= Math.floor((p[1] + r) / CELL); gy++) {
+        for (const a of this.grid.get(gx + ',' + gy) || []) {
+          if (p[0] < a.min[0] - r || p[0] > a.max[0] + r || p[1] < a.min[1] - r || p[1] > a.max[1] + r) continue;
+          if (p[2] < a.min[2] - 24 || p[2] > a.max[2] + STEP_HEIGHT + 6) continue;
+          const d = edgeDist(a.corners, p[0], p[1]);
+          if (d < bd) { bd = d; best = a; }
+        }
+      }
+    }
+    return best;
+  }
+
   // A random standing spot, weighted by area size. `accept(area, point)` can reject candidates.
   randomPoint(accept = () => true, tries = 60) {
     for (let t = 0; t < tries; t++) {
       let r = Math.random() * this.total, a = this.areas[0];
       for (const x of this.areas) { r -= x.size; if (r <= 0) { a = x; break; } }
-      if (a.flags & (FLAG_CROUCH | FLAG_JUMP | FLAG_AVOID) || a.size < 900) continue;
+      if (a.flags & (FLAG_CROUCH | FLAG_JUMP | FLAG_AVOID) || a.size < 900 || !this.reach.has(a.id)) continue;
       const p = pointIn(a.corners);
       if (accept(a, p)) return { area: a, point: p };
     }
     return null;
   }
 
-  // A* over areas; returns waypoints (crossing points between areas, then the goal) or null.
-  path(from, to) {
+  // A* over areas; returns waypoints (crossing points between areas, then the goal) or null. nearest: where there's no
+  // way to the goal (a spot on a box nobody gets onto), the way to the nearest place to it that there is a way to
+  // ({ partial: true }, ending there).
+  path(from, to, nearest = false) {
     const start = this.nearestArea(from), goal = this.nearestArea(to);
     if (!start || !goal) return null;
     const open = new Map([[start.id, { a: start, g: 0, f: dist(start.center, goal.center), prev: null }]]);
     const closed = new Map();
+    // The waypoints along a chain of areas, ending at end.
+    const build = (cur, end) => {
+      const areas = [];
+      for (let n = cur; n; n = n.prev) areas.unshift(n.a);
+      const pts = [];
+      const chain = [];
+      for (let n = cur; n; n = n.prev) chain.unshift(n);
+      for (let i = 1; i < areas.length; i++) {
+        const lad = chain[i].ladder;
+        if (!lad) {
+          const rise = areas[i - 1].rise.get(areas[i].id) || 0;
+          const link = areas[i - 1].id + '>' + areas[i].id;
+          const p = rise > STEP_HEIGHT ? Object.assign(portal(areas[i - 1], areas[i]), { jump: rise, into: across(areas[i - 1], areas[i]), link }) : Object.assign(portal(areas[i - 1], areas[i]), { link });
+          if ((areas[i - 1].flags | areas[i].flags) & FLAG_CROUCH) p.crouch = true; // (a vent, a hole in a wall: crouch through)
+          // A way through that has to be gone through, not cut past (a crouch gap, a drop off a ledge): which way across.
+          if (p.crouch || rise < -STEP_HEIGHT) p.cross = p.into || across(areas[i - 1], areas[i]);
+          pts.push(p);
+          continue;
+        }
+        // Climb: walk to the foot (or the top), then up (or down) the rungs, then step off.
+        const { ladder: l, up } = lad, n = l.normal;
+        const foot = [l.bottom[0] + n[0] * 16, l.bottom[1] + n[1] * 16, l.bottom[2]], head = [l.top[0] + n[0] * 16, l.top[1] + n[1] * 16, l.top[2]];
+        const off = [l.top[0] - n[0] * 24, l.top[1] - n[1] * 24, l.top[2]];
+        const into = areas[i];
+        if (up) { pts.push(foot); pts.push(Object.assign(head, { ladder: l, up: true })); pts.push(heightPoint(into, off)); }
+        else { pts.push(heightPoint(areas[i - 1], off)); pts.push(head); pts.push(Object.assign(foot, { ladder: l, up: false })); }
+      }
+      pts.push(end);
+      return { areas, points: pts };
+    };
     while (open.size) {
       let cur = null;
       for (const n of open.values()) if (!cur || n.f < cur.f) cur = n;
       open.delete(cur.a.id);
       closed.set(cur.a.id, cur);
-      if (cur.a === goal) {
-        const areas = [];
-        for (let n = cur; n; n = n.prev) areas.unshift(n.a);
-        const pts = [];
-        const chain = [];
-        for (let n = cur; n; n = n.prev) chain.unshift(n);
-        for (let i = 1; i < areas.length; i++) {
-          const lad = chain[i].ladder;
-          if (!lad) {
-            const rise = areas[i - 1].rise.get(areas[i].id) || 0;
-            const link = areas[i - 1].id + '>' + areas[i].id;
-            const p = rise > STEP_HEIGHT ? Object.assign(portal(areas[i - 1], areas[i]), { jump: rise, into: across(areas[i - 1], areas[i]), link }) : Object.assign(portal(areas[i - 1], areas[i]), { link });
-            if ((areas[i - 1].flags | areas[i].flags) & FLAG_CROUCH) p.crouch = true; // (a vent, a hole in a wall: crouch through)
-            pts.push(p);
-            continue;
-          }
-          // Climb: walk to the foot (or the top), then up (or down) the rungs, then step off.
-          const { ladder: l, up } = lad, n = l.normal;
-          const foot = [l.bottom[0] + n[0] * 16, l.bottom[1] + n[1] * 16, l.bottom[2]], head = [l.top[0] + n[0] * 16, l.top[1] + n[1] * 16, l.top[2]];
-          const off = [l.top[0] - n[0] * 24, l.top[1] - n[1] * 24, l.top[2]];
-          const into = areas[i];
-          if (up) { pts.push(foot); pts.push(Object.assign(head, { ladder: l, up: true })); pts.push(heightPoint(into, off)); }
-          else { pts.push(heightPoint(areas[i - 1], off)); pts.push(head); pts.push(Object.assign(foot, { ladder: l, up: false })); }
-        }
-        pts.push(to.slice());
-        return { areas, points: pts };
-      }
+      if (cur.a === goal) return build(cur, to.slice());
       for (const id of cur.a.links) {
         if (closed.has(id)) continue;
         const b = this.byId.get(id);
         const rise = cur.a.rise.get(id) || 0;
-        if (!b || rise > CROUCH_JUMP_HEIGHT || (rise > STEP_HEIGHT && this.failed.has(cur.a.id + '>' + id)) || (this.blocked.size && this.blocked.has(cur.a.id + '>' + id))) continue;
+        if (!b || rise > CROUCH_JUMP_HEIGHT || (rise > STEP_HEIGHT && this.failed.has(cur.a.id + '>' + id)) || (this.blocked.size && this.blocked.has(cur.a.id + '>' + id)) || this.ontoLedge(cur.a.id, id)) continue;
         const g = cur.g + dist(cur.a.center, b.center) * (b.flags & FLAG_CROUCH ? 2 : 1) + (rise > STEP_HEIGHT ? JUMP_COST : 0);
         const o = open.get(id);
         if (!o || g < o.g) open.set(id, { a: b, g, f: g + dist(b.center, goal.center), prev: cur });
       }
       for (const lk of this.ladderLinks.get(cur.a.id) || []) {
-        if (closed.has(lk.to)) continue;
+        if (closed.has(lk.to) || this.ontoLedge(cur.a.id, lk.to)) continue;
         const b = this.byId.get(lk.to);
         if (!b) continue;
         const g = cur.g + dist(cur.a.center, lk.ladder.bottom) + lk.ladder.length * 1.6 + dist(lk.ladder.top, b.center);
@@ -189,7 +315,10 @@ export class NavMesh {
         if (!o || g < o.g) open.set(lk.to, { a: b, g, f: g + dist(b.center, goal.center), prev: cur, ladder: lk });
       }
     }
-    return null;
+    if (!nearest) return null;
+    let near = null, nearD = Infinity;
+    for (const n of closed.values()) { const d = dist(closestIn(n.a, to), to); if (d < nearD) { nearD = d; near = n; } }
+    return near && Object.assign(build(near, closestIn(near.a, to)), { partial: true });
   }
 }
 
@@ -225,6 +354,35 @@ function triHeight(a, b, c, x, y) {
   const w = 1 - u - v;
   if (u < -1e-4 || v < -1e-4 || w < -1e-4) return null;
   return u * a[2] + v * b[2] + w * c[2];
+}
+
+// How far (x, y) is from a convex area, sideways (0 inside it).
+function edgeDist(c, x, y) {
+  if (heightIn(c, x, y) !== null) return 0;
+  let best = Infinity;
+  for (let i = 0; i < c.length; i++) {
+    const p = c[i], q = c[(i + 1) % c.length], dx = q[0] - p[0], dy = q[1] - p[1], l2 = dx * dx + dy * dy || 1;
+    const k = Math.max(0, Math.min(1, ((x - p[0]) * dx + (y - p[1]) * dy) / l2));
+    best = Math.min(best, Math.hypot(p[0] + dx * k - x, p[1] + dy * k - y));
+  }
+  return best;
+}
+// The point of an area nearest to p (on its surface): p's own (x, y) when it's over it, else the nearest on its edge,
+// a little way in.
+function closestIn(a, p) {
+  const c = a.corners, h = heightIn(c, p[0], p[1]);
+  if (h !== null) return [p[0], p[1], h];
+  let best = null, bd = Infinity;
+  for (let i = 0; i < c.length; i++) {
+    const s = c[i], q = c[(i + 1) % c.length], dx = q[0] - s[0], dy = q[1] - s[1], l2 = dx * dx + dy * dy || 1;
+    const k = Math.max(0, Math.min(1, ((p[0] - s[0]) * dx + (p[1] - s[1]) * dy) / l2));
+    const x = s[0] + dx * k, y = s[1] + dy * k, d = Math.hypot(x - p[0], y - p[1]);
+    if (d < bd) { bd = d; best = [x, y, s[2] + (q[2] - s[2]) * k]; }
+  }
+  // (Pulled towards the middle by up to 8 units, so it's on it, not on the line.)
+  const mx = a.center[0] - best[0], my = a.center[1] - best[1], ml = Math.hypot(mx, my);
+  if (ml > 0) { const k = Math.min(8, ml) / ml; best[0] += mx * k; best[1] += my * k; }
+  return best;
 }
 
 // A point moved onto an area's surface (its height there, or the area's centre height).

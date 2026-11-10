@@ -10,7 +10,7 @@
 // Deathmatch and Arms Race keep the round system's shape (phase, time, the bomb's state) so the rest of the game
 // treats them like one long round.
 import { RULES, CATALOG } from './match.js';
-import { CollisionWorld, joinCollision } from './collision.js';
+import { CollisionWorld, joinCollision, FLAG_PLAYER } from './collision.js';
 import { NavMesh, withoutAreas } from './nav.js';
 
 export const MODES = {
@@ -45,9 +45,11 @@ export async function matchWorld(map, mode, site, get) {
   const data = await get(map.nav).then((r) => r.json());
   const nav = new NavMesh(wingman ? withoutAreas(data, w?.closed, w?.cut) : data);
   const info = wingman ? wingmanInfo(map.info, site) : map.info;
+  const collision = new CollisionWorld(col.buffer, col.info);
+  nav.markLedges(collision, FLAG_PLAYER); // (no jumping onto a rail over the edge of the map: see NavMesh.markLedges)
   return {
     map: wingman ? { ...map, info: { ...info, places: info.places.filter((p) => nav.reaches(p.min, p.max)) } } : map,
-    collision: new CollisionWorld(col.buffer, col.info), nav,
+    collision, nav,
   };
 }
 

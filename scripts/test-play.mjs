@@ -939,6 +939,18 @@ function fakeGame() {
   ] });
   const through = crawl.path([50, 50, 0], [210, 50, 0]);
   ok(through && through.points.filter((p) => p.crouch).length === 2 && !through.points[through.points.length - 1].crouch, 'nav: into and out of a crawl, the bot is told to crouch');
+  // A guard rail 4 wide and 60 up at the floor's east edge (as round Vertigo's roofs): with nothing past it (no wall, no
+  // floor) no path goes onto it and it's out of where bots are sent; with a wall just past it, it's an ordinary ledge.
+  const railed = () => new NavMesh({ areas: [
+    { id: 1, flags: 0, c: sq(0, 0, 100, 100, 0), e: [[], [2], [], []] },
+    { id: 2, flags: 0, c: sq(100, 0, 104, 100, 60), e: [[], [], [], [1]] },
+  ] });
+  const sky = railed().markLedges({ raycast: () => null, traceBox: () => ({ fraction: 1, startsolid: false }) }, 1);
+  ok(sky.ledges.has(2) && sky.path([50, 50, 0], [102, 50, 60]) === null && !sky.canReach(sky.byId.get(2)) && sky.canReach(sky.byId.get(1)),
+    'nav: a rail over nothing is a ledge: no path onto it, not where bots are sent');
+  ok(sky.path([102, 50, 60], [50, 50, 0]) !== null, 'nav: a bot that is on one still gets off it');
+  const walled = railed().markLedges({ raycast: () => ({ t: 6 }), traceBox: () => ({ fraction: 1, startsolid: false }) }, 1);
+  ok(!walled.ledges.size && walled.path([50, 50, 0], [102, 50, 60]) !== null, 'nav: the same ledge against a wall is climbed as before');
 }
 
 // ---- hit tests: a shot aimed at a bot from above or below hits it at any range (the quick reject used the 3D
@@ -1532,6 +1544,26 @@ function fakeGame() {
   two.plan.sightings = new Map(ts.slice(0, 2).map((e) => [e, { site: 'A', t: 10 }]));
   ok(!two.fallBack('A', 11, () => site), "fall back: two terrorists aren't enough to fall back from");
   ok(b.fallBack('A', 40, () => site) === null, "fall back: back to its spot once they're gone from the site (nothing seen there for a while)");
+}
+
+// ---- fleeing the bomb (ai.js flee): one whose way ran out looks again rather than standing in the blast -----------------
+{
+  const { Brain } = await import('../src/js/play/ai.js');
+  const g = { now: 30, enemySpawnCenter: () => [2000, 0, 0], nav: { randomPointIn: (lo, hi) => ({ point: [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, 0] }) } };
+  const b = Object.assign(Object.create(Brain.prototype), { game: g, bot: { pos: [0, 0, 0], c: { team: 'T' } }, restUntil: 0, goals: [] });
+  b.goTo = function (goal) { this.goal = goal.slice(); this.path = [goal]; this.goals.push(goal); };
+  b.flee([0, 0, 0]);
+  ok(b.task === 'flee' && b.goals.length === 1, 'flee: a terrorist near the bomb runs for its own spawn');
+  g.now = 30.3; b.flee([0, 0, 0]);
+  ok(b.goals.length === 1, 'flee: on its way, it keeps going');
+  b.path = null; b.bot.pos = [400, 0, 0]; g.now = 30.6; b.flee([0, 0, 0]);
+  ok(b.goals.length === 1, "flee: a way that ran out isn't looked for again within the second");
+  g.now = 31.2; b.flee([0, 0, 0]);
+  ok(b.goals.length === 2, 'flee: one whose way ran out short of there looks again, rather than standing in the blast');
+  b.path = null; b.restUntil = 40; g.now = 34; b.flee([0, 0, 0]);
+  ok(b.goals.length === 2, 'flee: one that just got stuck waits as it would for any other goal');
+  b.bot.pos = b.goal.slice(); b.restUntil = 0; g.now = 50; b.flee([0, 0, 0]);
+  ok(b.goals.length === 2, "flee: one that's there stays there");
 }
 
 // ---- guns keep their skins: dropped, picked up by a bot or by you; a bot's is the default -------------------------------

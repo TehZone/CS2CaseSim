@@ -122,9 +122,10 @@ export class Spots {
       if (near.length && !ways.some((w) => dist2(w.door, door) < 300)) ways.push({ pts: near, door, entry: Math.max(0, entry), from: def.names?.[o] || null });
     }
     if (!ways.length) return null;
-    // Where to hold: CS2's hiding spots about the place, and points in it.
+    // Where to hold: CS2's hiding spots about the place, and points in it (only where there's a way to: some of CS2's
+    // hiding spots are on boxes and ledges nobody gets onto: on Nuke a bot sent to one stood below it for many seconds).
     const cand = [];
-    for (const a of nav.areas) for (const h of a.hiding || []) if (inBox(h, def.box, def.margin)) cand.push({ pos: [h[0], h[1], h[2]], hiding: true });
+    for (const a of nav.areas) for (const h of a.hiding || []) if (inBox(h, def.box, def.margin) && nav.canReach(a) && nav.reachable(h)) cand.push({ pos: [h[0], h[1], h[2]], hiding: true });
     for (let i = 0; i < 45; i++) { const r = nav.randomPointIn(def.box.min, def.box.max, () => true, 20); if (r) cand.push({ pos: r.point, hiding: false }); }
     // (A position: on its own floor, within its reach.)
     if (def.near) for (let i = cand.length - 1; i >= 0; i--) if (Math.abs(cand[i].pos[2] - def.near[2]) > 100 || dist2(cand[i].pos, def.near) > def.r) cand.splice(i, 1);
