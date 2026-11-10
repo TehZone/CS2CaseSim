@@ -2590,6 +2590,10 @@ export class Game {
     this.hud.dispose();
     this.buyMenu.el.remove();
     this.renderer.dispose();
+    // Ends the WebGL context itself, and everything still in it (GBs of the map and the models). three's dispose doesn't:
+    // the context lived on as long as anything kept the renderer, and the shared textures and models (textures.js, the
+    // glTF cache) keep it in their dispose listeners, so each match left its context, and its GPU memory, behind.
+    this.renderer.forceContextLoss();
     this.canvas.remove();
     this.listeners.clear();
   }
