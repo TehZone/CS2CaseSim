@@ -209,6 +209,29 @@ function earnStars(ctx, spent) {
   if (add) { ctx.st.stars += add; ctx.dirty.add('stars'); }
   return add;
 }
+// What case.open's buy pays for the cases and keys it's short of: what case.buy and key.buy would charge and count, in their
+// order (the money, Spent on cases, the Armory Stars), without the items, which are opened at once. → { cases, keys, cost,
+// stars }, or null when it's short of nothing. maxCost: what the game expects it to cost (what it showed and checked against
+// your money and auto open's minimum balance); more than that is refused before anything is paid ('price'), as when the game
+// counted a case of yours that the server can't open (one in your trade offer) or the prices changed.
+function buyShort(ctx, c, cases, keys, maxCost = null) {
+  if (!cases && !keys) return null;
+  if (typeof maxCost === 'number' && Number.isFinite(maxCost)) {
+    const total = round2((cases ? round2(c.price * cases) : 0) + (keys ? round2(D.keyPrice * keys) : 0));
+    if (total > maxCost + 0.001) fail(`Buying what's missing costs $${total.toFixed(2)}, not $${Math.max(0, maxCost).toFixed(2)}. Try again.`, 'price');
+  }
+  let cost = 0, stars = 0;
+  const pay = (v) => {
+    spend(ctx, v);
+    const s = stats(ctx);
+    s.spent = round2(s.spent + v);
+    cost = round2(cost + v);
+    stars += earnStars(ctx, v);
+  };
+  if (cases) pay(round2(c.price * cases));
+  if (keys) pay(round2(D.keyPrice * keys));
+  return { cases, keys, cost, stars };
+}
 // Sells new drops that match the auto-sell rules straight away (marked `as`, never added to the inventory).
 function autoSellDrops(ctx, items, rules) {
   const r = I.cleanAutoSell(rules);
@@ -365,20 +388,27 @@ export const ACTIONS = {
     return { items, cost, stars: earnStars(ctx, cost) };
   },
   // Opens n of your cases of one kind (uids: which ones, else your oldest), each with one of your keys for it if it takes
-  // one. Locked cases and keys, and ones in a trade offer, stay put.
-  'case.open'(ctx, { id, n = 1, uids = null, autoSell }) {
+  // one. Locked cases and keys, and ones in a trade offer, stay put. buy (your oldest only): the cases and keys you're short
+  // of are bought in the same go, at the store's price, as case.buy and key.buy would (Spent on cases and Armory Stars too),
+  // and opened at once: they never go to the inventory, so a nearly full one isn't in the way. maxCost (with buy): the most
+  // that buying may cost, else it's refused and nothing changes (see buyShort). → { items, autoSold, bought? } (bought:
+  // { cases, keys, cost, stars }, when something was).
+  'case.open'(ctx, { id, n = 1, uids = null, autoSell, buy = false, maxCost = null }) {
     n = int(Array.isArray(uids) ? uids.length : n, 1, 10, 'count');
     const c = D.caseById[id];
     if (!c) fail('Unknown case');
+    buy = buy === true && !Array.isArray(uids);
     const free = (it) => !it.lk && !ctx.reserved?.has(it.uid);
     const oldest = (a, b) => (a.at || 0) - (b.at || 0);
     const boxes = Array.isArray(uids) ? uids.map((u) => findOwned(ctx, String(u)))
       : ctx.st.inv.filter((it) => it.t === 'crate' && it.id === c.id && free(it)).sort(oldest).slice(0, n);
     if (boxes.some((b) => b.t !== 'crate' || b.id !== c.id)) fail(`Those aren't all ${c.n}s`);
-    if (boxes.length < n) fail(n > 1 ? `You have ${boxes.length} ${c.n}${boxes.length === 1 ? '' : 's'}, not ${n}` : `You don't have a ${c.n}. Buy one first.`, 'nocase');
+    const noCase = () => fail(n > 1 ? `You have ${boxes.length} ${c.n}${boxes.length === 1 ? '' : 's'}, not ${n}` : `You don't have a ${c.n}. Buy one first.`, 'nocase');
+    if (boxes.length < n && !(buy && c.price != null)) noCase();
     const key = keyFor(c);
     const keys = key ? ctx.st.inv.filter((it) => it.t === 'key' && it.id === key && free(it)).sort(oldest).slice(0, n) : [];
-    if (key && keys.length < n) fail(`You need ${n > 1 ? n + ' ' + D.keys[key].n + 's' : 'a ' + D.keys[key].n} to open ${n > 1 ? 'these' : 'this'}. Buy ${n > 1 ? 'them' : 'one'} first.`, 'nokey');
+    if (key && keys.length < n && !(buy && D.keys[key])) fail(`You need ${n > 1 ? n + ' ' + D.keys[key].n + 's' : 'a ' + D.keys[key].n} to open ${n > 1 ? 'these' : 'this'}. Buy ${n > 1 ? 'them' : 'one'} first.`, 'nokey');
+    const bought = buy ? buyShort(ctx, c, n - boxes.length, key ? n - keys.length : 0, maxCost) : null;
     take(ctx, [...boxes, ...keys].map((it) => it.uid));
     const items = Array.from({ length: n }, () => I.rollFromCase(c, ctx.rng));
     serialize(ctx, items);
@@ -388,7 +418,7 @@ export const ACTIONS = {
     const autoSold = autoSellDrops(ctx, items, autoSell);
     give(ctx, items.filter((it) => !it.as));
     noteUnboxed(ctx, items); // (what was auto-sold too: you still unboxed it)
-    return { items, autoSold };
+    return { items, autoSold, ...(bought ? { bought } : {}) };
   },
   // A Storage Unit from the store. As in CS2 a full inventory can still buy one (it's how you make room), so it doesn't go
   // through give(); there's a limit on how many you can own instead.

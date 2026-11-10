@@ -291,6 +291,9 @@ Good to know:
   `electron .` and run `(await import('./js/net/online.js')).net.setServerUrl('http://localhost:8787')` in its console.
 - `/health` also reports `commit`: `SERVER_COMMIT` (the VPS's deploy sets it) or `RENDER_GIT_COMMIT` (Render sets it),
   `null` without either. `HOST` makes the server listen on that one address (every interface when it's unset).
+- `/health`'s `ws` is the open game connections and how many of them are compressed (WebSocket permessage-deflate, which
+  the game's browser and the server agree on by themselves, through Caddy): with players online, `deflate` equal to
+  `connections` means compression is getting through.
 - Tests: `node scripts/test-engine.mjs` (game rules), `node scripts/test-update.mjs` (the updater), `node server/test.mjs`
   (server, trading, gambling), `node server/test-admin.mjs` (the admin panel and the Discord bot, against a stand-in
   Discord) and `node server/test-release.mjs` (the version lock); `npm test` in `server/` runs the server tests.

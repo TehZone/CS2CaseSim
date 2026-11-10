@@ -6,6 +6,9 @@ import { makeCtx, runAction, delta, GameError } from './engine/actions.js';
 let remote = null;
 export function setRemote(r) { remote = r; }
 export const online = () => !!remote;
+// Whether the actions can do something an older server's can't (offline they're this game's own: always). 'buyOpen':
+// case.open's buy, which buys the cases and keys it's short of in the same request.
+export const can = (what) => (remote ? !!remote.can?.(what) : true);
 
 export async function act(name, args = {}) {
   if (remote) return remote.act(name, args);

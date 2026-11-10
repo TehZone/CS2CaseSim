@@ -14,7 +14,8 @@ import { TIER_LABEL } from './patterns.js';
 import { isEquipped, slotName } from './loadout.js';
 import { floatRankOf } from './floatranks.js';
 import { CATEGORY_NAME } from './engine/database.js';
-import { UNIT_CAP, unitCount, unitValue, viewItems } from './engine/storage.js';
+import { UNIT_CAP, viewItems } from './engine/storage.js';
+import { unitCount, unitValue } from './stored.js';
 import { nameable } from './engine/tools.js';
 import { iconHtml } from './menu.js';
 
@@ -195,9 +196,10 @@ function charmBadge(c) {
 }
 
 // A Storage Unit's card: its label, how full it is, and when it last changed (click it to open it: pages/storage.js). Another
-// player's comes with its own n and value: what's in it isn't in your save.
+// player's comes with its own n and value: what's in it isn't in your save. (Yours: stored.js, which online may have only its
+// count and value, not what's in it.)
 function unitCard(item, { extra = '' } = {}) {
-  const r = I.rarityInfo(item), np = I.nameParts(item), n = item.n ?? unitCount(S, item.uid);
+  const r = I.rarityInfo(item), np = I.nameParts(item), n = item.n ?? unitCount(item.uid);
   return `<div class="card unit ${extra}" data-uid="${item.uid}" style="--rc:${r.c}">
     <div class="tags">${item.nw ? '<span class="tag new">New</span>' : ''}${item.name ? '' : '<span class="tag pat">Not in use</span>'}</div>
     <div class="img"><img loading="lazy" src="${I.itemImage(item, 'm')}" alt=""></div>
@@ -206,7 +208,7 @@ function unitCard(item, { extra = '' } = {}) {
     <div class="meta">
       <div class="n1">${esc(np.top)}</div>
       <div class="n2">${esc(np.bottom)}</div>
-      <div class="row"><span class="wear">${n.toLocaleString('en-US')} / ${UNIT_CAP.toLocaleString('en-US')} items</span><span class="val">${money(item.value ?? unitValue(S, item.uid))}</span></div>
+      <div class="row"><span class="wear">${n.toLocaleString('en-US')} / ${UNIT_CAP.toLocaleString('en-US')} items</span><span class="val">${money(item.value ?? unitValue(item.uid))}</span></div>
       <div class="row unit-mod"><span>${item.mod ? 'Modified ' + timeAgo(item.mod) : 'Not used yet'}</span></div>
     </div>
   </div>`;

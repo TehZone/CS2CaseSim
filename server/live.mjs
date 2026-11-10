@@ -10,6 +10,8 @@ import { round2 } from '../src/js/engine/util.js';
 
 const fail = (m) => { throw new GameError(m); };
 const JACKPOT_MS = +process.env.JACKPOT_MS || 45000;
+// How often, at most, a lean1 game with its Gamble page open is sent the lobbies when changes come together (see broadcast).
+export const LOBBY_MS = 1000;
 const seedOf = (s) => String(s || '').slice(0, 64) || G.newSeed().slice(0, 16);
 
 export class Live {
@@ -19,6 +21,8 @@ export class Live {
     this.battles = new Map();
     this.pot = null;
     this.timer = setInterval(() => this.tick().catch((e) => srv.log('[live] tick', e.message)), 1000);
+    this.leanAt = 0; // (when lean1 games were last all sent the lobbies)
+    this.leanTimer = null; // (the send that's waiting for LOBBY_MS to pass)
   }
 
   // ---- escrow persistence ----------------------------------------------------------------------------
@@ -103,11 +107,54 @@ export class Live {
       } : null,
     };
   }
-  broadcast() { this.srv.forEachOnline((id) => this.srv.sendTo(id, { t: 'lobbies', lobbies: this.snapshot(id) })); }
+  // The lobbies changed (now: the players whose round it was, the one whose request changed them first). A game without
+  // lean1 is sent them at once, every time, as it always was. A lean1 game only while its Gamble page is open (subscribe),
+  // and at most once every LOBBY_MS: the first change goes at once, the ones after it within LOBBY_MS go together when it's
+  // up, as they are by then. The round's own players' open pages get theirs at once all the same, so the round they just
+  // made, joined, cancelled or saw end is right on every page that has it (not a Cancel button for a flip that's gone).
+  broadcast(now = []) {
+    const srv = this.srv;
+    srv.forEachOnline((id) => {
+      let msg = null;
+      srv.sendEach(id, (ws) => (srv.lean(ws) ? null : (msg ??= { t: 'lobbies', lobbies: this.snapshot(id) })));
+    });
+    const wait = this.leanAt + LOBBY_MS - Date.now();
+    if (!this.leanTimer && wait <= 0) return this.sendLean();
+    if (!this.leanTimer) {
+      this.leanTimer = setTimeout(() => { this.leanTimer = null; this.sendLean(); }, wait);
+      this.leanTimer.unref?.();
+    }
+    for (const id of new Set(now)) if (id != null) this.sendLean(id);
+  }
+  // The players in the round a request is about, read before it runs (it may end the round): the flip's maker, the battle's
+  // seated players, the pot's entrants.
+  inRound(m, a = {}) {
+    if (/^flip\./.test(m)) { const f = this.flips.get(String(a.id)); return f ? [f.userId] : []; }
+    if (/^battle\./.test(m)) { const b = this.battles.get(String(a.id)); return b ? b.seats.filter((s) => s && !s.bot).map((s) => s.userId) : []; }
+    if (m === 'jackpot.join') return (this.pot?.entries || []).map((x) => x.userId);
+    return [];
+  }
+  // The lobbies to the lean1 connections watching them: everyone's (and the time noted), or one player's.
+  sendLean(only = null) {
+    if (only == null) this.leanAt = Date.now();
+    const send = (id) => {
+      let msg = null;
+      this.srv.sendEach(id, (ws) => (this.srv.lean(ws) && ws.welcomed && ws.subs?.lobbies ? (msg ??= { t: 'lobbies', lobbies: this.snapshot(id) }) : null));
+    };
+    if (only != null) send(only);
+    else this.srv.forEachOnline(send);
+  }
+  // A lean1 game's Gamble page opened (on) or closed: from now on it is sent the lobbies, starting with them as they are.
+  subscribe(ws, on) {
+    const was = !!ws.subs?.lobbies;
+    ws.subs = { ...ws.subs, lobbies: on };
+    if (on && !was && ws.readyState === 1 && ws.user) ws.send(JSON.stringify({ t: 'lobbies', lobbies: this.snapshot(ws.user.id) }));
+  }
 
   async rpc(user, m, a = {}) {
+    const others = this.inRound(m, a || {});
     const r = await this.dispatch(user, m, a);
-    this.broadcast();
+    this.broadcast([user.id, ...others]);
     return r;
   }
   async dispatch(user, m, a) {
@@ -267,8 +314,8 @@ export class Live {
       const view = pot.entries.map((y) => ({ id: y.userId === x.userId ? 'me' : 'u' + y.userId, name: y.name, value: y.value, color: y.color }));
       this.srv.sendTo(x.userId, { t: 'gamble.result', ev: { kind: 'jackpot', won: x.userId === winner, result: { entries: view, total: pot.total, winner: winner === x.userId ? 'me' : 'u' + winner, winnerName, fair } } });
     }
-    this.broadcast();
+    this.broadcast(pot.entries.map((x) => x.userId));
   }
 
-  close() { clearInterval(this.timer); }
+  close() { clearInterval(this.timer); clearTimeout(this.leanTimer); this.leanTimer = null; }
 }

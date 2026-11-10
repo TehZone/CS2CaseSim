@@ -9,7 +9,7 @@ import { MAIN_SLOTS, GUN_GROUPS, ZEUS_SLOT, equipped, equippedUids, slotName } f
 import { cs2Play } from '../cs2/api.js';
 import { iconFor } from '../play/icons.js';
 import { refreshRanks } from '../floatranks.js';
-import { ownedItems, ownedValue, storedOf } from '../engine/storage.js';
+import { bestOwned, ownedWorth, storedTotals } from '../stored.js';
 import { moveToUnit, openUnit } from './storage.js';
 
 const view = { type: 'all', sort: 'new', q: '', select: false, selected: new Set(), limit: 150 };
@@ -43,7 +43,10 @@ const SORTS = {
 export function render(r) {
   root = r;
   off?.();
-  off = on('inv', debounce(() => draw(), 120));
+  const redraw = debounce(() => draw(), 120);
+  // (and when float ranks that had to wait for their time come in: floatranks.js)
+  const offs = [on('inv', redraw), on('ranks', redraw)];
+  off = () => offs.forEach((f) => f());
   drawPage();
 }
 
@@ -91,9 +94,9 @@ function draw() {
   // (Storage Units first, whatever the order: they hold more than anything else here.)
   const sorted = S.inv.filter(matches).sort(SORTS[view.sort]);
   const items = [...sorted.filter(I.isUnit), ...sorted.filter((i) => !I.isUnit(i))];
-  const totalValue = ownedValue(S), stored = storedOf(S);
+  const totalValue = ownedWorth(), stored = storedTotals();
   const shownValue = items.reduce((s, i) => s + I.itemValue(i), 0);
-  const best = ownedItems(S).reduce((b, i) => (!b || I.itemValue(i) > I.itemValue(b) ? i : b), null);
+  const best = bestOwned();
   for (const uid of [...view.selected]) if (!S.inv.some((i) => i.uid === uid)) view.selected.delete(uid);
   const selItems = S.inv.filter((i) => view.selected.has(i.uid));
   const selValue = selItems.reduce((s, i) => s + I.itemValue(i), 0);
@@ -102,7 +105,7 @@ function draw() {
 
   root.querySelector('[data-sum]').innerHTML = `<div>Items<b>${S.inv.length}</b></div>
     <div>Inventory value<b class="green">${money(totalValue)}</b></div>
-    ${stored.length ? `<div>In storage<b>${stored.length.toLocaleString('en-US')} · ${money(stored.reduce((s, i) => s + I.itemValue(i), 0))}</b></div>` : ''}
+    ${stored.n ? `<div>In storage<b>${stored.n.toLocaleString('en-US')} · ${money(stored.value)}</b></div>` : ''}
     <div>Showing<b>${items.length} · ${money(shownValue)}</b></div>
     <div>Most valuable<b>${best ? I.nameHtml(best) + ' · ' + money(I.itemValue(best)) : '—'}</b></div>`;
   root.querySelector('[data-acts]').innerHTML = view.select

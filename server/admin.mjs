@@ -303,13 +303,14 @@ export class Admin {
   // Cancels every open offer from or to a player (their items in them are what a restore or reset replaces).
   async cancelOffers(id) {
     const T = this.srv.trades;
-    const who = new Set();
+    const who = new Set(), closed = [];
     for (const t of [...T.open.values()]) {
       if (t.from_id !== id && t.to_id !== id) continue;
       await T.close(t, 'cancelled');
       who.add(t.from_id); who.add(t.to_id);
+      closed.push(t.id);
     }
-    if (who.size) await T.pushLists(...who);
+    if (closed.length) await T.pushClosed(...closed);
     return Math.max(0, who.size - 1);
   }
 
@@ -778,7 +779,7 @@ export class Admin {
     });
     this.levels.delete(t.id);
     for (const ws of this.srv.sockets.get(t.id) || []) if (ws.user) ws.user.name = name; // (their open connections' requests)
-    if (offers.length) await this.srv.trades.pushLists(...offers.flatMap((o) => [o.from_id, o.to_id]));
+    if (offers.length) await this.srv.trades.pushChanged(...offers.map((o) => o.id));
     this.srv.notice(t.id, `Your username is now <b>${name}</b>`);
     await this.audit(actor, 'rename', { id: t.id, name }, { before: t.name, after: name });
     // (After the audit: it is done whatever happens to these.)

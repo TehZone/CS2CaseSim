@@ -12,7 +12,7 @@ import { prepareAll, prepareStatus, prepareCancel, cacheSize } from '../cs2/cont
 import { rankInfo } from '../engine/ranks.js';
 import { loadRankArt, emblemHtml, rankKey } from '../rank.js';
 import { levelHtml } from '../profile.js';
-import { ownedValue } from '../engine/storage.js';
+import { ownedWorth } from '../stored.js';
 
 let root;
 
@@ -32,7 +32,7 @@ function competitiveRank(wingman = false) {
 
 function draw() {
   const st = S.stats;
-  const invValue = ownedValue(S); // (what's in Storage Units too)
+  const invValue = ownedWorth(); // (what's in Storage Units too)
   const drops = [2, 3, 4, 5, 6].map((k) => [k, st.drops[k] || 0]);
   const totalDrops = drops.reduce((s, d) => s + d[1], 0) || 1;
   const expected = { 2: 0.7992, 3: 0.1598, 4: 0.032, 5: 0.0064, 6: 0.0026 };

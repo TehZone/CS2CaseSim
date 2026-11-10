@@ -9,7 +9,7 @@
 import { esc, money, timeAgo, debounce } from '../util.js';
 import { D } from '../data.js';
 import * as I from '../items.js';
-import { S, on } from '../state.js';
+import { S, on, calmly } from '../state.js';
 import { sfx } from '../audio.js';
 import { toast, openModal, itemCard, openInspect, canInspect, showItemDetail, confirmDialog } from '../ui.js';
 import { medalOf } from '../engine/levels.js';
@@ -20,6 +20,9 @@ import { offerTo } from './trade.js';
 import { avatarTag, cc, backdrop, profileHeadHtml, profileDialog } from './community.js';
 
 const MESSAGE_MAX = 300, REPORT_MAX = 500, UNIT_PAGE = 150;
+// Your own profile shows your inventory, so it's asked for again when that changes: at most once every OWN_GAP, not while auto
+// open runs, and once when it stops (if anything changed meanwhile).
+export const OWN_GAP = 15000;
 const DMS = [['everyone', 'Everyone'], ['friends', 'Friends only']];
 // (Said as it is: the reason goes to staff and the mod log in these words.)
 const REASONS = ['Harassment or threats', 'Hate speech', 'Scam or a dishonest trade', 'Spam', 'Something else'];
@@ -35,6 +38,8 @@ const threads = new Map(); // id -> { msgs, more, loaded, busy, error }: chats o
 const cards = new Map(); // id -> `profile`'s answer, or { error }
 const cardRuns = new Map(); // id -> that request, while it's out
 const windows = new Set(); // this page's open windows: what they hold means nothing after a log out
+// (your own profile asked for again, if it's still what's shown)
+const ownAgain = calmly(() => { if (root && view.who === 'me' && home) loadCard(meId()); }, OWN_GAP);
 
 const list = (v) => (Array.isArray(v) ? v : []);
 const meId = () => home?.me?.id ?? net.me()?.id;
@@ -119,6 +124,7 @@ function loadHome() {
 
 function loadCard(id) {
   if (cardRuns.has(id)) return cardRuns.get(id);
+  if (id === meId()) ownAgain.ran();
   const at = era, known = people.has(id);
   const run = net.social('profile', { id }).then((p) => { if (at === era) { cards.set(id, p); remember(p); } }, (e) => { if (at === era) cards.set(id, { error: e.message || 'Request failed' }); })
     .then(() => {
@@ -166,7 +172,7 @@ function onChat({ msg, who } = {}) {
 export function render(r) {
   root = r;
   offs.forEach((o) => o());
-  offs = [on('inv', () => { if (view.who === 'me' && home) loadCard(meId()); })];
+  offs = [on('inv', () => { if (view.who === 'me' && home) ownAgain.ask(); })];
   cards.clear();
   homeDrawn = false;
   root.innerHTML = '<div class="page community live"><div class="cm-grid"><aside class="fr-panel" data-list></aside><section class="cm-main" data-main></section></div></div>';
@@ -180,6 +186,7 @@ export function destroy() {
   if (box && box.scrollHeight - box.scrollTop - box.clientHeight > 40) view.scroll.set(+box.dataset.with, box.scrollTop);
   offs.forEach((o) => o());
   offs = [];
+  ownAgain.stop();
   root = null;
 }
 
@@ -199,7 +206,11 @@ function drawLive() {
   drawMe();
   drawRows();
   drawHead();
-  if (view.pane === 'profile') loadCard(shownId());
+  // (Your own profile goes by the same limit as the inventory's changes, and not while it's already being asked for.)
+  if (view.pane === 'profile') {
+    if (view.who !== 'me') loadCard(shownId());
+    else if (!cardRuns.has(meId())) ownAgain.ask();
+  }
 }
 function pick(id, pane) {
   if (id === meId()) id = 'me';

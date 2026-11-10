@@ -8,6 +8,8 @@ import { textProblem } from '../src/js/engine/tools.js';
 import { round2 } from '../src/js/engine/util.js';
 
 const MAX_ITEMS = 100, MAX_OPEN = 20, MAX_LIST = 30, MSG_MAX = 140;
+// The offers player $1 sees: theirs, and those to them (not one sent while they had its sender blocked).
+const VISIBLE = "(from_id = $1 OR (to_id = $1 AND offer->>'hidden' IS NULL))";
 const fail = (m) => { throw new GameError(m); };
 const money = (v) => { const n = round2(Number(v) || 0); if (!(n >= 0) || n > 1e12) fail('Invalid amount'); return n; };
 const uidList = (v) => {
@@ -52,13 +54,13 @@ export class Trades {
       if (!copies.length) continue;
       for (const it of copies) delete it.name;
       await this.srv.db.query('UPDATE trades SET offer = $1::jsonb WHERE id = $2', [JSON.stringify(t.offer), t.id]);
-      await this.pushLists(t.from_id, t.to_id);
+      await this.pushChanged(t.id);
     }
   }
 
+  // A player's list: the MAX_LIST latest offers they see (VISIBLE), open and closed.
   async list(userId) {
-    const { rows } = await this.srv.db.query(
-      "SELECT * FROM trades WHERE from_id = $1 OR (to_id = $1 AND offer->>'hidden' IS NULL) ORDER BY updated DESC LIMIT " + MAX_LIST, [userId]);
+    const { rows } = await this.srv.db.query(`SELECT * FROM trades WHERE ${VISIBLE} ORDER BY updated DESC LIMIT ${MAX_LIST}`, [userId]);
     return rows.map(norm).map((t) => this.view(t));
   }
   view(t) {
@@ -68,12 +70,53 @@ export class Trades {
       give: { items: t.offer.giveItems, money: t.offer.give.money }, get: { items: t.offer.getItems, money: t.offer.get.money },
     };
   }
-  async pushLists(...ids) {
-    for (const id of new Set(ids)) if (this.srv.isOnline(id)) this.srv.sendTo(id, { t: 'trades', trades: await this.list(id) });
+  // Tells both sides of these offers (ids) that they changed. A game without lean1 gets its whole list again
+  // ({ t: 'trades', trades }), as it always did. A lean1 game gets only the offers that changed and are on its list, and the
+  // ids of any pushed off the end of it ({ t: 'trades.d', upd, del }); its whole list comes in its welcome and from
+  // trade 'list'. (A lean1 connection whose welcome is still on its way is sent its whole list just after it instead: the
+  // welcome's may have been read before this change.)
+  pushChanged(...ids) { return this.push(ids, []); }
+  // The same, for offers whose status is all that changed (closed: declined, cancelled, accepted, failed, countered): to a
+  // lean1 game each is { id, status, version, updated }, which it merges into the copy it has (it asks for its list again
+  // if it hasn't one). Its items, money and words are what it was sent already.
+  pushClosed(...ids) { return this.push(ids, ids); }
+  async push(ids, closed) {
+    ids = [...new Set(ids.filter((x) => x != null).map(String))];
+    if (!ids.length) return;
+    const brief = new Set(closed.filter((x) => x != null).map(String));
+    const row = (t) => (brief.has(t.id) ? { id: t.id, status: t.status, version: t.version, updated: Number(t.updated) } : this.view(t));
+    const { rows } = await this.srv.db.query('SELECT * FROM trades WHERE id = ANY($1::text[])', [ids]);
+    const changed = rows.map(norm);
+    const conns = (id) => [...(this.srv.sockets.get(id) || [])];
+    for (const id of new Set(changed.flatMap((t) => [t.from_id, t.to_id]))) {
+      let some = null;
+      if (conns(id).some((ws) => this.srv.lean(ws))) {
+        const theirs = changed.filter((t) => t.from_id === id || t.to_id === id);
+        const { rows: top } = await this.srv.db.query(`SELECT id FROM trades WHERE ${VISIBLE} ORDER BY updated DESC LIMIT ${MAX_LIST + theirs.length}`, [id]);
+        const shown = new Set(top.slice(0, MAX_LIST).map((r) => r.id));
+        // (Nothing at all when none of them is on their list: an offer from someone they've blocked says nothing to them.)
+        const upd = theirs.filter((t) => shown.has(t.id)).map(row), del = top.slice(MAX_LIST).map((r) => r.id);
+        if (upd.length) some = { t: 'trades.d', upd, ...(del.length ? { del } : {}) };
+      }
+      // (The whole list last, and sent as soon as it's read: whoever is connected by then gets it.)
+      const full = conns(id).some((ws) => !this.srv.lean(ws)) ? { t: 'trades', trades: await this.list(id) } : null;
+      this.srv.sendEach(id, (ws) => {
+        if (!this.srv.lean(ws)) return full;
+        if (!ws.welcomed) { ws.tradesStale = true; return null; }
+        return some;
+      });
+    }
+  }
+  // A player's whole list to one connection (see pushChanged).
+  async pushFull(id, ws) {
+    ws.tradesStale = false;
+    const trades = await this.list(id);
+    if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'trades', trades }));
   }
 
   async rpc(user, m, a = {}) {
     switch (m) {
+      case 'list': return this.list(user.id); // (the whole list again: a lean1 game is otherwise sent only changes)
       case 'inventory': return this.inventory(user, a);
       case 'offer': return this.offer(user, a);
       case 'accept': return this.accept(user, a);
@@ -139,11 +182,12 @@ export class Trades {
       await this.srv.db.query('INSERT INTO trades (id, from_id, to_id, status, version, offer, created, updated) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8)',
         [t.id, t.from_id, t.to_id, t.status, t.version, JSON.stringify(t.offer), now, now]);
       this.open.set(t.id, t);
+      let countered = null;
       if (a.counterOf) {
         const c = this.open.get(String(a.counterOf));
-        if (c && c.to_id === user.id && !c.offer.hidden) await this.close(c, 'countered');
+        if (c && c.to_id === user.id && !c.offer.hidden) { await this.close(c, 'countered'); countered = c.id; }
       }
-      await this.pushLists(user.id, other.id);
+      await this.push([t.id, countered], [countered]); // (the countered offer: its status only)
       if (!hidden) this.srv.notice(other.id, `New trade offer from <b>${me.name}</b>`);
       return { id: t.id };
     });
@@ -160,7 +204,7 @@ export class Trades {
     // (a hidden offer never reached the player it's to, so it isn't theirs to answer)
     if (!t || t[side + '_id'] !== user.id || (side === 'to' && t.offer.hidden)) fail('That offer is no longer open');
     await this.close(t, status);
-    await this.pushLists(t.from_id, t.to_id);
+    await this.pushClosed(t.id);
     if (status === 'declined') this.srv.notice(t.from_id, `<b>${t.offer.toName}</b> declined your trade offer`);
     return {};
   }
@@ -209,10 +253,10 @@ export class Trades {
       if ((o.from_id === t.from_id || o.from_id === t.to_id || o.to_id === t.from_id || o.to_id === t.to_id) &&
         (gone(o.offer.give.uids, o.from_id) || gone(o.offer.get.uids, o.to_id))) {
         await this.close(o, 'failed');
-        await this.pushLists(o.from_id, o.to_id);
+        await this.pushClosed(o.id);
       }
     }
-    await this.pushLists(t.from_id, t.to_id);
+    await this.pushClosed(t.id);
     return { ok: true, d: result.dt };
   }
 }

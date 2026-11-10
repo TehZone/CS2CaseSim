@@ -2,8 +2,12 @@
 //   node server/index.mjs            (DATABASE_URL=postgres://... for Postgres/Neon; without it an embedded
 //                                     Postgres is used: in memory, or on disk with PGLITE_DIR=./server/.data)
 //   node server/index.mjs --admins alice,bob --discord-token-file <path>   (dev: staff by name, the bot's token from a file)
-// HTTP: GET /health, POST /api/register | /api/login | /api/logout | /api/reset, GET /api/prices
-// WebSocket: /ws (protocol described in src/js/net/online.js)
+// HTTP: GET /health, POST /api/register | /api/login | /api/logout | /api/reset, GET /api/prices (brotli, gzip or plain, by
+// the request's Accept-Encoding)
+// WebSocket: /ws (protocol described in src/js/net/online.js), compressed with permessage-deflate when the game offers it
+// (Chromium and Electron always do; see DEFLATE). Capabilities: a game names the newer message shapes it understands in its
+// hello (caps: ['lean1']), and the server answers with the ones it will use (welcome.caps). Only a connection that announced
+// a capability is sent its shapes; a game that announces none (1.1.2 and older) gets exactly what it always got. See CAPS.
 // Staff, bans and the Discord bot: server/admin.mjs and server/discord.mjs (env: ADMIN_USERS, DISCORD_BOT_TOKEN or
 // DISCORD_TOKEN_FILE, DISCORD_GUILD_ID, DISCORD_ADMIN_ROLES, DISCORD_MOD_ROLES, DISCORD_LOG_CHANNEL, DISCORD_DROPS_CHANNEL, DISCORD_LINKED_ROLE,
 // DISCORD_GATEWAY=0 for an instance that must not run the bot's gateway). TRUST_PROXY=<hops>: only behind reverse
@@ -18,7 +22,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, PerMessageDeflate, extension } from 'ws';
 import { openDb } from './db.mjs';
 import { Store } from './store.mjs';
 import { Trades } from './trade.mjs';
@@ -34,16 +38,48 @@ import { dropEmbed } from './drops.mjs';
 import { marketWindow } from '../src/js/engine/market.js';
 import { DB_TYPES, publicCopy } from '../src/js/engine/database.js';
 import { ownedValue } from '../src/js/engine/storage.js';
+import { forConnection, leanAct, leanPush, leanState, statsBefore, storedOfUnit, sumsSent, unitSums, unitsChange } from './lean.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROTOCOL = 1;
+// Capabilities a game can announce in its hello. Each names a set of message shapes, frozen once a game that announces it is
+// released: a later change to them is a new name (lean2), and the server keeps answering the old one until a release
+// requires a newer game. A connection's own set is ws.caps; srv.lean(ws) is the test for lean1.
+//   lean1: the players list as changes after the welcome ({ t: 'players.d' }); gamble lobbies only while the game says its
+//          Gamble page is open ({ t: 'sub', lobbies }), at most about once a second (at once to the round's own players),
+//          and not in the welcome; trade offers as the ones that changed ({ t: 'trades.d' }; a closed one as its new status
+//          only), and an accept's answer without its d. An action's answer and changes without the same item twice, the
+//          stats as what changed, item.seen as uids; the welcome without what's in Storage Units, asked for a unit at a time
+//          (social 'stored'), and changes with the sums of the units they changed. The shapes are in src/js/net/online.js
+//          and server/lean.mjs.
+//   (Not a shape, so not a capability: case.open's buy, which a server has from the deploy that brought it. A game uses it
+//   only on a server whose welcome names lean1, which came with it.)
+export const LEAN = 'lean1';
+export const CAPS = new Set([LEAN]);
+// WebSocket compression (permessage-deflate, RFC 7692). Each connection keeps its zlib streams between messages (context
+// takeover, ws's default, kept on purpose): a message is compressed against the ones before it, which is what makes a small
+// one, a reply or a lobbies push, shrink to a few dozen bytes. ws's 1 KB threshold only applies without context takeover.
+// A 16 KB window (server_max_window_bits=14) and memLevel 6 compressed a replay of a real session (a 1,500-item welcome, 60
+// rounds of auto-open, 30 joins) as well as zlib's defaults (32 KB, 8) did: 10.6% of the raw bytes against 10.7%; 8 KB would
+// be 11.1%, 4 KB 14%. Measured, a compressed connection then takes about 0.3 MB of the server's memory (0.45 MB with the
+// defaults, 0.05 MB uncompressed), so 100 players about 30 MB. The client's own window (client_max_window_bits) is left to
+// it: asking for a size would refuse a game that doesn't offer one.
+const DEFLATE = { serverMaxWindowBits: 14, zlibDeflateOptions: { memLevel: 6 } };
 const INV_CAP = 3000;
 const MAX_MSG = 64 * 1024;
-// Requests that end your own offer or round still work while trading or gambling is turned off.
-const TRADE_ALWAYS = new Set(['cancel', 'decline']);
+// Requests that end your own offer or round still work while trading or gambling is turned off (and the list of offers
+// can always be read: the welcome has it anyway).
+const TRADE_ALWAYS = new Set(['cancel', 'decline', 'list']);
 const GAMBLE_ALWAYS = new Set(['flip.cancel', 'battle.cancel']);
 const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+// Whether an Accept-Encoding header takes brotli: `br` listed, and not with q=0.
+const acceptsBrotli = (ae) => list(ae).some((part) => {
+  const [name, ...params] = part.split(';').map((s) => s.trim());
+  if (name.toLowerCase() !== 'br') return false;
+  const q = params.find((p) => /^q\s*=/i.test(p));
+  return !q || Number(q.replace(/^q\s*=\s*/i, '')) > 0;
+});
 // Actions saved in a transaction before they're answered (others are written within a couple of seconds): what moves
 // items in and out of a Storage Unit, uses up a tool or claims an Index reward is never left only in memory.
 const IN_TRANSACTION = /^(storage|tools|index)\./;
@@ -121,6 +157,10 @@ export async function startServer({
   };
   log(discord.enabled ? '[discord] bot configured' : '[discord] no bot (set DISCORD_BOT_TOKEN to link accounts and use Discord roles)');
 
+  // userId -> the Storage Units' sums the player's lean1 games were last told (lean.mjs sumsSent: their welcome's, then each
+  // change's), while they're connected. A lean1 connection's own ws.unloaded: the units it knows only by those sums (all it
+  // had at its welcome, less those it has asked for: social 'stored').
+  const unitsSent = new Map();
   const srv = {
     db, store, log, INV_CAP, sockets, discord,
     isOnline: (id) => sockets.has(id),
@@ -131,9 +171,60 @@ export async function startServer({
       const text = JSON.stringify(msg);
       for (const ws of set) if (ws !== except && ws.readyState === 1) ws.send(text);
     },
+    // Whether a connection announced lean1 (see CAPS).
+    lean: (ws) => !!ws?.caps?.has(LEAN),
+    // A message shaped for each of a player's connections: pick(ws) gives it (null: nothing to that one). Each message
+    // object is turned into text once, however many connections it goes to.
+    sendEach(id, pick, except = null) {
+      const set = sockets.get(id);
+      if (!set) return;
+      const texts = new Map();
+      for (const ws of set) {
+        if (ws === except || ws.readyState !== 1) continue;
+        const m = pick(ws);
+        if (m == null) continue;
+        if (!texts.has(m)) texts.set(m, JSON.stringify(m));
+        ws.send(texts.get(m));
+      }
+    },
+    // Whether any of a player's connections announced lean1 (then the lean shapes are worth making).
+    anyLean: (id) => [...(sockets.get(id) || [])].some((ws) => srv.lean(ws)),
+    // lean1: the sums of the Storage Units a change to what's in them changed, against what the player's lean1 games were last
+    // told (unitsSent), which they are now. Called while the player's state is held, with the state the change made; only
+    // when one of their connections is lean1 (all of those are sent every such change: a new one's welcome has them all).
+    unitsDelta(id, st) {
+      const { change, sent } = unitsChange(unitsSent.get(id) || null, unitSums(st));
+      unitsSent.set(id, sent);
+      return change;
+    },
+    // A change that replaced what's in Storage Units whole (staff restoring a save: set.stored): every lean1 game has all of
+    // it now, as the game takes it, so nothing is left out for them and the sums start again from here.
+    storedWhole(id, st) {
+      unitsSent.set(id, sumsSent(unitSums(st)));
+      for (const ws of sockets.get(id) || []) ws.unloaded = null;
+    },
+    // pick() for sendEach: the old message to a game without lean1, `lean` (lean1's, with t and d) to the others, each without
+    // the stored items it would drop (forConnection). One object per shape, so each is turned into text once.
+    leanPick(full, lean) {
+      const units = [...new Set((lean.d?.sto?.add || []).map((it) => it.su))], made = new Map();
+      return (ws) => {
+        if (!srv.lean(ws)) return full;
+        const key = units.filter((u) => ws.unloaded?.has(u)).join('|');
+        if (!key) return lean;
+        if (!made.has(key)) made.set(key, { ...lean, d: forConnection(lean.d, ws.unloaded) });
+        return made.get(key);
+      };
+    },
+    // (lean1: a change to what's in Storage Units also has the changed units' sums: server/lean.mjs. Such a change is only
+    // ever sent from inside the player's lock (staff tools), so the state read here is the one it made.)
     deltaTo(id, d, note = null, quiet = false) {
       if (!d) return;
-      srv.sendTo(id, { t: 'delta', d, ...(note && !quiet ? { note } : {}) });
+      const extra = note && !quiet ? { note } : {};
+      const full = { t: 'delta', d, ...extra };
+      const st = store.cache.get(id)?.st, anyLean = (d.sto || 'stored' in (d.set || {})) && st && srv.anyLean(id);
+      if (anyLean && 'stored' in (d.set || {})) srv.storedWhole(id, st);
+      const leanD = anyLean && d.sto ? leanPush(d, srv.unitsDelta(id, st)) : d;
+      srv.sendEach(id, srv.leanPick(full, leanD === d ? full : { t: 'delta', d: leanD, ...extra }));
     },
     notice(id, msg, type = 'gold') { srv.sendTo(id, { t: 'notice', msg, type }); },
     async bumpStat(id, key) {
@@ -184,7 +275,10 @@ export async function startServer({
   srv.passive = passive;
 
   // ---- market prices: same data build as the client, refreshed daily from the marketplaces ----------------
-  let pricePatch = null, pricePatchGz = null;
+  // (Compressed once per price change, both ways: brotli at its best is a fifth smaller than gzip here, ~105 KB against
+  // ~135 KB. It takes a second or two, so it's made on zlib's own threads, not the one everything else runs on: nothing
+  // waits for it but the server's start, and after a refresh gzip goes out until it's ready, never the old prices.)
+  let pricePatch = null, pricePatchGz = null, pricePatchBr = null, brBuild = 0;
   const buildPatch = () => {
     const pick = (obj, f) => Object.fromEntries(Object.values(obj).map((x) => [x.id, f(x)]));
     pricePatch = {
@@ -192,7 +286,19 @@ export async function startServer({
       skins: pick(D.skins, (s) => s.p), stickers: pick(D.stickers, (s) => s.p), agents: pick(D.agents, (a) => a.p),
       cases: Object.fromEntries(D.cases.filter((c) => !c.custom).map((c) => [c.id, c.price])),
     };
-    pricePatchGz = zlib.gzipSync(JSON.stringify(pricePatch));
+    const text = JSON.stringify(pricePatch);
+    pricePatchGz = zlib.gzipSync(text);
+    pricePatchBr = null;
+    const build = ++brBuild;
+    return new Promise((resolve) => zlib.brotliCompress(text, { params: {
+      [zlib.constants.BROTLI_PARAM_QUALITY]: zlib.constants.BROTLI_MAX_QUALITY,
+      [zlib.constants.BROTLI_PARAM_MODE]: zlib.constants.BROTLI_MODE_TEXT,
+      [zlib.constants.BROTLI_PARAM_SIZE_HINT]: Buffer.byteLength(text),
+    } }, (err, buf) => {
+      if (err) log('[prices] brotli failed (gzip is sent)', err.message);
+      else if (build === brBuild) pricePatchBr = buf; // (not one a newer refresh has replaced)
+      resolve();
+    }));
   };
   const applyPatch = (p) => {
     for (const [id, v] of Object.entries(p.skins)) if (D.skins[id]) D.skins[id].p = v;
@@ -206,7 +312,7 @@ export async function startServer({
     const saved = rows[0] && (typeof rows[0].v === 'string' ? JSON.parse(rows[0].v) : rows[0].v);
     if (saved?.generatedAt === D.generatedAt && saved.pricedAt > (D.pricedAt || '')) { applyPatch(saved); log(`[prices] using prices from ${saved.pricedAt}`); }
   } catch (e) { log('[prices] could not load saved prices', e.message); }
-  buildPatch();
+  await buildPatch();
   async function refreshPrices() {
     try {
       log('[prices] refreshing from marketplaces…');
@@ -301,8 +407,13 @@ export async function startServer({
     try { url = new URL(req.url, 'http://x'); } catch { res.writeHead(400, cors); return res.end(); }
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
     try {
-      // (`commit`: what a deploy waits for, to know the new code is the one answering)
-      if (url.pathname === '/health') return json(res, 200, { ok: true, online: sockets.size, data: D.generatedAt, pricedAt: D.pricedAt, requiredVersion: release.required, discord: { connected: !!discord.status().connected }, commit });
+      // (`commit`: what a deploy waits for, to know the new code is the one answering. `ws`: the open connections, and how
+      // many of them are compressed: behind a proxy, that the compression got through it.)
+      if (url.pathname === '/health') {
+        const conns = [...wss.clients];
+        return json(res, 200, { ok: true, online: sockets.size, data: D.generatedAt, pricedAt: D.pricedAt, requiredVersion: release.required, discord: { connected: !!discord.status().connected }, commit,
+          ws: { connections: conns.length, deflate: conns.filter((c) => /permessage-deflate/.test(c.extensions)).length } });
+      }
       if (url.pathname === '/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         return res.end(`<!doctype html><title>CS2 Case Simulator server</title><body style="font-family:system-ui;background:#0a0d12;color:#e8eef5;padding:40px">
@@ -310,9 +421,11 @@ export async function startServer({
           <p>Players online: ${sockets.size}</p></body>`);
       }
       if (url.pathname === '/api/prices' && req.method === 'GET') {
-        const gz = /gzip/.test(req.headers['accept-encoding'] || '');
-        res.writeHead(200, { 'content-type': 'application/json', ...(gz ? { 'content-encoding': 'gzip' } : {}), ...cors });
-        return res.end(gz ? pricePatchGz : JSON.stringify(pricePatch));
+        // Brotli to whoever accepts it (the game's Chromium does, and unpacks it itself), then gzip, then plain JSON.
+        const ae = String(req.headers['accept-encoding'] || '');
+        const enc = acceptsBrotli(ae) && pricePatchBr ? 'br' : /gzip/.test(ae) ? 'gzip' : null; // (brotli: once it's made)
+        res.writeHead(200, { 'content-type': 'application/json', ...(enc ? { 'content-encoding': enc } : {}), vary: 'Accept-Encoding', ...cors });
+        return res.end(enc === 'br' ? pricePatchBr : enc === 'gzip' ? pricePatchGz : JSON.stringify(pricePatch));
       }
       if (req.method === 'POST' && ['/api/register', '/api/login', '/api/logout', '/api/reset'].includes(url.pathname)) {
         const ip = ipOf(req);
@@ -413,12 +526,45 @@ export async function startServer({
   }
 
   // ---- WebSocket ------------------------------------------------------------------------------------
-  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: MAX_MSG });
-  const playersList = () => [...sockets.keys()].map((id) => {
+  // A permessage-deflate offer ws can't take (one asking for a smaller window than DEFLATE's, or a header it can't read)
+  // would end the handshake with a 400: such a game connects without compression instead, as every game did before.
+  server.prependListener('upgrade', (req) => {
+    const offer = req.headers['sec-websocket-extensions'];
+    if (offer === undefined) return;
+    try {
+      const offers = extension.parse(offer)[PerMessageDeflate.extensionName];
+      if (offers) new PerMessageDeflate({ ...DEFLATE, isServer: true }).accept(offers);
+    } catch { delete req.headers['sec-websocket-extensions']; }
+  });
+  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: MAX_MSG, perMessageDeflate: DEFLATE });
+
+  // Who's online: { name, online, worth } for each player connected. A game without lean1 is sent the whole list on every
+  // join, leave, kick or rename, as before. A lean1 game gets it in its welcome, then only what changed since the last
+  // time anyone was told ({ t: 'players.d', join, leave, upd }: worths are refreshed at those same moments).
+  const playerRow = (id) => {
     const e = store.cache.get(id);
     return { name: e?.name || '?', online: true, worth: e ? Math.round(ownedValue(e.st)) : 0 };
-  });
-  const broadcastPlayers = () => { const players = playersList(); for (const id of sockets.keys()) srv.sendTo(id, { t: 'players', players }); };
+  };
+  const playersList = () => [...sockets.keys()].map(playerRow);
+  let shownPlayers = new Map(); // userId -> the row lean1 games were last told
+  // (welcomed: a lean1 connection just sent its welcome, whose list was read in this same moment: it has these changes)
+  const broadcastPlayers = (welcomed = null) => {
+    const now = new Map([...sockets.keys()].map((id) => [id, playerRow(id)]));
+    const join = [], leave = [], upd = [];
+    for (const [id, p] of shownPlayers) if (!now.has(id)) leave.push(p.name);
+    for (const [id, p] of now) {
+      const was = shownPlayers.get(id);
+      if (!was) join.push(p);
+      else if (was.name !== p.name) upd.push({ ...p, was: was.name }); // (a rename: the row it replaces)
+      else if (was.worth !== p.worth) upd.push(p);
+    }
+    shownPlayers = now;
+    const changes = join.length || leave.length || upd.length
+      ? { t: 'players.d', ...(join.length ? { join } : {}), ...(leave.length ? { leave } : {}), ...(upd.length ? { upd } : {}) } : null;
+    let full = null;
+    // (A lean1 connection not welcomed yet gets nothing: its welcome has the list, and is followed at once by one of these.)
+    for (const id of sockets.keys()) srv.sendEach(id, (ws) => (srv.lean(ws) ? (ws.welcomed && ws !== welcomed ? changes : null) : (full ??= { t: 'players', players: [...now.values()] })));
+  };
 
   wss.on('connection', (ws, req) => {
     let user = null, greeting = false;
@@ -450,6 +596,10 @@ export async function startServer({
         if (outdated) return refuse(outdated);
         if (msg.v !== PROTOCOL) return refuse({ t: 'fatal', error: 'Your game is a different version from the server. Update the game.', code: 'version' });
         if (msg.data !== D.generatedAt) return refuse({ t: 'fatal', error: 'Your game data is a different version from the server. Update the game (or the server).', code: 'version' });
+        // The capabilities it announced that this server has (unknown ones are left out). The welcome names them back only
+        // to a game that sent caps at all: an older game's welcome is unchanged.
+        const asked = Array.isArray(msg.caps);
+        const caps = new Set(asked ? msg.caps.filter((c) => typeof c === 'string' && CAPS.has(c)) : []);
         greeting = true;
         const began = kickSeq; // (a kick from here on that this hello's checks can't have seen)
         try {
@@ -470,6 +620,7 @@ export async function startServer({
           ws.user = u; // (a rename updates the name its requests use)
           ws.ipHash = ipHash; // (a network ban throws off every account connected from it)
           ws.app = msg.app; // (a new release drops the versions it leaves behind)
+          ws.caps = caps; // (the newer message shapes this game reads: see CAPS)
           if (!sockets.has(u.id)) sockets.set(u.id, new Set());
           sockets.get(u.id).add(ws);
           store.online.add(u.id);
@@ -477,20 +628,35 @@ export async function startServer({
           // the welcome brings, `away` says what it paid, and their other windows are sent the change.
           const { state, away } = await store.withUser(u.id, async (e) => ({ away: await passive.connected(e), state: e.st }));
           if (away) passive.push(u.id, { t: 'delta', d: away.d }, ws);
+          const offers = await trades.list(u.id), account = await admin.account(u.id);
+          // (From here to broadcastPlayers nothing waits: the players list a lean1 game is sent here is the one the changes
+          // after it start from. A lean1 game asks for the lobbies when its Gamble page opens: they're not in its welcome.)
+          // (lean1: no Storage Units' contents, their counts and values instead: server/lean.mjs. Its changes start from these
+          // sums, and it knows every unit it has now only by them until it asks for one.)
+          const lean = srv.lean(ws), sums = lean ? unitSums(state) : null;
+          if (lean) { unitsSent.set(u.id, sumsSent(sums)); ws.unloaded = new Set(Object.keys(sums)); }
           send({
-            t: 'welcome', user: { id: u.id, name: u.name }, state, pricedAt: D.pricedAt, serverTime: Date.now(),
-            players: playersList(), trades: await trades.list(u.id), lobbies: live.snapshot(u.id), market: marketSnapshot(),
-            account: await admin.account(u.id), motd: admin.settings.motd || '',
+            t: 'welcome', user: { id: u.id, name: u.name }, state: lean ? leanState(state) : state, ...(lean ? { units: sums } : {}),
+            pricedAt: D.pricedAt, serverTime: Date.now(),
+            players: playersList(), trades: offers, ...(lean ? {} : { lobbies: live.snapshot(u.id) }), market: marketSnapshot(),
+            account, motd: admin.settings.motd || '',
             ...(away?.r.earned ? { away: { earned: away.r.earned, minutes: away.r.minutes, capped: away.r.capped } } : {}),
+            ...(asked ? { caps: [...caps] } : {}),
           });
           ws.welcomed = true; // (passive income's pushes wait for this: a change sent before it is in the welcome's state already)
-          broadcastPlayers();
+          broadcastPlayers(ws); // (not to this one if it's lean1: the list in its welcome, read just now, has these changes)
+          if (ws.tradesStale) trades.pushFull(u.id, ws).catch((e) => log('[trade] list failed', e?.message || e)); // (see Trades.pushChanged)
         } catch (e) {
           log('[ws] hello failed', e);
           ws.close(1011);
         } finally {
           greeting = false;
         }
+        return;
+      }
+      // A lean1 game says which pushes it wants: { t: 'sub', lobbies: true | false } as its Gamble page opens and closes.
+      if (user && msg.t === 'sub') {
+        if (srv.lean(ws) && typeof msg.lobbies === 'boolean') live.subscribe(ws, msg.lobbies);
         return;
       }
       if (!user || msg.t !== 'rpc') return;
@@ -501,22 +667,43 @@ export async function startServer({
           if (!admin.settings.gambling && /^gamble\./.test(String(msg.m))) throw new GameError('Gambling is turned off on this server right now', 'off');
           const args = msg.args || {};
           const boughtNow = [];
+          const name = String(msg.m);
           const out = await store.withUser(user.id, async (e) => {
             const ctx = makeCtx(e.st, { online: true, invCap: INV_CAP, reserved: trades.reserved(user.id), asked: trades.asked(user.id) });
             // The market's stock is shared by everyone on the server.
             ctx.market = (w) => ({ has: (lid) => soldSet(w).has(lid), add: (lid) => { soldSet(w).add(lid); marketDirty = true; boughtNow.push([w, lid]); } });
             ctx.serial = srv.serial; // serial numbers are counted across the server
             ctx.dirty.add('money');
-            const r = runAction(ctx, String(msg.m), args);
+            // (lean1's shapes are made here, while the state is this action's: they compare its stats with these)
+            const statsWere = srv.anyLean(user.id) ? statsBefore(e.st) : null;
+            const r = runAction(ctx, name, args);
             store.markDirty(e);
-            if (IN_TRANSACTION.test(String(msg.m))) await store.commit([e]);
-            return { r, d: delta(ctx) };
+            if (IN_TRANSACTION.test(name)) await store.commit([e]);
+            const d = delta(ctx);
+            return { r, d, lean: statsWere ? leanAct(name, r, d, { statsWere, units: d.sto ? srv.unitsDelta(user.id, e.st) : null }) : null };
           });
-          reply(true, { r: out.r, d: out.d });
+          // (a lean1 connection's lean, made above if any of the player's connections announced it: one that connected
+          // meanwhile gets the old shapes this once, which it reads too)
+          const leanOut = srv.lean(ws) && out.lean;
+          reply(true, leanOut ? { r: leanOut.r, d: forConnection(leanOut.d, ws.unloaded) } : { r: out.r, d: out.d });
           for (const [w, lid] of boughtNow) for (const id of sockets.keys()) srv.sendTo(id, { t: 'market', w, lid });
-          srv.sendTo(user.id, { t: 'delta', d: out.d }, ws); // other tabs of the same player
-          if (OPENED.has(String(msg.m))) announceDrops(user.name, out.r.items || [out.r.item]);
+          // Other tabs of the same player.
+          const full = { t: 'delta', d: out.d };
+          srv.sendEach(user.id, srv.leanPick(full, out.lean ? { t: 'delta', d: out.lean.d } : full), ws);
+          if (OPENED.has(name)) announceDrops(user.name, out.r.items || [out.r.item]);
           return;
+        }
+        // What's in one of your own Storage Units ({ unit }: its uid), which a lean1 welcome leaves out. → { unit, items, sum }
+        // Answered while the player's state is held: a change to the unit after it is sent after it, one before it is in it.
+        if (msg.ns === 'social' && msg.m === 'stored') {
+          const unit = String(msg.args?.unit ?? '');
+          socials.limit('unit', user.id);
+          return await store.withUser(user.id, async (e) => {
+            const r = storedOfUnit(e.st, unit);
+            if (!r) throw new GameError('That Storage Unit is gone', 'missing');
+            ws.unloaded?.delete(unit); // (its changes from here on carry what goes into it: the game has its contents now)
+            reply(true, { r });
+          });
         }
         if (msg.ns === 'social') {
           const out = await social(user, String(msg.m), msg.args || {}, ws);
@@ -524,7 +711,11 @@ export async function startServer({
         }
         if (msg.ns === 'trade') {
           if (!admin.settings.trading && !TRADE_ALWAYS.has(String(msg.m))) throw new GameError('Trading is turned off on this server right now', 'off');
-          return reply(true, { r: await trades.rpc(user, String(msg.m), msg.args || {}) });
+          const r = await trades.rpc(user, String(msg.m), msg.args || {});
+          // (lean1: an accept's answer without its d, the changes the trade made to you, which every one of your connections
+          // has just been sent as a delta: the game takes them from that, and never read this copy)
+          if (srv.lean(ws) && msg.m === 'accept' && r && typeof r === 'object' && 'd' in r) { const { d: _d, ...rest } = r; return reply(true, { r: rest }); }
+          return reply(true, { r });
         }
         if (msg.ns === 'gamble') {
           if (!admin.settings.gambling && !GAMBLE_ALWAYS.has(String(msg.m))) throw new GameError('Gambling is turned off on this server right now', 'off');
@@ -549,6 +740,7 @@ export async function startServer({
       set?.delete(ws);
       if (set && !set.size) {
         sockets.delete(user.id);
+        unitsSent.delete(user.id);
         store.online.delete(user.id);
         broadcastPlayers();
         socials.left(user.id).catch((e) => log('[social] left failed', e?.message || e));

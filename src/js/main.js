@@ -2,7 +2,7 @@ import { $, $$, money, debounce, esc } from './util.js';
 import { act, online } from './backend.js';
 import { loadData } from './data.js';
 import { S, loadState, on, saveSync, save, retiredOnLoad } from './state.js';
-import { ownedValue } from './engine/storage.js';
+import { ownedWorth } from './stored.js';
 import { toast, topModal, openModal, installTooltips } from './ui.js';
 import { initMenu, initMoreMenu } from './menu.js';
 import { loadGameSounds } from './audio.js';
@@ -57,7 +57,7 @@ function updateBalance() {
 }
 const updateInv = debounce(() => {
   $('#inv-count').textContent = S.inv.length;
-  $('#net-worth').textContent = money(ownedValue(S));
+  $('#net-worth').textContent = money(ownedWorth());
 }, 150);
 const updateStars = () => { $('#star-count').textContent = S.stars || 0; };
 // Unread messages and friend requests: from the NPC players offline, from real players online.

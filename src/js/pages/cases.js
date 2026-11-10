@@ -1,9 +1,10 @@
 import { esc, money, imgUrl, round2 } from '../util.js';
 import { D, WEARS, casePrice, caseTiers, rarityColor, DOPPLER_PHASE_WEIGHT, collectionBox, eventShort, CASE_KINDS, keyFor } from '../data.js';
 import * as I from '../items.js';
-import { S, save, emit } from '../state.js';
+import { S, save, emit, setAutoOpening } from '../state.js';
 import { autoSellLabel, autoSellModal, autoSellRules } from '../autosell.js';
-import { act } from '../backend.js';
+import { act, can, online } from '../backend.js';
+import { net } from '../net/online.js';
 import { sfx } from '../audio.js';
 import { toast, openModal, itemCard, patternTag, sellItems, openInspect, showItemDetail, rarityOddsHTML } from '../ui.js';
 import { playCaseIntro } from '../caseintro.js';
@@ -473,8 +474,20 @@ function skinPreview(c, ids, odds) {
 }
 
 // ---- your cases and keys ----------------------------------------------------------------------
-// Cases you buy go to your inventory, and one that takes a key opens with one of its keys (bought apart), like CS2.
-const usable = (it) => !it.lk;
+// Cases you buy go to your inventory, and one that takes a key opens with one of its keys (bought apart), like CS2. Online, one
+// in a trade offer you made that's still open isn't counted: the server won't open it (what's short is then bought, and
+// shortfall's cost is what the game shows and checks for that).
+let offersSeen = null, offered = new Set();
+function inMyOffers(uid) {
+  const list = net.trades(); // (a new list whenever the offers change)
+  if (list !== offersSeen) {
+    offersSeen = list;
+    const me = net.me()?.id;
+    offered = new Set((list || []).filter((t) => t?.status === 'open' && t.from?.id === me).flatMap((t) => (t.give?.items || []).map((i) => i.uid)));
+  }
+  return offered.has(uid);
+}
+const usable = (it) => !it.lk && !(online() && inMyOffers(it.uid));
 export const ownedCases = (c) => S.inv.filter((it) => it.t === 'crate' && it.id === c.id && usable(it));
 export function ownedKeys(c) {
   const key = keyFor(c);
@@ -515,12 +528,25 @@ export function buyCrateKey(item) {
   const c = D.caseById[item.id];
   return c && keyFor(c) ? buy(c, 'key', 1) : Promise.resolve(false);
 }
-// Buys what's missing to open n (auto open, "Buy & open again"). Returns what it cost; throws if you can't afford it.
+// Buys what's missing to open n (auto open, "Buy & open again"), on a server without case.open's buy. Returns what it cost;
+// throws if you can't afford it.
 async function buyMissing(c, n) {
   const need = shortfall(c, n);
   if (need.cases) await act('case.buy', { id: c.id, n: need.cases });
   if (need.keys) await act('key.buy', { key: keyFor(c), n: need.keys });
   return need.cost;
+}
+// Opens n of your oldest, buying what's missing first (auto open, "Buy & open again"). Offline, and on a server that has it,
+// that's one request (case.open's buy: one answer instead of three); on an older server, case.buy and key.buy first. → the
+// opening's answer, and what the buying cost (bought.cost, else the shortfall's). (maxCost: what the game worked out, which
+// is what it checked against your money: the server buys no more than that.)
+async function buyAndOpen(c, n, args = {}) {
+  if (can('buyOpen')) {
+    const r = await act('case.open', { id: c.id, n, ...args, buy: true, maxCost: shortfall(c, n).cost });
+    return { r, cost: r.bought?.cost || 0 };
+  }
+  const cost = await buyMissing(c, n);
+  return { r: await act('case.open', { id: c.id, n, ...args }), cost };
 }
 
 // ---- opening -------------------------------------------------------------------------------
@@ -583,15 +609,16 @@ async function runAutoOpen(c, n, p) {
   };
   draw();
   let reason = p.count ? `Finished ${p.count} openings` : 'Stopped';
+  setAutoOpening(true); // (pages that ask the server after every change wait: state.js calmly)
   try {
     while (!run.stop && (!p.count || run.done < p.count)) {
       const cost = shortfall(c, n).cost;
       if (S.money + 1e-9 < cost) { reason = 'Not enough money for the next opening'; break; }
       if (cost && S.money - cost < p.minBalance) { reason = `Your balance would drop below ${money(p.minBalance)}`; break; }
-      let r;
-      try { await buyMissing(c, n); r = await act('case.open', { id: c.id, n, autoSell: autoSellRules() }); } catch (e) { reason = e.message; break; }
+      let r, paid;
+      try { ({ r, cost: paid } = await buyAndOpen(c, n, { autoSell: autoSellRules() })); } catch (e) { reason = e.message; break; }
       run.done++;
-      run.spent = round2(run.spent + cost);
+      run.spent = round2(run.spent + paid);
       run.sold = round2(run.sold + (r.autoSold || 0));
       for (const it of r.items) {
         if (!it.as) run.kept.push(it);
@@ -609,6 +636,7 @@ async function runAutoOpen(c, n, p) {
     panel.remove();
     opening = false;
     autoRun = null;
+    setAutoOpening(false);
   }
   const keptValue = run.kept.reduce((s, i) => s + I.itemValue(i), 0);
   const net = keptValue + run.sold - run.spent;
@@ -623,14 +651,16 @@ async function runAutoOpen(c, n, p) {
   });
 }
 
-// Opens n of your cases (uids: the ones picked in the inventory), each with one of your keys for it.
-export async function openCase(c, n, { uids = null } = {}) {
+// Opens n of your cases (uids: the ones picked in the inventory), each with one of your keys for it. buy: what's missing is
+// bought first ("Buy & open again").
+export async function openCase(c, n, { uids = null, buy = false } = {}) {
   if (opening) return;
   opening = true;
   let r;
   try {
     // Rolled and saved (or rolled on the server) before the animation, so nothing is lost if the app closes.
-    r = await act('case.open', { id: c.id, n, ...(uids ? { uids } : {}), autoSell: autoSellRules() });
+    const args = { ...(uids ? { uids } : {}), autoSell: autoSellRules() };
+    r = buy && !uids ? (await buyAndOpen(c, n, args)).r : await act('case.open', { id: c.id, n, ...args });
   } catch (e) {
     opening = false;
     sfx.error();
@@ -650,10 +680,7 @@ export async function openCase(c, n, { uids = null } = {}) {
   const need = shortfall(c, n);
   showResults(c, r.items, n, {
     againLabel: need.cost ? `Buy & open again (${money(need.cost)})` : `Open again (${ownedCases(c).length} left)`,
-    again: async () => {
-      try { await buyMissing(c, n); } catch (e) { sfx.error(); toast(esc(e.message), 'bad'); return; }
-      openCase(c, n);
-    },
+    again: () => openCase(c, n, { buy: true }),
   });
 }
 // A case from your inventory (its details or right-click menu).

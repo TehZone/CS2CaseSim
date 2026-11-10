@@ -26,7 +26,8 @@ let root = null, offs = [], busy = false;
 export function render(r) {
   root = r;
   offs.forEach((o) => o());
-  offs = [on('inv', () => !busy && draw()), on('money', () => updateCost()), net.on('lobbies', () => !busy && drawLobbies())];
+  // (net.watch: the server sends the live lobbies while this page is open)
+  offs = [on('inv', () => !busy && draw()), on('money', () => updateCost()), net.on('lobbies', () => !busy && drawLobbies()), net.watch('lobbies')];
   draw();
 }
 export function destroy() { offs.forEach((o) => o()); offs = []; root = null; }
