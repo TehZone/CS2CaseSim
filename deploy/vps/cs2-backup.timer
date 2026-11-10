@@ -1,0 +1,12 @@
+# cs2-backup.timer: a backup every night at about 04:15 UTC (a missed one runs at the next boot). setup.sh installs and
+# enables it.   systemctl list-timers cs2-backup.timer
+[Unit]
+Description=CS2 Case Simulator server: nightly database backup
+
+[Timer]
+OnCalendar=*-*-* 04:15:00 UTC
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

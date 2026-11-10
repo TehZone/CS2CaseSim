@@ -1,0 +1,13 @@
+# cs2-deploy.timer: runs cs2-deploy.service a minute after it starts (at boot, or when setup.sh enables it), then a
+# minute after each run ends, so two runs never overlap. setup.sh installs and enables it.
+#   systemctl list-timers cs2-deploy.timer     sudo systemctl stop cs2-deploy.timer   (pauses the auto-deploy)
+[Unit]
+Description=CS2 Case Simulator server: look for new commits on main about every minute
+
+[Timer]
+OnActiveSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

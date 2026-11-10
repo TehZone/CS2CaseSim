@@ -7,6 +7,7 @@ import net from 'node:net';
 import WebSocket from 'ws';
 
 process.env.JACKPOT_MS = '1500';
+for (const k of ['HOST', 'SERVER_COMMIT', 'RENDER_GIT_COMMIT']) delete process.env[k]; // (the checks of /health's commit and HOST set them)
 const { startServer } = await import('./index.mjs');
 const { D, casePrice, keyFor } = await import('../src/js/engine/data.js');
 const { serialKey, makeStickerItem, makeSkinItem, itemValue } = await import('../src/js/engine/items.js');
@@ -661,6 +662,29 @@ try {
   const odd = [await rawGet('//'), await rawGet('///'), await rawGet('//?x=1'), await rawGet('http://')];
   check('a stranger: an address that isn\'t one is refused', odd.every((l) => / 400 /.test(l)), odd.join(' | '));
   check('a stranger: nothing they send ends the server', (await fetch(base() + '/health')).ok);
+
+  // ---- /health's commit and HOST (deploy/vps: the server behind Caddy, and a deploy waiting for its commit) -------------
+  const health = async (b = base()) => (await fetch(b + '/health')).json();
+  check('/health: commit is null when nothing says which', (await health()).commit === null);
+  // (whether something answers on that address and the server's port)
+  const answers = (host) => new Promise((res) => {
+    const s = net.connect(server.port, host, () => { s.destroy(); res(true); });
+    s.on('error', () => res(false));
+  });
+  const v6Before = await answers('::1');
+  const restartWith = async (env) => {
+    await server.close();
+    Object.assign(process.env, env);
+    try { server = await startServer({ port: 0, db: { dataDir: DIR }, log: quiet, priceRefresh: false, discord: false }); }
+    finally { for (const k of Object.keys(env)) delete process.env[k]; }
+  };
+  await restartWith({ RENDER_GIT_COMMIT: 'render0' });
+  check('/health: the commit Render says (RENDER_GIT_COMMIT)', (await health()).commit === 'render0');
+  await restartWith({ HOST: '127.0.0.1', SERVER_COMMIT: 'abc1234', RENDER_GIT_COMMIT: 'render0' });
+  const h = await health(`http://127.0.0.1:${server.port}`);
+  check('/health: SERVER_COMMIT first', h.commit === 'abc1234', String(h.commit));
+  check('HOST: the server answers on that address', h.ok === true);
+  check('HOST: and on no other', !(await answers('::1')), v6Before ? '' : '(this machine has no ::1 to try it on)');
 } catch (e) {
   failed++;
   console.error('FAIL  test crashed:', e);

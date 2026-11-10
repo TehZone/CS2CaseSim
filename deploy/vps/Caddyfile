@@ -1,0 +1,9 @@
+# Caddyfile template for the CS2 Case Simulator server (deploy/vps). setup.sh writes it to /etc/caddy/Caddyfile with
+# your domain on the site line below and reloads Caddy:  sudo bash ~/vps/setup.sh server.example.com
+# Caddy gets and renews the HTTPS certificate by itself, and WebSockets (the game's /ws) pass straight through.
+# It puts the player's address in X-Forwarded-For and drops whatever the player sent in that header (no trusted_proxies
+# here), so the server takes the one entry there: TRUST_PROXY=1 in /etc/cs2-server/env.
+# A reload of Caddy closes open WebSockets (the game reconnects by itself): setup.sh reloads only when this changed.
+__DOMAIN__ {
+	reverse_proxy 127.0.0.1:8787
+}

@@ -7,7 +7,10 @@
 // Staff, bans and the Discord bot: server/admin.mjs and server/discord.mjs (env: ADMIN_USERS, DISCORD_BOT_TOKEN or
 // DISCORD_TOKEN_FILE, DISCORD_GUILD_ID, DISCORD_ADMIN_ROLES, DISCORD_MOD_ROLES, DISCORD_LOG_CHANNEL, DISCORD_DROPS_CHANNEL, DISCORD_LINKED_ROLE,
 // DISCORD_GATEWAY=0 for an instance that must not run the bot's gateway). TRUST_PROXY=<hops>: only behind reverse
-// proxies (Render: 1), the client's address is taken from X-Forwarded-For, that many entries from the right.
+// proxies (Render: 1, Caddy on the same machine: 1), the client's address is taken from X-Forwarded-For, that many
+// entries from the right. HOST=<address>: listen on that address only (127.0.0.1 behind a proxy on the same machine,
+// deploy/vps); unset, every interface. /health's `commit`: SERVER_COMMIT (deploy/vps/deploy.sh writes it) or
+// RENDER_GIT_COMMIT (Render sets it), null without either.
 // The version lock: server/release.mjs (env: RELEASE_FEED; on by itself when NODE_ENV is production).
 import http from 'node:http';
 import fs from 'node:fs';
@@ -89,7 +92,8 @@ async function openDiscord(opt, log) {
 }
 
 export async function startServer({
-  port = +process.env.PORT || 8787, db: dbOpts = {}, log = console.log, priceRefresh = process.env.PRICE_REFRESH !== '0',
+  port = +process.env.PORT || 8787, host = process.env.HOST || undefined, db: dbOpts = {}, log = console.log, priceRefresh = process.env.PRICE_REFRESH !== '0',
+  commit = process.env.SERVER_COMMIT || process.env.RENDER_GIT_COMMIT || null,
   admins = list(process.env.ADMIN_USERS), discord: discordOpt, trustProxy = process.env.TRUST_PROXY, release: releaseOpt = releaseFromEnv(),
 } = {}) {
   const data = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/game-data.json'), 'utf8'));
@@ -291,7 +295,8 @@ export async function startServer({
     try { url = new URL(req.url, 'http://x'); } catch { res.writeHead(400, cors); return res.end(); }
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
     try {
-      if (url.pathname === '/health') return json(res, 200, { ok: true, online: sockets.size, data: D.generatedAt, pricedAt: D.pricedAt, requiredVersion: release.required, discord: { connected: !!discord.status().connected } });
+      // (`commit`: what a deploy waits for, to know the new code is the one answering)
+      if (url.pathname === '/health') return json(res, 200, { ok: true, online: sockets.size, data: D.generatedAt, pricedAt: D.pricedAt, requiredVersion: release.required, discord: { connected: !!discord.status().connected }, commit });
       if (url.pathname === '/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         return res.end(`<!doctype html><title>CS2 Case Simulator server</title><body style="font-family:system-ui;background:#0a0d12;color:#e8eef5;padding:40px">
@@ -542,9 +547,9 @@ export async function startServer({
     for (const [id, k] of kicks) if (Date.now() - k.at > 120000) kicks.delete(id); // (no hello waits that long)
   }, 30000);
 
-  await new Promise((r) => server.listen(port, r));
+  await new Promise((r) => (host ? server.listen(port, host, r) : server.listen(port, r)));
   const actualPort = server.address().port;
-  log(`[server] listening on :${actualPort}`);
+  log(`[server] listening on ${host || ''}:${actualPort}${commit ? ` (commit ${String(commit).slice(0, 7)})` : ''}`);
   // The bot connects in the background; nothing waits for Discord.
   if (discord.enabled) Promise.resolve().then(() => discord.start()).catch((e) => log('[discord] start failed', e?.message || e));
 
@@ -565,10 +570,10 @@ export async function startServer({
   return { port: actualPort, close, srv, db, store, refreshPrices, admin, discord };
 }
 
-// Run directly: start and shut down cleanly on SIGTERM (Render sends it before stopping an instance).
+// Run directly: start and shut down cleanly on SIGTERM (systemd and Render send it before stopping the server).
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL) {
-    console.error('DATABASE_URL is not set. Set it to your Neon connection string (see DEPLOY.md).');
+    console.error('DATABASE_URL is not set. Set it to your Postgres connection string (see DEPLOY.md).');
     process.exit(1);
   }
   // Dev conveniences: --admins a,b (as ADMIN_USERS) and --discord-token-file <path> (as DISCORD_TOKEN_FILE).

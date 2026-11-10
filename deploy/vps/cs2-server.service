@@ -1,0 +1,63 @@
+# cs2-server.service: the CS2 Case Simulator multiplayer server (deploy/vps). setup.sh installs it in /etc/systemd/system.
+#   sudo systemctl status cs2-server     sudo systemctl restart cs2-server     journalctl -u cs2-server -f
+# It listens on 127.0.0.1:8787 only (HOST, PORT in /etc/cs2-server/env); Caddy answers on the domain over HTTPS.
+[Unit]
+Description=CS2 Case Simulator multiplayer server
+Documentation=https://github.com/TehZone/CS2CaseSim/blob/main/DEPLOY.md
+Wants=network-online.target postgresql.service
+# (postgresql.service is up once every cluster is: Debian's postgresql@.service units start Before= it)
+After=network-online.target postgresql.service
+# Not while the database is being replaced, or a replace didn't finish (the move from Neon, a restore): not even at
+# boot. Those scripts remove the hold before they start the server.
+ConditionPathExists=!/var/lib/cs2-deploy/hold
+# No start limit (by default systemd gives up for good after 5 starts in 10 s, Restart=always or not): a commit that
+# crashes at once keeps being restarted, and the deploy's restart of the commit before is never refused.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=cs2
+Group=cs2
+WorkingDirectory=/opt/cs2-server
+# The settings and secrets (root:cs2 0640), then the commit the last deploy wrote (/health reports it).
+EnvironmentFile=/etc/cs2-server/env
+EnvironmentFile=-/etc/cs2-server/commit.env
+ExecStart=/usr/local/bin/node server/index.mjs
+Restart=always
+RestartSec=2
+# SIGTERM: the server writes what's still only in memory and closes (server/index.mjs).
+KillSignal=SIGTERM
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Hardening. The server writes nothing to disk: everything it keeps is in PostgreSQL (PGlite, the embedded database,
+# is a dev dependency and isn't installed), so the whole filesystem is read-only to it and there are no ReadWritePaths.
+# It reads /opt/cs2-server and, with the Discord bot, /etc/cs2-server/discord-token. No MemoryDenyWriteExecute: V8's
+# JIT needs writable code memory. A system call outside @system-service fails with EPERM instead of killing it.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

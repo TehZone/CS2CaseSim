@@ -1,0 +1,15 @@
+# cs2-backup.service: one backup of the database (deploy/vps/backup.sh) into /var/backups/cs2-server, keeping 14.
+# cs2-backup.timer starts it every night; setup.sh installs both.
+#   sudo systemctl start cs2-backup     (a backup now)     journalctl -u cs2-backup
+[Unit]
+Description=CS2 Case Simulator server: back up the database
+Wants=postgresql.service
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/cs2-server/backup.sh
+SyslogIdentifier=cs2-backup
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=idle

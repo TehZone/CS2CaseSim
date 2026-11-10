@@ -1,0 +1,14 @@
+# cs2-deploy.service: one auto-deploy run (deploy/vps/deploy.sh): when origin/main moved, deploy it, or go back to the
+# commit before if it doesn't come up. cs2-deploy.timer starts it about every minute; setup.sh installs both.
+#   sudo systemctl start cs2-deploy     (a run now)     journalctl -u cs2-deploy     (what the runs did)
+[Unit]
+Description=CS2 Case Simulator server: deploy new commits on main
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/cs2-server/deploy.sh
+SyslogIdentifier=cs2-deploy
+TimeoutStartSec=15min
+Nice=5
