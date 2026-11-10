@@ -86,8 +86,8 @@ function draw() {
     <p class="muted" style="max-width:860px;line-height:1.6;font-size:13px">
       Fan-made simulator, not affiliated with or endorsed by Valve. Counter-Strike, CS2 and all item names and images are property of Valve Corporation.
       Item database: ByMykel CSGO-API (Steam CDN images). Market prices: Skinport public API plus CSFloat, Buff163, YouPin and Steam price feeds via csgotrader.app,
-      blended as a median of third-party marketplaces. Drop odds follow Valve's published rates. Pattern tiers (blue gems, Fire &amp; Ice, fade %) follow community lists
-      and are approximations. No real money or items are involved.
+      blended as a median of third-party marketplaces. Drop odds follow Valve's published rates. Pattern tiers (blue gems, Fire &amp; Ice, fade %, diamonds...) follow community lists,
+      most of them the CS.MONEY Wiki's rare patterns, and are approximations. No real money or items are involved.
       <br>Data built ${D.generatedAt ? new Date(D.generatedAt).toLocaleString() : '—'} · ${D.cases.filter((c) => c.kind === 'case').length} cases · ${Object.keys(D.skins).length} skins · ${Object.keys(D.stickers).length.toLocaleString()} stickers · ${Object.keys(D.agents).length} agents.
     </p>
   </div>`;

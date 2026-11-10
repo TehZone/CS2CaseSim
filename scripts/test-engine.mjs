@@ -113,11 +113,12 @@ function tierFreq(box, n) {
   check('cheap skins are almost always for sale', c1.share > 0.95 && c1.most > 1, `${(c1.share * 100).toFixed(0)}% of restocks`);
   check('a Dragon Lore is listed rarely, one at a time', c2.share > 0 && c2.share < 0.12 && c2.most === 1, `${(c2.share * 100).toFixed(1)}% of restocks`);
   check('a Ruby knife is listed very rarely', c3.share < 0.05 && c3.most <= 1, `${ruby.n}: ${(c3.share * 100).toFixed(1)}% of restocks`);
-  // Premium patterns (blue gems etc.) are kept on only ~10% of listings that roll one.
+  // Premium patterns (blue gems etc.) are kept on only ~10% of listings that roll one. (69 of the AK-47's seeds are a Blue Gem
+  // Tier 2 or better since the CS.MONEY Wiki's ranks, 28 before: hence one in 100 restocks rather than one in 170.)
   const ch = Object.values(D.skins).find((s) => s.n === 'AK-47 | Case Hardened');
   let listings = 0, premium = 0;
   for (let w = W0; w < W0 + 3000; w++) for (const l of MK.skinListings(ch, w)) { listings++; if (['t0', 't1', 't2'].includes(I.patternInfo(l.item).tier)) premium++; }
-  check('blue gems rarely reach the market', premium / 3000 < 0.006, `${premium} blue-gem-tier AK Case Hardened listings in 3000 restocks (${listings} listings)`);
+  check('blue gems rarely reach the market', premium / 3000 < 0.01, `${premium} blue-gem-tier AK Case Hardened listings in 3000 restocks (${listings} listings)`);
   const kato = Object.values(D.stickers).filter((s) => /Katowice/.test(s.t) && /2014/.test(s.t) && s.fx === 'Holo').sort((a, b) => b.p - a.p)[0];
   let kl = 0; for (let w = W0; w < W0 + 2000; w++) if (MK.unitStock('sticker', kato, w)) kl++;
   check('rare stickers are listed rarely', kl / 2000 < 0.06, `${kato.n} ($${kato.p}): ${(kl / 20).toFixed(1)}% of restocks`);
@@ -145,7 +146,8 @@ function tierFreq(box, n) {
 
 // ---- Case Hardened and Heat Treated: every label comes from what the seed really shows --------------------------------
 {
-  const { analyzePattern, playside } = await E('patterns');
+  // (What the measuring gives by itself: on the 12 skins the CS.MONEY Wiki covers its groups go on top, checked further down.)
+  const { basePattern: analyzePattern, playside } = await E('patterns');
   const { CASE_HARDENED } = await E('case-hardened-data');
   const seeds = Array.from({ length: 1001 }, (_, i) => i);
   const hardened = Object.values(D.skins).filter((s) => s.fin === 'Case Hardened' || s.fin === 'Heat Treated');
@@ -250,6 +252,135 @@ function tierFreq(box, n) {
   check('Hydra Gloves: every label\'s worth at least a plain pair, and nothing else reads the guide\'s list', gloves.every((p) => p.mult >= 1) && !gloves.some((p) => /High Blue|Above-average/.test(p.label)) && !/Blaze|Tier 4/.test(label(karambit, 15)) && label(skin('weapon_mac10', 'Case Hardened'), 174) !== 'Blaze Gem Tier 1');
   check('Case Hardened: a seed past the end of the measuring shows nothing rather than break', [-1, 1001, 5000].every((sd) => { const p = analyzePattern(ak, sd); return p.label === '' && p.blue === undefined && p.mult === 1; }));
   check('Case Hardened: the data stays small', fs.statSync(path.join(ROOT, 'src/js/engine/case-hardened-data.js')).size < 120e3);
+}
+
+// ---- The CS.MONEY Wiki's rare patterns (rare-patterns-data.js): 100 skins' groups, 22 Fades' real percentages ------------
+{
+  const P = await E('patterns');
+  const raw = fs.readFileSync(path.join(ROOT, 'scripts/data/cs-money-rare-patterns.json'), 'utf8'), src = JSON.parse(raw).skins;
+  const seeds = Array.from({ length: 1001 }, (_, i) => i);
+  const named = new Map(Object.values(D.skins).filter((s) => !s.v).map((s) => [s.n, s]));
+  const pages = Object.entries(src).map(([k, e]) => ({ k, ...e, skin: named.get(e.name) }));
+  const fades = pages.filter((p) => p.fade), grouped = pages.filter((p) => !p.fade);
+  const on = (k, sd) => P.analyzePattern(named.get(src[k].name), sd);
+  const is = (k, sd, label, mult, tier) => { const p = on(k, sd); return p.label === label && p.mult === mult && (tier === undefined || p.tier === tier); };
+  const key = (g) => g.type + (g.tier != null ? '/' + g.tier : '');
+  const unpack = (s) => Array.from({ length: s.length / 2 }, (_, i) => parseInt(s.slice(i * 2, i * 2 + 2), 32));
+  const shown = (list) => (list.length ? `${list.length}: ${list.slice(0, 5).join(', ')}` : '');
+
+  check('Rare patterns: all 100 of the wiki\'s skins are in the game, each a skin of its own', pages.length === 100 && fades.length === 22
+    && pages.every((p) => p.skin && P.rarePatterns(p.skin)) && new Set(pages.map((p) => p.skin?.id)).size === 100);
+  let bad = grouped.filter((p) => {
+    const want = {};
+    for (const g of p.groups) want[key(g)] = [...new Set([...(want[key(g)] || []), ...g.seeds])].sort((a, b) => a - b);
+    return JSON.stringify(Object.fromEntries(Object.entries(P.rarePatterns(p.skin).groups).map(([k, v]) => [k, unpack(v)]))) !== JSON.stringify(want);
+  }).map((p) => p.k);
+  check('Rare patterns: every skin has all its groups, every seed of each and no other', !bad.length, shown(bad));
+  bad = grouped.flatMap((p) => p.groups.filter((g) => !P.RARE[P.rarePatterns(p.skin).set]?.[key(g)]).map((g) => `${p.k} ${key(g)}`));
+  check('Rare patterns: every group has its label, tier and boost in the one table', !bad.length, shown(bad));
+  // (A Marble Fade tip on more of the knife's seeds than TIPS's last share is only told, in the info.)
+  const told = (g) => /-tip$/.test(g.type) && g.seeds.length > P.TIPS.at(-1)[0] * 1001;
+  bad = grouped.flatMap((p) => p.groups.flatMap((g) => g.seeds.filter((sd) => {
+    const r = P.analyzePattern(p.skin, sd);
+    if (told(g) && !r.label) return r.mult !== 1 || !r.info.some(([k, v]) => k === 'Tip' && `${v.toLowerCase()}-tip` === g.type);
+    return !r.label || !(r.mult > 1) || r.mult < (P.RARE[P.rarePatterns(p.skin).set][key(g)].mult ?? 1);
+  }).map((sd) => `${p.k} ${g.name} ${sd}`)));
+  check('Rare patterns: every seed of every group is named, and worth at least its group\'s boost (a tip on most of a knife only told)', !bad.length, shown(bad));
+  bad = grouped.filter((p) => !/case-hardened/.test(p.k)).flatMap((p) => seeds.filter((sd) => on(p.k, sd).label && !p.groups.some((g) => g.seeds.includes(sd))).map((sd) => `${p.k} ${sd}`));
+  check('Rare patterns: on the wiki\'s skins nothing else is named (no roll, no list for every knife, no measured Fire & Ice)', !bad.length, shown(bad));
+  check('Rare patterns: the source keeps only what\'s used, and the data stays small', !/preview|image|webp|png/i.test(raw) && fs.statSync(path.join(ROOT, 'src/js/engine/rare-patterns-data.js')).size < 70e3);
+
+  bad = fades.flatMap((p) => seeds.filter((sd) => { const r = P.analyzePattern(p.skin, sd); return r.fade !== p.fade[sd] || r.info.join() !== `Fade,${p.fade[sd].toFixed(1)}%`; }).map((sd) => `${p.k} ${sd}`));
+  check('Fade: the wiki\'s real percentage shows on all 22, every seed, instead of one made up from the seed', !bad.length, shown(bad));
+  bad = fades.flatMap((p) => seeds.filter((sd) => {
+    const r = P.analyzePattern(p.skin, sd), pct = p.fade[sd], whole = pct >= 99.5 ? 100 : Math.floor(pct);
+    const want = whole === 100 ? ['Full Fade', 't1', 1.5] : whole >= 97 ? [`${pct.toFixed(1)}% Fade`, whole === 97 ? 't3' : 't2', { 99: 1.3, 98: 1.2, 97: 1.1 }[whole]]
+      : whole >= 95 ? ['', '', 1.07] : ['', '', pct < 85 ? 0.92 : 1];
+    return [r.label, r.tier, r.mult].join() !== want.join();
+  }).map((sd) => `${p.k} ${sd}`));
+  check('Fade: label and boost go by the percentage shown: Full Fade from 99.5%, then 99, 98 and 97% by number, 95-96% a little, under 85% less', !bad.length, shown(bad));
+  bad = fades.flatMap((p) => { const seen = new Map(); return seeds.filter((sd) => { const r = P.analyzePattern(p.skin, sd), k = r.info[0][1], was = seen.get(k); seen.set(k, `${r.tier} ${r.mult}`); return was != null && was !== seen.get(k); }).map((sd) => `${p.k} ${sd}`); });
+  check('Fade: copies that show the same percentage read the same (the wiki\'s whole-percent groups split its x.5s both ways)', !bad.length
+    && fades.every((p) => p.groups.every((g) => g.seeds.every((sd) => Math.abs(p.fade[sd] - +g.type) <= 0.5))), shown(bad));
+  check('Fade: spot checks (the Karambit\'s 412 is a Full Fade, the AWP\'s 129 reads 99.5% and is one too, a Butterfly\'s 412 is 80%)',
+    is('karambit/fade', 412, 'Full Fade', 1.5, 't1') && on('karambit/fade', 412).info.join() === 'Fade,100.0%' && is('awp/fade', 129, 'Full Fade', 1.5, 't1') && on('awp/fade', 129).info.join() === 'Fade,99.5%'
+    && is('awp/fade', 628, 'Full Fade', 1.5) && is('karambit/fade', 1000, '98.6% Fade', 1.2, 't2')
+    && is('butterfly-knife/fade', 412, '', 0.92) && on('butterfly-knife/fade', 412).fade === 80 && is('glock-18/fade', 41, 'Full Fade', 1.5) && is('m4a1-s/fade', 0, '', 1) && on('m4a1-s/fade', 0).fade === 88.3);
+
+  check('Marble Fade: spot checks: Fire & Ice\'s Max ranks and tiers, the fakes, Tricolor, the tips',
+    is('karambit/marble-fade', 412, '1st Max', 2.6, 't0') && is('karambit/marble-fade', 152, '3rd Max', 2.3, 't1') && is('karambit/marble-fade', 28, '10th Max', 1.8, 't3')
+    && is('karambit/marble-fade', 9, 'Max Fake Fire & Ice', 1.25) && is('karambit/marble-fade', 60, 'Fake Fire & Ice', 1.15, 't3') && is('karambit/marble-fade', 0, 'Tricolor', 1.1)
+    && is('talon-knife/marble-fade', 41, 'Fire & Ice Tier 1', 1.9, 't1') && is('talon-knife/marble-fade', 6, 'Fake Fire & Ice Tier 1', 1.25, 't3') && is('talon-knife/marble-fade', 2, 'Tricolor Tier 3', 1.1)
+    && is('talon-knife/marble-fade', 412, 'Red Tip', 1.15) && is('stiletto-knife/marble-fade', 34, 'Blue Tip', 1.1) && is('nomad-knife/marble-fade', 11, 'Orange Tip', 1.05)
+    && is('butterfly-knife/marble-fade', 0, '', 1) && on('butterfly-knife/marble-fade', 0).info.join() === 'Tip,Red' && is('m9-bayonet/marble-fade', 0, '', 1) && is('butterfly-knife/marble-fade', 412, '', 1));
+  // Tips: the wiki gives nearly every seed of most knives one, so what a tip is worth is how rare it is on that knife.
+  bad = grouped.filter((p) => /marble-fade/.test(p.k)).flatMap((p) => {
+    const tips = p.groups.filter((g) => /-tip$/.test(g.type)).map((g) => {
+      const rs = g.seeds.filter((sd) => p.groups.every((h) => h === g || !h.seeds.includes(sd))).map((sd) => P.analyzePattern(p.skin, sd));
+      return { t: g.type, n: g.seeds.length, mult: Math.max(...rs.map((r) => r.mult)), named: rs.some((r) => r.label) };
+    });
+    return tips.filter((a) => (a.named || a.mult > 1) === a.n > 150 || tips.some((b) => a.n < b.n && a.mult < b.mult)).map((a) => `${p.k} ${a.t} (${a.n})`);
+  });
+  check('Marble Fade: a tip on over 15% of a knife\'s seeds has no tag and adds nothing, a rarer one does, and never less than a commoner one on the knife', !bad.length
+    && P.TIPS.every(([share, m], i) => !i || (share > P.TIPS[i - 1][0] && m < P.TIPS[i - 1][1])), shown(bad));
+  const marble = Object.values(D.skins).filter((s) => s.fin === 'Marble Fade');
+  bad = marble.filter((s) => P.rarePatterns(s)).flatMap((s) => seeds.filter((sd) => {
+    const a = P.analyzePattern(s, sd), b = P.basePattern(s, sd);
+    return a.info.slice(0, b.info.length).join() !== b.info.join() || a.info.slice(b.info.length).some(([k]) => k !== 'Tip') || JSON.stringify(a.colors) !== JSON.stringify(b.colors);
+  }).map((sd) => `${s.n} ${sd}`));
+  check('Marble Fade: where the wiki names the seed the measured colours still show', !bad.length && on('karambit/marble-fade', 412).info[0][0] === 'Playside colours', shown(bad));
+  const ownMarble = marble.filter((s) => !P.rarePatterns(s));
+  check('Marble Fade: the knives the wiki hasn\'t keep the measuring: 412 is still their Max Fire & Ice', ownMarble.map((s) => s.w).sort().join() === 'Gut Knife,Navaja Knife,Shadow Daggers,Specialist Gloves,Survival Knife'
+    && ownMarble.filter((s) => s.cat === 'knife').every((s) => P.analyzePattern(s, 412).label === 'Max Fire & Ice' && P.analyzePattern(s, 16).label === 'Fire & Ice'));
+
+  check('Slaughter: spot checks, and the old Diamond list only where the wiki hasn\'t the knife', is('bayonet/slaughter', 2, 'Diamond Double Heart Tier 1', 1.9, 't1') && is('karambit/slaughter', 33, 'Diamond Tier 1', 1.6, 't1')
+    && is('karambit/slaughter', 85, 'Heart Tier 2', 1.2, 't2') && is('flip-knife/slaughter', 74, 'Lozenge Diamond', 1.6) && is('nomad-knife/slaughter', 611, 'Mirror Diamond Tier 1', 1.8)
+    && P.analyzePattern(named.get('★ Gut Knife | Slaughter'), 104).label === 'Diamond');
+  check('Crimson Web: the wiki\'s webs instead of a roll, a Quad Web the rarest', is('butterfly-knife/crimson-web', 977, 'Quad Web Tier 3', 3, 't0') && is('bayonet/crimson-web', 810, 'Quad Web Tier 2', 3.5, 't0')
+    && is('butterfly-knife/crimson-web', 165, 'Triple Web', 2.5, 't1') && is('karambit/crimson-web', 10, 'Centered Web', 1.35, 't3'));
+  check('Tiger Tooth, Scorched and Freehand are named now', is('karambit/tiger-tooth', 2, 'Straight Stripes Tier 1', 1.25, 't1') && is('karambit/tiger-tooth', 34, 'Straight Stripes Tier 3', 1.07, 't3')
+    && is('karambit/scorched', 271, 'Black Gem Tier 1', 1.3, 't1') && is('butterfly-knife/freehand', 137, '#1 Max Purple', 1.6, 't0') && is('karambit/freehand', 26, 'Max Black', 1.2));
+  check('Gloves: the five pairs are named now, and add a little: 1.5 at most', is('gloves/sport-gloves-ultra-violent', 0, 'Max Pink Tier 1', 1.4, 't1') && is('gloves/sport-gloves-ultra-violent', 48, 'Symmetric', 1.15)
+    && is('gloves/sport-gloves-nocts', 15, 'Full Leopard', 1.4) && is('gloves/specialist-gloves-emerald-web', 208, 'Double Web Tier 1', 1.5) && is('gloves/hand-wraps-slaughter', 3, 'Double Diamond', 1.5)
+    && is('gloves/moto-gloves-cool-mint', 56, 'Ice Blue', 1.3) && pages.filter((p) => /^gloves/.test(p.k)).every((p) => seeds.every((sd) => { const m = on(p.k, sd).mult; return m >= 1 && m <= 1.5; })));
+
+  // Case Hardened: the measuring stays the base (basePattern, checked above), and the wiki only adds.
+  const order = { t0: 4, t1: 3, t2: 2, t3: 1, '': 0 };
+  bad = Object.values(D.skins).filter((s) => s.fin === 'Case Hardened' || s.fin === 'Heat Treated').flatMap((s) => seeds.filter((sd) => {
+    const a = P.analyzePattern(s, sd), b = P.basePattern(s, sd);
+    return a.mult < b.mult || order[a.tier] < order[b.tier] || a.info.slice(0, b.info.length).join() !== b.info.join() || a.info.slice(b.info.length).some(([k]) => k !== 'CS.MONEY Wiki')
+      || (a.label !== b.label && a.info.at(-1)?.[0] !== 'CS.MONEY Wiki') || a.blue !== b.blue || a.gold !== b.gold || (!P.rarePatterns(s) && JSON.stringify(a) !== JSON.stringify(b));
+  }).map((sd) => `${s.n} ${sd}`));
+  check('Case Hardened: the wiki never lowers what the measuring gives, keeps its blue and gold, says where it decides, and the skins it hasn\'t are as they were', !bad.length, shown(bad));
+  const ak = named.get('AK-47 | Case Hardened');
+  check('Case Hardened: #1s and Ranks are Blue Gem tiers at the weapon\'s own boost, the wiki\'s Gold Gems t3', is('ak-47/case-hardened', 661, '#1 Blue Gem', 500, 't0') && is('karambit/case-hardened', 387, '#1 Blue Gem', 150, 't0')
+    && is('m9-bayonet/case-hardened', 601, '#1 Blue Gem', 60, 't0') && is('huntsman-knife/case-hardened', 618, '#1 Blue Gem', 60) && is('ak-47/case-hardened', 4, 'Blue Gem Tier 2', 8, 't2') && P.basePattern(ak, 4).label === ''
+    && is('ak-47/case-hardened', 34, 'Blue Gem Tier 3', 2.5, 't3') && is('karambit/case-hardened', 38, 'Blue Gem Tier 3', 2, 't3') && is('butterfly-knife/case-hardened', 27, 'Blue Gem Tier 3', 1.7, 't3')
+    && is('ak-47/case-hardened', 219, 'Gold Gem Tier 1', 1.7, 't3') && P.basePattern(ak, 219).label === 'Gold Gem' && on('ak-47/case-hardened', 219).info.join() === 'Playside blue,0.7%,Playside gold,91.2%,CS.MONEY Wiki,Gold Gem Tier 1');
+  // The Karambit's ranks go by either side of the blade: 346 is gold where the game measures (3% blue) and 95% blue on the back.
+  // Its 195 is a Rank 4 and a Gold Gem on the wiki, which calls it a Gold Gem.
+  check('Case Hardened: a rank shows in the wiki\'s words, and a seed that\'s a Rank and a Gold Gem is the Gold Gem', is('karambit/case-hardened', 346, 'Blue Gem Tier 2', 5, 't2')
+    && on('karambit/case-hardened', 346).info.join() === 'Playside blue,3.2%,Playside gold,84.4%,CS.MONEY Wiki,Rank 2' && on('karambit/case-hardened', 387).info.at(-1).join() === 'CS.MONEY Wiki,#1'
+    && is('karambit/case-hardened', 195, 'Gold Gem Tier 2', 1.5, 't3') && on('karambit/case-hardened', 195).info.at(-1).join() === 'CS.MONEY Wiki,Gold Gem Tier 2');
+
+  // The rarer the more.
+  const families = {};
+  for (const [set, groups] of Object.entries(P.RARE)) for (const [k, g] of Object.entries(groups)) { const [fam, n] = k.split('/'); if (n && g.mult != null) (families[`${set} ${fam}`] ||= []).push([+n, g.mult]); }
+  bad = Object.entries(families).filter(([, list]) => list.sort((a, b) => a[0] - b[0]).some(([, m], i) => i && m >= list[i - 1][1])).map(([f]) => f);
+  const maxes = Array.from({ length: 10 }, (_, i) => P.RARE['Marble Fade'][`${i + 1}${['st', 'nd', 'rd'][i] || 'th'}-max`].mult), web = P.RARE['Crimson Web'];
+  const gems = (k) => ['#1 Blue Gem', 'Blue Gem Tier 1', 'Blue Gem Tier 2', 'Blue Gem Tier 3'].map((l) => seeds.map((sd) => on(k, sd)).find((p) => p.label === l)?.mult);
+  check('Rare patterns: the rarer the more: each Tier 1 over its Tier 2 over its Tier 3, 1st Max down to 10th, #1 Blue Gem down to Tier 3, Quad Web down to one web',
+    !bad.length && maxes.every((m, i) => !i || m < maxes[i - 1]) && ['ak-47/case-hardened', 'karambit/case-hardened', 'butterfly-knife/case-hardened'].every((k) => gems(k).every((x, i, m) => x > 1 && (!i || x < m[i - 1])))
+    && web['quad-web/3'].mult > web['triple-web/1'].mult && web['triple-web/1'].mult > web['double-web/1'].mult && web['double-web/1'].mult > web['web/1'].mult
+    && Object.values(P.RARE).every((groups) => Object.values(groups).every((g) => g.mult == null || g.mult > 1)), shown(bad));
+
+  // Everything else as it was: every seed of a skin with a pattern rule, a sample of the rest.
+  const ruled = /^(Fade|Amber Fade|Marble Fade|Crimson Web|Slaughter|Case Hardened|Heat Treated|Doppler|Gamma Doppler)$/;
+  bad = Object.values(D.skins).filter((s) => !P.rarePatterns(s)).filter((s) => seeds.filter((sd) => ruled.test(s.fin) || sd % 50 === 0)
+    .some((sd) => JSON.stringify(P.analyzePattern(s, sd)) !== JSON.stringify(P.basePattern(s, sd)))).map((s) => s.n);
+  check('Rare patterns: every skin the wiki hasn\'t is as it was (the Gut Knife\'s Fade and Slaughter, Doppler\'s Pink Galaxy and Max Pearl...)', !bad.length, shown(bad));
+  bad = Object.values(D.skins).filter((s) => s.fin === 'Crimson Web' && !P.rarePatterns(s)).filter((s) => seeds.some((sd) => { const p = P.analyzePattern(s, sd); return p.label || p.mult !== 1; })).map((s) => s.n);
+  check('Crimson Web: no rolled webs where the wiki has none, every seed plain', !bad.length && Object.values(D.skins).some((s) => s.fin === 'Crimson Web' && !P.rarePatterns(s)), shown(bad));
 }
 
 // ---- trade-ups ----------------------------------------------------------------------------------

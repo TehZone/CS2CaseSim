@@ -480,7 +480,19 @@ What's in a match:
   knife's blade or the AK-47's dust cover. Their labels go by it, weapon by weapon: Blue Gems are each skin's bluest seeds,
   with the community's Tier 1 lists on top for the AK-47, Karambit and Five-SeveN, and Gold Gem what's almost all gold; no
   other seed is named (the info still shows every seed's blue and gold). Hydra Gloves can't be measured, so they show no numbers and go by the
-  community's tier list (Blue, Gold and Blaze Gems and Tier 4). The 3D inspect opens these skins on that side
+  community's tier list (Blue, Gold and Blaze Gems and Tier 4). The 3D inspect opens these skins on that side.
+  The 100 skins the CS.MONEY Wiki's rare patterns cover (https://wiki.cs.money/rare-patterns, fetched 2026-11-10 by
+  `scripts/build-rare-patterns.mjs` into `src/js/engine/rare-patterns-data.js`) go by its groups, each with a label, tier and
+  value boost in one table in `patterns.js`: the Fades of 18 knives, the Glock-18, AWP, UMP-45 and M4A1-S by their real fade
+  percentage (Full Fade from 99.5%, then 98.7% Fade..., so copies showing the same percentage read the same), Marble Fade's
+  Fire & Ice ranks (1st to 10th Max) and tiers, fakes, Tricolor and tips (a tip on more than 15% of a knife's seeds, as most
+  are, is only shown in the info and adds nothing; the rarer ones are named), Slaughter's diamonds and hearts, Crimson Web's
+  centered, double, triple and quad webs, Tiger Tooth's straight stripes, Scorched's Black Gems, Freehand's Max Purple and
+  Max Black, and five pairs of gloves (Ultra Violent, Nocts, Emerald Web, Hand Wraps | Slaughter, Cool Mint). On Case
+  Hardened its #1s, ranks and Gold Gem tiers only ever raise what the measuring gives, so on those 12 skins a Blue Gem isn't
+  always among the bluest by the numbers: its ranks can go by the other side of the blade (the Karambit's 346 is 3% blue
+  where the game measures and 95% on the back), and the info then says which rank it is (CS.MONEY Wiki: Rank 2). Skins it
+  doesn't cover keep the rules above, except Crimson Web: it's named only where the wiki says, with no rolled webs
 - StatTrak™, knives and gloves, stickers with free placement, scraping, and craft bonuses
 - Loadout (Inventory → Loadout, or Equip on an item): gloves, knife, a T and a CT agent, and one skin per gun
 - 3D inspect (drag, zoom, F to inspect, B to flip)
