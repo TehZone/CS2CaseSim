@@ -1,11 +1,13 @@
-Online play is back on a new, faster server, and money comes in much faster.
+Shooting in Play is fixed, Wingman plays the real Wingman maps, and souvenir stickers sit where CS2 puts them.
 
-- New server: online play runs on our own server now. It never sleeps, so there's no more waiting for it to wake up. Your account, inventory and trades came along, and you stay logged in.
-- Passive income: you get $100 every minute, even while the game is closed (up to 12 hours' worth).
-- Matches pay 5x: $1,250 a win or draw, $500 a loss, $100 a kill and $50 an assist.
-- Case Hardened and Heat Treated: Blue Gem, Gold Gem, High Blue and Above-average labels now come from what each seed really shows, so some patterns' labels and prices changed. Hydra Gloves follow the community's tier list.
-- Storage Units: look through other players' Storage Units from their profile, and picking items to deposit keeps your place in the list.
-- Item Database: click an owner's name to open their profile.
-- Inventory: the sort, search and tabs stay usable during auto open.
-- Auto-sell: keeping Blue Gems is its own option, and keep low floats now means below 0.001.
-- Play: a running match follows your volume, and match settings have a volume slider.
+- Play: shots at an enemy above or below you now hit. Before, they could be thrown away as if the enemy were behind a wall (worst on Nuke and Dust II), and the bots' shots had the same problem.
+- Play: hitboxes match CS2's, so headshots count from any angle, yours included, and a bot below you aims at your head when that's all it can see.
+- Wingman: plays each map's real Wingman version (Inferno, Nuke, Overpass, Vertigo, Debris, El Dorado, Poseidon), with one site and Wingman's own walls, spawns and buy zones. Debris now loads.
+- Play: Nuke's and Overpass's doors start closed in their frames, as in CS2.
+- Play: leaving a match frees its graphics memory. Each match used to leave gigabytes behind.
+- Play: bots don't get stuck: bomb carriers walk into the site and plant, nobody walks off Vertigo's roofs, and flat walls can't be climbed along their seams.
+- Souvenirs: the event, team and autograph stickers sit where CS2 puts them, on the 3D gun and on its picture.
+- Rare patterns: every pattern the CS.MONEY Wiki lists on the 100 skins it covers (Black Gems, Max Purple, Crimson Web webs, Fire & Ice, Marble Fade ranks and more), and 22 Fades show their real fade percentage.
+- Case Hardened: only Blue Gems and Gold Gems are named now (High Blue and Above-average are gone), so some patterns' prices changed.
+- Item Database: the lowest and highest floats in the game, and a skin's copies sorted by pattern.
+- Online: the game uses far less data.
