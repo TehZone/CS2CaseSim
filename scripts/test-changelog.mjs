@@ -10,7 +10,7 @@ import { OUT, NEVER, REVIEW, readCommits, loadNotes, classify, parse, buildChang
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
-const SERVER = 'cs2-case-sim-server.onrender.com';
+const SERVER = 'server.cs2casesim.lol';
 
 let failed = 0, passed = 0;
 function check(name, ok, info = '') {
@@ -67,7 +67,7 @@ check('the update window can ask for a version', want.updates.some((u) => u.vers
 
 // ---- what players must not see ---------------------------------------------------------------------------------------
 {
-  check('the server\'s address isn\'t in the file', !serialize(want).includes(SERVER) && !serialize(want).includes('onrender'));
+  check('the server\'s address isn\'t in the file', !serialize(want).includes(SERVER) && !serialize(want).includes('cs2casesim') && !serialize(want).includes('onrender'));
   const bad = want.updates.flatMap((u) => [u.text, u.area].filter((t) => NEVER.some(([, re]) => re.test(t))));
   check('no address, file name, code, hash or trailer', !bad.length, bad.join(' / '));
   const staff = REVIEW.find(([n]) => n === 'staff tools')[1];

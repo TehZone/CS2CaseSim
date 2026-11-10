@@ -27,7 +27,7 @@ const PROTOCOL = 1;
 // with the login that went with it. Development only (`npm run dev`, `electron .`): a local
 // server is net.setServerUrl('http://localhost:8787') in the console. A test run of any build: CS2SIM_SMOKE_SERVER
 // (localhost only, see shared/updater.cjs).
-const SERVER = 'https://cs2-case-sim-server.onrender.com';
+const SERVER = 'https://server.cs2casesim.lol';
 // This build, from the app (preload.js): { version, packaged, server }. In a browser (the dev server) there's none, and in
 // Node (scripts/test-play.mjs loads this through the game) no window either.
 const build = globalThis.window?.native?.build || {};

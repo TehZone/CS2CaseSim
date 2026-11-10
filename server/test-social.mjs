@@ -638,7 +638,7 @@ try {
 
   // The server's address stays out of it.
   const source = fs.readFileSync(new URL('./social.mjs', import.meta.url), 'utf8');
-  check('the server\'s address isn\'t in the module', !/https?:\/\/|onrender/.test(source));
+  check('the server\'s address isn\'t in the module', !/https?:\/\/|onrender|cs2casesim/.test(source));
 
   // ---- a 1.1.0 game -----------------------------------------------------------------------------------------------
   // Exactly what src/js/net/online.js' handle() takes in that version: anything else falls through its switch.

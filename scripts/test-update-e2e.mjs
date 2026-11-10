@@ -189,11 +189,11 @@ async function runServerChecks() {
     await p.eval(`localStorage.setItem('cs2sim-online', JSON.stringify({ url: 'http://example.invalid', token: 'old-token', name: 'x' })); location.reload(); 1`);
     await wait(1500);
     await booted(p);
-    check('packaged: a server saved by an older install is ignored', (await p.eval(`${online}.then((n) => n.serverUrl())`)) === 'https://cs2-case-sim-server.onrender.com');
+    check('packaged: a server saved by an older install is ignored', (await p.eval(`${online}.then((n) => n.serverUrl())`)) === 'https://server.cs2casesim.lol');
     const left = JSON.parse(await p.eval(`localStorage.getItem('cs2sim-online')`));
     check('packaged: and the login that went with it is dropped, so nothing is sent to the real server', !left.url && !left.token, JSON.stringify(left));
     await p.eval(`${online}.then((n) => n.setServerUrl('http://example.invalid'))`);
-    check('packaged: nothing in the page can set another one', (await p.eval(`${online}.then((n) => n.serverUrl())`)) === 'https://cs2-case-sim-server.onrender.com');
+    check('packaged: nothing in the page can set another one', (await p.eval(`${online}.then((n) => n.serverUrl())`)) === 'https://server.cs2casesim.lol');
     await p.eval(`document.querySelector('#account').click()`);
     await wait(300);
     const form = await p.eval(`[...document.querySelectorAll('.modal label')].map((l) => l.textContent.trim()).join(', ') + ' / ' + !!document.querySelector('.modal [data-url]')`);
@@ -219,7 +219,7 @@ async function runServerChecks() {
     const chip = await p.eval(`document.querySelector('#account').title || document.querySelector('#account').dataset.tip`);
     const win = await p.eval(modalText);
     check('packaged: the top right says it as asked', chip === 'Online. Players Online: 1', chip);
-    check('packaged: the account window too, with no address in it', win.includes('Online. Players Online: 1') && !/https?:|localhost|onrender/.test(win), win.replace(/\s+/g, ' ').slice(0, 120));
+    check('packaged: the account window too, with no address in it', win.includes('Online. Players Online: 1') && !/https?:|localhost|onrender|cs2casesim/.test(win), win.replace(/\s+/g, ' ').slice(0, 120));
     await p.shot('packaged-online');
   } finally {
     p.close();
