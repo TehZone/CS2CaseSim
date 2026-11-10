@@ -11,7 +11,7 @@ import { loadGltf, shareSkeletons } from '../cs2/rig.js';
 import { buildCS2Model } from '../cs2/skin.js';
 import { plainSticker } from '../cs2/sticker.js';
 import { itemDef } from '../items.js';
-import { toGl, fromGl, ambientLit, ambientCube, bakeSkin, barrelTip } from './world.js';
+import { toGl, fromGl, IN, ambientLit, ambientCube, bakeSkin, barrelTip } from './world.js';
 
 export const AGENTS = {
   T: ['agents/models/tm_phoenix/tm_phoenix.vmdl', 'agents/models/tm_leet/tm_leet_variantb.vmdl'],
@@ -107,18 +107,22 @@ export function botClips(holdsFor = [], { gestures = false } = {}) {
   return [...LOCO_CLIPS, ...ladders, ...DEATHS, PLANT, DEFUSE, ...Object.values(SHARED), ...holdsFor.map(holdPath), ...own];
 }
 
-// Hitbox capsules between bones (radius in game units) and the hit group they count as.
+// Hitboxes: CS2's own, the agents' "cstrike" hitbox set (the same on every agent): a capsule on a bone, its two ends
+// in the bone's space (inches), its radius (game units) and the hit group it counts as (CS2's neck counts as chest
+// here). Capsules from bone to bone had the chest's top round the neck, over the back and sides of the head (a
+// headshot from behind, from the side or from below came out as the chest), and no feet.
 const HITBOXES = [
-  { a: 'head_0', b: 'head_0', ext: 6.5, r: 4.6, group: 'head' },
-  { a: 'neck_0', b: 'head_0', r: 3.6, group: 'chest' },
-  { a: 'spine_2', b: 'neck_0', r: 6.8, group: 'chest' },
-  { a: 'spine_0', b: 'spine_2', r: 6.6, group: 'stomach' },
-  { a: 'pelvis', b: 'spine_0', r: 6.6, group: 'stomach' },
-  { a: 'arm_upper_L', b: 'arm_lower_L', r: 3.2, group: 'arm' }, { a: 'arm_lower_L', b: 'hand_L', r: 2.6, group: 'arm' },
-  { a: 'arm_upper_R', b: 'arm_lower_R', r: 3.2, group: 'arm' }, { a: 'arm_lower_R', b: 'hand_R', r: 2.6, group: 'arm' },
-  { a: 'leg_upper_L', b: 'leg_lower_L', r: 4.6, group: 'leg' }, { a: 'leg_lower_L', b: 'ankle_L', r: 3.6, group: 'leg' },
-  { a: 'leg_upper_R', b: 'leg_lower_R', r: 4.6, group: 'leg' }, { a: 'leg_lower_R', b: 'ankle_R', r: 3.6, group: 'leg' },
-];
+  ['head_0', [-1, 1.8, 0], [3.5, 0.2, 0], 4.3, 'head'], ['neck_0', [0, -0.4, 0], [1.4, -0.2, 0], 3.5, 'chest'],
+  ['spine_3', [2.5, -0.6, -6], [2.5, -0.6, 6], 5, 'chest'], ['spine_2', [4.8, 0.15, -4.1], [4.8, 0.15, 4.1], 6.2, 'chest'],
+  ['spine_1', [3.8, 0.8, -2.4], [3.8, 0.4, 2.4], 6.5, 'chest'],
+  ['spine_0', [1.4, 0.8, 3.1], [1.4, 0.8, -3.1], 6, 'stomach'], ['pelvis', [-2.7, 1.1, -3.2], [-2.7, 1.1, 3.2], 6, 'stomach'],
+  ['arm_upper_L', [0, 0, 0], [11.2, 0, 0], 3.3, 'arm'], ['arm_lower_L', [0, 0, 0], [10, 0, 0], 3, 'arm'], ['hand_L', [0, 0.3, 0], [3.59, 1.15, 0.11], 2.3, 'arm'],
+  ['arm_upper_R', [0, 0, 0], [-11.2, 0, 0], 3.3, 'arm'], ['arm_lower_R', [0, 0, 0], [-10, 0, -0.5], 3, 'arm'], ['hand_R', [0, -0.3, 0.02], [-3.44, -1.17, -0.09], 2.3, 'arm'],
+  ['leg_upper_L', [1.3, -0.2, 0], [16.5, -0.7, 0], 5, 'leg'], ['leg_lower_L', [0.1, -0.4, 0.2], [17, -0.4, 0.7], 4, 'leg'], ['ankle_L', [0, -3.43, -0.52], [8, 0.74, 0.33], 2.6, 'leg'],
+  ['leg_upper_R', [-1.3, 0, -0.6], [-16.5, 0, -0.7], 5, 'leg'], ['leg_lower_R', [-0.1, 0, -0.2], [-17, 0.4, -0.7], 4, 'leg'], ['ankle_R', [-7.98, -0.75, -0.27], [-0.02, 3.44, 0.58], 2.6, 'leg'],
+].map(([bone, a, b, r, group]) => ({ bone, a: new THREE.Vector3(...a).multiplyScalar(IN), b: new THREE.Vector3(...b).multiplyScalar(IN), r, group }));
+const _ha = new THREE.Vector3(), _hb = new THREE.Vector3(), _pa = [0, 0, 0], _pb = [0, 0, 0];
+const gameAt = (v, out) => { out[0] = v.z / IN; out[1] = v.x / IN; out[2] = v.y / IN; return out; }; // (fromGl, into out)
 
 // Shared assets for every bot: agent models per team, CS2's third-person clips, weapon models (loaded on first use).
 export class BotAssets {
@@ -706,17 +710,10 @@ export class Bot {
     this.sync(); // hitboxes follow the simulated position even between frames
     this.root.updateMatrixWorld(true);
     let best = null;
-    const v = new THREE.Vector3();
     for (const h of HITBOXES) {
-      const a = this.bonePos(h.a, v);
-      if (!a) continue;
-      let b = this.bonePos(h.b, v) || a;
-      if (h.ext) {
-        const n = this.bonePos('neck_0', v) || a;
-        const dir = [a[0] - n[0], a[1] - n[1], a[2] - n[2]];
-        const l = Math.hypot(...dir) || 1;
-        b = [a[0] + (dir[0] / l) * h.ext, a[1] + (dir[1] / l) * h.ext, a[2] + (dir[2] / l) * h.ext];
-      }
+      const bone = this.bones[h.bone];
+      if (!bone) continue;
+      const a = gameAt(_ha.copy(h.a).applyMatrix4(bone.matrixWorld), _pa), b = gameAt(_hb.copy(h.b).applyMatrix4(bone.matrixWorld), _pb);
       const t = rayCapsule(o, d, a, b, h.r);
       if (t !== null && t >= 0 && t < maxT && (!best || t < best.t)) best = { t, group: h.group };
     }

@@ -953,17 +953,124 @@ function fakeGame() {
   ok(!walled.ledges.size && walled.path([50, 50, 0], [102, 50, 60]) !== null, 'nav: the same ledge against a wall is climbed as before');
 }
 
-// ---- hit tests: a shot aimed at a bot from above or below hits it at any range (the quick reject used the 3D
-// direction's x and y as if they were unit length, so steep shots from a few hundred units were all thrown away) ----
+// ---- hit tests: a bot's hitboxes are CS2's own, on its bones, wherever you shoot it from -----------------------------
+// RIG: a real agent (ctm_sas) posed by CS2's idle rifle clip at the origin facing +x, standing, crouched, and crouched
+// looking 20° up (at someone above it): each hitbox bone's world position (game units) and rotation (glTF axes,
+// x y z w), as the game poses them. CRANIUM and the BALL of each foot: the middle of the top half of the drawn head
+// and of each boot's toe (the skinned vertices of head_0, ball_L and ball_R).
+const RIG = {
+    stand: {
+      head_0: [4.47, -0.5, 63.97, 0.4128, 0.4108, 0.7122, 0.3918], neck_0: [1.35, 2.57, 60.22, 0.3532, 0.1105, 0.8684, 0.3301], spine_3: [-1.1, 4.31, 54.44, 0.349, 0.169, 0.7779, 0.4945],
+      spine_2: [-2.14, 4.73, 48.19, 0.325, 0.237, 0.6905, 0.6012], spine_1: [-3.35, 5.21, 43.63, 0.3492, 0.2099, 0.7114, 0.5727], spine_0: [-3.72, 5.34, 39.58, 0.3171, 0.2677, 0.6667, 0.6192],
+      pelvis: [-3.72, 5.38, 38.65, 0.2967, 0.3431, 0.6115, 0.6483], arm_upper_L: [6.96, 7.76, 56.16, 0.4207, -0.7323, 0.1678, 0.5085], arm_lower_L: [17.41, 6.24, 50.91, 0.1529, 0.8306, -0.4569, -0.2792],
+      hand_L: [21, -2.6, 56.56, 0.0775, -0.7315, 0.3799, 0.5609], arm_upper_R: [-3.98, -3.41, 58.67, -0.6745, -0.1797, 0.3675, 0.6146], arm_lower_R: [-0.75, -11.25, 50.49, -0.5255, 0.4594, 0.7151, 0.038],
+      hand_R: [7.97, -6.32, 55.24, -0.5152, 0.6701, 0.3714, 0.3842], leg_upper_L: [-0.5, 7.76, 35.09, 0.5376, -0.18, 0.7075, -0.422], leg_lower_L: [10.4, 6.58, 20.93, -0.445, 0.3513, -0.523, 0.6364],
+      ankle_L: [10.71, 10.07, 4.36, 0.1816, -0.7477, -0.1836, 0.6117], leg_upper_R: [-4.85, 1.79, 34.83, 0.2725, 0.155, 0.4959, 0.8098], leg_lower_R: [-5.19, -6.45, 18.94, 0.3121, 0.0297, 0.7843, 0.5354],
+      ankle_R: [-12.95, -2.52, 4.4, 0.9418, 0.2573, -0.2133, -0.0371]
+    },
+    crouch: {
+      head_0: [8, 0, 47, 0.4846, 0.372, 0.6976, 0.3742], neck_0: [3.29, 2.55, 44.88, 0.4994, 0.0802, 0.8456, 0.1706], spine_3: [-1.15, 5.04, 40.81, 0.4721, 0.154, 0.817, 0.2931],
+      spine_2: [-5.15, 7.21, 36.38, 0.4692, 0.1798, 0.7989, 0.3306], spine_1: [-7.85, 8.33, 32.65, 0.4786, 0.202, 0.76, 0.3905], spine_0: [-8.91, 8.94, 28.77, 0.4013, 0.2935, 0.6988, 0.5143],
+      pelvis: [-8.98, 8.94, 27.83, 0.3207, 0.302, 0.6151, 0.654], arm_upper_L: [6.35, 9.87, 41.42, -0.6127, 0.618, -0.0841, -0.4854], arm_lower_L: [14.63, 12.49, 33.45, -0.0674, 0.8676, -0.3782, -0.3157],
+      hand_L: [21.27, 3.72, 34.8, 0.3101, -0.6946, 0.3354, 0.5557], arm_upper_R: [-1.19, -3.99, 42.9, -0.4964, -0.2638, 0.4956, 0.6621], arm_lower_R: [0.49, -8.34, 32.08, -0.4959, 0.2647, 0.826, -0.0418],
+      hand_R: [9.33, -2.75, 35.76, -0.5031, 0.5598, 0.5745, 0.3216], leg_upper_L: [-5.99, 11.07, 23.93, 0.6399, 0.023, 0.7545, -0.144], leg_lower_L: [11.41, 8.57, 20.57, -0.469, 0.4359, -0.432, 0.6351],
+      ankle_L: [8.9, 12.74, 4.35, 0.1772, -0.7467, -0.1878, 0.613], leg_upper_R: [-10.51, 5.23, 24.28, 0.1849, 0.1866, 0.1559, 0.9522], leg_lower_R: [-5.18, -10.55, 17.73, 0.2613, -0.0262, 0.8381, 0.4781],
+      ankle_R: [-13.03, -3.67, 4.39, 0.9424, 0.2579, -0.2107, -0.0313]
+    },
+    crouchUp: {
+      head_0: [3.75, 0, 50.85, 0.4123, 0.4875, 0.6224, 0.4527], neck_0: [0.05, 2.55, 47.24, 0.4622, 0.2258, 0.8188, 0.2547], spine_3: [-2.73, 5.04, 41.9, 0.414, 0.2935, 0.7778, 0.3707],
+      spine_2: [-5.6, 7.21, 36.67, 0.4277, 0.2713, 0.7726, 0.3828], spine_1: [-7.85, 8.33, 32.65, 0.4551, 0.2458, 0.747, 0.4177], spine_0: [-8.91, 8.94, 28.77, 0.4013, 0.2935, 0.6988, 0.5143],
+      pelvis: [-8.98, 8.94, 27.83, 0.3207, 0.302, 0.6151, 0.654], arm_upper_L: [4.11, 9.87, 45.04, 0.5191, -0.594, 0.1901, 0.5844], arm_lower_L: [14.62, 12.49, 40.39, -0.0115, 0.7888, -0.5231, -0.3227],
+      hand_L: [20.39, 3.72, 43.93, 0.2089, -0.6258, 0.451, 0.6011], arm_upper_R: [-3.48, -3.99, 43.86, -0.6038, -0.1738, 0.5339, 0.5659], arm_lower_R: [1.8, -8.34, 34.26, -0.4812, 0.4041, 0.7675, -0.1272],
+      hand_R: [8.85, -2.75, 40.74, -0.5513, 0.6511, 0.4685, 0.2294], leg_upper_L: [-5.99, 11.07, 23.93, 0.6399, 0.023, 0.7545, -0.144], leg_lower_L: [11.41, 8.57, 20.57, -0.469, 0.4359, -0.432, 0.6351],
+      ankle_L: [8.9, 12.74, 4.35, 0.1772, -0.7467, -0.1878, 0.613], leg_upper_R: [-10.51, 5.23, 24.28, 0.1849, 0.1866, 0.1559, 0.9522], leg_lower_R: [-5.18, -10.55, 17.73, 0.2613, -0.0262, 0.8381, 0.4781],
+      ankle_R: [-13.03, -3.67, 4.39, 0.9424, 0.2579, -0.2107, -0.0313]
+    }
+};
+const CRANIUM = { stand: [7.17, -1.12, 65.56], crouch: [10.71, -0.54, 48.33] }, BALL_L = [19.37, 8.48, 1.49], BALL_R = [-9.3, -10.5, 1.46];
+// A bot on RIG's bones, its feet at pos (Bot.raycast, and bonePos as the game's).
+const rigBot = (pose, pos = [0, 0, 0]) => {
+  const bones = {}, IN = 0.0254;
+  for (const [n, [x, y, z, ...q]] of Object.entries(RIG[pose])) {
+    const b = new THREE.Object3D();
+    b.matrixWorld.compose(new THREE.Vector3((y + pos[1]) * IN, (z + pos[2]) * IN, (x + pos[0]) * IN), new THREE.Quaternion(...q).normalize(), new THREE.Vector3(1, 1, 1));
+    bones[n] = b;
+  }
+  return { mode: 'move', pos, bones, ducked: pose !== 'stand', sync() {}, root: { updateMatrixWorld() {} },
+    bonePos: (n) => (bones[n] ? [bones[n].matrixWorld.elements[14] / IN, bones[n].matrixWorld.elements[12] / IN, bones[n].matrixWorld.elements[13] / IN] : null) };
+};
+// A shot from `from` degrees round the target (0: in front of it, +x) and `elev` up, `dist` away, at the point p.
+const shotAt = (p, from, elev, dist = 500) => {
+  const a = (elev * Math.PI) / 180, s = (from * Math.PI) / 180;
+  const o = [p[0] + Math.cos(s) * Math.cos(a) * dist, p[1] + Math.sin(s) * Math.cos(a) * dist, p[2] + Math.sin(a) * dist];
+  const d = p.map((v, i) => v - o[i]), l = Math.hypot(...d);
+  return [o, d.map((v) => v / l)];
+};
 {
   const { Bot } = await import('../src/js/play/bots.js');
-  const pos = [634, -1179, -416], up = { pelvis: 38, spine_0: 42, spine_2: 52, neck_0: 60, head_0: 64 };
-  const fake = { mode: 'move', pos, sync() {}, root: { updateMatrixWorld() {} }, bonePos: (n) => (n in up ? [pos[0], pos[1], pos[2] + up[n]] : null) };
-  const shot = (o) => { const t = [pos[0], pos[1], pos[2] + 50], v = t.map((x, i) => x - o[i]), l = Math.hypot(...v); return Bot.prototype.raycast.call(fake, o, v.map((x) => x / l), l + 50); };
-  ok(shot([980, -864, -64])?.group === 'chest', "hit test: from Nuke's Rafters onto A site (557 units, 33° down) a shot at the chest hits");
+  const cast = (bot, [o, d], maxT = 1e9) => Bot.prototype.raycast.call(bot, o, d, maxT);
+  // From above or below at any range (the quick reject used the 3D direction's x and y as if they were unit length,
+  // so steep shots from a few hundred units were all thrown away).
+  const pos = [634, -1179, -416], bot = rigBot('stand', pos), chest = [pos[0], pos[1], pos[2] + 50];
+  const shot = (o) => { const v = chest.map((x, i) => x - o[i]), l = Math.hypot(...v); return cast(bot, [o, v.map((x) => x / l)], l + 50); };
+  ok(shot([980, -864, -64]) !== null, "hit test: from Nuke's Rafters onto A site (557 units, 33° down) a shot at the chest hits");
   ok(shot([520, -312, -64]) !== null && shot([634 + 900, -1179, -416 + 64]) !== null, 'hit test: 920 units 18° down, and level at 900 units, hit too');
-  const miss = (() => { const o = [1500, -1179, -350], d = [0, 1, 0]; return Bot.prototype.raycast.call(fake, o, d, 4000); })();
-  ok(miss === null, 'hit test: a shot passing 866 units to the side misses');
+  ok(cast(bot, [[1500, -1179, -350], [0, 1, 0]], 4000) === null, 'hit test: a shot passing 866 units to the side misses');
+  // CS2's hitboxes. The head is a capsule of its own: the chest (from the spine to the neck's round end, over the back
+  // and sides of the head) took headshots from behind, and from above behind it.
+  const stand = rigBot('stand'), crouch = rigBot('crouch'), up = rigBot('crouchUp');
+  const ways = [[180, 0], [135, 0], [135, 15], [180, 15], [90, 0], [0, 0], [90, -15], [45, -30], [270, 30]];
+  const heads = (bot, p) => ways.filter(([f, e]) => cast(bot, shotAt(p, f, e))?.group === 'head').length;
+  ok(heads(stand, CRANIUM.stand) === ways.length && heads(crouch, CRANIUM.crouch) === ways.length, `hit test: a shot at the middle of a bot's head from behind, the side, the front, above or below is a headshot (${heads(stand, CRANIUM.stand)}/${ways.length} standing, ${heads(crouch, CRANIUM.crouch)}/${ways.length} crouched)`);
+  // Its feet: the legs ended at the ankles, the boots were outside every hitbox (a bot on a ledge above you, only its
+  // feet showing, couldn't be hit).
+  const feet = [[90, 0], [270, 0], [0, -10], [180, -10], [90, 30]].flatMap(([f, e]) => [cast(stand, shotAt(BALL_L, f, e)), cast(stand, shotAt(BALL_R, f, e))]);
+  ok(feet.every((h) => h?.group === 'leg'), `hit test: a shot at the toe of a bot's boot hits its leg (${feet.filter((h) => h?.group === 'leg').length}/${feet.length})`);
+  // A crouched bot looking up at you: the bots' body shot (its feet + 36) hits it from every side.
+  const low = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].filter((f) => cast(up, shotAt([0, 0, 36], f, 20, 300))).length;
+  ok(low === 12, `hit test: a body shot at a crouched bot looking up at the shooter hits it from every side (${low}/12)`);
+}
+
+// ---- your own hitboxes: a bot's shot at your head is a headshot from below it, and while you crouch -------------------
+{
+  const me = { alive: true }, G = Object.create(Game.prototype);
+  Object.assign(G, { me, input: { yaw: 0 }, player: new PlayerMovement(world([]), [0, 0, 0]) });
+  const hitYou = (ducked, p, from, elev) => {
+    G.player.ducked = ducked; G.player.duckAmount = ducked ? 1 : 0;
+    const [o, d] = shotAt(p, from, elev, 400);
+    return Game.prototype.hitTest.call(G, me, o, d, 1e9)?.group;
+  };
+  const eye = (ducked) => (ducked ? 46.05 : 64.06), head = (ducked) => [0, 0, eye(ducked) + 1]; // (where bots aim: bodyOf)
+  const below = [-15, -30, -45, -60].map((e) => hitYou(false, head(false), 30, e));
+  ok(below.slice(0, 3).every((g) => g === 'head'), `your hitboxes: a bot 15-45° below you shooting at your head gets a headshot (${below.join(', ')})`);
+  const low = [0, -20, 20, 45].map((e) => hitYou(true, head(true), 120, e));
+  ok(low.every((g) => g === 'head'), `your hitboxes: crouched, a shot at your head is a headshot from level, below and above (${low.join(', ')})`);
+  ok(hitYou(false, [0, 0, 50], 0, 0) === 'chest' && hitYou(true, [0, 0, 37.5], 0, 0) === 'chest' && hitYou(false, [0, 0, 50], 0, -30) === 'chest',
+    'your hitboxes: a shot at your chest (where bots aim) is still a chest hit, standing and crouched');
+}
+
+// ---- bots aim at what they can see of you: your head over a ledge, not your chest behind it --------------------------
+{
+  const { Brain } = await import('../src/js/play/ai.js');
+  const you = { alive: true, team: 'CT' }, botC = { alive: true, team: 'T' };
+  const head = [600, 0, 201], chest = [600, 0, 150]; // you on a ledge above the bot, only your head over its edge
+  let chestSeen = false;
+  const g = { combatants: [you], hostile: () => true, chestInto: (e, out) => { out[0] = chest[0]; out[1] = chest[1]; out[2] = chest[2]; return out; },
+    bodyOf: () => ({ feet: [600, 0, 100], eye: [600, 0, 200], head, chest }), canSee: (a, b) => b === head || chestSeen,
+    spot() {}, radio: { chatter() {} }, placeOf: () => null, callout() {}, cv: {} };
+  const bot = { c: botC, pos: [0, 0, 0], yaw: 0, pitch: 0, eye: () => [0, 0, 64], weapons: {}, slot: 'c4', ducked: false, vel: [0, 0, 0] };
+  const aimedAt = (seeChest) => {
+    chestSeen = seeChest;
+    const at = [];
+    const brain = Object.assign(Object.create(Brain.prototype), { game: g, bot, d: { fov: 90, reaction: [0.2, 0.2], periph: 0, head: 0, turn: 380 },
+      aim: { start() {}, step(dt, t, view, to, vel, size, d, out) { at.push(to[0]); out[0] = to[0]; out[1] = to[1]; }, phase: 'track', progress: () => 1 } });
+    Brain.prototype.scan.call(brain, 1);
+    Brain.prototype.fight.call(brain, 1 / 64, 1);
+    return at[0];
+  };
+  const pitchOf = (p) => (-Math.atan2(p[2] - 64, Math.hypot(p[0], p[1])) * 180) / Math.PI;
+  ok(near(aimedAt(false), pitchOf(head), 1e-6), `bots: one going for your body aims at your head when only your head is in sight (${aimedAt(false)?.toFixed(1)}°, head ${pitchOf(head).toFixed(1)}°)`);
+  ok(near(aimedAt(true), pitchOf(chest), 1e-6), 'bots: ...and at your chest when that is in sight too');
 }
 
 // Molotov fire: the flame flipbook and a fire's life.

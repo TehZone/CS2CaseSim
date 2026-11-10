@@ -272,7 +272,7 @@ export class Brain {
       // Stick with the enemy it's fighting unless another is clearly closer (two at about the same distance would
       // otherwise swap every scan, the aim flicking between them).
       const dd = this.target?.c === e && this.target.visible ? d * 0.7 : d;
-      if (seen && dd < bestD) { best = { c: e, point: seen, d, cos }; bestD = dd; }
+      if (seen && dd < bestD) { best = { c: e, point: seen, d, cos, head: seen === body.head, chest: body.chest }; bestD = dd; }
     }
     if (best) {
       g.spot(best.c, this.c);
@@ -292,6 +292,8 @@ export class Brain {
       if (!this.target.visible && t - (this.target.calledAt ?? -99) > 6) { this.target.calledAt = t; g.radio.chatter(this.c, 'spotted', { where: g.placeOf(best.c) ? 'at ' + g.placeOf(best.c).replace(/([a-z])([A-Z])/g, '$1 $2') : '' }); }
       this.target.visible = true;
       this.target.dist = best.d;
+      // What of them it can see (it aims at that: with only their head over a ledge, a shot at the chest hits the ledge).
+      this.target.sees = !best.head ? 'chest' : g.canSee(eye, best.chest) ? 'both' : 'head';
       this.lastSeen = { pos: g.bodyOf(best.c).feet.slice(), t };
       g.callout(this.c, best.c);
       if (this.c.team === 'CT') this.reportContact(best.c);
@@ -366,17 +368,20 @@ export class Brain {
     const g = this.game, b = this.bot, tg = this.target;
     const body = g.bodyOf(tg.c);
     const eye = b.eye();
-    const aimAt = this.aimHead ? body.head : body.chest;
+    // Its head or its body, whichever the bot means to shoot (aimHead) if it can see that, else what it can see.
+    const sees = tg.sees || 'both', atHead = sees === 'both' ? this.aimHead : sees === 'head';
+    const aimAt = atHead ? body.head : body.chest;
     const [p, y] = angleTo(eye, aimAt);
-    // How fast the point it aims at moves across its view (deg/s, smoothed), for its hand to follow (aim.js).
-    if (tg.ang) {
+    // How fast the point it aims at moves across its view (deg/s, smoothed), for its hand to follow (aim.js). (Not as
+    // it moves from the head to the body or back.)
+    if (tg.ang && tg.atHead === atHead) {
       const kv = 1 - Math.exp(-dt / 0.05);
       tg.vel[0] += ((p - tg.ang[0]) / dt - tg.vel[0]) * kv; tg.vel[1] += (wrap(y - tg.ang[1]) / dt - tg.vel[1]) * kv;
-    } else tg.ang = [0, 0];
-    tg.ang[0] = p; tg.ang[1] = y;
+    } else tg.ang ||= [0, 0];
+    tg.ang[0] = p; tg.ang[1] = y; tg.atHead = atHead;
     const dist = Math.max(1, tg.dist || 1), deg = (u) => (Math.atan(u / dist) * 180) / Math.PI;
     _view[0] = b.pitch; _view[1] = b.yaw; _at[0] = p; _at[1] = y;
-    this.aim.step(dt, t, _view, _at, tg.vel, deg(this.aimHead ? 4 : 9), this.d, _aimOut);
+    this.aim.step(dt, t, _view, _at, tg.vel, deg(atHead ? 4 : 9), this.d, _aimOut);
     b.pitch = _aimOut[0]; b.yaw = _aimOut[1];
     const gun = b.weapons[b.slot];
     if (b.slot === 'c4') return true;
@@ -399,10 +404,11 @@ export class Brain {
     // On them: the crosshair on their head, or on their body (then it's a body shot). It shoots once its aim follows
     // them, between corrections while it's on them, or (a higher rank) as a flick arrives on them.
     const ph = this.aim.phase, ready = ph === 'track' || ph === 'dwell' || (this.d.flickShot && this.aim.progress(t) > 0.85);
-    const head = angleTo(eye, body.head), chest = this.aimHead ? angleTo(eye, body.chest) : [p, y];
-    const onTarget = ready && (Math.hypot(b.pitch - head[0], wrap(b.yaw - head[1])) < Math.max(0.2, deg(4.5))
-      || (Math.abs(wrap(b.yaw - chest[1])) < Math.max(0.3, deg(10)) && Math.abs(b.pitch - chest[0]) < Math.max(0.4, deg(18))));
-    const settled = (!scope || (gun.zoom && t >= gun.zoomReady)) && this.accurate(gun, tg);
+    // (Only on what it can see of them: the crosshair on their hidden chest is on the ledge in front of it.)
+    const head = angleTo(eye, body.head), chest = atHead ? angleTo(eye, body.chest) : [p, y];
+    const onTarget = ready && ((sees !== 'chest' && Math.hypot(b.pitch - head[0], wrap(b.yaw - head[1])) < Math.max(0.2, deg(4.5)))
+      || (sees !== 'head' && Math.abs(wrap(b.yaw - chest[1])) < Math.max(0.3, deg(10)) && Math.abs(b.pitch - chest[0]) < Math.max(0.4, deg(18))));
+    const settled = (!scope || (gun.zoom && t >= gun.zoomReady)) && this.accurate(gun, tg, atHead);
     if (t >= tg.react && t >= tg.pauseUntil && onTarget && settled && t >= gun.nextAttack && gun.clip > 0 && !g.teammateInLine(b, aimAt) && !g.cv?.bot_dont_shoot) {
       const auto = gun.stats.fullAuto;
       const burst = tg.dist < 600 ? this.d.burst * 3 : tg.dist < 1500 ? this.d.burst : Math.max(1, Math.round(this.d.burst / 2));
@@ -421,9 +427,9 @@ export class Brain {
   // spray's penalty) and the recoil it can't pull down, against the target's size there. One that knows its gun
   // (discipline) waits for good odds, or the best this gun gets at that range: it stops before shooting, taps at range,
   // bursts nearer and sprays up close. A Silver fires anyway.
-  accurate(gun, tg) {
+  accurate(gun, tg, atHead = this.aimHead) {
     const b = this.bot, st = gun.stats, m = gun.zoom > 0 ? 1 : 0;
-    const size = (this.aimHead ? 4 : 8) / Math.max(1, tg.dist);
+    const size = (atHead ? 4 : 8) / Math.max(1, tg.dist);
     const opts = { spread: st.spread?.[m] || 0, bullets: st.bullets || 1 };
     const now = hitOdds(size, inaccuracyOf(st, m, { ducked: b.ducked, speed: Math.hypot(b.vel[0], b.vel[1]), airborne: b.airborne, penalty: gun.penalty }),
       { ...opts, recoil: Math.hypot(gun.punch[0], gun.punch[1]) * 2 * (1 - this.d.control) * (Math.PI / 180) });

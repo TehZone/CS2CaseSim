@@ -2041,9 +2041,11 @@ export class Game {
     if (c !== this.me) return this.botOf(c).raycast(o, d, maxT);
     const p = this.player.origin, eye = this.player.eye(), s = this.player.ducked ? 0.75 : 1;
     const yr = (this.input.yaw * Math.PI) / 180, side = [Math.sin(yr) * 4.5, -Math.cos(yr) * 4.5];
+    // (The chest's top stops 12 below the eye: up to 57 x s, its round top reached past the eye, over the head, and a
+    // shot at your head from below, or at all while you crouched, was a chest hit.)
     const boxes = [
       { a: [eye[0], eye[1], eye[2] - 3], b: [eye[0], eye[1], eye[2] + 3], r: 4.8, group: 'head' },
-      { a: [p[0], p[1], p[2] + 43 * s], b: [p[0], p[1], p[2] + 57 * s], r: 8.5, group: 'chest' },
+      { a: [p[0], p[1], p[2] + 43 * s], b: [p[0], p[1], Math.min(p[2] + 57 * s, Math.max(p[2] + 43 * s, eye[2] - 12))], r: 8.5, group: 'chest' },
       { a: [p[0], p[1], p[2] + 31 * s], b: [p[0], p[1], p[2] + 43 * s], r: 8, group: 'stomach' },
       { a: [p[0] + side[0], p[1] + side[1], p[2] + 3], b: [p[0] + side[0], p[1] + side[1], p[2] + 31 * s], r: 5, group: 'leg' },
       { a: [p[0] - side[0], p[1] - side[1], p[2] + 3], b: [p[0] - side[0], p[1] - side[1], p[2] + 31 * s], r: 5, group: 'leg' },
