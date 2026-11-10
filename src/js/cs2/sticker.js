@@ -33,6 +33,10 @@ uniform float cs2GlitterScale;
 uniform float cs2Wear;
 uniform float cs2WearScratches;
 uniform vec2 cs2WearBias;
+#if CS2_MASK
+uniform sampler2D cs2Mask;
+varying vec2 vCs2Texel;
+#endif
 
 // Hemi-octahedral normal (RG) as the shader decodes it; +y points down the texture like CS2's texture space.
 vec3 cs2HemiOct(vec2 e) {
@@ -77,6 +81,9 @@ vec3 cs2Sparkles = vec3(0.0);
 
   vec4 col = texture(cs2Sticker, uv, -1.0);
   float a = saturate(col.a * 12.75) * inside; // alpha is also the wear mask; anything above 20/255 is sticker
+#if CS2_MASK
+  a *= texture(cs2Mask, vCs2Texel).r;
+#endif
   vec4 nr = texture(cs2NormalRough, uv, -1.0); // RG normal, B roughness, A self-illum mask
   vec3 ns = cs2HemiOct(nr.xy);
   ns.y = -ns.y;
@@ -204,10 +211,37 @@ export const SHADER_SPARKLE = /* glsl */ `
 
 function patchStickerShader(shader) {
   Object.assign(shader.uniforms, this.userData.cs2Uniforms);
+  if (this.defines.CS2_MASK) {
+    shader.vertexShader = shader.vertexShader
+      .replace('void main() {', 'attribute vec2 cs2Texel;\nvarying vec2 vCs2Texel;\nvoid main() {\n  vCs2Texel = cs2Texel;');
+  }
   shader.fragmentShader = shader.fragmentShader
     .replace('void main() {', SHADER_PARS + 'void main() {')
     .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + SHADER_SURFACE)
     .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + SHADER_SPARKLE);
+}
+
+// What's left of the shader on a plain material showing a sticker's picture (m.map), for a world that lights its materials
+// its own way (Play's, see bots.js: it goes on after that lighting's patch, which replaces any before it). Only where the
+// picture shows: the right way up (the picture's rows run down, a decal's v up), on the sticker and not past it, where the
+// gun's mask lets it (a slot's decal covers every triangle reaching the slot). uniforms: the sticker material's cs2Uniforms.
+export function plainSticker(m, uniforms) {
+  const mask = uniforms.cs2Mask, lit = m.onBeforeCompile, key = m.customProgramCacheKey;
+  m.onBeforeCompile = (shader, renderer) => {
+    lit.call(m, shader, renderer);
+    if (mask) {
+      shader.uniforms.cs2Mask = mask;
+      shader.vertexShader = 'attribute vec2 cs2Texel;\nvarying vec2 vCs2Texel;\n' + shader.vertexShader.replace('void main() {', 'void main() {\n  vCs2Texel = cs2Texel;');
+      shader.fragmentShader = 'uniform sampler2D cs2Mask;\nvarying vec2 vCs2Texel;\n' + shader.fragmentShader;
+    }
+    shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', /* glsl */ `{
+      vec2 uv = vec2(vMapUv.x, 1.0 - vMapUv.y);
+      vec4 col = texture2D(map, uv);
+      diffuseColor *= vec4(col.rgb, saturate(col.a * 12.75) * (all(equal(saturate(uv), uv)) ? 1.0 : 0.0));
+      ${mask ? 'diffuseColor.a *= texture2D(cs2Mask, vCs2Texel).r;' : ''}
+    }`);
+  };
+  m.customProgramCacheKey = () => key.call(m) + (mask ? 'cs2plainmasked' : 'cs2plain');
 }
 
 const srgbToLinear = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
@@ -223,16 +257,17 @@ const DEFAULT_TEX = {
 };
 
 // The sticker's CS2 material as a three.js material. `wear` is the scrape amount (0..1); `backing` makes it opaque
-// with CS2's paper backing where the sticker is cut out (standalone sticker) instead of a transparent decal.
+// with CS2's paper backing where the sticker is cut out (standalone sticker) instead of a transparent decal. `mask`: a
+// gun's texture of where a sticker may show, read at the geometry's `cs2Texel` (a place on that gun's own textures).
 // Rejects when the game data is unavailable, so callers can fall back to the icon.
-export async function stickerSurface(def, { wear = 0, backing = false } = {}) {
+export async function stickerSurface(def, { wear = 0, backing = false, mask = null } = {}) {
   if (!def?.sm) throw new Error('No CS2 sticker material for ' + def?.n);
   const info = await cs2Sticker(def.sm);
   const t = info.textures;
   if (!t.g_tSticker0) throw new Error('Sticker texture missing for ' + def.sm);
   const clamp = { wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping };
   const load = (name, opts) => (t[name] ? texture(t[name], opts) : DEFAULT_TEX[name]());
-  const [sticker, normalRough, sfx, spectrum, glitter, scratches, back] = await Promise.all([
+  const [sticker, normalRough, sfx, spectrum, glitter, scratches, back, masked] = await Promise.all([
     load('g_tSticker0', { srgb: true, ...clamp }),
     load('g_tNormalRoughnessSticker0', clamp),
     load('g_tSfxMaskSticker0', clamp),
@@ -240,8 +275,9 @@ export async function stickerSurface(def, { wear = 0, backing = false } = {}) {
     load('g_tGlitterNormalSticker0'),
     load('g_tStickerScratches'),
     backing ? load('g_tColor', { srgb: true }) : solidTex(0, 0, 0, 255),
+    mask ? texture(mask) : null,
   ]);
-  const textures = [sticker, normalRough, sfx, spectrum, glitter, scratches, back];
+  const textures = [sticker, normalRough, sfx, spectrum, glitter, scratches, back, ...(masked ? [masked] : [])];
 
   // Material parameters; colour tint and tint saturation go through the shader's expressions (sRGB->linear, 1-x).
   const num = (name, def) => info.floats[name] ?? info.ints[name] ?? def;
@@ -261,6 +297,7 @@ export async function stickerSurface(def, { wear = 0, backing = false } = {}) {
     CS2_PRESERVE_ROUGH: flag('g_bPreserveRoughnessSticker0', 0),
     CS2_SELF_ILLUM: flag('g_bSelfIllumSticker0', 0),
     CS2_BACKING: backing ? 1 : 0,
+    CS2_MASK: masked ? 1 : 0,
   };
   material.userData.cs2Uniforms = {
     cs2Sticker: { value: sticker }, cs2NormalRough: { value: normalRough }, cs2SfxMask: { value: sfx },
@@ -273,6 +310,7 @@ export async function stickerSurface(def, { wear = 0, backing = false } = {}) {
     cs2Wear: { value: Math.max(0, wear) },
     cs2WearScratches: { value: num('g_fWearScratchesSticker0', 1) },
     cs2WearBias: { value: new THREE.Vector2(bias[0] ?? 1, bias[1] ?? 1) },
+    ...(masked ? { cs2Mask: { value: masked } } : {}),
   };
   material.onBeforeCompile = patchStickerShader;
   material.userData.dispose = () => { for (const x of textures) x.dispose(); };

@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -1949,6 +1950,113 @@ function tierFreq(box, n) {
     AD.restoreMerge(now_, off, { keepRewards: true });
     check('Index: offline a restore is your own save as it was', !off.index.claimed.some && !off.index.items[other]);
   }
+}
+
+// ---- Souvenir stickers: in the gun's own slots, as CS2 places them -----------------------------------------------------
+{
+  const { slotUv, souvenirSlots, souvenirsOnIcon } = await import(new URL('../src/js/cs2/markup.js', import.meta.url));
+  const { SOUVENIR_ICONS } = await import(new URL('../src/js/cs2/souvenir-icons.js', import.meta.url));
+  const slot = (id, offset, scale, legacy = false, rotation = 0) => ({ id, offset, scale, rotation, legacy });
+  // The AK-47's slots as its model has them.
+  const ak = { stickers: [slot('Autograph', [0.148, -0.434], 14.1), slot('Team1', [0.061, -0.434], 14.1), slot('Team2', [-0.025, -0.435], 14.1), slot('Map', [-0.164, -0.444], 14.1), slot('Map', [-0.164, -0.444], 15.35, true)] };
+  const map = ak.stickers[3];
+  const close = (a, b) => a.every((v, i) => near(v, b[i], 1e-9));
+  check('Souvenir slot: its offset is the middle of the sticker', close(slotUv(map, 0.336, 0.056), [0.5, 0.5]));
+  check('Souvenir slot: its scale is how many stickers fit across the sticker space', close(slotUv(map, 0.336 + 0.5 / 14.1, 0.056 - 0.5 / 14.1), [1, 0]));
+  check('Souvenir slot: its rotation is in turns, as the Glock\'s grip has it', close(slotUv(slot('Map', [0, 0], 2, false, 0.25), 0.75, 0.5), [0.5, 1]));
+  const stk = ['event', 'team a', 'team b', 'mvp'].map((id) => ({ id, x: 0.3, y: 0.42, r: 0, wr: 0, m: 1, sv: 1 }));
+  const item = { stk }, saved = JSON.stringify(item);
+  check('Souvenir slots: the event, the two teams and the autograph in the slots CS2 names', souvenirSlots(item, ak).map((s) => s.slot.id).join() === 'Map,Team1,Team2,Autograph');
+  check('Souvenir slots: a legacy skin takes its legacy slot', souvenirSlots(item, ak, true)[0].slot.scale === 15.35);
+  check('Souvenir slots: a legacy body without a slot of its own falls back on the other body\'s', souvenirSlots(item, ak, true)[1].slot === ak.stickers[1]);
+  check('Souvenir slots: an event before autographs leaves that slot empty', souvenirSlots({ stk: stk.slice(0, 3) }, ak).map((s) => s.slot.id).join() === 'Map,Team1,Team2');
+  check('Souvenir slots: without CS2 they stay where they were made', souvenirSlots(item, null).every((s, i) => s === stk[i]));
+  check('Souvenir slots: what\'s saved is left alone', JSON.stringify(item) === saved && !stk.some((s) => s.at || s.slot));
+  const applied = { id: 'mine', x: 0.5, y: 0.5, r: 0, wr: 0 };
+  check('Souvenir slots: a sticker a player placed doesn\'t move', souvenirSlots({ stk: [applied] }, ak)[0] === applied && souvenirsOnIcon({ stk: [applied] }, 'weapon_ak47', { x0: 0, x1: 1, y0: 0, y1: 1 }, 512, 384)[0] === applied);
+
+  // An icon's outline as composite.js finds it, in a 512 by 384 picture.
+  const outline = (b) => ({ x0: b[0], x1: b[1], y0: b[2] / 0.75, y1: b[3] / 0.75 });
+  const [hd, legacy] = SOUVENIR_ICONS.weapon_ak47;
+  const on = (wid, view) => souvenirsOnIcon(item, wid, outline(view.box), 512, 384);
+  const same = (x, y) => x.every((v, i) => near(v, y[i], 1e-9));
+  check('Souvenir icons: an icon\'s outline picks the gun\'s body', same(on('weapon_ak47', hd)[0].at, hd.slots.Map) && same(on('weapon_ak47', legacy)[0].at, legacy.slots.Map));
+  const big = souvenirsOnIcon(item, 'weapon_ak47', { x0: 0.25 + hd.box[0] / 2, x1: 0.25 + hd.box[1] / 2, y0: 0.25 + hd.box[2] / 1.5, y1: 0.25 + hd.box[3] / 1.5 }, 1024, 768)[0].at;
+  check('Souvenir icons: Steam\'s biggest picture is the icon in a margin, and a sticker stays on it', near(big[0], 0.25 + hd.slots.Map[0] / 2, 1e-9) && near(big[1], 0.1875 + hd.slots.Map[1] / 2, 1e-9) && near(big[2], hd.slots.Map[2] / 2, 1e-9));
+  const small = souvenirsOnIcon(item, 'weapon_ak47', outline(legacy.box), 256, 192)[0].at;
+  check('Souvenir icons: a smaller picture is the same icon', same(small, legacy.slots.Map));
+  const xs = on('weapon_ak47', hd).map((s) => s.at[0]);
+  check('Souvenir icons: on the AK-47 from muzzle to stock, Map, Team2, Team1, Autograph', xs[0] < xs[2] && xs[2] < xs[1] && xs[1] < xs[3], xs.join(' '));
+  check('Souvenir icons: a slot the icon can\'t show isn\'t drawn (the M249\'s ammo box hides three)', on('weapon_m249', SOUVENIR_ICONS.weapon_m249[0]).map((s) => s.id).join() === 'mvp');
+  check('Souvenir icons: a gun with no slots keeps its stickers where they were made', souvenirsOnIcon(item, 'weapon_nothing', outline(hd.box), 512, 384) === stk);
+  const guns = new Set(Object.values(D.cases).filter((c) => c.kind === 'souvenir').flatMap((c) => [...Object.values(c.pools || {}).flat(), ...(c.rare || []).flat()]).map((id) => D.skins[id]?.wid).filter(Boolean));
+  check('Souvenir icons: every gun that comes as a souvenir has its place on them', [...guns].every((w) => SOUVENIR_ICONS[w]?.length), [...guns].filter((w) => !SOUVENIR_ICONS[w]?.length).join());
+  const all = Object.values(SOUVENIR_ICONS).flat().flatMap((v) => Object.values(v.slots));
+  check('Souvenir icons: every sticker lands on the picture at a size a sticker could be', all.length > 150 && all.every(([x, y, ax, ay, bx, by]) => x > 0 && x < 1 && y > 0 && y < 0.75 && Math.hypot(ax, ay) > 0.01 && Math.hypot(ax, ay) < 0.3 && Math.hypot(bx, by) < 0.3), all.length + ' slots');
+  // Each gun's slots left to right on its icons, a string for each body (M Map, 1 and 2 the teams, A Autograph). They're what
+  // the models say, each slot's middle along the gun, but for the Dual Berettas (two guns, posed by hand) and the MP7's
+  // second body (Map and Team1 a hair apart, at different heights): those are as the table has them.
+  const ALONG = {
+    ak47: 'M21A M21A', aug: '1A2M 1A2M', awp: '21AM 21AM', bizon: 'M21A M21A', cz75a: '21AM 21AM', deagle: '21AM 21AM', elite: '21MA 21MA', famas: '1A2M 1A2M',
+    fiveseven: '21AM 21AM', g3sg1: '2A1M 2A1M', galilar: '21AM 21AM', glock: '21AM 21AM', hkp2000: '21AM 21AM', m249: 'A A', m4a1: '21AM 21AM', m4a1_silencer: 'M21A M21A',
+    mac10: '21MA 21MA', mag7: '21AM 21AM', mp5sd: 'M21A M21A', mp7: '21MA 2M1A', mp9: '21MA 21MA', negev: '2M1A 2M1A', nova: '21AM 21AM', p250: '21AM 21AM', p90: '1A2M 1A2M',
+    revolver: '21AM 21AM', sawedoff: 'M21A M21A', scar20: 'M21A 21AM', sg556: '2M1A 2M1A', ssg08: 'M21A 21AM', taser: '21AM', tec9: '21A 21A', ump45: 'M21A M21A',
+    usp_silencer: '21AM 21AM', xm1014: 'M21A M21A',
+  };
+  const letter = { Map: 'M', Team1: '1', Team2: '2', Autograph: 'A' };
+  const order = (w) => SOUVENIR_ICONS[w].map((v) => Object.keys(v.slots).sort((a, b) => v.slots[a][0] - v.slots[b][0]).map((k) => letter[k]).join('')).join(' ');
+  const misordered = Object.keys(SOUVENIR_ICONS).filter((w) => order(w) !== ALONG[w.slice(7)]);
+  check('Souvenir icons: every gun\'s slots run along it in the order its model has them', !misordered.length && Object.keys(SOUVENIR_ICONS).length === Object.keys(ALONG).length, misordered.map((w) => `${w}: ${order(w)}`).join(', '));
+  check('Souvenir icons: every slot\'s middle is inside its gun\'s bounds', Object.values(SOUVENIR_ICONS).flat().every((v) => Object.values(v.slots).every(([x, y]) => x > v.box[0] && x < v.box[1] && y > v.box[2] && y < v.box[3])));
+  // On real icons, where this machine has them (scripts/build-souvenir-icons.mjs fetches them to cache/img), the way a drawn
+  // icon goes: its outline picks the body and places the slots, and each slot's middle has to land on the gun.
+  const { decodePNG } = createRequire(import.meta.url)('../cs2/png.cjs');
+  const outlineOf = ({ width: w, height: h, channels: c, data }) => {
+    let x0 = w, y0 = h, x1 = 0, y1 = 0;
+    for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) if (data[(y * w + x) * c + 3] > 20) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    return { x0: x0 / w, x1: x1 / w, y0: y0 / h, y1: y1 / h };
+  };
+  let icons = 0;
+  const off = [];
+  for (const wid of Object.keys(SOUVENIR_ICONS)) {
+    let left = 12;
+    for (const skin of Object.values(D.skins)) {
+      if (skin.wid !== wid || !skin.img || !left) continue;
+      const file = path.join(ROOT, 'cache/img', crypto.createHash('sha1').update(`https://community.akamai.steamstatic.com/economy/image/${skin.img.slice(1)}/512fx384f`).digest('hex'));
+      if (!fs.existsSync(file)) continue;
+      left--; icons++;
+      const img = decodePNG(fs.readFileSync(file)), W = img.width, H = img.height;
+      for (const s of souvenirsOnIcon(item, wid, outlineOf(img), W, H)) {
+        if (s.at && !(img.data[(Math.round(s.at[1] * W) * W + Math.round(s.at[0] * W)) * img.channels + 3] > 100)) off.push(`${skin.n} ${s.id}`);
+      }
+    }
+  }
+  if (icons) check('Souvenir icons: on real icons every slot\'s middle is on the gun', !off.length, off.length ? off.slice(0, 6).join(', ') : icons + ' icons');
+  else console.log('      (no icons in cache/img: slots not checked against real outlines)');
+  const { artSide, TEXTURE_FILL } = await import(new URL('../src/js/composite.js', import.meta.url));
+  check('Sticker art: it fills a slot by its longer side, tall art by its height', near(artSide({ x0: 0.2, x1: 0.8, y0: 0.05, y1: 0.95 }, 256, 256), 230.4, 1e-9) && near(artSide({ x0: 0.1, x1: 0.9, y0: 0.25, y1: 0.75 }, 200, 100), 160, 1e-9) && TEXTURE_FILL > 0.9 && TEXTURE_FILL < 1);
+
+  // A sticker on a gun in Play's world, whose lighting replaces a material's shader patch (on the floor, and again in a
+  // bot's hands): its picture stays the right way up, and in the mask of a slot's sticker.
+  const THREE = await import('three');
+  const { BotAssets } = await import(new URL('../src/js/play/bots.js', import.meta.url));
+  const assets = new BotAssets(null, { cube: { value: new Float32Array(18) } });
+  const sticker = (cs2Sticker) => {
+    const m = new THREE.MeshStandardMaterial({ map: new THREE.Texture(), transparent: true });
+    m.cs2Sticker = cs2Sticker;
+    assets.light(new THREE.Mesh(new THREE.BufferGeometry(), m));
+    return m;
+  };
+  const shaded = (m) => {
+    const sh = { vertexShader: THREE.ShaderLib.physical.vertexShader, fragmentShader: THREE.ShaderLib.physical.fragmentShader, uniforms: {} };
+    m.onBeforeCompile(sh, null);
+    return { up: sh.fragmentShader.includes('1.0 - vMapUv.y'), masked: !!sh.uniforms.cs2Mask && sh.fragmentShader.includes('cs2Mask, vCs2Texel') && sh.vertexShader.includes('vCs2Texel = cs2Texel') };
+  };
+  const inSlot = sticker({ cs2Mask: { value: new THREE.Texture() } }), placed = sticker({}), icon = sticker(undefined);
+  check('Stickers in Play: on the floor and in a bot\'s hands, a slot\'s stays the right way up and in its mask', [inSlot, assets.botMaterial(inSlot)].every((m) => { const r = shaded(m); return r.up && r.masked; }));
+  check('Stickers in Play: one a player placed is the right way up, with no mask to read', [placed, assets.botMaterial(placed)].every((m) => { const r = shaded(m); return r.up && !r.masked; }));
+  check('Stickers in Play: an icon in place of CS2\'s texture is left as it is', !shaded(icon).up && !shaded(assets.botMaterial(icon)).up);
+  check('Stickers in Play: masked and unmasked don\'t share a shader', new Set([inSlot, placed, icon].map((m) => m.customProgramCacheKey())).size === 3);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

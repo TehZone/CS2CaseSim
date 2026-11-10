@@ -118,7 +118,7 @@ export function cs2CharmAttach(weapon) {
 }
 
 // A gun model's own placement data: where a charm may hang ({ keychain: [{ bone, corners, legacy, def }] }, in the model's
-// space in inches), its sticker slots ({ stickers, regions }, see markup.js) and its inventory camera.
+// space in inches), its sticker slots ({ stickers }, see markup.js) and where a sticker may show ({ masks } by material).
 const markups = new Map();
 export function cs2WeaponMarkup(weapon) {
   if (!markups.has(weapon)) {

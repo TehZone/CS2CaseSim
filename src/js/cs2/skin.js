@@ -12,8 +12,8 @@ import { loadGltf as loadRig, rebind, bonesByName, forearmTwist, hidePoints, ski
 import { loadSource, texture, whiteTex } from './textures.js';
 import { stickerSurface, contentBox } from './sticker.js';
 import { addCharm } from './charm.js';
-import { weaponMarkup, placeSouvenirStickers } from './markup.js';
-import { stickerBase } from '../composite.js';
+import { weaponMarkup, souvenirSlots, slotUv } from './markup.js';
+import { stickerBase, TEXTURE_FILL, artSide } from '../composite.js';
 import { D } from '../data.js';
 
 const BAKE_SIZE = 2048;
@@ -488,6 +488,7 @@ export async function buildCS2Model(item, def, renderer, { statTrak = true, quic
     const owner = inBody(o) || meshes.length === 1 || extra(o);
     const matName = o.material?.name || '';
     if (!owner || /sticker_gaps|panorama/.test(matName)) { o.visible = false; continue; }
+    o.userData.madeOf = matName; // (for its sticker mask)
     if (skin && matName === prep.material) o.material = skin;
     else o.material = await plainMaterial(prep.materials[matName]);
     o.frustumCulled = false;
@@ -762,8 +763,14 @@ function stickerMaterial(def, map) {
   });
 }
 
+// How far a sticker in a slot sits off the gun, in metres: enough to stay in front of the surface it follows exactly.
+const STICKER_LIFT = 0.0002;
+
 async function addStickerDecals(wrap, item, def) {
-  const icon = await alphaBounds(imgUrl(def.img, 'm'));
+  // The gun's Steam picture, for a sticker placed on it (iconOf, loaded once one needs it): one in a slot or placed on the
+  // model needs only CS2's files, so a picture that won't load (offline, say) doesn't take those off the gun.
+  let iconJob = null;
+  const iconOf = () => (iconJob ||= alphaBounds(imgUrl(def.img, 'm')));
   wrap.updateMatrixWorld(true);
   // The gun's own visible surfaces: not a hanging charm.
   const targets = [];
@@ -775,15 +782,68 @@ async function addStickerDecals(wrap, item, def) {
   const box = new THREE.Box3();
   for (const t of targets) box.expandByObject(t, true);
   const ray = new THREE.Raycaster();
-  // Souvenir stickers sit in the model's own slots.
+  // Souvenir stickers sit in the model's own slots, across its sticker gaps (hidden quads that only ever show a sticker).
   const mk = item.sv ? await weaponMarkup(wrap.userData.weapon) : null;
-  for (const s of placeSouvenirStickers(item, mk, stickerBase(def), /legacy/.test(wrap.userData.mesh || ''))) {
+  const body = wrap.userData.mesh || '';
+  const gaps = [];
+  wrap.traverse((o) => {
+    if (!o.isMesh || !/sticker_gaps/.test(o.material?.name || '')) return;
+    for (let n = o; n; n = n.parent) if (n.name.includes(body)) { gaps.push(o); return; }
+  });
+  for (const s of souvenirSlots(item, mk, /legacy/.test(body))) {
     // One sticker that fails (say its icon won't load) leaves the others on the gun.
-    try { await addStickerDecal(wrap, targets, ray, box, icon, def, s); } catch (e) { console.warn('sticker decal failed', s.id, e); }
+    try {
+      if (s.slot) for (const surface of [...targets, ...gaps]) await addSlotSticker(wrap, surface, s, mk.masks?.[surface.userData.madeOf]);
+      else await addStickerDecal(wrap, targets, ray, box, iconOf, def, s);
+    } catch (e) { console.warn('sticker decal failed', s.id, e); }
   }
 }
 
-async function addStickerDecal(wrap, targets, ray, box, icon, def, s) {
+// A sticker in one of the gun's own slots, as CS2's weapon shader draws it, on one of the gun's surfaces: every triangle
+// there that reaches the slot, with the sticker's UVs worked out from the model's sticker space (see markup.js). They run
+// past the sticker's edges on the triangles around it, where its material draws nothing. mask: the surface's sticker mask.
+// CS2 draws a sticker on the surface itself, so every part of it goes where that part of the gun goes: there's a decal for
+// each bone under it (a sticker across the receiver and the magazine parts on a reload, half of it leaving with the mag).
+async function addSlotSticker(wrap, mesh, s, mask) {
+  const sd = D.stickers[s.id], g = mesh.geometry, space = g.attributes.uv1, idx = g.index;
+  if (!sd || !space) return;
+  const parts = new Map(); // a bone's name -> the triangles it moves
+  const p = new THREE.Vector3(), n = new THREE.Vector3(), lift = STICKER_LIFT * wrap.userData.unitScale;
+  const toWorld = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+  for (let i = 0; i < idx.count; i += 3) {
+    const tri = [idx.getX(i), idx.getX(i + 1), idx.getX(i + 2)];
+    if (tri.some((v) => space.getX(v) <= -1)) continue;
+    const at = tri.map((v) => slotUv(s.slot, space.getX(v), space.getY(v)));
+    if ([0, 1].some((k) => at.every((c) => c[k] < 0) || at.every((c) => c[k] > 1))) continue;
+    const bone = skinningBone({ object: mesh, face: { a: tri[0], b: tri[1], c: tri[2] } });
+    if (!parts.has(bone)) parts.set(bone, { pos: [], nor: [], uv: [], texel: [] });
+    const { pos, nor, uv, texel } = parts.get(bone);
+    tri.forEach((v, k) => {
+      n.fromBufferAttribute(g.attributes.normal, v).applyMatrix3(toWorld).normalize();
+      p.fromBufferAttribute(g.attributes.position, v).applyMatrix4(mesh.matrixWorld).addScaledVector(n, lift);
+      pos.push(p.x, p.y, p.z);
+      nor.push(n.x, n.y, n.z);
+      uv.push(at[k][0], 1 - at[k][1]); // (three's v is up the texture)
+      texel.push(g.attributes.uv.getX(v), g.attributes.uv.getY(v));
+    });
+  }
+  if (!parts.size) return;
+  const { mat } = await decalLook(sd, s, { mask, filled: true });
+  for (const [bone, { pos, nor, uv, texel }] of parts) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setAttribute('cs2Texel', new THREE.Float32BufferAttribute(texel, 2));
+    const decal = new THREE.Mesh(geo, mat);
+    decal.renderOrder = 2;
+    decal.userData.decal = true;
+    decal.userData.boneName = bone;
+    wrap.add(decal);
+  }
+}
+
+async function addStickerDecal(wrap, targets, ray, box, iconOf, def, s) {
   const sd = D.stickers[s.id];
   if (!sd) return;
   const W = box.max.x - box.min.x, H = box.max.y - box.min.y;
@@ -792,6 +852,7 @@ async function addStickerDecal(wrap, targets, ray, box, icon, def, s) {
     await placeDecal(wrap, targets, ray, box, sd, s, box.min.x + s.x * W, box.max.y - s.y * H, stickerBase(def) * (s.s || 1) * W);
     return;
   }
+  const icon = await iconOf();
   const u = (s.x - icon.x0) / Math.max(1e-6, icon.x1 - icon.x0);
   const v = (s.y - icon.y0) / Math.max(1e-6, icon.y1 - icon.y0);
   const cx = box.min.x + u * W;
@@ -821,6 +882,33 @@ async function addStickerDecal(wrap, targets, ray, box, icon, def, s) {
   await placeDecal(wrap, targets, ray, box, sd, s, hit.point.x, hit.point.y, (stickerBase(def) * (s.s || 1) * W) / Math.max(0.05, icon.x1 - icon.x0), hit);
 }
 
+// What a sticker looks like on a gun: CS2's own sticker material (effects, scrape wear) when the game has it, the icon
+// otherwise. fit: how much wider its picture must be than the icon's to show the sticker at the same size (the game
+// texture is padded differently). filled: the icon's art made as big in its UVs as the game texture's is, for a slot.
+async function decalLook(sd, s, { mask = null, filled = false } = {}) {
+  let surface = null;
+  if (sd.sm) {
+    try { surface = await stickerSurface(sd, { wear: s.wr || 0, mask }); } catch (e) { console.warn('CS2 sticker material unavailable, using the icon:', sd.n, e); }
+  }
+  // (In a slot the game texture is the sticker as it is: its Steam picture isn't needed.)
+  if (surface && filled) return { mat: surface.material, aspect: surface.image.height / surface.image.width, fit: 1 };
+  const icon = await loadImage(imgUrl(sd.img, 'm'));
+  if (surface) {
+    return { mat: surface.material, aspect: surface.image.height / surface.image.width, fit: contentBox(icon).w / Math.max(0.05, contentBox(surface.image).w) };
+  }
+  const tex = new THREE.Texture(icon);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  if (filled) {
+    const art = contentBox(icon), iw = icon.naturalWidth, ih = icon.naturalHeight, side = artSide(art, iw, ih) / TEXTURE_FILL;
+    tex.repeat.set(side / iw, side / ih);
+    tex.offset.set((art.x0 + art.x1 - tex.repeat.x) / 2, 1 - (art.y0 + art.y1 + tex.repeat.y) / 2);
+  }
+  const mat = stickerMaterial(sd, tex);
+  mat.opacity = 1 - (s.wr || 0) * 0.8;
+  return { mat, aspect: icon.naturalHeight / icon.naturalWidth || 0.75, fit: 1 };
+}
+
 async function placeDecal(wrap, targets, ray, box, sd, s, x, y, width, hit = null) {
   const W = box.max.x - box.min.x;
   for (let i = 0; i < 60 && !hit; i++) {
@@ -830,26 +918,8 @@ async function placeDecal(wrap, targets, ray, box, sd, s, x, y, width, hit = nul
   }
   if (!hit) return;
   {
-    const icon = await loadImage(imgUrl(sd.img, 'm'));
-    // CS2's own sticker material (effects, scrape wear) when the game has it; the icon image otherwise.
-    let surface = null;
-    if (sd.sm) {
-      try { surface = await stickerSurface(sd, { wear: s.wr || 0 }); } catch (e) { console.warn('CS2 sticker material unavailable, using the icon:', sd.n, e); }
-    }
-    let mat, aspect;
-    if (surface) {
-      // The game texture is padded differently from the icon: keep the visible sticker the size placed on the icon.
-      width *= contentBox(icon).w / Math.max(0.05, contentBox(surface.image).w);
-      aspect = surface.image.height / surface.image.width;
-      mat = surface.material;
-    } else {
-      const tex = new THREE.Texture(icon);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.needsUpdate = true;
-      aspect = icon.naturalHeight / icon.naturalWidth || 0.75;
-      mat = stickerMaterial(sd, tex);
-      mat.opacity = 1 - (s.wr || 0) * 0.8;
-    }
+    const { mat, aspect, fit } = await decalLook(sd, s);
+    width *= fit;
     const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
     const orient = new THREE.Object3D();
     orient.position.copy(hit.point);

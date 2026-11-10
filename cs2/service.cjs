@@ -45,9 +45,9 @@ function attachment(text, name) {
   return { bone, offset, rotation };
 }
 // CS2's placement data in a weapon model's keyvalues: where a charm may hang (KeychainMarkup: quads on the gun's surface
-// in a bone's space, one of them the default) and the sticker slots (StickerMarkup: points in the inventory camera's
-// side view of their own, with names like a souvenir's "Team1"; see markup.js), plus the inventory camera.
-const MARKUP_VERSION = 5;
+// in a bone's space, one of them the default) and the sticker slots (StickerMarkup: places in the model's sticker space,
+// with names like a souvenir's "Team1", their rotation in turns; see markup.js).
+const MARKUP_VERSION = 6;
 function parseMarkup(text) {
   const at = text.indexOf('--- Data for block "DATA" ---');
   const keys = (() => { try { return parseKV3(parseKV3(text.slice(at)).m_modelInfo?.m_keyValueText || '{}'); } catch { return {}; } })();
@@ -56,31 +56,7 @@ function parseMarkup(text) {
     .map((m) => ({ bone: m.BoneName, corners: xyz(m.Corners), legacy: !!m.LegacyModel, ...(m.DefaultLocation ? { def: true } : {}) }));
   const slots = (keys.StickerMarkup || []).filter((m) => !m.Deprecated && m.Offset?.length === 2);
   const stickers = slots.map((m) => ({ i: m.Index, id: m.SpecialIdentifier || '', offset: m.Offset, scale: m.Scale || 0, rotation: m.Rotation || 0, legacy: !!m.LegacyModel }));
-  const cam = (keys.AttachmentCameraData || []).find((c) => c.attachment_name === 'camera_inventory');
-  return { keychain, stickers, camera: cam ? { fov: cam.fov, width: cam.screen_width, height: cam.screen_height } : null };
-}
-// Each body's bounds in the model's space (inches): { hd, legacy: { min, max } }. The model's meshes (one MDAT block each,
-// in order) belong to mesh groups by m_refMeshGroupMasks (bits into m_meshGroups, e.g. "body_@1_#&body_legacy").
-function meshBounds(data, mdat) {
-  let groups = [], masks = [];
-  try {
-    const kv = parseKV3(data.slice(data.indexOf('--- Data for block "DATA" ---')));
-    groups = kv.m_meshGroups || []; masks = kv.m_refMeshGroupMasks || [];
-  } catch {}
-  const out = {};
-  mdat.split('--- Data for block "MDAT" ---').slice(1).forEach((whole, i) => {
-    const block = whole.split('m_HitBoxes')[0]; // its scene objects' bounds, not its hitboxes'
-    const vec = (key) => [...block.matchAll(new RegExp(key + '\\s*=\\s*\\[([^\\]]*)\\]', 'g'))].map((m) => m[1].split(',').map(Number)).filter((v) => v.length === 3 && v.every(Number.isFinite));
-    const mins = vec('m_vMinBounds'), maxs = vec('m_vMaxBounds');
-    if (!mins.length || !maxs.length) return;
-    const names = groups.filter((_, g) => (masks[i] >> g) & 1).join(' ');
-    const k = /legacy/.test(names) ? 'legacy' : /hidden/.test(names) ? null : 'hd';
-    if (!k) return;
-    const b = out[k] || (out[k] = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] });
-    for (const v of mins) for (let a = 0; a < 3; a++) b.min[a] = Math.min(b.min[a], v[a]);
-    for (const v of maxs) for (let a = 0; a < 3; a++) b.max[a] = Math.max(b.max[a], v[a]);
-  });
-  return out;
+  return { keychain, stickers };
 }
 const shrunkBadly = (dir) => fs.existsSync(path.join(dir, '.shrunk')) && !fs.existsSync(path.join(dir, SHRUNK));
 
@@ -327,7 +303,8 @@ class CS2Service {
     });
   }
 
-  // A weapon's charm areas, sticker slots and inventory camera (see parseMarkup), the camera with its attachment.
+  // A weapon's charm areas and sticker slots (see parseMarkup), and by material the texture saying where a sticker may
+  // show on it (g_tStickerWepInputs: the weapon shader multiplies a sticker by its red).
   weaponMarkup(weapon) {
     weapon = String(weapon);
     return this.playJob('weaponMarkup:' + weapon, async () => {
@@ -339,14 +316,15 @@ class CS2Service {
       try { mk = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
       if (mk?.model !== w.model || mk.v !== MARKUP_VERSION) {
         const data = String(await cs2.run(['-i', cs2.vpk, '-f', w.model + '_c', '--block', 'DATA']));
-        const mdat = String(await cs2.run(['-i', cs2.vpk, '-f', w.model + '_c', '--block', 'MDAT']));
-        const { keychain, stickers, camera } = parseMarkup(data);
-        const view = attachment(mdat, 'camera_inventory');
-        mk = { v: MARKUP_VERSION, model: w.model, keychain, stickers, bounds: meshBounds(data, mdat), camera: camera && view ? { ...camera, ...view } : null };
+        const g = JSON.parse(fs.readFileSync((await this.model(w.model)).gltfFile, 'utf8'));
+        const masks = Object.fromEntries((g.materials || []).map((m) => [m.name, m.extras?.vmat?.TextureParams?.g_tStickerWepInputs]).filter(([, t]) => t));
+        mk = { v: MARKUP_VERSION, model: w.model, ...parseMarkup(data), masks };
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.writeFileSync(file, JSON.stringify(mk));
       }
-      return { keychain: mk.keychain, stickers: mk.stickers, bounds: mk.bounds, camera: mk.camera };
+      const files = await cs2.extract(Object.values(mk.masks));
+      const masks = Object.fromEntries(Object.entries(mk.masks).map(([m, t]) => [m, files[t + '_c'] ? this.url(files[t + '_c']) : null]));
+      return { keychain: mk.keychain, stickers: mk.stickers, masks };
     });
   }
 

@@ -485,6 +485,7 @@ npm run data      # rebuild src/data/game-data.json (add --refresh via `npm run 
 node scripts/build-extras.mjs   # rebuild src/data/keys.json (which key opens which case) and medals.json (Service Medal pictures)
 npm run vendor    # copy three.js into src/vendor (with the patch in scripts/copy-vendor.mjs)
 node scripts/build-charm-pics.mjs   # rebake charm pictures from CS2's files (src/img/charms, src/data/charm-looks.json): when charms or their shader change; --check <dir> compares them with the 3D charm
+node scripts/build-souvenir-icons.mjs   # where souvenir stickers land on each gun's icon (src/js/cs2/souvenir-icons.js), from CS2's models and Steam's icons: when a gun's model changes
 npm start         # run the game
 npm run dev       # browser preview at http://localhost:5178
 npm run dist      # build dist/CS2-Case-Simulator-Setup.exe, dist/CS2-Case-Simulator.exe and dist/latest.json (a release: see DEPLOY.md)

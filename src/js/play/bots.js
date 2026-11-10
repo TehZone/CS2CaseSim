@@ -9,6 +9,7 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2Play } from '../cs2/api.js';
 import { loadGltf, shareSkeletons } from '../cs2/rig.js';
 import { buildCS2Model } from '../cs2/skin.js';
+import { plainSticker } from '../cs2/sticker.js';
 import { itemDef } from '../items.js';
 import { toGl, fromGl, ambientLit, ambientCube, bakeSkin, barrelTip } from './world.js';
 
@@ -201,6 +202,7 @@ export class BotAssets {
       const c = m.clone(), cube = ambientCube().cube;
       ambientLit(c, { cube });
       c.cs2Cube = cube;
+      if (m.cs2Sticker) { c.cs2Sticker = m.cs2Sticker; plainSticker(c, m.cs2Sticker); }
       this.botMats.set(m, c);
     }
     return this.botMats.get(m);
@@ -214,6 +216,7 @@ export class BotAssets {
         this.lit.add(m);
         m.envMap = null;
         ambientLit(m, this.ambient);
+        if (m.cs2Sticker) plainSticker(m, m.cs2Sticker);
         if (m.transparent && m.map) { m.alphaTest = 0.4; m.transparent = false; }
         if (m.alphaTest > 0 && this.coverage) m.alphaToCoverage = true; // (see Game: alpha to coverage)
       }
@@ -304,12 +307,18 @@ export class BotAssets {
         if (!root) return null;
         // The stickers sit on the inspect model's frame round it: onto the gun itself, where they are on it, each in a
         // plain material of its picture (CS2's sticker shader, its foil and holo, is a patch the world's lighting here
-        // would replace; in a bot's hands or on the floor it's the picture that shows).
+        // would replace; in a bot's hands or on the floor it's the picture that shows). cs2Sticker: what's kept of that
+        // shader (see plainSticker), put on with the lighting.
         m.updateMatrixWorld(true);
+        const plain = new Map(); // (a sticker's decals share a material)
         for (const o of m.children.slice()) {
           if (!o.userData.decal) continue;
-          const src = o.material, map = src.map || src.userData.cs2Uniforms?.cs2Sticker.value || null;
-          o.material = new THREE.MeshStandardMaterial({ map, transparent: true, opacity: src.opacity, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, roughness: 0.45, metalness: 0.05 });
+          const src = o.material, cs2 = src.userData.cs2Uniforms;
+          if (!plain.has(src)) {
+            plain.set(src, new THREE.MeshStandardMaterial({ map: src.map || cs2?.cs2Sticker.value || null, transparent: true, opacity: src.opacity, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, roughness: 0.45, metalness: 0.05 }));
+            plain.get(src).cs2Sticker = cs2;
+          }
+          o.material = plain.get(src);
           root.attach(o);
         }
         this.light(root);

@@ -2,7 +2,7 @@
 import { loadImage, imgUrl, mulberry32, clamp, smoothstep } from './util.js';
 import { D } from './data.js';
 import { itemDef, patternInfo } from './items.js';
-import { weaponMarkup, placeSouvenirStickers } from './cs2/markup.js';
+import { souvenirsOnIcon } from './cs2/markup.js';
 import { charmPictureReady } from './charmpics.js';
 
 export const STICKER_BASE = 0.15; // sticker width as a fraction of the weapon image width at scale 1
@@ -145,21 +145,41 @@ export function alphaBox(canvasOrCtx) {
   return x1 > x0 ? { x0: x0 / w, x1: x1 / w, y0: y0 / h, y1: y1 / h } : { x0: 0, x1: 1, y0: 0, y1: 1 };
 }
 
+// How much of a sticker's own CS2 texture the sticker fills, along the longer side of its art (a tall one reaches the
+// texture's top and bottom, not its sides). Steam's pictures of stickers are far from alike (some have twice the margin of
+// others), so one is drawn by the art in it (artBox) to match.
+export const TEXTURE_FILL = 0.97;
+// That side of the art in a w by h picture of it, box being where it is in that picture.
+export const artSide = (box, w, h) => Math.max((box.x1 - box.x0) * w, (box.y1 - box.y0) * h);
+const artBoxes = new WeakMap();
+function artBox(im) {
+  if (!artBoxes.has(im)) {
+    const c = canvas(im.width, im.height);
+    c.getContext('2d', { willReadFrequently: true }).drawImage(im, 0, 0);
+    artBoxes.set(im, alphaBox(c));
+  }
+  return artBoxes.get(im);
+}
+
 // Stickers with `m` were placed on the real model's side view (coordinates relative to its bounding
-// box); on icons they are mapped through the icon's weapon bounding box.
+// box); on icons they are mapped through the icon's weapon bounding box. Those with `at` are in a slot: [x, y, then the
+// sticker's two sides], all in widths of the picture, the sides as the icon's angle turns them.
 export async function drawStickers(ctx, W, H, stickers, box = null, weapon = null) {
   for (const s0 of stickers) {
     const def = D.stickers[s0.id];
     if (!def) continue;
     let s = s0, scale = 1;
-    if (s0.m) {
+    if (s0.at) {
+      s = { ...s0, x: s0.at[0], y: (s0.at[1] * W) / H };
+    } else if (s0.m) {
       box = box || alphaBox(ctx);
       s = { ...s0, x: box.x0 + s0.x * (box.x1 - box.x0), y: box.y0 + s0.y * (box.y1 - box.y0) };
       scale = box.x1 - box.x0;
     }
     let im;
     try { im = await loadImage(imgUrl(def.img, 'm')); } catch { continue; }
-    const w = stickerBase(weapon) * W * (s.s || 1) * scale;
+    const art = s0.at && artBox(im), across = s0.at && Math.hypot(s0.at[2], s0.at[3]);
+    const w = s0.at ? (across * W * TEXTURE_FILL * im.width) / artSide(art, im.width, im.height) : stickerBase(weapon) * W * (s.s || 1) * scale;
     const h = (w * im.height) / im.width;
     const tmp = canvas(Math.ceil(w), Math.ceil(h));
     const t = tmp.getContext('2d');
@@ -174,8 +194,13 @@ export async function drawStickers(ctx, W, H, stickers, box = null, weapon = nul
     ctx.save();
     ctx.globalCompositeOperation = 'source-atop'; // clip to the weapon's pixels
     ctx.translate(s.x * W, s.y * H);
-    ctx.rotate(((s.r || 0) * Math.PI) / 180);
-    ctx.drawImage(tmp, -w / 2, -h / 2);
+    if (s0.at) {
+      ctx.transform(s0.at[2] / across, s0.at[3] / across, s0.at[4] / across, s0.at[5] / across, 0, 0);
+      ctx.drawImage(tmp, -w * (art.x0 + art.x1) / 2, -h * (art.y0 + art.y1) / 2);
+    } else {
+      ctx.rotate(((s.r || 0) * Math.PI) / 180);
+      ctx.drawImage(tmp, -w / 2, -h / 2);
+    }
     ctx.restore();
   }
 }
@@ -202,9 +227,8 @@ export async function composeItem(item, { size = 'l', stickers = true } = {}) {
       ctx.putImageData(id, 0, 0);
     }
     if (stickers && item.stk?.length) {
-      // Souvenir stickers in the gun's own slots when CS2 is there to say where they are.
-      const stk = item.sv ? placeSouvenirStickers(item, await weaponMarkup(def.wid), stickerBase(def)) : item.stk;
-      await drawStickers(ctx, W, H, stk, null, def);
+      // Souvenir stickers in the gun's own slots.
+      await drawStickers(ctx, W, H, item.sv ? souvenirsOnIcon(item, def.wid, alphaBox(ctx), W, H) : item.stk, null, def);
     }
     return c;
   })();
