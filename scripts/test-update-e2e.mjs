@@ -26,6 +26,8 @@ const SHOTS = path.join(WORK, 'shots');
 const DEBUG_PORT = 9347;
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// (The save as it was, plus whatever passive income it earned meanwhile: $100 for each whole minute the update took.)
+const cameThrough = (now, was) => now >= was - 0.01 && Math.abs((now - was) / 100 - Math.round((now - was) / 100)) < 1e-4;
 const until = async (fn, ms, what) => {
   const t0 = Date.now();
   for (;;) {
@@ -248,7 +250,7 @@ async function runInstaller() {
     const downloads = () => fs.readdirSync(path.join(DATA, 'updates')).filter((f) => /^\d+-/.test(f));
     check('installer: the downloaded installer is cleared up a minute later', await until(() => !downloads().length, 120000, 'the download to be cleared'), secs());
     const saved = JSON.parse(fs.readFileSync(path.join(DATA, 'save.json'), 'utf8'));
-    check('installer: the save came through', Math.abs(saved.money - money) < 0.01, `money ${saved.money}`);
+    check('installer: the save came through', cameThrough(saved.money, money), `money ${saved.money}`);
   } finally {
     killGame();
     await wait(1500);
@@ -276,7 +278,7 @@ async function runPortable() {
     check('portable: nothing is left beside it', await until(() => fs.readdirSync(home).length === 1, 30000, 'the folder to be clean'), fs.readdirSync(home).join(', '));
     check('portable: and it started again by itself', await until(() => updateLog().includes(`${NEW} started (portable)`), 120000, 'the new version\'s log'));
     const saved = JSON.parse(fs.readFileSync(path.join(DATA, 'save.json'), 'utf8'));
-    check('portable: the save came through', Math.abs(saved.money - money) < 0.01, `money ${saved.money}`);
+    check('portable: the save came through', cameThrough(saved.money, money), `money ${saved.money}`);
   } finally {
     killGame();
   }
