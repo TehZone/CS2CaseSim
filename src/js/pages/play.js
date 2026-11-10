@@ -3,7 +3,7 @@
 // your rank (see matchmaking.js); a private match has everything up to you, the bots' ranks too, and moves no rank.
 // In a match this page is its menu (Esc): Resume, your settings and keys, Leave, and Reconnect / Abandon once you've
 // left a ranked one.
-import { esc } from '../util.js';
+import { esc, money } from '../util.js';
 import { cs2Play } from '../cs2/api.js';
 import { MODES } from '../play/modes.js';
 import { S } from '../state.js';
@@ -195,7 +195,8 @@ function premierCard() {
 function record() {
   const st = S.stats || {};
   if (!st.playMatches) return '<div class="muted play-record">Finished matches pay into your wallet (offline): kills, MVPs, rounds and wins, more against better bots.</div>';
-  return `<div class="play-record"><span><b>${st.playMatches}</b> matches</span><span><b>${st.playWins || 0}</b> wins</span><span><b>${st.playKills || 0}</b> kills</span><span><b>$${(st.playEarned || 0).toFixed(2)}</b> earned</span></div>`;
+  const n = (v) => (v || 0).toLocaleString('en-US');
+  return `<div class="play-record"><span><b>${n(st.playMatches)}</b> matches</span><span><b>${n(st.playWins)}</b> wins</span><span><b>${n(st.playKills)}</b> kills</span><span><b>${money(st.playEarned || 0)}</b> earned</span></div>`;
 }
 
 // ---- in a match: its menu ---------------------------------------------------------------------------------------------

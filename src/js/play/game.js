@@ -1212,10 +1212,10 @@ export class Game {
     return r;
   }
 
-  // A finished match is the only thing that pays (online too): the result (a draw pays as a win), your kills of enemies
-  // (a teamkill isn't one) and assists, and XP for those and the rounds your team won (see engine/levels.js). Paid against
-  // the match's run (see load); an abandoned match never gets here. { error } when it wasn't paid. With cheats in the
-  // match it pays nothing, and the run is closed.
+  // What a finished match pays, online too (the money that comes in by the minute is passive.js's): the result (a draw
+  // pays as a win), your kills of enemies (a teamkill isn't one) and assists, and XP for those and the rounds your team
+  // won (see engine/levels.js). Paid against the match's run (see load); an abandoned match never gets here. { error }
+  // when it wasn't paid. With cheats in the match it pays nothing, and the run is closed.
   async payReward(won, draw) {
     const me = this.me, m = this.match;
     try {
