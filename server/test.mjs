@@ -105,8 +105,8 @@ try {
   const paid = await A.act('play.reward', { run, mode: 'competitive', result: 'win', kills: 20, assists: 3, roundsWon: 13, rounds: 22 });
   const m1 = (await serverState(A.user.id)).money;
   let twice = null; try { await A.act('play.reward', { run, mode: 'competitive', result: 'win', kills: 20, assists: 3, roundsWon: 13, rounds: 22 }); } catch (e) { twice = e; }
-  check('online match money: refused for an unseen or too-quick match, paid once for a real one ($250 + 20 kills + 3 assists)',
-    unseen?.code === 'match' && tooFast?.code === 'match' && twice?.code === 'match' && Math.abs(m1 - m0 - 680) < 0.011 && paid.earned === 680 && paid.xp.total > 0,
+  check('online match money: refused for an unseen or too-quick match, paid once for a real one ($1,250 + 20 kills + 3 assists)',
+    unseen?.code === 'match' && tooFast?.code === 'match' && twice?.code === 'match' && Math.abs(m1 - m0 - 3400) < 0.011 && paid.earned === 3400 && paid.xp.total > 0,
     `${m0} -> ${m1}`);
 
   // A match with cheats in it pays nothing online, and its run can't be paid afterwards.

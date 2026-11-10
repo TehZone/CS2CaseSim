@@ -39,10 +39,13 @@ export function replaceInPlace(st, next) {
 
 // The state as edit.raw replaces it (all but the inventory, what's in Storage Units, the Index's record, the NPC world and, offline, the device's settings), as a
 // short hash: the panel sends back the one it loaded, so a raw edit can't put back what changed since. Keys sorted (a
-// state read back from JSONB has them in another order).
+// state read back from JSONB has them in another order). Not what passive income changes by itself every minute (levels.js):
+// its clock, and the money it has paid (money counts without it). A raw edit opened a while ago isn't stale for that, and
+// keeps what it paid since (rawEdit).
 const canon = (v) => (Array.isArray(v) ? v.map(canon) : isObj(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
 export function revOf(st) {
-  const { inv: _inv, stored: _stored, index: _index, social: _social, settings: _settings, ...rest } = st;
+  const { inv: _inv, stored: _stored, index: _index, social: _social, settings: _settings, passive, ...rest } = st;
+  if (typeof rest.money === 'number') rest.money = round2(rest.money - (Number(passive?.earned) || 0));
   return sha256Hex(JSON.stringify(canon(rest))).slice(0, 32);
 }
 // What a raw edit shows and answers: the state without those.
@@ -137,11 +140,14 @@ export function applyEdit(st, next) {
 
 // ---- what a replaced state always keeps --------------------------------------------------------------------------------
 // From the state it replaces: the device's settings (offline; online states have none), the Play match being played
-// (what its reward is checked against; one already paid isn't paid again) and the ranked match in progress.
-export function keepLive(next, cur) {
+// (what its reward is checked against; one already paid isn't paid again), the ranked match in progress, and passive
+// income's clock (levels.js: a restore or an edit puts back no time to be paid again; startOver, a reset, is a new
+// account's, counting from now).
+export function keepLive(next, cur, { startOver = false } = {}) {
   if (cur.settings) next.settings = cur.settings; else delete next.settings;
   next.play = cur.play ?? null;
   next.mm = { ...next.mm, match: cur.mm?.match ?? null };
+  if (!startOver) { if (cur.passive) next.passive = cur.passive; else delete next.passive; }
   return next;
 }
 // Loadout slots only for items the state has.
@@ -178,7 +184,10 @@ export function rawEdit(cur, state, base) {
   st.prof = { ...st.prof, drops: cur.prof?.drops ?? [] };
   keepLive(st, cur);
   fitLoadout(st);
-  if (typeof st.money === 'number') st.money = round2(st.money);
+  // What passive income paid since the panel loaded this (it didn't make it stale: revOf) stays paid, on top of its money.
+  const paid = Number(cur.passive?.earned) || 0, then = Number(src.passive?.earned);
+  const since = Number.isFinite(then) ? Math.min(paid, Math.max(0, paid - then)) : 0;
+  if (typeof st.money === 'number') st.money = round2(st.money + since);
   const changed = [...new Set([...Object.keys(cur), ...Object.keys(st)])].filter((k) => k !== 'inv' && k !== 'stored' && k !== 'index' && k !== 'social' && JSON.stringify(cur[k]) !== JSON.stringify(st[k]));
   return { next: st, changed, before: pick(cur, changed), after: pick(st, changed) };
 }
@@ -212,7 +221,7 @@ export function restoreMerge(cur, next, { elsewhere = new Set(), keepRewards = f
   if (next.prof) next.prof = { ...next.prof, drops: keep };
   if (!keepRewards && !startOver) next.index = mergeIndex(next.index, cur.index);
   fitLoadout(next);
-  keepLive(next, cur);
+  keepLive(next, cur, { startOver });
   return { dropped, rewards };
 }
 

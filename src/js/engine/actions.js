@@ -54,9 +54,10 @@ function abandonMatch(ctx, { roundsFor = 0, roundsAgainst = 0 } = {}) {
   return { mode: m.mode, cooldown: ms, until: mm.until, rated };
 }
 
+// (system: the server running an action itself, not for a client's request: see 'passive.collect')
 export function makeCtx(st, opts = {}) {
   return {
-    st, rng: opts.rng || rand, now: opts.now || Date.now(), online: !!opts.online,
+    st, rng: opts.rng || rand, now: opts.now || Date.now(), online: !!opts.online, system: !!opts.system,
     invCap: opts.invCap || Infinity, reserved: opts.reserved || null, asked: opts.asked || null,
     add: [], del: [], upd: new Map(), dirty: new Set(), sto: { add: [], del: [] }, ix: null,
   };
@@ -611,6 +612,19 @@ export const ACTIONS = {
     s.playKills = (s.playKills || 0) + kills;
     s.playEarned = round2((s.playEarned || 0) + pay.total);
     return { result, earned: pay.total, pay, xp, before: lv.before, after: lv.after, levelUps: lv.levelUps, medals: lv.medals, waiting: lv.prof.drops.length };
+  },
+  // Passive income (see levels.js): what's due since the time it was counted up to, by the clock's time (ctx.now), and the
+  // clock moved on in the same change as the money. Offline the game collects it on loading and every minute; online the
+  // server does, by its own clock (server/passive.mjs), so it's nothing a client can ask for. Takes no arguments: there is
+  // no time to send. → { earned, minutes (paid for), capped (an absence past the 12 hours) }
+  'passive.collect'(ctx) {
+    if (ctx.online && !ctx.system) fail('Passive income is paid by the server', 'server');
+    const was = ctx.st.passive, r = L.passivePay(was?.at, ctx.now);
+    if (was && r.at === was.at) return { earned: 0, minutes: 0, capped: false };
+    ctx.st.passive = { at: r.at, earned: round2((Number(was?.earned) || 0) + r.pay) };
+    ctx.dirty.add('passive');
+    if (r.pay) credit(ctx, r.pay);
+    return { earned: r.pay, minutes: r.minutes, capped: r.capped };
   },
   // Claiming a level-up reward: two of its four items, like CS2's care package.
   'drop.claim'(ctx, { id, picks }) {

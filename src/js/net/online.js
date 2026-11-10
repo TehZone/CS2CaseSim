@@ -4,9 +4,10 @@
 // Protocol (JSON over WebSocket at <server>/ws):
 //   client -> server  { t: 'hello', token, data, v, app }    first message; data = game data build stamp, app = the game's version
 //                     { t: 'rpc', id, ns, m, args }          ns: 'act' | 'gamble' | 'trade' | 'social' | 'account' | 'admin'
-//   server -> client  { t: 'welcome', user, state, account, motd, ... }   after hello
+//   server -> client  { t: 'welcome', user, state, account, motd, away?, ... }   after hello (away: what passive income
+//                                                            paid for the time since you were last here: { earned, minutes, capped })
 //                     { t: 'res', id, ok, r, d, err }        reply to an rpc (d = state changes)
-//                     { t: 'delta', d }                      state changes from elsewhere (trades, idle income, wins)
+//                     { t: 'delta', d }                      state changes from elsewhere (trades, passive income every minute, wins)
 //                     { t: 'account', account }              your Discord link or staff level changed
 //                     { t: 'admin.msg', kind, msg, from }    a moderator's warning or a broadcast
 //                     { t: 'fatal', code, error, ban? }      refused or thrown off (auth, version, outdated, banned, kicked, maintenance)
@@ -49,9 +50,10 @@ const saved = () => { try { return JSON.parse(localStorage.getItem(LS) || '{}');
 const store = (v) => { try { localStorage.setItem(LS, JSON.stringify({ ...saved(), ...v })); } catch {} };
 if (packaged && saved().url) store({ url: null, ...(saved().url === SERVER ? {} : { token: null }) });
 
-function setStatus(s, detail = '') {
+// (lost: the connection, or the attempt at one, has just ended, and the game tries again: see passive.js)
+function setStatus(s, detail = '', lost = false) {
   status = s;
-  emit('status', { status: s, detail });
+  emit('status', { status: s, detail, lost });
 }
 function emit(type, detail) { bus.dispatchEvent(new CustomEvent(type, { detail })); }
 
@@ -153,7 +155,10 @@ function connect({ asked = false } = {}) {
       return reject(new Error('Could not connect to the server'));
     }
     ws = sock;
-    let welcomed = false;
+    // A change the server sends before the welcome is in the welcome's state already. One that comes while the welcome is
+    // being taken in (prices synced first) is after it, but the game's state is still the offline save then, which mustn't
+    // get it: it waits in `early`.
+    let welcomed = false, early = null;
     sock.onopen = () => sock.send(JSON.stringify({ t: 'hello', token: saved().token, data: D.generatedAt, v: PROTOCOL, app: build.version }));
     sock.onmessage = async (e) => {
       let msg;
@@ -161,7 +166,8 @@ function connect({ asked = false } = {}) {
       if (msg.t === 'welcome') {
         welcomed = true;
         retry = 0;
-        await onWelcome(msg);
+        early = [];
+        try { await onWelcome(msg); } finally { const waiting = early; early = null; for (const m of waiting) handle(m); }
         resolve();
       } else if (msg.t === 'fatal') {
         wantOnline = false;
@@ -171,7 +177,8 @@ function connect({ asked = false } = {}) {
         if (SHOWN_FATAL.has(msg.code)) emit('fatal', { code: msg.code, error: msg.error || '', ban: msg.ban || null, required: msg.required || '', asked });
         else emit('notice', { msg: msg.error, type: 'bad' });
         sock.close();
-      } else handle(msg);
+      } else if (early) early.push(msg);
+      else if (welcomed) handle(msg);
     };
     sock.onclose = () => {
       if (ws !== sock) return;
@@ -179,7 +186,7 @@ function connect({ asked = false } = {}) {
       pending.clear();
       if (!welcomed) reject(new Error('Could not connect to the server'));
       if (wantOnline) {
-        setStatus('connecting', 'Connection lost, reconnecting…');
+        setStatus('connecting', 'Connection lost, reconnecting…', true);
         retryTimer = setTimeout(() => connect().catch(() => {}), Math.min(30000, 1000 * 2 ** retry++));
       } else disconnect();
     };
@@ -221,6 +228,8 @@ async function onWelcome(msg) {
   emit('trades', trades);
   emit('lobbies', lobbies);
   emit('account', account);
+  // Passive income for your time away, paid as you connected (it's in the state already): passive.js says so.
+  if (msg.away && typeof msg.away === 'object') emit('away', msg.away);
 }
 
 // Use the server's market prices so item values match what the server pays.

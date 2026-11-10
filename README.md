@@ -390,9 +390,12 @@ What's in a match:
   feels the same.
 
 ## Features
-- Money comes from playing matches in Play: a win or a draw pays $250, a loss $100, and every kill $20 and assist $10
-  (online too, for a match the server saw start, once, and only what it could have earned). There's no clicker or
-  passive income
+- Money comes from playing matches in Play: a win or a draw pays $1,250, a loss $500, and every kill $100 and assist $50
+  (online too, for a match the server saw start, once, and only what it could have earned). And from passive income:
+  $100 every minute, while the game is open and while it's closed, up to 12 hours of it at a time (back after longer, the
+  game pays 12 hours, $72,000, and says so). Offline the save collects it by the PC's clock as the game loads and every
+  minute; online the server pays it by its own clock, when you connect and every minute you're connected. Saves and
+  accounts from before it start counting the first time they're opened (no back pay); a reset starts the count again
 - Profile levels like CS2's: 5,000 XP a level, from 1 to 40 (a win or draw is 250 XP, a loss 100, each kill 20, each assist
   10 and each round your team wins 50). Past level 40 you earn the next Service Medal and start again at level 1: every
   colour of the 2026 medal first, then 2025's, back to the first ever (2015's), 69 in all. Your level, XP bar and medal

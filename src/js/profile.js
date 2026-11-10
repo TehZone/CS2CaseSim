@@ -1,10 +1,10 @@
 // Your profile, like CS2's: your level in the top bar (CS2's own level icon when it's installed) with its XP bar and the
 // Service Medal you've reached, the medals you can earn, and the rewards each level up brings: four items to keep two
 // of (CS2's care package). Levels and medals are earned by playing matches (rules in engine/levels.js).
-import { esc, imgUrl } from './util.js';
+import { esc, imgUrl, money } from './util.js';
 import { S, on } from './state.js';
 import * as I from './items.js';
-import { XP_PER_LEVEL, MAX_LEVEL, MEDALS, XP, PAY, CARE_PICKS, CARE_OFFERS, medalName, medalOf, nextMedal } from './engine/levels.js';
+import { XP_PER_LEVEL, MAX_LEVEL, MEDALS, XP, PAY, PASSIVE, CARE_PICKS, CARE_OFFERS, medalName, medalOf, nextMedal } from './engine/levels.js';
 import { cs2Status, cs2Play } from './cs2/api.js';
 import { openModal, itemCard, toast, tryAct, showItemDetail } from './ui.js';
 import { sfx } from './audio.js';
@@ -13,6 +13,7 @@ let art = null; // CS2's level icons and medals from the install: { levels: { n:
 let pics = {}; // Steam's medal pictures (data/medals.json), when CS2 isn't installed
 
 const medalKey = (m) => `${m.y}-${m.l}`;
+const usd = (n) => '$' + n.toLocaleString('en-US'); // (whole dollars: $1,250)
 export function medalImg(m) {
   if (!m) return '';
   return art?.medals?.[medalKey(m)] || (pics[medalKey(m)] ? imgUrl(pics[medalKey(m)], 's') : '');
@@ -42,12 +43,12 @@ export function matchRewardHtml(r) {
   if (!r) return '';
   if (r.cheats) return '<span class="muted">Cheats were used, so this match pays nothing</span>';
   const p = r.pay, x = r.xp;
-  const parts = [p.result && `${{ win: 'Win', draw: 'Draw', loss: 'Loss' }[r.result] || 'Result'} $${p.result}`, p.kills && `kills $${p.kills}`, p.assists && `assists $${p.assists}`].filter(Boolean).join(' · ');
+  const parts = [p.result && `${{ win: 'Win', draw: 'Draw', loss: 'Loss' }[r.result] || 'Result'} ${usd(p.result)}`, p.kills && `kills ${usd(p.kills)}`, p.assists && `assists ${usd(p.assists)}`].filter(Boolean).join(' · ');
   const prof = { ...S.prof, ...r.after };
   const medal = r.medals?.length ? MEDALS[r.medals.at(-1)] : null;
   const ups = r.levelUps ? `<div class="lvl-up">${medal ? `${medalHtml(medal, 40)}<b>${esc(medalName(medal))}</b> earned! Back to level 1`
     : `${levelIconHtml(prof.level, 36)}<b>Level ${prof.level}</b>`}${r.levelUps > 1 ? ` (${r.levelUps} level ups)` : ''} · ${r.waiting} reward${r.waiting === 1 ? '' : 's'} waiting at the top of the menu</div>` : '';
-  return `<div class="match-pay"><div><b class="green">+$${r.earned.toFixed(2)}</b> <span class="muted">${parts}</span></div>
+  return `<div class="match-pay"><div><b class="green">+${money(r.earned)}</b> <span class="muted">${parts}</span></div>
     <div class="xp-line">${levelIconHtml(prof.level, 26)}<span>+${x.total.toLocaleString()} XP</span>${xpBarHtml(prof, { from: r.levelUps ? 0 : r.before.xp })}<span class="muted">${prof.xp.toLocaleString()} / ${XP_PER_LEVEL.toLocaleString()}</span></div>
     ${ups}</div>`;
 }
@@ -98,9 +99,10 @@ export function openProfile() {
         ${waiting ? `<button class="btn gold" data-claim>Claim reward${waiting > 1 ? `s (${waiting})` : ''}</button>` : ''}
       </div>
       <div class="section-title">Earning XP and money</div>
-      <div class="muted" style="font-size:13px;line-height:1.6">Every finished match in Play: a win or draw <b>$${PAY.win}</b> and ${XP.win} XP, a loss <b>$${PAY.loss}</b> and ${XP.loss} XP;
-        each kill <b>$${PAY.kill}</b> and ${XP.kill} XP, each assist <b>$${PAY.assist}</b> and ${XP.assist} XP, and ${XP.round} XP for each round your team wins.
-        ${XP_PER_LEVEL.toLocaleString()} XP is a level, and every level up brings a reward: ${CARE_OFFERS} items to keep ${CARE_PICKS} of.</div>
+      <div class="muted" style="font-size:13px;line-height:1.6">Every finished match in Play: a win or draw <b>${usd(PAY.win)}</b> and ${XP.win} XP, a loss <b>${usd(PAY.loss)}</b> and ${XP.loss} XP;
+        each kill <b>${usd(PAY.kill)}</b> and ${XP.kill} XP, each assist <b>${usd(PAY.assist)}</b> and ${XP.assist} XP, and ${XP.round} XP for each round your team wins.
+        ${XP_PER_LEVEL.toLocaleString()} XP is a level, and every level up brings a reward: ${CARE_OFFERS} items to keep ${CARE_PICKS} of.
+        You also get <b>${usd(PASSIVE.perMinute)}</b> every minute, even while the game is closed (up to ${PASSIVE.capHours} hours).</div>
       <div class="section-title">Service Medals <span class="muted" style="font-size:12px;text-transform:none;letter-spacing:0">${prof.medals} of ${MEDALS.length}</span></div>
       <div class="muted" style="font-size:13px;margin-bottom:10px">Past level 40 you earn the next medal and start again at level 1. Every colour of the newest medal comes first, then the year before's, back to the first ever, 2015's.</div>
       <div class="medal-years">${years.map((y) => `<div class="myear"><span>${y.y}</span>${y.list.map(medalCell).join('')}</div>`).join('')}</div>`,

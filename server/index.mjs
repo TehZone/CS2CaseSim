@@ -27,6 +27,7 @@ import { Live } from './live.mjs';
 import * as A from './accounts.mjs';
 import { Admin, banText, networkBanText } from './admin.mjs';
 import { Release, releaseFromEnv } from './release.mjs';
+import { Passive, PASSIVE_TICK_MS } from './passive.mjs';
 import { D, initData } from '../src/js/engine/data.js';
 import { makeCtx, runAction, delta, GameError } from '../src/js/engine/actions.js';
 import { dropEmbed } from './drops.mjs';
@@ -93,8 +94,10 @@ async function openDiscord(opt, log) {
 
 export async function startServer({
   port = +process.env.PORT || 8787, host = process.env.HOST || undefined, db: dbOpts = {}, log = console.log, priceRefresh = process.env.PRICE_REFRESH !== '0',
-  commit = process.env.SERVER_COMMIT || process.env.RENDER_GIT_COMMIT || null,
   admins = list(process.env.ADMIN_USERS), discord: discordOpt, trustProxy = process.env.TRUST_PROXY, release: releaseOpt = releaseFromEnv(),
+  commit = process.env.SERVER_COMMIT || process.env.RENDER_GIT_COMMIT || null,
+  // Passive income (server/passive.mjs): the server's clock, and how often it looks for whole minutes due (tests set both).
+  clock = Date.now, passiveTick = PASSIVE_TICK_MS,
 } = {}) {
   const data = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/game-data.json'), 'utf8'));
   initData(data, { keys: JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/keys.json'), 'utf8')) });
@@ -176,6 +179,9 @@ export async function startServer({
   const release = new Release(srv, releaseOpt);
   srv.release = release;
   await release.init();
+  srv.now = clock; // (passive income's time, and the clock a new or reset account's starts from)
+  const passive = new Passive(srv, { clock, tick: passiveTick });
+  srv.passive = passive;
 
   // ---- market prices: same data build as the client, refreshed daily from the marketplaces ----------------
   let pricePatch = null, pricePatchGz = null;
@@ -321,7 +327,7 @@ export async function startServer({
           if (!admin.settings.registration) return json(res, 403, { error: 'New accounts are closed right now' });
           const ban = await admin.activeBan({ ipHash });
           if (ban) return json(res, 403, { error: networkBanText(ban), ban: { reason: ban.reason, expires: ban.expires, by: ban.by } });
-          r = await A.register(db, body.name, body.password);
+          r = await A.register(db, body.name, body.password, { now: clock() });
         } else {
           // A banned account (or one on a banned network) gets no session; maintenance only stops the WebSocket.
           r = await A.login(db, body.name, body.password, {
@@ -459,12 +465,17 @@ export async function startServer({
           if (!sockets.has(u.id)) sockets.set(u.id, new Set());
           sockets.get(u.id).add(ws);
           store.online.add(u.id);
-          const state = await store.withUser(u.id, async (e) => e.st);
+          // Passive income for the time since they were last paid (server/passive.mjs), by the server's clock: in the state
+          // the welcome brings, `away` says what it paid, and their other windows are sent the change.
+          const { state, away } = await store.withUser(u.id, async (e) => ({ away: await passive.connected(e), state: e.st }));
+          if (away) passive.push(u.id, { t: 'delta', d: away.d }, ws);
           send({
             t: 'welcome', user: { id: u.id, name: u.name }, state, pricedAt: D.pricedAt, serverTime: Date.now(),
             players: playersList(), trades: await trades.list(u.id), lobbies: live.snapshot(u.id), market: marketSnapshot(),
             account: await admin.account(u.id), motd: admin.settings.motd || '',
+            ...(away?.r.earned ? { away: { earned: away.r.earned, minutes: away.r.minutes, capped: away.r.capped } } : {}),
           });
+          ws.welcomed = true; // (passive income's pushes wait for this: a change sent before it is in the welcome's state already)
           broadcastPlayers();
         } catch (e) {
           log('[ws] hello failed', e);
@@ -555,6 +566,7 @@ export async function startServer({
 
   async function close() {
     clearInterval(ping); clearInterval(priceTimer); clearInterval(saveMarket); clearInterval(serialTimer);
+    passive.close();
     admin.close();
     release.close();
     socials.close();

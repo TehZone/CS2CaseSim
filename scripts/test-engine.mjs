@@ -776,8 +776,8 @@ function tierFreq(box, n) {
   check('levels: 69 Service Medals, newest first: every colour of 2026, then of 2025, back to 2015', L.MEDALS.length === 69 && L.MEDALS[0].y === 2026 && L.MEDALS[0].l === 1
     && L.MEDALS[5].y === 2026 && L.MEDALS[5].l === 6 && L.MEDALS[6].y === 2025 && L.MEDALS[6].l === 1 && L.MEDALS.at(-1).y === 2015 && L.MEDALS.at(-1).l === 2
     && L.MEDALS.filter((m) => m.y === 2017).length === 7);
-  check('match money: a win or draw $250, a loss $100, $20 a kill and $10 an assist',
-    L.matchPay({ result: 'win', kills: 3, assists: 2 }).total === 330 && L.matchPay({ result: 'draw' }).total === 250 && L.matchPay({ result: 'loss', kills: 1 }).total === 120);
+  check('match money: a win or draw $1,250, a loss $500, $100 a kill and $50 an assist',
+    L.matchPay({ result: 'win', kills: 3, assists: 2 }).total === 1650 && L.matchPay({ result: 'draw' }).total === 1250 && L.matchPay({ result: 'loss', kills: 1 }).total === 600);
   const p = L.freshProfile();
   const up = L.addXp(p, 12000, { r: rng });
   check('levels: 5,000 XP a level, and a reward (four to pick two from) for each level up', up.after.level === 3 && up.after.xp === 2000 && up.levelUps === 2 && up.prof.drops.length === 2
@@ -796,9 +796,9 @@ function tierFreq(box, n) {
   const st = freshState();
   const run = (name, args, opts = {}) => { const ctx = ACT.makeCtx(st, { rng, ...opts }); const r = ACT.runAction(ctx, name, args); return { r, d: ACT.delta(ctx) }; };
   const pay = run('play.reward', { mode: 'competitive', result: 'win', kills: 25, assists: 4, roundsWon: 13, rounds: 24 });
-  check('a finished match pays and gives XP', pay.r.earned === 790 && near(st.money, 10 + 790, 1e-9) && pay.r.xp.total === 250 + 500 + 40 + 650 && st.prof.xp === pay.r.xp.total && 'prof' in pay.d.set);
+  check('a finished match pays and gives XP', pay.r.earned === 3950 && near(st.money, 10 + 3950, 1e-9) && pay.r.xp.total === 250 + 500 + 40 + 650 && st.prof.xp === pay.r.xp.total && 'prof' in pay.d.set);
   const old = run('play.reward', { won: true, kills: 2, assists: 0, mvps: 1, rounds: 9, difficulty: 'hard' });
-  check('the game’s older reward call (won, rounds won) still pays', old.r.earned === 290);
+  check('the game’s older reward call (won, rounds won) still pays', old.r.earned === 1450);
   for (let i = 0; i < 4; i++) run('play.reward', { mode: 'competitive', result: 'loss', kills: 20, assists: 5, roundsWon: 10, rounds: 23 });
   check('levelling up leaves rewards to claim', st.prof.level >= 2 && st.prof.drops.length === st.prof.level - 1);
   const drop = st.prof.drops[0];
@@ -825,7 +825,7 @@ function tierFreq(box, n) {
   const ok = run('play.reward', { run: id, result: 'win', kills: 12, roundsWon: 9, rounds: 14 }, { online: true, now: t0 + 20 * 60e3 });
   let twice = null; try { run('play.reward', { run: id, result: 'win', kills: 12, roundsWon: 9, rounds: 14 }, { online: true, now: t0 + 21 * 60e3 }); } catch (e) { twice = e; }
   check('online match money: only for a match the server saw start, once, long enough, with kills a Wingman match could have',
-    unseen?.code === 'match' && quick?.code === 'match' && many?.code === 'match' && ok.r.earned === 490 && twice?.code === 'match');
+    unseen?.code === 'match' && quick?.code === 'match' && many?.code === 'match' && ok.r.earned === 2450 && twice?.code === 'match');
   {
     // A StatTrak™ kill online: only in a match the server saw start, one at a time, no faster than the match's clock.
     const def = Object.values(D.skins).find((s) => s.stt && s.cat === 'rifle');
@@ -862,6 +862,85 @@ function tierFreq(box, n) {
   }
   const crate = drop.offers.find((o) => o.t === 'crate');
   check('reward cases are inventory cases that take their own key', !!keyFor(D.caseById[crate.id]) && I.itemName(crate) === D.caseById[crate.id].n && I.itemValue(crate) === D.caseById[crate.id].price);
+}
+
+// ---- passive income: $100 a whole minute, open or closed, up to 12 hours of it at a time --------------------------------
+{
+  const L = await E('levels');
+  const { upgradeState } = await E('economy');
+  const AD = await E('admin');
+  const MIN = 60e3, HOUR = 3600e3, t = 1.7e12;
+  check('passive: $100 a minute, 12 hours at most', L.PASSIVE.perMinute === 100 && L.PASSIVE.capHours === 12);
+  // The rule.
+  const r1 = L.passivePay(t, t + 3 * MIN + 25e3);
+  check('passive: whole minutes only, and the part of a minute left over carries over', r1.minutes === 3 && r1.pay === 300 && r1.at === t + 3 * MIN && !r1.capped
+    && L.passivePay(r1.at, t + 4 * MIN).minutes === 1);
+  const r0 = L.passivePay(t, t + MIN - 1);
+  check('passive: under a minute pays nothing and moves nothing', r0.minutes === 0 && r0.pay === 0 && r0.at === t && !L.passiveDue({ at: t }, t + MIN - 1) && L.passiveDue({ at: t }, t + MIN));
+  const cap = L.passivePay(t, t + 30 * HOUR + 10e3);
+  check('passive: past 12 hours pays 12 hours ($72,000), and counts all of the time (none of it pays later)', cap.minutes === 720 && cap.pay === 72000 && cap.capped
+    && cap.at === t + 30 * HOUR && L.passivePay(cap.at, t + 30 * HOUR + 10e3).pay === 0);
+  const twelve = L.passivePay(t, t + 12 * HOUR);
+  check('passive: 12 hours exactly is within the cap', twelve.pay === 72000 && !twelve.capped);
+  const back = L.passivePay(t, t - 5 * MIN);
+  check('passive: a clock gone backwards pays nothing and counts from its time', back.pay === 0 && back.at === t - 5 * MIN && L.passiveDue({ at: t }, t - 1));
+  const none = L.passivePay(undefined, t);
+  check('passive: no time yet pays nothing and counts from now', none.pay === 0 && none.at === t && L.passiveDue(undefined, t) && L.passiveDue({}, t));
+
+  // The action, on a save.
+  const collect = (st, now, opts = {}) => { const ctx = ACT.makeCtx(st, { now, ...opts }); const r = ACT.runAction(ctx, 'passive.collect'); return { r, d: ACT.delta(ctx) }; };
+  const fresh = freshState(t);
+  check('passive: a new save counts from when it was made', fresh.passive.at === t && fresh.passive.earned === 0 && collect(freshState(t), t + 30e3).r.earned === 0);
+  const st = freshState(t);
+  const a = collect(st, t + 2 * MIN + 30e3);
+  check('passive: a collect pays and moves the clock, in one change of just those two', a.r.earned === 200 && a.r.minutes === 2 && st.money === 210 && st.passive.at === t + 2 * MIN
+    && st.passive.earned === 200 && Object.keys(a.d.set).sort().join() === 'money,passive' && !a.d.add.length && !a.d.del.length && !a.d.upd.length);
+  const b = collect(st, t + 3 * MIN);
+  check('passive: the half minute left over makes the next one due 30 seconds later', b.r.earned === 100 && st.passive.at === t + 3 * MIN && st.money === 310);
+  const idle = collect(st, t + 3 * MIN + 59e3);
+  check('passive: nothing due changes nothing', idle.r.earned === 0 && !Object.keys(idle.d.set).length && st.money === 310);
+  const twice = [collect(st, t + 4 * MIN), collect(st, t + 4 * MIN)];
+  check('passive: the same minute is never paid twice', twice[0].r.earned === 100 && twice[1].r.earned === 0 && st.money === 410);
+  const away = collect(st, t + 4 * MIN + 13 * HOUR);
+  check('passive: back after 13 hours, 12 hours\' worth', away.r.earned === 72000 && away.r.capped && away.r.minutes === 720 && st.money === 72410
+    && st.passive.at === t + 4 * MIN + 13 * HOUR && st.passive.earned === 72400);
+  const behind = collect(st, t);
+  check('passive: a clock put back pays nothing and counts again from its time', behind.r.earned === 0 && st.money === 72410 && st.passive.at === t
+    && 'passive' in behind.d.set && !('money' in behind.d.set));
+  check('passive: and pays from there as usual', collect(st, t + MIN).r.earned === 100 && st.money === 72510);
+
+  // Saves and accounts from before passive income: no back pay.
+  const { passive: _p, ...older } = freshState(t - 30 * 24 * HOUR);
+  const old = upgradeState(JSON.parse(JSON.stringify(older)));
+  check('passive: a save from before it has no clock when it loads (none is made up for it)', old.passive === undefined && !('passive' in JSON.parse(JSON.stringify(old))));
+  const first = collect(old, t);
+  check('passive: its first collect starts the clock and pays nothing for the time before', first.r.earned === 0 && old.money === 10 && old.passive.at === t && old.passive.earned === 0 && 'passive' in first.d.set);
+  check('passive: then it earns like any other', collect(old, t + 5 * MIN).r.earned === 500 && old.money === 510);
+  check('passive: and the clock is saved with it', upgradeState(JSON.parse(JSON.stringify(old))).passive.at === t + 5 * MIN);
+
+  // Online only the server collects (server/passive.mjs), by its own time: the action takes none from anyone.
+  const acct = freshState(t);
+  let refused = null; try { collect(acct, t + 10 * MIN, { online: true }); } catch (e) { refused = e; }
+  check('passive: online a client can\'t ask for it', refused?.code === 'server' && acct.money === 10 && acct.passive.at === t);
+  const sys = ACT.runAction(ACT.makeCtx(acct, { online: true, system: true, now: t + 10 * MIN }), 'passive.collect', { now: t + 99 * HOUR, at: 0, minutes: 720 });
+  check('passive: the server\'s collect goes by its clock, not by anything sent with it', sys.earned === 1000 && acct.money === 1010 && acct.passive.at === t + 10 * MIN);
+
+  // What a replaced state keeps (the admin panels): a restore or a raw edit keeps the clock, a reset starts it again.
+  const cur = { ...freshState(t), money: 5010, passive: { at: t + 50 * MIN, earned: 5000 } };
+  const snap = upgradeState(JSON.parse(JSON.stringify(freshState(t - 24 * HOUR))));
+  AD.restoreMerge(cur, snap, {});
+  check('passive: a restored snapshot keeps the clock as it is now (no time paid twice)', snap.passive === cur.passive);
+  const reset = upgradeState(JSON.parse(JSON.stringify(freshState(t + 60 * MIN))));
+  AD.restoreMerge(cur, reset, { startOver: true });
+  check('passive: a reset counts again from the reset', reset.passive.at === t + 60 * MIN && reset.passive.earned === 0);
+  const rev = AD.revOf(cur), view = JSON.parse(JSON.stringify(AD.rawView(cur)));
+  collect(cur, t + 53 * MIN); // (what it pays while the panel has the raw JSON open)
+  check('passive: what it pays meanwhile doesn\'t make a raw edit stale', AD.revOf(cur) === rev && cur.money === 5310);
+  const edit = AD.rawEdit(cur, { ...view, stars: 7 }, rev);
+  check('passive: the raw edit keeps what it paid since, and its clock', edit.next.money === 5310 && edit.next.stars === 7 && edit.next.passive === cur.passive && edit.changed.join() === 'stars', edit.changed.join());
+  check('passive: a raw edit\'s money is that money plus what was paid since it was opened', AD.rawEdit(cur, { ...view, money: 100 }, rev).next.money === 400);
+  cur.money += 1;
+  check('passive: anything else that moved the money still makes it stale', AD.revOf(cur) !== rev);
 }
 
 

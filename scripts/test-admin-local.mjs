@@ -37,6 +37,7 @@ const MIN = 60e3;
   const oldRev = (st) => { const { inv: _i, stored: _t, index: _x, social: _s, ...rest } = st; return crypto.createHash('sha256').update(JSON.stringify(canon(rest))).digest('hex').slice(0, 32); };
   const st = freshState();
   delete st.settings; // (as online states are)
+  delete st.passive; // (as states were before passive income, whose clock and pay revOf now leaves out: see test-engine)
   st.stats.bestName = 'AWP | Dragon Lore ★ 日本 ✓';
   st.money = 1234.56;
   const shuffled = Object.fromEntries(Object.entries(st).reverse());

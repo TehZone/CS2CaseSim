@@ -28,6 +28,8 @@ import { initMatchmaking } from './matchmaking.js';
 import { initProfile } from './profile.js';
 import { initAccount, discordSection, bindDiscordSection, openResetModal, staffPc } from './account.js';
 import { initUpdates } from './update.js';
+import { initPassive } from './passive.js';
+import { PAY, PASSIVE } from './engine/levels.js';
 
 const PAGES = { play, cases, inventory, tradeup, armory, market, index: itemindex, database, gamble, trade, stats, community, admin, changelog };
 let current = null, currentName = 'cases';
@@ -211,9 +213,14 @@ async function boot() {
     save();
     toast(`Chickens and player cards are no longer in the game, so ${retiredOnLoad.n === 1 ? 'yours was' : `your ${retiredOnLoad.n} were`} sold for <b class="green">${money(retiredOnLoad.value)}</b>.`, 'gold');
   }
-  if (S.stats.opened === 0 && S.inv.length === 0 && S.money === 10) {
-    toast('Welcome! You start with <b class="green">$10.00</b>. Earn more by playing matches in <b>Play</b>: $250 a win, $100 a loss, $20 a kill.', 'gold');
+  // (Until you've opened, played or spent anything: passive income alone doesn't count.)
+  if (S.stats.opened === 0 && S.inv.length === 0 && S.money - (Number(S.passive?.earned) || 0) === 10) {
+    const usd = (n) => '$' + n.toLocaleString('en-US');
+    toast(`Welcome! You start with <b class="green">$10.00</b>. Earn more by playing matches in <b>Play</b>: ${usd(PAY.win)} a win, ${usd(PAY.loss)} a loss, ${usd(PAY.kill)} a kill.
+      You also get ${usd(PASSIVE.perMinute)} every minute, even while the game is closed (up to ${PASSIVE.capHours} hours).`, 'gold', 10000);
   }
+  // Passive income: collected now (the time since the save was last open) and every minute (after net.resume(): see passive.js).
+  initPassive();
 }
 
 boot();

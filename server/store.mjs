@@ -24,15 +24,32 @@ export class Store {
     if (e) { e.touched = Date.now(); return e; }
     const { rows } = await this.db.query('SELECT id, name, state FROM users WHERE id = $1', [id]);
     if (!rows.length) throw new Error('No such player');
-    const saved = typeof rows[0].state === 'string' ? JSON.parse(rows[0].state) : rows[0].state;
-    const moved = saved.index?.filled ? null : await this.changedHands(id); // (accounts from before the Index, once)
+    const { st, dirty } = await this.fromRow(id, rows[0].state);
     e = this.cache.get(id); // loaded meanwhile
     if (e) return e;
-    e = { id: rows[0].id, name: rows[0].name, st: upgradeState(saved), dirty: false, touched: Date.now() };
-    delete e.st.settings;
-    if (retireOld(e.st).n) e.dirty = true; // older accounts' chickens and pro cards, sold once
-    if (moved) { backfillIndex(e.st, { moved }); e.dirty = true; }
+    e = { id: rows[0].id, name: rows[0].name, st, dirty, touched: Date.now() };
     this.cache.set(id, e);
+    return e;
+  }
+
+  // A saved state as memory keeps it: brought up to date, without the game's settings. → { st, dirty (it changed) }
+  async fromRow(id, state) {
+    const saved = typeof state === 'string' ? JSON.parse(state) : state;
+    const moved = saved.index?.filled ? null : await this.changedHands(id); // (accounts from before the Index, once)
+    const st = upgradeState(saved);
+    delete st.settings;
+    let dirty = false;
+    if (retireOld(st).n) dirty = true; // older accounts' chickens and pro cards, sold once
+    if (moved) { backfillIndex(st, { moved }); dirty = true; }
+    return { st, dirty };
+  }
+
+  // Reads a player's row again into their entry, which stays the same object (the caller holds their lock): another server
+  // instance has written the row since this copy of it was loaded (two running at once in a deploy: server/passive.mjs).
+  async reload(e) {
+    const { rows } = await this.db.query('SELECT name, state FROM users WHERE id = $1', [e.id]);
+    if (!rows.length) throw new Error('No such player');
+    Object.assign(e, { name: rows[0].name, ...(await this.fromRow(e.id, rows[0].state)), touched: Date.now() });
     return e;
   }
 
@@ -97,16 +114,39 @@ export class Store {
 
   markDirty(e) { e.dirty = true; e.touched = Date.now(); }
 
+  // Writes only these top-level fields of a player's saved state (`next`), the rest of the row left as the database has it,
+  // and only if the database still has each of them as `was` (this copy's, before the change): another server instance (two
+  // run at once in a deploy) may have written the row since this copy was loaded. For a change the server makes by itself on
+  // a timer (passive income, server/passive.mjs), which mustn't write back this copy's view of the rest of the row. Not
+  // last_seen (when they last changed something). → whether it was written.
+  async patch(e, was, next) {
+    const args = [e.id], where = [];
+    let set = 'state';
+    for (const [k, v] of Object.entries(next)) {
+      args.push(k, JSON.stringify(v), was[k] === undefined ? null : JSON.stringify(was[k]));
+      const n = args.length;
+      set = `jsonb_set(${set}, ARRAY[$${n - 2}::text], $${n - 1}::jsonb)`;
+      where.push(`state -> $${n - 2}::text IS NOT DISTINCT FROM $${n}::jsonb`);
+    }
+    const { rows } = await this.db.query(`UPDATE users SET state = ${set} WHERE id = $1 AND ${where.join(' AND ')} RETURNING id`, args);
+    e.touched = Date.now();
+    return rows.length > 0;
+  }
+
   async flush() {
     const dirty = [...this.cache.values()].filter((e) => e.dirty);
     for (const e of dirty) {
       if (this.locks.has(e.id)) continue; // being changed right now; next round
       e.dirty = false;
+      // (saving: the row is on its way with this copy as it is now, so a change meanwhile goes in the next write, not a patch)
+      e.saving = true;
       try {
         await this.db.query('UPDATE users SET state = $1::jsonb, last_seen = $2 WHERE id = $3', [JSON.stringify(e.st), Date.now(), e.id]);
       } catch (err) {
         e.dirty = true;
         throw err;
+      } finally {
+        e.saving = false;
       }
     }
     const now = Date.now();

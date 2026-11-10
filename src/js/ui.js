@@ -19,12 +19,13 @@ import { nameable } from './engine/tools.js';
 import { iconHtml } from './menu.js';
 
 // ---- toasts --------------------------------------------------------------------------------
-export function toast(msg, type = '') {
+// (ms: how long it shows, for one with more to read)
+export function toast(msg, type = '', ms = 3200) {
   const el = document.createElement('div');
   el.className = 'toast ' + type;
   el.innerHTML = msg;
   document.getElementById('toasts').appendChild(el);
-  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 300); }, 3200);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 300); }, ms);
   return el;
 }
 

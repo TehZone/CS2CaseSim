@@ -3,7 +3,8 @@
 // Medal, then every colour of 2025's, and so on back to the first one ever made, 2015's. Each level up comes with a
 // reward like CS2's care package: four items to choose two from.
 //
-// Matches are also the only way to earn money: a win (or a draw) pays $250, a loss $100, and every kill $20 and assist $10.
+// Money comes from matches (a win or a draw pays $1,250, a loss $500, and every kill $100 and assist $50) and from passive
+// income: $100 every minute, while the game is open and while it's closed, up to 12 hours of it at a time (PASSIVE below).
 import { D, COLLECTION_ODDS } from './data.js';
 import { makeSkinItem, makeCrateItem } from './items.js';
 import { pick, pickWeighted, rand, uid } from './util.js';
@@ -17,7 +18,7 @@ export const MEDALS = MEDAL_YEARS.flatMap(([y, n]) => Array.from({ length: n }, 
 export const medalName = (m) => `${m.y} Service Medal`;
 
 // What a finished match pays, and the XP it's worth (the same for every mode; rounds count where there are rounds).
-export const PAY = { win: 250, draw: 250, loss: 100, kill: 20, assist: 10 };
+export const PAY = { win: 1250, draw: 1250, loss: 500, kill: 100, assist: 50 };
 export const XP = { win: 250, draw: 250, loss: 100, kill: 20, assist: 10, round: 50 };
 export const RESULTS = ['win', 'draw', 'loss'];
 
@@ -29,6 +30,28 @@ export function matchXp({ result, kills = 0, assists = 0, roundsWon = 0 }) {
   const parts = { result: XP[result] || 0, kills: kills * XP.kill, assists: assists * XP.assist, rounds: roundsWon * XP.round };
   return { ...parts, total: parts.result + parts.kills + parts.assists + parts.rounds };
 }
+
+// ---- passive income ----------------------------------------------------------------------------------------------------
+// $100 for every whole minute, online and offline, while the game is open and while it's closed: up to 12 hours of it at a
+// time (a longer absence pays 12 hours, $72,000). The one rule for both modes (offline the game runs it by the PC's clock,
+// online the server by its own: see actions.js 'passive.collect'). The state keeps passive = { at, earned }: the time it has
+// been counted up to, and what it has paid in all. Collecting at `now` pays the whole minutes since `at`, no more than the
+// cap, and moves `at` on by every whole minute that went by (paid, or past the cap), so the part of a minute left over
+// counts towards the next. A state with no time yet (saves and accounts from before passive income: no back pay) or one
+// ahead of the clock (a PC's clock put back) pays nothing and counts from now. Open, the game collects every minute, so
+// the cap only ever bites on time away.
+export const PASSIVE = { perMinute: 100, capHours: 12 };
+export const PASSIVE_MINUTE = 60 * 1000;
+// A new save's or account's: counting from its creation.
+export const freshPassive = (now = Date.now()) => ({ at: now, earned: 0 });
+// What collecting at `now` pays, from the time `at` it was counted up to. → { minutes, pay, capped, at (the new time) }
+export function passivePay(at, now) {
+  if (!Number.isFinite(at) || now < at) return { minutes: 0, pay: 0, capped: false, at: now };
+  const whole = Math.floor((now - at) / PASSIVE_MINUTE), minutes = Math.min(whole, PASSIVE.capHours * 60);
+  return { minutes, pay: minutes * PASSIVE.perMinute, capped: whole > minutes, at: at + whole * PASSIVE_MINUTE };
+}
+// Whether collecting at `now` would change anything: a whole minute is due, or the clock starts (or starts again).
+export const passiveDue = (passive, now) => !Number.isFinite(passive?.at) || now < passive.at || now - passive.at >= PASSIVE_MINUTE;
 
 // A new player's profile: level 1, no XP, no medals yet, no rewards waiting.
 export const freshProfile = () => ({ level: 1, xp: 0, medals: 0, total: 0, drops: [] });

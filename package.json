@@ -2,7 +2,7 @@
   "name": "cs2-case-sim",
   "productName": "CS2 Case Simulator",
   "version": "1.1.1",
-  "description": "CS2 case opening simulator with clicker economy, floats, patterns, stickers, agents, chickens and 3D inspect.",
+  "description": "CS2 case opening simulator with match pay and passive income, floats, patterns, stickers, agents and 3D inspect.",
   "main": "main.js",
   "author": "dawso",
   "license": "UNLICENSED",

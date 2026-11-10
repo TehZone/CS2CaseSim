@@ -790,7 +790,8 @@ export class Admin {
   async reset(actor, a) {
     const t = await this.target(a.id);
     await this.canChange(actor, t);
-    await this.replaceWith(actor, t, A.newState(), 'reset');
+    // (a new account's: passive income counts again from now, on the server's clock)
+    await this.replaceWith(actor, t, A.newState(this.srv.now?.() ?? Date.now()), 'reset');
     await this.audit(actor, 'reset', t, {});
     return {};
   }

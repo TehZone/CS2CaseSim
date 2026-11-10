@@ -1,8 +1,9 @@
 // The shape of a player's state. Every function takes the state object explicitly so the same rules run on the client
-// (offline save) and on the multiplayer server (online account). Money is earned by playing matches (see levels.js).
+// (offline save) and on the multiplayer server (online account). Money is earned by playing matches and by passive income
+// (see levels.js).
 import { freshRank } from './ranks.js';
 import { freshMM } from './matchmaking.js';
-import { freshProfile } from './levels.js';
+import { freshProfile, freshPassive } from './levels.js';
 import { repairStorage } from './storage.js';
 import { freshIndex, upgradeIndex } from './itemindex.js';
 
@@ -12,10 +13,12 @@ import { freshIndex, upgradeIndex } from './itemindex.js';
 // all three (older saves and older games have only that).
 export const AUTO_SELL_DEFAULT = { on: false, below: 0, ranks: [], keepStt: true, keepRare: true };
 
-export function freshState() {
+// (now: when it's made; the server passes its own clock's)
+export function freshState(now = Date.now()) {
   return {
     v: 2,
     money: 10,
+    passive: freshPassive(now), // passive income: the time it's been counted up to, and what it has paid (see levels.js)
     stars: 0,
     starSpend: 0, // case spending towards the next armory star
     inv: [],
@@ -38,8 +41,8 @@ export function freshState() {
       playMatches: 0, playWins: 0, playKills: 0, playEarned: 0,
     },
     settings: { volume: 0.5, fast: false, confirmSellAbove: 25, showOdds: true, autoSell: { ...AUTO_SELL_DEFAULT } },
-    created: Date.now(),
-    lastSeen: Date.now(),
+    created: now,
+    lastSeen: now,
   };
 }
 
@@ -55,6 +58,9 @@ export function upgradeState(saved) {
   st.serialsBackfilled = !!saved.serialsBackfilled; // saves from before serials get theirs on load (items.backfillSerials)
   repairStorage(st); // saves from before Storage Units have none
   st.index = upgradeIndex(saved.index); // (saves from before the Index are filled in as they load: itemindex.backfillIndex)
+  // Passive income's clock as saved. One from before it has none, and isn't given one here: it starts counting at its first
+  // collect, which saves it (a clock made on every load would lose the time between loads that never collected).
+  if (!Number.isFinite(saved.passive?.at)) delete st.passive;
   st.v = base.v;
   return st;
 }

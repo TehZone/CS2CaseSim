@@ -41,19 +41,19 @@ async function newSession(db, userId) {
 
 const checkPass = (pass) => { if (typeof pass !== 'string' || pass.length < 6 || pass.length > 200) throw new AuthError('Password: at least 6 characters'); };
 
-// A new account's state (also what an admin's reset gives): the game's settings stay on the player's PC.
-export function newState() {
-  const st = freshState();
+// A new account's state (also what an admin's reset gives): the game's settings stay on the player's PC. now: the server's
+// clock (passive income counts from it).
+export function newState(now = Date.now()) {
+  const st = freshState(now);
   delete st.settings;
   return st;
 }
 
-export async function register(db, name, pass) {
+export async function register(db, name, pass, { now = Date.now() } = {}) {
   const bad = validName(name);
   if (bad) throw new AuthError(bad);
   checkPass(pass);
-  const st = newState();
-  const now = Date.now();
+  const st = newState(now);
   let id;
   try {
     const { rows } = await db.query(
