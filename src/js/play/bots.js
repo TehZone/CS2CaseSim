@@ -695,9 +695,13 @@ export class Bot {
   // Ray (game units) against this bot's hitboxes: { t, group } of the nearest hit, or null.
   raycast(o, d, maxT) {
     if (this.mode === 'dead') return null;
+    // Quick reject: the bot's distance from the ray's line seen from above. d is unit length in 3D,
+    // so its x,y part is shorter on a shot aimed up or down: normalise it, or a steep shot from range
+    // looks like a miss and is thrown away.
     const cx = this.pos[0] - o[0], cy = this.pos[1] - o[1];
-    const along = cx * d[0] + cy * d[1];
-    const px = cx - d[0] * along, py = cy - d[1] * along;
+    const hl = Math.hypot(d[0], d[1]) || 1e-9, ux = d[0] / hl, uy = d[1] / hl;
+    const along = cx * ux + cy * uy;
+    const px = cx - ux * along, py = cy - uy * along;
     if (px * px + py * py > 60 * 60 && Math.hypot(cx, cy) > 60) return null;
     this.sync(); // hitboxes follow the simulated position even between frames
     this.root.updateMatrixWorld(true);

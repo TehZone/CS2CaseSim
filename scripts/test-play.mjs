@@ -941,6 +941,19 @@ function fakeGame() {
   ok(through && through.points.filter((p) => p.crouch).length === 2 && !through.points[through.points.length - 1].crouch, 'nav: into and out of a crawl, the bot is told to crouch');
 }
 
+// ---- hit tests: a shot aimed at a bot from above or below hits it at any range (the quick reject used the 3D
+// direction's x and y as if they were unit length, so steep shots from a few hundred units were all thrown away) ----
+{
+  const { Bot } = await import('../src/js/play/bots.js');
+  const pos = [634, -1179, -416], up = { pelvis: 38, spine_0: 42, spine_2: 52, neck_0: 60, head_0: 64 };
+  const fake = { mode: 'move', pos, sync() {}, root: { updateMatrixWorld() {} }, bonePos: (n) => (n in up ? [pos[0], pos[1], pos[2] + up[n]] : null) };
+  const shot = (o) => { const t = [pos[0], pos[1], pos[2] + 50], v = t.map((x, i) => x - o[i]), l = Math.hypot(...v); return Bot.prototype.raycast.call(fake, o, v.map((x) => x / l), l + 50); };
+  ok(shot([980, -864, -64])?.group === 'chest', "hit test: from Nuke's Rafters onto A site (557 units, 33° down) a shot at the chest hits");
+  ok(shot([520, -312, -64]) !== null && shot([634 + 900, -1179, -416 + 64]) !== null, 'hit test: 920 units 18° down, and level at 900 units, hit too');
+  const miss = (() => { const o = [1500, -1179, -350], d = [0, 1, 0]; return Bot.prototype.raycast.call(fake, o, d, 4000); })();
+  ok(miss === null, 'hit test: a shot passing 866 units to the side misses');
+}
+
 // Molotov fire: the flame flipbook and a fire's life.
 {
   const a = flameAtlas(), W = a.width, CH = a.height / 4, CW = W / 8;
