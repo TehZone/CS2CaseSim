@@ -1,7 +1,8 @@
 // CS2's other game modes, next to Competitive (match.js):
 //  - Premier: Competitive's rules over the full MR12 (first to 13, overtime on a tie), the map picked by banning from the
 //    Active Duty pool, and a CS Rating instead of a skill group (engine/premier.js).
-//  - Wingman: 2v2 on one bomb site, first to 9 rounds, shorter rounds.
+//  - Wingman: 2v2 on one bomb site of CS2's Wingman maps, first to 9 rounds, shorter rounds. Each map's Wingman version
+//    is its own (read from CS2's files by cs2/play.cjs wingmanSetup): walls and doors, spawns and buy zones, the site.
 //  - Deathmatch: 10 minutes of respawning, every weapon free from the buy menu anywhere, points for kills (more for a
 //    headshot or a pistol/knife kill); free-for-all or teams.
 //  - Arms Race: free-for-all; every kill moves you to the next weapon, the last one is the knife; a knife kill also
@@ -9,6 +10,8 @@
 // Deathmatch and Arms Race keep the round system's shape (phase, time, the bomb's state) so the rest of the game
 // treats them like one long round.
 import { RULES, CATALOG } from './match.js';
+import { CollisionWorld, joinCollision } from './collision.js';
+import { NavMesh, withoutAreas } from './nav.js';
 
 export const MODES = {
   premier: { name: 'Premier', blurb: 'CS Rating, map pick/ban, MR12 with overtime' },
@@ -18,6 +21,35 @@ export const MODES = {
   armsrace: { name: 'Arms Race', blurb: 'A new weapon every kill, the knife last', respawn: true },
 };
 export const WINGMAN_RULES = { ...RULES, freeze: 10, roundTime: 90, buyTime: 15, maxRounds: 16, winsNeeded: 9, halftime: 8 };
+
+// A map's info as Wingman has it (info.wingman, see wingmanSetup): its own site, or on a map that has none of its own the
+// one chosen (the private match page's Bomb site); its spawns and buy zones; what it draws and doesn't.
+export function wingmanInfo(info, chosen) {
+  const w = info.wingman, sites = info.bombsites;
+  const own = sites[w?.site], picked = sites.filter((s) => s.site === chosen);
+  const out = { ...info, bombsites: own ? [own] : picked.length ? picked : sites.slice(0, 1) };
+  if (!w) return out;
+  const show = new Set(w.show);
+  return { ...out, spawns: w.spawns || info.spawns, buyzones: w.buyzones || info.buyzones, hidden: [...(info.hidden || []).filter((n) => !show.has(n)), ...(w.hide || [])] };
+}
+
+// What a match plays on: { map, collision, nav }, from the map as the service gave it, which stays as it was (the next match
+// on it may be another mode). Other modes play that. Wingman plays its Wingman version: a copy of it (wingmanInfo), its walls
+// in the collision world, and the nav mesh and the callouts without what's closed (bots plan by them, and there's no way
+// through a closed one). get: fetch.
+export async function matchWorld(map, mode, site, get) {
+  const wingman = mode === 'wingman', w = map.info.wingman;
+  const bytes = (url) => get(url).then((r) => r.arrayBuffer());
+  let col = { buffer: await bytes(map.collision), info: map.info.collision };
+  if (wingman && map.wingman) col = joinCollision(col.buffer, col.info, await bytes(map.wingman), w.collision);
+  const data = await get(map.nav).then((r) => r.json());
+  const nav = new NavMesh(wingman ? withoutAreas(data, w?.closed, w?.cut) : data);
+  const info = wingman ? wingmanInfo(map.info, site) : map.info;
+  return {
+    map: wingman ? { ...map, info: { ...info, places: info.places.filter((p) => nav.reaches(p.min, p.max)) } } : map,
+    collision: new CollisionWorld(col.buffer, col.info), nav,
+  };
+}
 
 // Arms Race's weapons, in order (the knife is the last level).
 export const ARMS_RACE = ['weapon_m4a1_silencer', 'weapon_ak47', 'weapon_aug', 'weapon_famas', 'weapon_galilar', 'weapon_awp', 'weapon_p90',

@@ -10,7 +10,7 @@ import { FLAG_PLAYER, FLAG_BULLET, FLAG_GRENADE } from './collision.js';
 import { fromGl } from './world.js';
 
 const SOLID = FLAG_PLAYER | FLAG_BULLET | FLAG_GRENADE;
-const USE_RANGE = 96; // how far away you can open a door (CS2's use distance)
+export const USE_RANGE = 96; // how far away you can open a door (CS2's use distance)
 
 // The 12 triangles of a box given by its 8 corners (game units), written into out at offset 0.
 function boxTris(c, out) {
@@ -152,6 +152,13 @@ export class Doors {
     return hit?.shape?.pane && !hit.shape.pane.broken ? hit.shape.pane : null;
   }
 
+  // A closed door in the way of a bot walking from a to b: it opens it (away from itself) from there, as a door swings
+  // slower than a bot walks: left till it's up against it, it would slide along it into the frame.
+  openAhead(a, b) {
+    const d = this.list.length ? this.game.collision.traceBox(a, b, [-16, -16, 0], [16, 16, 54], FLAG_PLAYER)?.shape?.door : null;
+    if (d && d.target === 0 && d.angle === 0) this.toggle(d, a);
+  }
+
   tick(dt, now) {
     const g = this.game;
     for (const d of this.list) {
@@ -167,8 +174,8 @@ export class Doors {
       const step = d.speed * dt, delta = d.target - d.angle, prev = d.angle;
       d.angle = Math.abs(delta) <= step ? d.target : d.angle + Math.sign(delta) * step;
       this.place(d);
-      // Someone in the way: it stops there.
-      if (g.combatants.some((c) => c.alive && this.inWay(d, g.positionOf(c)))) { d.angle = prev; d.target = prev; this.place(d); continue; }
+      // Someone in the way: it waits for them to move.
+      if (g.combatants.some((c) => c.alive && this.inWay(d, g.positionOf(c)))) { d.angle = prev; this.place(d); continue; }
       if (d.angle === d.target) {
         const s = d.target === 0 ? d.sounds.close : d.sounds.open;
         if (s) g.sounds.play(s, { pos: d.center, listener: g, volume: 0.8 });

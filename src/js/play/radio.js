@@ -110,6 +110,7 @@ export class Radio {
     }
     if (kind === 'siteA' || kind === 'siteB') {
       const site = kind === 'siteA' ? 'A' : 'B';
+      if (!g.map.info.bombsites?.some((s) => s.site === site)) return; // (Wingman's other site: there's no going there)
       const plan = g.plans?.[me.team];
       if (plan) { if (me.team === 'T') { plan.site = site; plan.lurk = null; } else plan.rotate = site; }
     }

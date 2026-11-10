@@ -1115,6 +1115,55 @@ function fakeGame() {
     "collision: a breakable's bounds let rays and sweeps past it skip it, and ones into it still hit");
 }
 
+// ---- doors (world.js, doors.js): where a door's model stands, and someone in its way ------------------------------------
+{
+  // A door's model comes turned by its root bone: baked as a door, it's turned back about its hinge, as its physics has it.
+  const { bakeSkin } = await import('../src/js/play/world.js');
+  const hinge = new THREE.Group(), bone = new THREE.Bone(), scene = new THREE.Group(), geometry = new THREE.BufferGeometry();
+  hinge.position.set(5, 0, 1);
+  hinge.rotation.y = Math.PI;
+  bone.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2);
+  hinge.add(bone);
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 2, 1.5], 3));
+  geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute([0, 0, 0, 0, 0, 0, 0, 0], 4));
+  geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0], 4));
+  const prop = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+  scene.add(hinge, prop);
+  scene.updateMatrixWorld(true);
+  prop.bind(new THREE.Skeleton([bone], [bone.matrix.clone().invert()]), new THREE.Matrix4());
+  const at = (g, i) => [g.attributes.position.getX(i), g.attributes.position.getY(i), g.attributes.position.getZ(i)];
+  const same = (a, b) => a.every((v, k) => near(v, b[k], 1e-4));
+  ok(same(at(bakeSkin(prop), 1), [5, 2, -0.5]), 'skinned props: where their bones put them');
+  const baked = bakeSkin(prop, true);
+  ok(same(at(baked, 0), [5, 0, 1]) && same(at(baked, 1), [3.5, 2, 1]), "doors: a door's model is turned back about its hinge (Nuke's stood wide open, Overpass's lay flat)");
+
+  // Someone in a door's way: it waits for them, and goes on once they've moved.
+  const { Doors } = await import('../src/js/play/doors.js');
+  const pos = [30, 40, 0], c = { alive: true };
+  const game = { collision: { addDynamic: (o) => o }, sounds: { play: () => {} }, bots: [], combatants: [c], positionOf: () => pos };
+  const box = new THREE.Box3(new THREE.Vector3(-0.1, 0, 0), new THREE.Vector3(0.1, 2.8, 1.5)); // (metres, three's axes: a leaf 59 units long)
+  const doors = new Doors(game, { doors: [{ box, pivot: new THREE.Group(), origin: [0, 0, 0], speed: 200, distance: 89, wait: -1, reverse: false, away: false, sounds: {} }], glass: [] });
+  const door = doors.list[0];
+  doors.toggle(door, null);
+  for (let i = 0; i < 64; i++) doors.tick(1 / 64, i / 64);
+  ok(door.angle > 0 && door.angle < 89 && door.target === 89, `doors: one stops at whoever's in its way (at ${door.angle})`);
+  pos[0] = 500;
+  for (let i = 0; i < 64; i++) doors.tick(1 / 64, 1 + i / 64);
+  ok(door.angle === 89, 'doors: and swings on once they\'ve moved, not left half open');
+
+  // A bot opens the closed door in its way from as far off as you can, not once it's up against it.
+  doors.reset();
+  let ahead = null;
+  game.collision.traceBox = () => ({ shape: ahead });
+  doors.openAhead([200, 0, 0], [104, 0, 0]);
+  ok(door.target === 0, 'doors: nothing ahead, nothing opens');
+  ahead = door.shape;
+  doors.openAhead([200, 0, 0], [104, 0, 0]);
+  ok(door.target === 89, 'doors: a bot opens the closed door ahead of it');
+  doors.openAhead([200, 0, 0], [104, 0, 0]);
+  ok(door.target === 89, 'doors: and leaves it open');
+}
+
 // ---- grenade flight (flight.js): how the game, the bots and the lineup finder all fly grenades -----------------------
 {
   const { throwVelocity, simulateFlight, FUSE } = await import('../src/js/play/flight.js');
@@ -1520,6 +1569,352 @@ function fakeGame() {
   ok(wide.w === 1280 && wide.h === 720 && wide.y === 152, '16:9 with black bars on a 5:4 screen: bars top and bottom');
   ok(screenLayout(1920, 1080, { aspect: '4:3', resolution: '1280x960' }).res?.join() === '1280,960' && !screenLayout(1920, 1080, { aspect: '4:3', resolution: '1920x1080' }).res,
     "screen: a resolution of the aspect picked is drawn at; another aspect's isn't");
+}
+
+// ---- Wingman (cs2/play.cjs, modes.js, nav.js, collision.js): the map's own version, read from CS2's files -------------
+{
+  const play = (await import('node:module')).createRequire(import.meta.url)('../cs2/play.cjs');
+  const { wingmanInfo, matchWorld } = await import('../src/js/play/modes.js');
+  const { NavMesh, withoutAreas } = await import('../src/js/play/nav.js');
+  const { joinCollision } = await import('../src/js/play/collision.js');
+
+  const gamemodes = `"GameModes.txt"
+  {
+    "gameTypes" { "classic" { "gameModes" {
+      "casual" { "mapgroupsMP" { "mg_de_dust2" "0" } }
+      "scrimcomp2v2" { "mapgroupsMP" { "template#include" "2v2" } }
+    } } }
+    "templates#include" { "2v2" { "mg_de_nuke" "0" "mg_de_debris" "1" } }
+    "mapgroups" {
+      "mg_de_nuke" { "name" "mg_de_nuke" "maps" { "de_nuke" "" } }
+      "mg_de_debris" { "name" "mg_de_debris" "maps" { "de_debris" "" } }
+      "mg_de_dust2" { "name" "mg_de_dust2" "maps" { "de_dust2" "" } }
+    }
+  }`;
+  ok(play.wingmanPool(gamemodes).join() === 'de_nuke,de_debris', "wingman: the pool is gamemodes.txt's, through its template, and no other mode's maps");
+  ok(play.wingmanPool('"GameModes.txt" { }').length === 0 && play.WINGMAN_POOL.includes('de_inferno'), "wingman: nothing read from a gamemodes.txt without it (the service then goes by CS2's list)");
+
+  // A Pulse graph: GetIsWingman, then two steps on its Wingman branch and one on the other (with a cell that isn't a step).
+  const graph = `{
+    m_Cells = [ { m_nEditorNodeID = 1 }, { m_nEditorNodeID = 10 }, { m_nEditorNodeID = 20 }, { m_nEditorNodeID = 30 } ]
+    m_InvokeBindings = [ { m_FuncName = "CCSPointPulseAPI::GetIsWingman" m_nCellIndex = -1 }, { m_FuncName = "FireAtName" m_nCellIndex = 1 }, { m_FuncName = "FireAtName" m_nCellIndex = 2 }, { m_FuncName = "FireAtName" m_nCellIndex = 3 } ]
+    m_OutputConnections = [
+      { m_SourceOutput = "Check => Step_EntFire:30" m_TargetEntity = "buyzone.2v2" m_TargetInput = "Disable" },
+      { m_SourceOutput = "Check => Step_EntFire:10" m_TargetEntity = "brush.blocker" m_TargetInput = "Enable" },
+      { m_SourceOutput = "Check => Step_EntFire:20" m_TargetEntity = "navblocker.2v2" m_TargetInput = "BlockNav" } ]
+    m_Chunks = [ { m_Instructions = [ { m_nCode = "NOP" }, { m_nCode = "LIBRARY_INVOKE" m_nInvokeBindingIndex = 0 }, { m_nCode = "JUMP_COND" m_nDestInstruction = 4 }, { m_nCode = "JUMP" m_nDestInstruction = 7 },
+      { m_nCode = "CELL_INVOKE" m_nInvokeBindingIndex = 1 }, { m_nCode = "CELL_INVOKE" m_nInvokeBindingIndex = 2 }, { m_nCode = "RETURN_VOID" }, { m_nCode = "CELL_INVOKE" m_nInvokeBindingIndex = 3 }, { m_nCode = "RETURN_VOID" } ] } ]
+  }`;
+  ok(JSON.stringify(play.wingmanSteps(graph)) === '[{"target":"brush.blocker","input":"Enable"},{"target":"navblocker.2v2","input":"BlockNav"}]', "wingman: a Pulse graph's steps are those on its Wingman branch, not the other's");
+  ok(play.wingmanSteps(graph.replace('GetIsWingman', 'GetRoundsPlayed')) === null, "wingman: a graph that doesn't ask (Train's thunder) sets nothing up");
+
+  // Exact names: Vertigo's leftover .b groups aren't switched on with .a's, and the prefab prefix doesn't count.
+  const named = [{ targetname: '[PR#]props.2v2.a', classname: 'prop_dynamic' }, { targetname: 'props.2v2.b', classname: 'prop_dynamic' }, { targetname: 'bombsite.tag.b', classname: 'func_brush' }, { classname: 'prop_dynamic' }];
+  const picked = play.wingmanEntities(named, [{ target: 'props.2v2.a', input: 'Enable' }, { target: 'props.2v2.a', input: 'EnableCollision' }, { target: 'bombsite.tag.b', input: 'Disable' }]);
+  ok(picked.on.length === 1 && picked.on[0] === named[0] && picked.off.length === 1 && picked.off[0] === named[2], "wingman: what's switched on and off goes by each group's exact name");
+
+  // A model's physics where its entity is: a triangle one unit along the model's x, turned to +y by a yaw of 90.
+  const IN = 0.0254, verts = new Float32Array([[10, 0, 0], [10, 0, 8], [10, 8, 0]].flatMap(([x, y, z]) => [y * IN, z * IN, x * IN]));
+  const glb = (extras) => ({ json: { nodes: [{ mesh: 0, extras }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }], accessors: [{ bufferView: 0, componentType: 5126, type: 'VEC3', count: 3 }], bufferViews: [{ byteOffset: 0 }] }, bin: Buffer.from(verts.buffer) });
+  const models = { 'a.vmdl': glb({ CollisionGroup: 'default', SurfaceProperty: 'metal' }), 'b.vmdl': glb({ CollisionGroup: 'conditionallysolid', InteractAs: ['playerclip'] }), 'c.vmdl': glb({ CollisionGroup: 'x', InteractAs: ['csgo_grenadeclip'] }) };
+  const solids = play.wingmanSolids([
+    { classname: 'prop_dynamic', model: 'a.vmdl', origin: '100 200 0', angles: '0 90 0' }, { classname: 'prop_dynamic', model: 'a.vmdl', origin: '0 0 0', solid: '0' },
+    { classname: 'func_brush', model: 'b.vmdl', origin: '0 0 0' }, { classname: 'func_brush', model: 'c.vmdl', origin: '0 0 0' }, { classname: 'func_brush', model: 'a.vmdl', origin: '0 0 0', solidity: '1' },
+    { classname: 'func_clip_vphysics', model: 'a.vmdl', origin: '0 0 0' }, { classname: 'prop_dynamic', model: 'missing.vmdl', origin: '0 0 0' },
+  ], (e) => models[e.model]);
+  ok(solids.length === 3 && solids[0].flags === 7 && solids[1].flags === 1 && solids[2].flags === 4 && solids[0].surface === 'metal', 'wingman: a prop stops everything, a player clip players, a grenade clip grenades; a brush or prop that isn\'t solid nothing');
+  ok(near(solids[0].tris[0], 100, 0.01) && near(solids[0].tris[1], 210, 0.01), 'wingman: a solid is where its entity puts it, turned by its angles');
+  const packed = play.wingmanCollision(solids);
+  ok(packed.tris === 3 && packed.surfaces.join() === 'metal,default' && packed.buf.length === 3 * 38, 'wingman: its solids as collision.bin, its own surfaces');
+
+  // Two rooms and a corridor to each side of a walled-off strip. Spawn rooms at either end, the sites B between them
+  // and A beyond a blocker, a strip of floor under a wall with no blocker, a room only a ladder reaches.
+  const sq = (x0, y0, x1, y1, z = 0) => [[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]];
+  const nav = { version: 2, areas: [
+    { id: 1, flags: 0, c: sq(0, 0, 200, 200), e: [[], [2], [], []], h: [] }, // T spawn
+    { id: 2, flags: 0, c: sq(200, 0, 400, 200), e: [[], [3], [], [1]], h: [] }, // site B
+    { id: 3, flags: 0, c: sq(400, 0, 600, 200), e: [[6], [4], [], [2]], h: [] }, // CT spawn
+    { id: 4, flags: 0, c: sq(600, 0, 620, 200), e: [[], [5], [], [3]], h: [] }, // under the nav blocker
+    { id: 5, flags: 0, c: sq(620, 0, 900, 200), e: [[], [], [], [4]], h: [] }, // site A, beyond it
+    { id: 6, flags: 0, c: sq(400, -100, 600, 0), e: [[7], [], [3], []], h: [] }, // a side room
+    { id: 7, flags: 0, c: sq(400, -130, 600, -100), e: [[8], [], [6], []], h: [] }, // the floor under a fence
+    { id: 8, flags: 0, c: sq(400, -400, 600, -130), e: [[], [], [7], []], h: [] }, // beyond the fence
+    { id: 9, flags: 0, c: sq(0, 300, 200, 500), e: [[], [], [], []], h: [] }, // up a ladder from the T spawn
+  ], ladders: [{ id: 1, width: 20, length: 200, dir: 0, top: [100, 300, 200], bottom: [100, 200, 0], topAreas: [9], bottomAreas: [1] }] };
+  const spawns = { T: [{ origin: [100, 100, 0] }], CT: [{ origin: [500, 100, 0] }] };
+  const fence = (y) => new Float32Array([400, y, -8, 600, y, -8, 600, y, 200, 400, y, -8, 600, y, 200, 400, y, 200]);
+  const blocker = { min: [605, 0, -8], max: [615, 200, 120] };
+  const r = play.wingmanReach(nav, [blocker], spawns, [{ tris: fence(-115) }]);
+  ok(r.closed.join() === '4,5,7,8', `wingman: the nav areas a blocker touches, the floor under a wall with no blocker, and what they cut off go (closed ${r.closed})`);
+  ok(r.reach.T.has(9) && r.reach.CT.has(1) && !r.reach.T.has(5), 'wingman: what a team can walk to, by ladder too');
+  const bombsites = [{ site: 'A', min: [700, 50, 0], max: [800, 150, 40] }, { site: 'B', min: [250, 50, 0], max: [350, 150, 40] }];
+  ok(play.wingmanSite(nav, bombsites, r.reach) === 1, 'wingman: the site is the one both teams can still walk to');
+  ok(play.wingmanSite(nav, bombsites.slice(0, 1), r.reach) === 0, 'wingman: a map with one site has that one');
+  ok(play.wingmanSite(nav, bombsites, play.wingmanReach(nav, [], spawns).reach) === null, 'wingman: not worked out when both stay open');
+  ok(play.wingmanReach(nav, [{ min: [40, 0, -8], max: [60, 200, 120] }], { T: [{ origin: [100, 100, 40] }], CT: spawns.CT }).reach.T.has(2), 'wingman: a spawn above the floor, on an area a blocker touches, leaves it by its own side');
+  // Not by the other: on Inferno a spawn stands on an area under a blocker, and through that side lie B and banana.
+  const split = { areas: [{ id: 1, flags: 0, c: sq(0, 0, 100, 200), e: [[], [2], [], []], h: [] }, { id: 2, flags: 0, c: sq(100, 0, 200, 200), e: [[], [3], [], [1]], h: [] }, { id: 3, flags: 0, c: sq(200, 0, 300, 200), e: [[], [], [], [2]], h: [] }] };
+  const sides = play.wingmanReach(split, [{ min: [140, 0, -8], max: [160, 200, 120] }], { T: [{ origin: [120, 100, 0] }], CT: [] });
+  ok(sides.reach.T.has(1) && !sides.reach.T.has(3) && sides.closed.join() === '2,3', `wingman: a spawn on a closed area doesn't leave it through its blocker (closed ${sides.closed})`);
+  const room ={ areas: [{ id: 1, flags: 0, c: sq(0, 0, 100, 100), e: [[], [2], [], []], h: [] }, { id: 2, flags: 0, c: sq(100, 0, 200, 100, 100), e: [[], [], [], [1]], h: [] }, { id: 3, flags: 0, c: sq(200, 0, 300, 100, 150), e: [[], [], [], [2]], h: [] }] };
+  ok(play.wingmanReach(room, [], { T: [{ origin: [50, 50, 0] }], CT: [] }).closed.join() === '2,3' && !play.wingmanReach(room, [], { T: [{ origin: [150, 50, 110] }], CT: [] }).closed.includes(1), "wingman: what's only reached climbing higher than a crouch-jump is closed, but not what's only dropped to");
+
+  // The whole of it from a map's entities: spawns and buy zones only where it swaps them.
+  const at = (x, y, z) => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, y * IN, z * IN, x * IN, 1];
+  const json = { nodes: [{ name: 'fence.fence_body', matrix: at(100, 200, 0) }, { name: 'tag_1.hammer_mesh_0' }, { name: 'fence.fence_body', matrix: at(900, 900, 0) }] };
+  const box = { 'nav.vmdl': glb({}), 'zone.vmdl': glb({}), 'models/fence.vmdl': glb({ CollisionGroup: 'default' }) };
+  const ents = [
+    { classname: 'info_player_terrorist', targetname: 'spawnpoints.standard', origin: '100 100 0', angles: '0 0 0' }, { classname: 'info_player_counterterrorist', targetname: 'spawnpoints.standard', origin: '500 100 0', angles: '0 0 0' },
+    { classname: 'info_player_terrorist', targetname: 'spawnpoints.2v2', enabled: 'false', origin: '120 120 0', angles: '0 45 0' }, { classname: 'info_player_counterterrorist', targetname: 'spawnpoints.2v2', enabled: 'false', origin: '520 120 0', angles: '0 90 0' },
+    { classname: 'func_nav_blocker', targetname: 'navblocker.2v2', model: 'nav.vmdl', origin: '600 0 0' }, { classname: 'func_buyzone', targetname: 'buyzone.2v2', teamnum: '2', model: 'zone.vmdl', origin: '100 100 0' },
+    { classname: 'func_buyzone', teamnum: '3', model: 'zone.vmdl', origin: '2000 100 0' }, { classname: 'prop_dynamic', targetname: 'props.2v2', model: 'models/fence.vmdl', origin: '100 200 0', startdisabled: 'true' },
+    { classname: 'func_brush', targetname: 'bombsite.tag.a', model: 'maps/x/entities/tag_1.vmdl' },
+  ];
+  const steps = [['spawnpoints.standard', 'SetDisabled'], ['spawnpoints.2v2', 'SetEnabled'], ['buyzone.2v2', 'Enable'], ['navblocker.2v2', 'BlockNav'], ['props.2v2', 'Enable'], ['bombsite.tag.a', 'Disable']].map(([target, input]) => ({ target, input }));
+  const physics = (e) => box[e.model];
+  const switched = play.wingmanEntities(ents, steps), made = play.wingmanSolids(switched.on, physics);
+  const setup = play.wingmanSetup({ ents, nav, json, bombsites, ...switched, solids: made, physics });
+  ok(setup.site === 1 && setup.spawns.T.length === 1 && setup.spawns.T[0].yaw === 45 && setup.spawns.CT[0].origin[0] === 520, "wingman: the map's site, and its own spawns for the standard ones");
+  ok(setup.buyzones.length === 2 && setup.buyzones[0].team === 'T' && setup.buyzones[1].team === 'CT' && near(setup.buyzones[0].min[0], 110, 1), 'wingman: its buy zones, and the ones it leaves on');
+  ok(setup.show.join() === '0' && setup.hide.join() === '1', 'wingman: the props it switches on are drawn, by model and origin; the signs it switches off aren\'t');
+  ok(setup.closed.join() === '4,5' && !setup.cut.length, 'wingman: what closes the nav mesh is the blocker the graph blocks');
+  const same = play.wingmanSetup({ ents, nav, json, bombsites, on: [ents[4]], off: [], solids: [], physics });
+  ok(!same.spawns && !same.buyzones, 'wingman: a map that keeps its spawns and buy zones says nothing of them (Vertigo)');
+
+  // A wall between two areas both teams reach another way: its link goes, the areas stay.
+  const round = { areas: [
+    { id: 1, flags: 0, c: sq(0, 0, 100, 100), e: [[4], [2], [], []], h: [] }, { id: 2, flags: 0, c: sq(100, 0, 200, 100), e: [[3], [], [], [1]], h: [] },
+    { id: 3, flags: 0, c: sq(100, -100, 200, 0), e: [[], [], [2], [4]], h: [] }, { id: 4, flags: 0, c: sq(0, -100, 100, 0), e: [[], [3], [1], []], h: [] } ] };
+  const across = new Float32Array([100, 0, -8, 100, 100, -8, 100, 100, 200, 100, 0, -8, 100, 100, 200, 100, 0, 200]);
+  const ring = play.wingmanReach(round, [], { T: [{ origin: [50, 50, 0] }], CT: [] }, [{ tris: across }]);
+  ok(ring.closed.length === 0 && JSON.stringify(ring.cut) === '[[1,2],[2,1]]', 'wingman: a link through a wall is cut both ways, the way round stays');
+
+  const left = withoutAreas(nav, r.closed, [[1, 2]]);
+  const mesh = new NavMesh(left);
+  ok(mesh.areas.length === 5 && !mesh.byId.has(5) && !mesh.byId.get(3).links.includes(4) && !mesh.byId.get(6).links.includes(7), 'wingman: the nav mesh without the closed areas, or links to them');
+  ok(!mesh.byId.get(1).links.includes(2) && mesh.byId.get(2).links.includes(1), 'wingman: a cut link goes one way at a time');
+  ok(mesh.ladders.length === 1 && new NavMesh(withoutAreas(nav, [9])).ladders.length === 0, 'wingman: a ladder stays only with both its ends');
+  ok(mesh.path([500, 100, 0], [750, 100, 0]).areas.every((a) => a.id === 3), 'wingman: no path through what\'s closed');
+  ok(mesh.reaches([250, 50, 0], [350, 150, 40]) && !mesh.reaches([700, 50, 0], [800, 150, 40]), 'wingman: a place on what\'s left, and one off it');
+  ok(nav.areas.length === 9 && nav.areas[2].e[1].includes(4), "wingman: the map's own nav data isn't touched (a Competitive match on it may follow)");
+
+  // Its info: the site, spawns and buy zones it has; what it shows and hides. The map's own info stays as it is.
+  const info = { bombsites, spawns: { T: [1], CT: [2] }, buyzones: [3], hidden: [5, 6, 7] };
+  const w = wingmanInfo({ ...info, wingman: { site: 1, spawns: { T: [8], CT: [9] }, buyzones: [4], show: [6], hide: [11] } }, 'A');
+  ok(w.bombsites.length === 1 && w.bombsites[0].site === 'B' && w.spawns.T[0] === 8 && w.buyzones[0] === 4, "wingman: the map's own site, spawns and buy zones, whatever site was asked for");
+  ok(w.hidden.join() === '5,7,11', 'wingman: what it switches on is drawn, what it switches off isn\'t, the rest stays off (Retakes\')');
+  const vertigo = wingmanInfo({ ...info, wingman: { site: 0, show: [], hide: [] } }, 'B');
+  ok(vertigo.bombsites[0].site === 'A' && vertigo.spawns.T[0] === 1 && vertigo.buyzones[0] === 3, 'wingman: a map that keeps its spawns and buy zones keeps them');
+  ok(wingmanInfo(info, 'B').bombsites[0].site === 'B' && wingmanInfo(info, 'A').bombsites[0].site === 'A' && wingmanInfo(info, 'C').bombsites[0].site === 'A', 'wingman: on a map without its own, the site chosen');
+  ok(wingmanInfo({ ...info, wingman: { site: null, show: [] } }, 'B').bombsites[0].site === 'B', "wingman: the site chosen where the map's couldn't be worked out");
+  ok(info.bombsites.length === 2 && info.hidden.length === 3, "wingman: the map's own info isn't touched");
+
+  // collision.bin and wingman.bin as one world: its walls stop what they stop, with their own surfaces.
+  const bin = (tris, flags, surface) => { const n = tris.length / 9, b = new ArrayBuffer(n * 38); new Float32Array(b, 0, n * 9).set(tris); new Uint8Array(b, n * 36, n).fill(flags); new Uint8Array(b, n * 37, n).fill(surface); return b; };
+  const floor = bin([-500, -500, 0, 500, -500, 0, 500, 500, 0, -500, -500, 0, 500, 500, 0, -500, 500, 0], FLAG_PLAYER | FLAG_BULLET, 0);
+  const plank = bin([100, -100, 0, 100, 100, 0, 100, 100, 200, 100, -100, 0, 100, 100, 200, 100, -100, 200], FLAG_PLAYER | FLAG_BULLET | FLAG_GRENADE, 1);
+  const clip = bin([200, -100, 0, 200, 100, 0, 200, 100, 200], FLAG_PLAYER, 0);
+  const joined = joinCollision(floor, { tris: 2, surfaces: ['concrete'], flags: { player: 1 } }, plank, { tris: 2, surfaces: ['concrete2', 'wood'] });
+  const both = new CollisionWorld(joined.buffer, joined.info), east = [1, 1e-9, 1e-9];
+  ok(joined.info.tris === 4 && joined.info.surfaces.join() === 'concrete,concrete2,wood' && joined.info.flags.player === 1, 'wingman: the worlds join, surfaces and all');
+  ok(both.raycast([0, 0, 50], east, 500, FLAG_BULLET)?.surface === 'wood' && near(both.raycast([0, 0, 50], east, 500, FLAG_BULLET).t, 100, 0.01), 'wingman: a bullet stops at its wall and hits its surface');
+  ok(both.raycast([0, 0, 50], [1e-9, 1e-9, -1], 500, FLAG_BULLET)?.surface === 'concrete', 'wingman: the map itself is as it was');
+  ok(both.traceBox([0, 0, 1], [300, 0, 1], [-16, -16, 0], [16, 16, 72], FLAG_PLAYER).fraction < 0.3, 'wingman: a player stops at its wall');
+  const j2 = joinCollision(floor, { tris: 2, surfaces: ['concrete'] }, clip, { tris: 1, surfaces: ['concrete'] }), w2 = new CollisionWorld(j2.buffer, j2.info);
+  ok(j2.info.surfaces.length === 1 && !w2.raycast([0, 0, 50], east, 500, FLAG_BULLET) && w2.raycast([0, 0, 50], east, 500, FLAG_PLAYER)?.t > 199, 'wingman: a player clip stops players, and bullets go through it');
+  ok(new CollisionWorld(floor, { tris: 2, surfaces: ['concrete'] }).count === 2, "wingman: the map's own collision is as it was");
+
+  // What a match plays on (game.js has all of it from matchWorld): the map as it is in any other mode, however much of a
+  // Wingman version it has, and the map's Wingman version in Wingman, the map itself left as it was for the next match.
+  const asked = [], files = { 'collision.bin': floor, 'wingman.bin': plank, 'nav.json': nav };
+  const get = async (url) => { asked.push(url); return { arrayBuffer: async () => files[url], json: async () => JSON.parse(JSON.stringify(files[url])) }; };
+  const played = (wingman) => ({
+    collision: 'collision.bin', nav: 'nav.json', wingman: wingman ? 'wingman.bin' : null,
+    info: { ...info, bombsites: bombsites.map((s) => ({ ...s })), collision: { tris: 2, surfaces: ['concrete'], flags: { player: 1 } }, places: [{ name: 'A', min: [700, 50, 0], max: [800, 150, 40] }, { name: 'B', min: [250, 50, 0], max: [350, 150, 40] }],
+      ...(wingman ? { wingman: { site: 1, closed: r.closed, cut: [[1, 2]], show: [6], hide: [11], collision: { tris: 2, surfaces: ['concrete2', 'wood'] } } } : {}) },
+  });
+  for (const mode of ['competitive', 'premier', 'deathmatch', 'armsrace']) {
+    const m = played(true), before = JSON.stringify(m), world = await matchWorld(m, mode, 'B', get);
+    ok(world.map === m && JSON.stringify(m) === before, `${mode}: the map as it is, its info untouched`);
+    ok(world.collision.count === 2 && !world.collision.raycast([0, 0, 50], east, 500, FLAG_BULLET) && !asked.includes('wingman.bin'), `${mode}: none of Wingman's walls`);
+    ok(world.nav.areas.length === 9 && world.nav.byId.has(5) && world.nav.byId.get(1).links.includes(2), `${mode}: the whole nav mesh`);
+  }
+  const m = played(true), before = JSON.stringify(m), match = await matchWorld(m, 'wingman', 'A', get);
+  ok(JSON.stringify(m) === before && m.info.bombsites.length === 2 && match.map !== m, "wingman: the map's own info stays as it was (a Competitive match on it may follow)");
+  ok(match.map.info.bombsites.map((s) => s.site).join() === 'B' && match.map.info.hidden.join() === '5,7,11', "wingman: a match plays the map's Wingman version");
+  ok(match.collision.count === 4 && match.collision.raycast([0, 0, 50], east, 500, FLAG_BULLET)?.surface === 'wood', 'wingman: a match has its walls');
+  ok(match.nav.areas.length === 5 && !match.nav.byId.has(5) && !match.nav.byId.get(1).links.includes(2), "wingman: a match's nav mesh is what's left of it");
+  ok(match.map.info.places.map((p) => p.name).join() === 'B', "wingman: a match's callouts are those on what's left");
+  const none = await matchWorld(played(false), 'wingman', 'A', get);
+  ok(none.map.info.bombsites[0].site === 'A' && none.collision.count === 2 && none.nav.areas.length === 9 && none.map.info.places.length === 2, 'wingman: a map without a Wingman version (or one not read yet) plays as it is, on the site chosen');
+
+  // The export (service.cjs), on a pretend CS2: what a failed read leaves, and what brings a map up to date.
+  const { default: fs } = await import('node:fs'), { default: os } = await import('node:os'), { default: path } = await import('node:path');
+  const { CS2Service } = (await import('node:module')).createRequire(import.meta.url)('../cs2/service.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cs2sim-wingman-test-'));
+  const put = (file, data) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data); };
+  const glbFile = (file, { json: j, bin: b = Buffer.alloc(0) }) => {
+    const text = Buffer.from(JSON.stringify(j)), head = Buffer.alloc(20), mid = Buffer.alloc(8);
+    head.writeUInt32LE(0x46546c67, 0); head.writeUInt32LE(text.length, 12); mid.writeUInt32LE(b.length, 0);
+    put(file, Buffer.concat([head, text, mid, b]));
+  };
+  const id = 'de_test', vpk = path.join(root, 'game', 'maps', id + '.vpk'), dir = path.join(root, 'cache', 'play', id), metaFile = path.join(dir, 'map.json'), GRAPH = 'pulse/test.vpulse';
+  put(vpk, 'vpk');
+  const st = fs.statSync(vpk), stamp = `${st.size}-${Math.round(st.mtimeMs)}`;
+  const entities = [{ classname: 'info_player_terrorist', origin: '100 100 0', angles: '0 0 0' }, { classname: 'info_player_counterterrorist', origin: '500 100 0', angles: '0 0 0' }, { classname: 'point_pulse', graph_def: GRAPH }, { classname: 'func_brush', targetname: 'brush.blocker', model: 'maps/test/wall.vmdl', origin: '0 0 0' }, { classname: 'func_nav_blocker', targetname: 'navblocker.2v2', model: 'maps/test/nav.vmdl', origin: '600 0 0' }]
+    .map((e, i) => `====${i}====\n` + Object.entries(e).map(([k, v]) => `${k} "${v}"`).join('\n')).join('\n') + '\n';
+  const model = (out, m, extras) => { glbFile(path.join(out, m + '.glb'), { json: { nodes: [] } }); glbFile(path.join(out, m + '_physics.glb'), glb(extras)); };
+  const pretend = {
+    vpk: path.join(root, 'pak01_dir.vpk'), crc: 'aa:1', graph, fail: null, miss: null, runs: [],
+    vpkContent: async () => 'content', vpkStamp: () => 'build', listing: async () => new Map([[GRAPH + '_c', pretend.crc]]),
+    // (As the CLI: it writes what's there, and says nothing of what isn't.)
+    run: async (args) => {
+      const at = (flag) => args[args.indexOf(flag) + 1], out = at('-o'), mine = at('-i') === vpk;
+      pretend.runs.push(at('-f'));
+      if (pretend.fail?.test(at('-f'))) throw new Error('Source2Viewer-CLI exited 1');
+      const made = mine ? {
+        [`maps/${id}/world.vwrld_c`]: () => glbFile(out, { json: { nodes: [] } }), [`maps/${id}/world_physics.vmdl_c`]: () => glbFile(out, glb({ CollisionGroup: 'default' })),
+        [`maps/${id}/entities/default_ents.vents_c`]: () => put(path.join(out, 'maps', id, 'entities', 'default_ents.vents'), entities),
+        'maps/test/wall.vmdl_c': () => model(out, 'maps/test/wall', { CollisionGroup: 'default', SurfaceProperty: 'metal' }), 'maps/test/nav.vmdl_c': () => model(out, 'maps/test/nav', {}),
+      } : { [GRAPH + '_c']: () => put(path.join(out, GRAPH), pretend.graph), 'gamemodes.txt': () => put(path.join(out, 'gamemodes.txt'), gamemodes.replaceAll('de_nuke', id)) };
+      for (const f of at('-f').split(',')) if (!pretend.miss?.test(f)) made[f]?.();
+      return '--- Wrote some files';
+    },
+  };
+  const logs = [], service = new CS2Service({ cacheDir: path.join(root, 'cache'), log: (l) => logs.push(l) });
+  Object.assign(service, { gameDir: path.join(root, 'game'), ensureCS2: () => pretend, playRadar: async () => null, playLighting: async () => ({}), playHurts: async () => [], playPropBreaks: async () => ({}), playSky3d: async () => null, playLayers: async () => ({}), playMaps: () => [{ id }] });
+  const version13 = () => {
+    fs.rmSync(path.join(dir, 'wingman.bin'), { force: true });
+    put(metaFile, JSON.stringify({ version: 13, stamp, content: 'content', id, name: 'Test', bombsites, collision: {} }));
+  };
+  const saved = () => JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+  const load = async (fresh = true) => { if (fresh) service.playJobs.clear(); pretend.runs = []; logs.length = 0; return service.playMap(id); };
+  put(path.join(dir, 'nav.json'), JSON.stringify({ ...nav, version: play.NAV_VERSION }));
+  glbFile(path.join(dir, 'world.glb'), { json: { nodes: [] } });
+
+  version13();
+  let got = await load();
+  ok(got.info.version === 14 && saved().version === 14 && got.info.wingman.closed.join() === '4,5' && got.info.wingman.collision.tris === 1, 'wingman export: version 13 gets its Wingman version');
+  ok(got.wingman && fs.statSync(path.join(dir, 'wingman.bin')).size === 38 && got.info.wingmanGraphs[GRAPH] === 'aa:1', "wingman export: with its walls as wingman.bin, and its graph's CRC");
+  got = await load();
+  ok(!pretend.runs.length && got.info.version === 14, 'wingman export: that done, loading the map reads nothing more');
+
+  // A read that fails: the map loads as it was, nothing's noted as done, it's logged, and the next load (this very session) tries again.
+  for (const [what, how, files] of [['graph', 'fail', /vpulse/], ['model', 'fail', /wall/], ['entities', 'fail', /default_ents/], ['graph, no error', 'miss', /vpulse/], ['model, no error', 'miss', /wall/], ['entities, no error', 'miss', /default_ents/]]) {
+    version13();
+    pretend[how] = files;
+    got = await load();
+    ok(got.info.version === 13 && saved().version === 13 && !got.info.wingman && got.wingman === null && got.collision && !fs.existsSync(path.join(dir, 'wingman.bin')), `wingman export: a failed read (${what}) leaves the map as it was, playable, not finished`);
+    ok(logs.some((l) => /^map upgrade: /.test(l)), `wingman export: a failed read (${what}) is logged`);
+    pretend[how] = null;
+    got = await load(false);
+    ok(got.info.version === 14 && got.info.wingman?.collision.tris === 1 && got.wingman, `wingman export: the next load reads it (${what})`);
+  }
+
+  // A graph that changes in pak01, with the map's own VPK as it was.
+  pretend.crc = 'bb:2';
+  pretend.graph = graph.replace('m_nDestInstruction = 4', 'm_nDestInstruction = 5');
+  got = await load();
+  ok(got.info.wingmanGraphs[GRAPH] === 'bb:2' && saved().wingmanGraphs[GRAPH] === 'bb:2' && got.info.version === 14 && pretend.runs.includes(GRAPH + '_c') && got.info.wingman.collision.tris === 0, 'wingman export: a graph changed in the game\'s files reaches an export');
+  pretend.crc = 'cc:3';
+  pretend.fail = /vpulse/;
+  got = await load();
+  ok(got.info.version === 14 && saved().wingmanGraphs[GRAPH] === 'bb:2' && logs.some((l) => /^map upgrade: /.test(l)), 'wingman export: one that fails to read keeps what it had');
+  pretend.fail = null;
+  pretend.graph = graph;
+  got = await load(false);
+  ok(saved().wingmanGraphs[GRAPH] === 'cc:3' && got.info.wingman.collision.tris === 1, 'wingman export: and it\'s read on the next load');
+  const old = saved();
+  delete old.wingmanGraphs;
+  put(metaFile, JSON.stringify(old));
+  got = await load();
+  ok(got.info.wingmanGraphs[GRAPH] === 'cc:3', 'wingman export: one that never noted its graphs is read again the once');
+
+  // A graph that doesn't ask: no Wingman version, and that's the answer: not read again.
+  pretend.graph = graph.replace('GetIsWingman', 'GetRoundsPlayed');
+  version13();
+  got = await load();
+  ok(got.info.version === 14 && got.info.wingman === null && got.wingman === null && !logs.some((l) => /^map upgrade/.test(l)), 'wingman export: a map whose graph doesn\'t ask has none, and that\'s no failure');
+  got = await load();
+  ok(!pretend.runs.length, 'wingman export: and it isn\'t read again');
+  pretend.graph = graph;
+
+  // The whole export, its Wingman step failing: the rest of the map is kept, and the next load reads just that.
+  fs.rmSync(dir, { recursive: true });
+  pretend.fail = /vpulse/;
+  got = await load();
+  ok(got.info.version === 13 && saved().version === 13 && !got.info.wingman && fs.existsSync(path.join(dir, 'collision.bin')) && logs.some((l) => /^wingman: can't read pulse/.test(l)), 'wingman export: a whole export whose Wingman step fails keeps the map, one version short');
+  pretend.fail = null;
+  put(path.join(dir, 'nav.json'), JSON.stringify({ ...nav, version: play.NAV_VERSION }));
+  got = await load(false);
+  ok(got.info.version === 14 && pretend.runs.includes(GRAPH + '_c') && !pretend.runs.some((f) => /world/.test(f)) && got.wingman, 'wingman export: and the next load reads only that');
+
+  // The play menu's list: a failed read isn't kept.
+  const list = path.join(root, 'cache', 'play', 'wingman.json');
+  pretend.fail = /vpulse/;
+  const first = await service.playWingmanMaps();
+  ok(first.pool.join() === id && !first.fixed.length && !fs.existsSync(list) && !service.playJobs.has('wingmanMaps'), "wingman maps: a graph that can't be read isn't kept as a map without one");
+  pretend.fail = null;
+  const second = await service.playWingmanMaps();
+  ok(second.fixed.join() === id && JSON.parse(fs.readFileSync(list, 'utf8')).fixed.join() === id, 'wingman maps: read again next time, and kept');
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+// ---- Wingman's bots (strats.js, setups.js): one site, A or B, and the positions on what's left of the map --------------
+{
+  const { teamPlan } = await import('../src/js/play/strats.js');
+  const { SETUPS, setupOf } = await import('../src/js/play/setups.js');
+  const { NavMesh } = await import('../src/js/play/nav.js');
+  const sq = (x0, y0, x1, y1) => [[x0, y0, 0], [x1, y0, 0], [x1, y1, 0], [x0, y1, 0]];
+  const nav = new NavMesh({ areas: [{ id: 1, flags: 0, c: sq(0, 0, 500, 500), e: [[], [], [], []], h: [] }] });
+  const P = (id, at, extra = {}) => ({ id, name: id, at, watch: [], ...extra });
+  SETUPS.test_wingman = { CT: { A: [P('gone', [3000, 0, 0])], B: [P('b1', [100, 100, 0]), P('b2', [300, 300, 0]), P('off', [3000, 3000, 0])] }, T: [P('t1', [200, 200, 0], { site: 'B' }), P('banana', [4000, 0, 0], { site: 'A' })] };
+  const mk = (team, i) => ({ c: { team, name: team + i, skill: 0.6, nades: {}, hasC4: false, alive: true }, weapons: { primary: { id: 'weapon_ak47' } }, pos: [0, 0, 0], brain: { d: { utility: 0 } } });
+  for (const site of ['A', 'B']) {
+    const game = { mode: 'wingman', nav, map: { info: { id: 'test_wingman', bombsites: [{ site }] } }, midSpot: null, lineups: [], tSiteHistory: [], bots: [mk('CT', 0), mk('CT', 1), mk('T', 0), mk('T', 1)] };
+    let on = true, spots = true;
+    for (let r = 0; r < 20; r++) {
+      const ct = teamPlan(game, 'CT', 'full');
+      if ([...ct.assign.values()].some((s) => s !== site)) on = false;
+      if ([...ct.pos.values()].some((p) => /gone|off/.test(p.id))) spots = false;
+      if (teamPlan(game, 'T', 'full').site !== site) on = false;
+    }
+    ok(on, `wingman: both teams play the one site there is (${site}), the CTs both on it`);
+    ok(spots, "wingman: no CT is sent to a position on the closed part of the map");
+  }
+  const game = { mode: 'wingman', nav, map: { info: { id: 'test_wingman' } } };
+  const s = setupOf(game);
+  ok(s.CT.B.map((p) => p.id).join() === 'b1,b2' && !s.CT.A.length && s.T.map((p) => p.id).join() === 't1', "wingman: a map's positions are those on the nav mesh left");
+  ok(setupOf({ ...game, mode: 'competitive' }) === SETUPS.test_wingman, 'competitive: every position, as it was');
+  delete SETUPS.test_wingman;
+
+  // Your radio orders: there's no going to a site the map doesn't have (Wingman's other one), so they stay on their plan.
+  const { Radio } = await import('../src/js/play/radio.js');
+  const orders = [], plan = { site: 'A', lurk: 'palace' };
+  const radio = Object.assign(Object.create(Radio.prototype), { game: { me: { team: 'T' }, player: { origin: [0, 0, 0] }, now: 5, disposed: true, map: { info: { bombsites: [{ site: 'A' }] } }, plans: { T: plan },
+    bots: [{ c: { alive: true, team: 'T' }, brain: { obey: (kind) => orders.push(kind) } }] } });
+  radio.order('siteB');
+  ok(!orders.length && plan.site === 'A' && plan.lurk === 'palace', 'radio: an order for a site the map doesn\'t have is ignored');
+  radio.order('siteA');
+  ok(orders.join() === 'siteA' && plan.site === 'A' && plan.lurk === null, 'radio: one for the site it has is followed');
+  ok(setupOf(game) === undefined, 'a map setups.js doesn\'t know has none');
+}
+
+// ---- which maps Wingman offers (matchmaking.js): CS2's Wingman maps among those installed --------------------------------
+{
+  const mm = await import('../src/js/matchmaking.js');
+  const maps = ['de_dust2', 'de_nuke', 'de_debris'].map((id) => ({ id, name: id }));
+  mm.setMaps({ maps, images: {}, nameOf: (id) => id, wingman: { pool: ['de_nuke', 'de_debris', 'de_inferno'], fixed: ['de_nuke'] } });
+  ok(mm.mapsFor('wingman').map((m) => m.id).join() === 'de_nuke,de_debris' && mm.mapsFor('competitive').length === 3, 'wingman: only its pool among the installed maps; other modes every map');
+  ok(mm.poolOf({ map: 'de_dust2' }, 'wingman').join() === 'de_nuke' && mm.poolOf({ map: 'de_debris' }, 'wingman').join() === 'de_debris', 'wingman: a search starts on the map you played last if it\'s a Wingman map, else the first');
+  ok(mm.poolOf({ map: 'de_dust2', pools: { wingman: ['de_dust2', 'de_debris'] } }, 'wingman').join() === 'de_debris', 'wingman: a map picked before that isn\'t a Wingman map falls out of the search');
+  ok(mm.poolOf({ map: 'de_dust2' }, 'competitive').join() === 'de_dust2' && mm.poolOf({ map: 'de_dust2', pools: { competitive: ['de_nuke'] } }, 'competitive').join() === 'de_nuke', 'competitive: your maps, as they were');
+  ok(mm.privateMap({ map: 'de_dust2' }, 'wingman') === 'de_nuke' && mm.privateMap({ map: 'de_debris' }, 'wingman') === 'de_debris' && mm.privateMap({ map: 'de_dust2' }, 'competitive') === 'de_dust2', 'wingman: a private match goes on a Wingman map');
+  ok(mm.fixedSite('de_nuke') && !mm.fixedSite('de_debris'), "wingman: there's no bomb site to choose on a map that has its own");
+  mm.setMaps({ maps, images: {}, nameOf: (id) => id, wingman: { pool: ['de_inferno'], fixed: [] } });
+  ok(!mm.mapsFor('wingman').length && !mm.poolOf({ map: 'de_dust2' }, 'wingman').length && mm.privateMap({ map: 'de_dust2' }, 'wingman') === null, 'wingman: none installed, nothing to play it on');
+  mm.setMaps({ maps, images: {}, nameOf: (id) => id });
+  ok(!mm.mapsFor('wingman').length && mm.mapsFor('competitive').length === 3, "wingman: no maps till CS2's list has been read");
 }
 
 console.log(`${pass} passed, ${fail} failed`);

@@ -26,9 +26,11 @@ const MM_RULES = { premier: '5v5 · MR12, overtime on a tie · friendly fire', c
   wingman: '2v2 on one bomb site · first to 9 · friendly fire', deathmatch: 'Free for all · 10 minutes', armsrace: 'Free for all · first to a knife kill' };
 const KEYS = 'WASD move · Space jump · Ctrl crouch · Shift walk · W into a ladder climbs it · Mouse1 fire · Mouse2 scope / silencer / burst mode · R reload · F inspect · B buy · E defuse / pick up · G drop · 1/2/3 weapons (3 again for the Zeus) · 4 grenades (Mouse1 throw, Mouse2 lob) · 5 bomb (hold Mouse1 in a site) · Z / X / V radio (commands, reports, responses: your bots follow orders) · Middle mouse ping · Tab scores · Esc menu (the match goes on)';
 let mapList = null, mapImages = null; // the installed maps, and CS2's screenshot of each ({ id: url })
+let wingmanMaps = null; // CS2's Wingman maps among them (matchmaking.js mapsFor)
 let rankAsked = false;
 let root = null, unsub = null, ticker = null;
 const nameOf = (id) => mapList?.find((m) => m.id === id)?.name || id;
+const shareMaps = () => mm.setMaps({ maps: mapList, images: mapImages, nameOf, wingman: wingmanMaps });
 
 export function render(r) {
   root = r;
@@ -36,15 +38,16 @@ export function render(r) {
     mapList = [{ id: 'de_dust2', name: 'Dust II' }];
     cs2Play('maps').then((list) => {
       const bomb = (list || []).filter((m) => /^de_/.test(m.id)); // bomb defusal maps
-      if (bomb.length) { mapList = bomb; mm.setMaps({ maps: mapList, images: mapImages, nameOf }); if (root === r) render(r); }
+      if (bomb.length) { mapList = bomb; shareMaps(); if (root === r) render(r); }
     }).catch(() => {});
+    cs2Play('wingmanMaps').catch(() => ({ pool: [], fixed: [] })).then((w) => { wingmanMaps = w; shareMaps(); if (root === r) render(r); });
   }
   if (!rankAsked) { rankAsked = true; loadRankArt().then((a) => { if (a && root === r) render(r); }); }
   if (!mapImages) {
     mapImages = {};
-    cs2Play('mapImages').then((imgs) => { mapImages = imgs || {}; mm.setMaps({ maps: mapList, images: mapImages, nameOf }); if (root === r) render(r); }).catch(() => {});
+    cs2Play('mapImages').then((imgs) => { mapImages = imgs || {}; shareMaps(); if (root === r) render(r); }).catch(() => {});
   }
-  mm.setMaps({ maps: mapList, images: mapImages, nameOf });
+  shareMaps();
   unsub ||= mm.onMatchmaking(() => { if (root) render(root); });
   clearInterval(ticker);
   ticker = setInterval(tick, 500);
@@ -86,8 +89,9 @@ function lobbyHtml(r) {
   const premier = !priv && mode === 'premier';
   const pool = priv ? [] : mm.poolOf(p, mode);
   const cooldown = !priv && isRanked(mode) ? cooldownLeft(S.mm) : 0;
-  const tiles = (premier ? mapList.filter((m) => ACTIVE_DUTY.includes(m.id)) : mapList).map(({ id, name }) => {
-    const on = priv ? id === p.map : !premier && pool.includes(id);
+  const map = priv ? mm.privateMap(p, mode) : null;
+  const tiles = (premier ? mapList.filter((m) => ACTIVE_DUTY.includes(m.id)) : mm.mapsFor(mode)).map(({ id, name }) => {
+    const on = priv ? id === map : !premier && pool.includes(id);
     const sub = premier ? 'Active Duty: picked by banning' : priv ? (id === 'de_dust2' ? 'Recommended' : 'The first match prepares the map (a couple of minutes)')
       : on ? 'In your search' : 'Click to add to your search';
     return `<button class="play-map ${on ? 'active' : ''} ${priv ? '' : 'pick'}" data-map="${id}" style="${tileStyle(id)}" ${premier || (busy && !priv) ? 'disabled' : ''}>
@@ -100,14 +104,14 @@ function lobbyHtml(r) {
       <button class="${priv ? 'active' : ''}" data-lobby="private"><b>Private match</b><small>Your rules and the bots' ranks; no rank</small></button>
     </div>
     <div class="play-lobby">
-      <div class="play-maps ${premier ? 'veto-pool' : ''}">${tiles}</div>
+      <div class="play-maps ${premier ? 'veto-pool' : ''}">${tiles || (mode === 'wingman' ? `<div class="muted">${wingmanMaps ? 'None of CS2\'s Wingman maps are installed.' : 'Reading CS2\'s Wingman maps…'}</div>` : '')}</div>
       <div class="play-setup panel">
         <div class="play-modes">${modes.map((id) => `<button class="${id === mode ? 'active' : ''}" data-mode="${id}" ${busy && !priv ? 'disabled' : ''}><b>${esc(MODES[id].name)}</b><small>${esc(priv ? MODES[id].blurb : MM_RULES[id])}</small></button>`).join('')}</div>
-        ${priv ? privateOptions(p, mode) : mmOptions(p, mode, pool, premier)}
+        ${priv ? privateOptions(p, mode, map) : mmOptions(p, mode, pool, premier)}
         <label>Sensitivity (CS2)<input class="input" type="number" min="0.05" max="20" step="0.05" data-k="sensitivity" value="${p.sensitivity}"></label>
         <label>Graphics<select class="input" data-k="quality">${opts([['high', 'High (full resolution, soft shadows)'], ['balanced', 'Medium'], ['performance', 'Low (no 3D skybox, no anti-aliasing)']], p.quality)}</select></label>
         ${cooldown ? `<div class="play-cooldown"><b>Ranked cooldown</b><span>You abandoned a match: no Premier, Competitive or Wingman for <b data-cooldown>${formatWait(cooldown)}</b>.</span></div>` : ''}
-        ${priv ? `<button class="btn primary big" data-start ${busy ? 'disabled' : ''}>Start</button>${search ? '<div class="muted">Cancel your search to start a private match.</div>' : ''}`
+        ${priv ? `<button class="btn primary big" data-start ${busy || !map ? 'disabled' : ''}>Start</button>${search ? '<div class="muted">Cancel your search to start a private match.</div>' : ''}`
           : search ? `<button class="btn primary big searching" data-go></button>`
           : `<button class="btn primary big" data-go ${cooldown || busy || (!premier && !pool.length) ? 'disabled' : ''}>Go</button>`}
         ${priv ? '<div class="muted play-private-note">Private matches are practice: they pay a reward but move no rank.</div>' : rankCard(mode)}
@@ -128,7 +132,7 @@ function lobbyHtml(r) {
     if (list.has(b.dataset.map)) list.delete(b.dataset.map); else list.add(b.dataset.map);
     q.pools = { ...(q.pools || {}), [mode]: [...list] };
   })));
-  r.querySelectorAll('[data-pool]').forEach((b) => b.addEventListener('click', () => set((q) => { q.pools = { ...(q.pools || {}), [mode]: b.dataset.pool === 'all' ? mapList.map((m) => m.id) : [] }; })));
+  r.querySelectorAll('[data-pool]').forEach((b) => b.addEventListener('click', () => set((q) => { q.pools = { ...(q.pools || {}), [mode]: b.dataset.pool === 'all' ? mm.mapsFor(mode).map((m) => m.id) : [] }; })));
   r.querySelectorAll('[data-k]').forEach((el) => el.addEventListener('change', () => {
     const q = playPrefs(), k = el.dataset.k;
     if (k.startsWith('ranks.')) q.ranks = { ...privateRanks(q), [k.slice(6)]: el.value };
@@ -147,15 +151,16 @@ function mmOptions(p, mode, pool, premier) {
     <span><button class="btn ghost sm" data-pool="all">All</button><button class="btn ghost sm" data-pool="none">None</button></span></div>`;
 }
 
-// A private match's choices: the side, the team size, the rules and the bots' ranks.
-function privateOptions(p, mode) {
+// A private match's choices: the side, the team size (in Wingman the bomb site, on a map without its own), the rules and
+// the bots' ranks.
+function privateOptions(p, mode, map) {
   const rounds = !MODES[mode].respawn, ffa = mode === 'armsrace' || (mode === 'deathmatch' && p.ffa === 'ffa');
   const ranks = privateRanks(p);
   const rankSelect = (k, label) => `<label>${label}<select class="input" data-k="ranks.${k}">${PRIVATE_RANKS.map((t) => `<optgroup label="${esc(t.name)}">
       <option value="${t.id}" ${ranks[k] === t.id ? 'selected' : ''}>Any ${esc(t.name)}</option>${t.groups.map(([id, n]) => `<option value="${id}" ${ranks[k] === id ? 'selected' : ''}>${esc(n)}</option>`).join('')}</optgroup>`).join('')}</select></label>`;
   const per = rounds || !ffa;
   return `${!ffa ? `<label>Side<select class="input" data-k="team"><option value="CT" ${p.team === 'CT' ? 'selected' : ''}>Counter-Terrorists</option><option value="T" ${p.team === 'T' ? 'selected' : ''}>Terrorists</option></select></label>` : ''}
-    ${mode === 'wingman' ? `<label>Bomb site<select class="input" data-k="site">${opts([['A', 'A'], ['B', 'B']], p.site)}</select></label>`
+    ${mode === 'wingman' ? (mm.fixedSite(map) ? '' : `<label>Bomb site<select class="input" data-k="site">${opts([['A', 'A'], ['B', 'B']], p.site)}</select></label>`)
       : `<label>${per ? 'Players per team' : 'Players'}<select class="input" data-k="teamSize">${opts([5, 4, 3, 2, 1].map((n) => [String(n), per ? `${n}v${n}` : String(n * 2)]), String(p.teamSize))}</select></label>`}
     ${mode === 'deathmatch' ? `<label>Deathmatch<select class="input" data-k="ffa">${opts([['ffa', 'Free for all'], ['team', 'Teams']], p.ffa)}</select></label>` : ''}
     ${!rounds ? `<label>Length<select class="input" data-k="minutes">${opts([['5', '5 minutes'], ['10', '10 minutes'], ['15', '15 minutes']], String(p.minutes))}</select></label>` : ''}

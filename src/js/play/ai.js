@@ -9,6 +9,7 @@
 // full buy, an AWP now and then). Your teammates follow your radio commands (radio.js): go to a site, rush, follow you,
 // hold, regroup, fall back, cover you.
 import { FLAG_BULLET, FLAG_PLAYER } from './collision.js';
+import { USE_RANGE } from './doors.js';
 import { Aim } from './aim.js';
 import { Gun } from './weapons.js';
 import { setOf } from './bots.js';
@@ -901,8 +902,11 @@ export class Brain {
       this.low = !!(wp?.crouch && Math.hypot(wp[0] - b.pos[0], wp[1] - b.pos[1]) < 120) || !!(prev?.crouch && Math.hypot(prev[0] - b.pos[0], prev[1] - b.pos[1]) < 64) || this.lowAhead(want[0] / go0, want[1] / go0);
       // And a breakable in the way (a vent cover over the hole it goes through, a shutter): it shoots it open, or slashes
       // it with the knife, like CS2's bots.
-      const pane = g.doors?.paneAhead([b.pos[0], b.pos[1], b.pos[2] + 2], [b.pos[0] + (want[0] / go0) * 40, b.pos[1] + (want[1] / go0) * 40, b.pos[2] + 2]);
+      const ahead = (n) => [b.pos[0] + (want[0] / go0) * n, b.pos[1] + (want[1] / go0) * n, b.pos[2] + 2], feet = ahead(0);
+      const pane = g.doors?.paneAhead(feet, ahead(40));
       if (pane) this.breakPane(pane, t);
+      // And a closed door: opened from as far off as you can.
+      g.doors?.openAhead(feet, ahead(USE_RANGE));
     } else if (go0 === 0) this.low = false;
     if (!moving) b.ducked = this.target?.visible ? b.ducked : this.task === 'plant' || this.task === 'defuse';
     else if (!this.target?.visible) b.ducked = !!this.low;

@@ -14,7 +14,7 @@
 // above), watching the enemy come in through its callouts.
 import { FLAG_BULLET } from './collision.js';
 import { stagingPoint } from './strats.js';
-import { SETUPS, setupPosition } from './setups.js';
+import { setupOf, setupPosition } from './setups.js';
 
 const EYE = 64, STEP = 96, NEAR = 220, FAR = 2600;
 const dist2 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -50,7 +50,7 @@ export class Spots {
       for (let r = 1; r < (this.place('hold:' + s.site)?.ways.length || 0); r++) out.push('gather:' + s.site + '/' + r);
     }
     if (this.midBox()) out.push('mid:CT', 'mid:T');
-    const s = SETUPS[g.map.info.id];
+    const s = setupOf(g);
     if (s) out.push(...Object.values(s.CT).flat().map((p) => 'pos:CT:' + p.id), ...s.T.map((p) => 'pos:T:' + p.id));
     return out;
   }

@@ -8,7 +8,7 @@ import { equipped } from '../loadout.js';
 import { itemDef } from '../items.js';
 import { D } from '../data.js';
 import { imgUrl } from '../util.js';
-import { CollisionWorld, FLAG_BULLET, FLAG_PLAYER } from './collision.js';
+import { FLAG_BULLET, FLAG_PLAYER } from './collision.js';
 import { PlayerMovement, HULL_STAND as BOT_HULL } from './movement.js';
 import { loadWorld, toGl, fromGl } from './world.js';
 import { Input, bindTable } from './input.js';
@@ -22,7 +22,6 @@ import { Brain, botGun, inaccuracyOf } from './ai.js';
 import { teamPlan, teamEconomy } from './strats.js';
 import { Effects } from './effects.js';
 import { Hud } from './hud.js';
-import { NavMesh } from './nav.js';
 import { Match, Combatant, RULES, SHORT_RULES, DEFAULT_PISTOL, ITEM_NAMES, slotOf, isGrenade } from './match.js';
 import { BuyMenu } from './buymenu.js';
 import { DevConsole } from './console.js';
@@ -38,7 +37,7 @@ import { numberUniforms } from './uniforms.js';
 import { quietSorting } from './drawsort.js';
 import { quietKeyframes } from './keyframes.js';
 import { Radio } from './radio.js';
-import { MODES, WINGMAN_RULES, Deathmatch, ARMS_RACE, PROTECT } from './modes.js';
+import { MODES, WINGMAN_RULES, matchWorld, Deathmatch, ARMS_RACE, PROTECT } from './modes.js';
 import { act } from '../backend.js';
 import { matchRewardHtml } from '../profile.js';
 import { esc } from '../util.js';
@@ -260,13 +259,10 @@ export class Game {
     // Sites are named from their callouts; if that fails, name them in order (A, B).
     const sites = map.info.bombsites || [];
     if (new Set(sites.map((s) => s.site)).size < sites.length) sites.forEach((s, i) => { s.site = 'ABCD'[i]; });
-    // Wingman plays one site.
-    if (this.mode === 'wingman') map.info.bombsites = sites.filter((s) => s.site === this.wingmanSite).length ? sites.filter((s) => s.site === this.wingmanSite) : sites.slice(0, 1);
     status('Loading collision…');
-    const colBuf = await fetch(map.collision).then((r) => r.arrayBuffer());
-    this.collision = new CollisionWorld(colBuf, map.info.collision);
-    this.nav = new NavMesh(await fetch(map.nav).then((r) => r.json()));
-    this.world = await loadWorld(map, this.renderer, { onProgress: status, anisotropy: this.anisotropy, sky3d: this.quality !== 'performance' });
+    // What the match plays on: Wingman, the map's Wingman version (modes.js).
+    ({ map: this.map, collision: this.collision, nav: this.nav } = await matchWorld(map, this.mode, this.wingmanSite, (url) => fetch(url)));
+    this.world = await loadWorld(this.map, this.renderer, { onProgress: status, anisotropy: this.anisotropy, sky3d: this.quality !== 'performance' });
     if (this.disposed) return;
     this.scene = this.world.scene;
     this.setupViewmodelLighting();
@@ -275,8 +271,8 @@ export class Game {
     this.drops = new Drops(this);
     this.balls = new Balls(this, this.world.balls);
     this.doors = new Doors(this, this.world);
-    // The bots' utility lineups for this map, checked on its collision (doors and all).
-    this.lineups = await loadLineups(this.mapId, this.collision).catch(() => []);
+    // The bots' utility lineups for this map, checked on its collision (doors and all); in Wingman, from what's left of it.
+    this.lineups = (await loadLineups(this.mapId, this.collision).catch(() => [])).filter((l) => this.mode !== 'wingman' || this.nav.findArea(l.pos));
     this.post = new Post(this.renderer, { samples: this.msaa, smoke: this.nades.volume });
     this.post.setLighting(this.world);
     // The map's post processing: its tone curve, auto exposure range and colour grading LUT.

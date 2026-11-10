@@ -659,6 +659,7 @@ class CS2Service {
         world: this.url(path.join(dir, 'world.glb')), collision: this.url(path.join(dir, 'collision.bin')),
         lightmap: meta.lightmap ? this.url(path.join(dir, 'lightmap.bin')) : null, sky: meta.sky ? this.url(path.join(dir, 'sky.png')) : null,
         probes: meta.lighting?.probes ? this.url(path.join(dir, 'probes.bin')) : null, sky3d: meta.sky3d ? this.url(path.join(dir, 'sky3d.glb')) : null, lut: meta.lighting?.lut ? this.url(path.join(dir, 'lut.bin')) : null,
+        wingman: meta.wingman?.collision ? this.url(path.join(dir, 'wingman.bin')) : null,
       });
       const say = (m) => { this.progress.set('map:' + id, m); this.log(`[play ${id}] ${m}`); };
       try {
@@ -677,8 +678,12 @@ class CS2Service {
         // Older exports are brought up to date step by step; a step that fails (no disk space, say) leaves the export as
         // it was, still playable, rather than exporting the whole map again.
         if (meta.stamp === stamp && meta.version >= 2) {
-          const steps = { 2: 'upgradeMapLighting', 3: 'upgradeMapHidden', 4: 'upgradeMapLayers', 5: 'upgradeMapDoors', 6: 'upgradeMapSky3d', 7: 'upgradeMapTextureSizes', 8: 'upgradeMapBreakables', 9: 'upgradeMapBreakables2', 10: 'upgradeMapSoundscapes', 11: 'upgradeMapGlass', 12: 'upgradeMapBreakables3' };
-          try { while (steps[meta.version]) meta = await this[steps[meta.version]](id, vpk, dir, meta, say); } catch (e) { this.log('map upgrade: ' + e.message); }
+          const steps = { 2: 'upgradeMapLighting', 3: 'upgradeMapHidden', 4: 'upgradeMapLayers', 5: 'upgradeMapDoors', 6: 'upgradeMapSky3d', 7: 'upgradeMapTextureSizes', 8: 'upgradeMapBreakables', 9: 'upgradeMapBreakables2', 10: 'upgradeMapSoundscapes', 11: 'upgradeMapGlass', 12: 'upgradeMapBreakables3', 13: 'upgradeMapWingman' };
+          try {
+            while (steps[meta.version]) meta = await this[steps[meta.version]](id, vpk, dir, meta, say);
+            if (await this.wingmanChanged(meta)) meta = await this.upgradeMapWingman(id, vpk, dir, meta, say);
+            if (!meta.sky && !meta.skyChecked) meta = await this.upgradeMapSky(id, vpk, dir, meta, say);
+          } catch (e) { this.log('map upgrade: ' + e.message); this.playJobs.delete('map:' + id); } // (the next load tries again)
           this.progress.delete('map:' + id);
           return result(meta);
         }
@@ -713,21 +718,16 @@ class CS2Service {
       if (fs.existsSync(irr)) lightmap = play.bakeLightmap(irr, path.join(tmp, 'maps', id, 'lightmaps', 'direct_light_shadows.png'), path.join(dir, 'lightmap.bin'));
       say('Reading the light probes and post processing…');
       const lighting = await this.playLighting(vpk, dir, ents, info);
-      let sky = false;
-      if (info.sky) {
-        try {
-          const mat = (await cs2.materialParams([info.sky]))[info.sky];
-          const vtex = mat?.textures?.g_tSkyTexture;
-          const local = vtex && (await cs2.extract([vtex]))[vtex + '_c'];
-          if (local && /\.exr$/i.test(local)) { play.bakeSky(local, path.join(dir, 'sky.png')); sky = true; }
-        } catch (e) { this.log('sky: ' + e.message); }
-      }
+      let sky = false, skyChecked = false; // (looked everywhere: see upgradeMapSky)
+      try { sky = await this.playSky(id, vpk, dir, info.sky); skyChecked = true; } catch (e) { this.log('sky: ' + e.message); }
 
       say('Exporting the second texture layers…');
       const { json } = play.readGlb(glb);
       const hidden = play.disabledNodes(json, ents);
       const hurts = await this.playHurts(vpk, dir, ents);
       const doors = play.doorNodes(json, ents), glass = play.glassNodes(json, ents, await this.playPropBreaks(vpk, ents));
+      // (That failing costs the map only its Wingman version: exported as the version before it, the next load tries again.)
+      const wingman = await this.playWingman(id, vpk, dir, ents, json, volumes.bombsites).catch((e) => { this.log('wingman: ' + e.message); return null; });
       say('Exporting the map\'s 3D skybox…');
       const sky3d = await this.playSky3d(dir, ents);
       const layers = await this.playLayers(vpk, dir, json);
@@ -753,12 +753,13 @@ class CS2Service {
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(entPhysFile, { force: true });
       const meta = {
-        version: play.PLAY_VERSION, stamp, content, id, name: nameOf(id), ...info, ...volumes, lightmap, sky, layers, lighting, hidden, hurts, doors, glass, sky3d,
-        soundscapes: play.mapSoundscapes(ents),
+        version: wingman ? play.PLAY_VERSION : 13, stamp, content, id, name: nameOf(id), ...info, ...volumes, lightmap, sky, skyChecked, layers, lighting, hidden, hurts, doors, glass, sky3d,
+        soundscapes: play.mapSoundscapes(ents), ...wingman,
         collision: { tris: col.tris, surfaces: col.surfaces, flags: { player: play.F_PLAYER, bullet: play.F_BULLET, grenade: play.F_GRENADE } },
       };
       fs.writeFileSync(metaFile, JSON.stringify(meta));
       this.progress.delete('map:' + id);
+      if (!wingman) this.playJobs.delete('map:' + id);
       return result(meta);
     });
   }
@@ -837,6 +838,57 @@ class CS2Service {
       }).filter(Boolean);
     } catch (err) { this.log('hurt volumes: ' + err.message); return []; }
     finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // A community map's own files, which CS2 mounts along with it (Debris's materials, its sky, its 3D skybox's map), or
+  // null: csgo_community_addons/<map>/<map>_dir.vpk.
+  addonVpk(id) {
+    const file = this.gameDir && path.join(this.gameDir, '..', 'csgo_community_addons', id, id + '_dir.vpk');
+    return file && fs.existsSync(file) ? file : null;
+  }
+
+  // The map's sky, env_sky's material (`skyMat`): its g_tSkyTexture (an EXR) baked into sky.png. True when it was, false
+  // when the map names none or it isn't there. The material and its texture are in the game's files or the map's own:
+  // its VPK or, for a community map, its addon (Debris's sky_debris_overcast; before, only the game's were looked in).
+  async playSky(id, vpk, dir, skyMat) {
+    if (!skyMat) return false;
+    const cs2 = this.ensureCS2();
+    const own = [vpk, this.addonVpk(id)].filter(Boolean), tmp = path.join(dir, 'tmp-sky');
+    try {
+      let vtex = (await cs2.materialParams([skyMat]))[skyMat]?.textures?.g_tSkyTexture;
+      for (const src of own) {
+        if (vtex) break;
+        const mat = (await cs2.dump(skyMat.replace(/\.vmat$/, '.vmat_c'), null, src))[skyMat];
+        vtex = mat?.m_textureParams?.find((x) => x.m_name === 'g_tSkyTexture')?.m_pValue;
+      }
+      if (!vtex) return false;
+      let local = (await cs2.extract([vtex]))[vtex + '_c'];
+      for (const src of own) {
+        if (local) break;
+        await cs2.run(['-i', src, '-f', vtex + '_c', '-d', '-o', tmp]);
+        const f = path.join(tmp, vtex.replace(/\.vtex$/, '.exr'));
+        if (fs.existsSync(f)) local = f;
+      }
+      if (!local || !/\.exr$/i.test(local)) return false;
+      play.bakeSky(local, path.join(dir, 'sky.png'));
+      return true;
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // An export that found no sky before the map's own files were looked in (Debris, a community map, came out with a
+  // flat colour) looks again, once (skyChecked): no version bump, so no other map is touched. A look that fails (the
+  // CLI, the disk) leaves it as it was, to try again next load.
+  async upgradeMapSky(id, vpk, dir, meta, say) {
+    say('Updating the map\'s sky…');
+    const tmp = path.join(dir, 'tmp-ents');
+    await this.ensureCS2().run(['-i', vpk, '-f', `maps/${id}/entities/default_ents.vents_c`, '-d', '-o', tmp]);
+    const entFile = path.join(tmp, 'maps', id, 'entities', 'default_ents.vents');
+    const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (!ents.length) throw new Error('no entities');
+    const next = { ...meta, sky: await this.playSky(id, vpk, dir, play.mapInfo(ents).sky), skyChecked: true };
+    fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
+    return next;
   }
 
   // CS2's 3D skybox: the prefab map a skybox_reference names (Inferno's hills and town, Nuke's plant...), drawn around
@@ -929,6 +981,124 @@ class CS2Service {
     const next = { ...meta, layers, skyBrightness: play.mapInfo(ents).skyBrightness, version: 12 };
     fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
     return next;
+  }
+
+  // What the map's Pulse graphs do in Wingman (play.wingmanSteps), or null: none of them asks. The graphs are in the game's
+  // files or the map's own, unpacked into tmp. One that can't be read throws: that says nothing of what the map does.
+  async wingmanSteps(vpk, ents, tmp) {
+    const cs2 = this.ensureCS2();
+    for (const graph of play.pulseGraphs(ents)) {
+      const local = path.join(tmp, graph);
+      let failed = null;
+      for (const src of [cs2.vpk, vpk]) if (!fs.existsSync(local)) await cs2.run(['-i', src, '-f', graph + '_c', '-d', '-o', tmp]).catch((e) => { failed = e; });
+      if (!fs.existsSync(local)) throw new Error(`can't read ${graph}${failed ? ': ' + failed.message : ''}`);
+      const steps = play.wingmanSteps(fs.readFileSync(local, 'utf8'));
+      if (steps) return steps;
+    }
+    return null;
+  }
+
+  // The CRCs of the map's Pulse graphs in the game's files, { graph: crc }: a map's own stamp doesn't see those change.
+  async wingmanGraphs(ents) {
+    const files = await this.ensureCS2().listing();
+    return Object.fromEntries(play.pulseGraphs(ents).filter((g) => files.has(g + '_c')).map((g) => [g, files.get(g + '_c')]));
+  }
+
+  // Has one of those changed since this export read them? (An export that didn't note them is read again the once.)
+  async wingmanChanged(meta) {
+    if (!meta.wingmanGraphs) return true;
+    const files = await this.ensureCS2().listing();
+    return Object.entries(meta.wingmanGraphs).some(([g, crc]) => files.get(g + '_c') !== crc);
+  }
+
+  // What map.json keeps of the map's Wingman version: { wingman: play.wingmanSetup's, wingmanGraphs }, what it makes solid as
+  // wingman.bin, from its graph and its entities' models (in the map's VPK or the game's). A map whose graph doesn't ask has
+  // none: wingman is { site } if it has just the one, else null. A read that fails throws, and nothing's kept of it: that
+  // isn't a map with no Wingman, and the walls would be drawn but not solid.
+  async playWingman(id, vpk, dir, ents, json, bombsites) {
+    const cs2 = this.ensureCS2();
+    const tmp = path.join(dir, 'tmp-wingman');
+    try {
+      if (!ents.length) throw new Error("can't read the map's entities");
+      const steps = await this.wingmanSteps(vpk, ents, tmp), wingmanGraphs = await this.wingmanGraphs(ents);
+      if (!steps) return { wingman: bombsites.length === 1 ? { site: 0 } : null, wingmanGraphs };
+      if (!(await this.playNav(id, vpk, dir))) throw new Error("can't read the nav mesh");
+      const { on, off } = play.wingmanEntities(ents, steps);
+      const local = (e) => path.join(tmp, play.modelPath(e).replace(/\.vmdl$/, '_physics.glb'));
+      // (Read, a model leaves its .glb, and its _physics.glb if it has any physics.)
+      const read = (m) => fs.existsSync(local({ model: m })) || fs.existsSync(path.join(tmp, m.replace(/\.vmdl$/, '.glb')));
+      const models = [...new Set([...on, ...ents.filter((e) => e.classname === 'func_buyzone')].filter((e) => e.model).map(play.modelPath))];
+      let failed = null;
+      for (const src of [vpk, cs2.vpk]) {
+        const missing = models.filter((m) => !read(m));
+        if (missing.length) await cs2.run(['-i', src, '-f', missing.map((m) => m + '_c').join(','), '-d', '-o', tmp, '--gltf_export_format', 'glb']).catch((e) => { failed = e; });
+      }
+      const unread = models.filter((m) => !read(m));
+      if (unread.length) throw new Error(`can't read ${unread.length} of its models, ${unread[0]}${failed ? ': ' + failed.message : ''}`);
+      const glbs = new Map();
+      const physics = (e) => {
+        const f = local(e);
+        if (!glbs.has(f)) glbs.set(f, fs.existsSync(f) ? play.readGlb(f) : null);
+        return glbs.get(f);
+      };
+      const nav = JSON.parse(fs.readFileSync(path.join(dir, 'nav.json'), 'utf8'));
+      const solids = play.wingmanSolids(on, physics), col = play.wingmanCollision(solids);
+      const setup = play.wingmanSetup({ ents, nav, json, bombsites, on, off, solids, physics });
+      fs.writeFileSync(path.join(dir, 'wingman.bin'), col.buf);
+      return { wingman: { ...setup, collision: { tris: col.tris, surfaces: col.surfaces } }, wingmanGraphs };
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // Version 13 gets version 14's Wingman version of the map, without exporting the rest again, and an export whose graph
+  // has changed (wingmanChanged) gets it again. If it can't be read this throws: playMap leaves the export as it was.
+  async upgradeMapWingman(id, vpk, dir, meta, say) {
+    say('Updating the map…');
+    const tmp = path.join(dir, 'tmp-ents');
+    await this.ensureCS2().run(['-i', vpk, '-f', `maps/${id}/entities/default_ents.vents_c`, '-d', '-o', tmp]);
+    const entFile = path.join(tmp, 'maps', id, 'entities', 'default_ents.vents');
+    const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
+    fs.rmSync(tmp, { recursive: true, force: true });
+    const next = { ...meta, ...(await this.playWingman(id, vpk, dir, ents, play.readGlb(path.join(dir, 'world.glb')).json, meta.bombsites)), version: Math.max(meta.version, 14) };
+    fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
+    return next;
+  }
+
+  // CS2's Wingman maps in this install, for the play menu: { pool: their ids, fixed: those whose bomb site is the map's
+  // own (it has just the one, or a graph that sets Wingman up) }. Kept until CS2 or one of the maps changes, once it's all
+  // been read: what couldn't be is read again next time.
+  playWingmanMaps() {
+    return this.playJob('wingmanMaps', async () => {
+      const cs2 = this.ensureCS2();
+      const file = path.join(this.cacheDir, 'play', 'wingman.json');
+      const stampOf = (ids) => [cs2.vpkStamp(), ...ids.map((id) => this.mapStamp(id))].join();
+      const installed = new Set(this.playMaps().map((m) => m.id));
+      try {
+        const c = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (c.stamp === stampOf(c.pool) && c.pool.every((id) => installed.has(id))) return { pool: c.pool, fixed: c.fixed };
+      } catch {}
+      const tmp = path.join(this.cacheDir, 'play', 'tmp-wingman');
+      try {
+        let whole = true;
+        const missed = (e) => { whole = false; this.log('wingman maps: ' + e.message); };
+        const read = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : missed(new Error("can't read " + path.basename(f))));
+        await cs2.run(['-i', cs2.vpk, '-f', 'gamemodes.txt', '-o', tmp]).catch(missed);
+        const gamemodes = read(path.join(tmp, 'gamemodes.txt'));
+        const named = gamemodes ? play.wingmanPool(gamemodes) : [];
+        const pool = (named.length ? named : play.WINGMAN_POOL).filter((id) => installed.has(id)), fixed = [];
+        for (const id of pool) {
+          const vpk = path.join(this.gameDir, 'maps', id + '.vpk');
+          await cs2.run(['-i', vpk, '-f', `maps/${id}/entities/default_ents.vents_c`, '-d', '-o', tmp]).catch(missed);
+          const text = read(path.join(tmp, 'maps', id, 'entities', 'default_ents.vents'));
+          const ents = text ? play.parseEntities(text) : [];
+          if (ents.filter((e) => e.classname === 'func_bomb_target').length === 1 || await this.wingmanSteps(vpk, ents, tmp).catch(missed)) fixed.push(id);
+        }
+        if (whole) {
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          fs.writeFileSync(file, JSON.stringify({ stamp: stampOf(pool), pool, fixed }));
+        } else this.playJobs.delete('wingmanMaps');
+        return { pool, fixed };
+      } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+    });
   }
 
   // Maps exported as version 8 get version 9's breakable props (with the doors and glass again).

@@ -201,6 +201,22 @@ export class CollisionWorld {
   }
 }
 
+// collision.bin with another file's triangles added ({ buffer, info } for a CollisionWorld): Wingman's walls, in the same
+// tree as the rest of the map, cost a trace nothing extra, and no other mode loads them.
+export function joinCollision(buffer, info, extra, more) {
+  const n = info.tris, m = more.tris, count = n + m, out = new ArrayBuffer(count * 38);
+  const pos = new Float32Array(out, 0, count * 9), flags = new Uint8Array(out, count * 36, count), surface = new Uint8Array(out, count * 37, count);
+  pos.set(new Float32Array(buffer, 0, n * 9));
+  pos.set(new Float32Array(extra, 0, m * 9), n * 9);
+  flags.set(new Uint8Array(buffer, n * 36, n));
+  flags.set(new Uint8Array(extra, m * 36, m), n);
+  surface.set(new Uint8Array(buffer, n * 37, n));
+  const surfaces = [...info.surfaces];
+  const index = more.surfaces.map((s) => (surfaces.includes(s) ? surfaces.indexOf(s) : surfaces.push(s) - 1));
+  new Uint8Array(extra, m * 37, m).forEach((s, i) => { surface[n + i] = index[s]; });
+  return { buffer: out, info: { ...info, tris: count, surfaces } };
+}
+
 // Does any solid triangle touch the box min..max? (Smoke fills only free space; a player stands up only where it fits.)
 // dynamic: the moving solids (doors, unbroken breakables) count too.
 CollisionWorld.prototype.boxOverlap = function boxOverlap(min, max, mask = FLAG_BULLET, dynamic = false) {

@@ -32,7 +32,7 @@ const SIZES = { premier: { A: 4, B: 5 }, competitive: { A: 4, B: 5 }, wingman: {
 
 let search = null; // the match being looked for: { mode, started, wait, map, site, team, roster, game, overlay, ready, state }
 let live = null; // the match you're in, or have left and can go back to: { mode, ranked, map, game, overlay, menu, away }
-let ctx = { maps: [], images: {}, nameOf: (id) => id }; // the installed maps, set by the Play page
+let ctx = { maps: [], images: {}, nameOf: (id) => id, wingman: null }; // the installed maps, set by the Play page (wingman: see mapsFor)
 const subs = new Set();
 
 export const searching = () => search;
@@ -42,7 +42,17 @@ export const onMatchmaking = (fn) => { subs.add(fn); return () => subs.delete(fn
 const changed = () => { drawBar(); for (const fn of subs) fn(); };
 const go = (page) => window.dispatchEvent(new CustomEvent('app:go', { detail: page }));
 const modeName = (mode) => MODES[mode]?.name || mode;
-export function setMaps({ maps, images, nameOf }) { ctx = { maps, images: images || {}, nameOf: nameOf || ((id) => id) }; }
+export function setMaps({ maps, images, nameOf, wingman }) { ctx = { maps, images: images || {}, nameOf: nameOf || ((id) => id), wingman: wingman || null }; }
+// The maps a mode can play: any installed one, but for Wingman only CS2's Wingman maps (none till they've been read:
+// cs2.playWingmanMaps's pool).
+export const mapsFor = (mode) => (mode === 'wingman' ? ctx.maps.filter((m) => ctx.wingman?.pool.includes(m.id)) : ctx.maps);
+// A private match's map: the one you picked, or the first Wingman map if that isn't one.
+export function privateMap(p, mode) {
+  const list = mapsFor(mode);
+  return mode !== 'wingman' || list.some((m) => m.id === p.map) ? p.map : list[0]?.id || null;
+}
+// Is this Wingman map's bomb site its own (no choosing one)?
+export const fixedSite = (id) => !!ctx.wingman?.fixed.includes(id);
 
 // ---- who you play with and against ----------------------------------------------------------------------------------
 // Matchmaking's bots: each its own rank around yours (your CS Rating in Premier, your Wingman rank in Wingman, else
@@ -85,8 +95,9 @@ function gameOptions(p, extra) {
 // ---- searching --------------------------------------------------------------------------------------------------------
 // The maps a mode searches on: the ones you picked for it (installed ones), at first the one you played last.
 export function poolOf(p, mode) {
-  const have = new Set(ctx.maps.map((m) => m.id));
+  const list = mapsFor(mode), have = new Set(list.map((m) => m.id));
   if (Array.isArray(p.pools?.[mode])) return p.pools[mode].filter((id) => have.has(id));
+  if (mode === 'wingman') return have.has(p.map) ? [p.map] : list.slice(0, 1).map((m) => m.id);
   return [have.has(p.map) ? p.map : 'de_dust2'];
 }
 
@@ -254,14 +265,16 @@ async function beginPrivate() {
   if (search || live) return;
   const p = playPrefs(), mode = MODES[p.mode] && p.mode !== 'premier' ? p.mode : 'competitive';
   const ffa = mode === 'armsrace' || (mode === 'deathmatch' && p.ffa !== 'team');
+  const map = privateMap(p, mode);
+  if (!map) { toast('None of CS2\'s Wingman maps are installed.', 'bad'); return; }
   const { Game } = await import('./play/game.js');
   const overlay = makeOverlay({ loading: true });
   const status = overlay.querySelector('[data-status]');
   const game = new Game(overlay, gameOptions(p, {
-    map: p.map, mode, site: p.site, ffa, minutes: p.minutes, team: p.team, teamSize: p.teamSize, roster: privateRoster({ ...p, mode }, ffa),
+    map, mode, site: p.site, ffa, minutes: p.minutes, team: p.team, teamSize: p.teamSize, roster: privateRoster({ ...p, mode }, ffa),
     length: p.length, overtime: p.overtime !== 'off', friendlyFire: p.friendlyFire === 'on', cheats: true, onStatus: (m) => { status.textContent = m; },
   }));
-  const pending = live = { game, overlay, mode, ranked: false, map: p.map, private: true, loading: true, menu: false, away: null };
+  const pending = live = { game, overlay, mode, ranked: false, map, private: true, loading: true, menu: false, away: null };
   overlay.querySelector('[data-cancel]').addEventListener('click', () => { if (live === pending) end(); });
   changed();
   try {
@@ -275,7 +288,7 @@ async function beginPrivate() {
   if (live !== pending || game.disposed) return;
   overlay.querySelector('.play-loading')?.remove();
   live = null;
-  begin({ game, overlay, mode, ranked: false, map: p.map, private: true });
+  begin({ game, overlay, mode, ranked: false, map, private: true });
 }
 
 // ---- in the match -----------------------------------------------------------------------------------------------------

@@ -40,7 +40,7 @@ function initPaths() {
 
 // Play mode calls from the renderer (one channel, whitelisted).
 const PLAY_CALLS = {
-  maps: () => cs2.playMaps(), mapImages: () => cs2.playMapImages(), map: (id) => cs2.playMap(id), progress: (key) => cs2.playProgress(key), weapon: (id) => cs2.playWeapon(id),
+  maps: () => cs2.playMaps(), mapImages: () => cs2.playMapImages(), wingmanMaps: () => cs2.playWingmanMaps(), map: (id) => cs2.playMap(id), progress: (key) => cs2.playProgress(key), weapon: (id) => cs2.playWeapon(id),
   agent: (vmdl) => cs2.playAgent(vmdl), anims: (list) => cs2.playAnims(list), sounds: (events) => cs2.playSounds(events),
   soundInfo: (events) => cs2.playSoundInfo(events), reverbs: () => cs2.playReverbs(),
   agentModel: (id) => cs2.agentModel(id), agentVoice: (id) => agentVoice(cs2, id), stats: () => cs2.playStats(), impacts: () => cs2.playImpacts(), voices: () => cs2.playVoices(), icons: () => cs2.playIcons(),
@@ -1148,7 +1148,7 @@ async function runHitchSmoke(win) {
 }
 
 // `CS2SIM_SMOKE=bots` watches the bots play: for each map (CS2SIM_SMOKE_MAPS, default Dust II and Mirage) and rank tier
-// (CS2SIM_SMOKE_TIERS, default silver and global), a competitive match for CS2SIM_SMOKE_SECONDS (default 150) with you dead
+// (CS2SIM_SMOKE_TIERS, default silver and global), a match (competitive, or CS2SIM_SMOKE_MODE) for CS2SIM_SMOKE_SECONDS (default 150) with you dead
 // (spectating), logging each round's plans (the terrorists' strat, site and buy, the CTs' setup, who throws which lineup),
 // every lineup thrown and how far from its spot it landed, kills, plants and who won; and a scoreboard screenshot
 // (userData/bots-<map>-<tier>.png: the bots' real players and ranks).
@@ -1158,8 +1158,9 @@ async function runHitchSmoke(win) {
 // within 52 units), where it holds (staring at a wall, how far it sees that way, cover round it, whether it watches a way
 // in to the site, the same spot as an earlier round, a teammate on top of it), and its fights (from when it has an
 // enemy in sight as its target: how far off its aim is 0.1 to 1 s on, how fast it turns, its first shot, its first hit).
+// Also where one stood stuck for 3 seconds, and where it was sent that the nav mesh has no way to.
 const botMetricsJs = `(() => { const g = window.__playGame, D2R = Math.PI / 180, BULLET = 2;
-  const M = window.__botMetrics = { ticks: 0, botTicks: 0, wallTicks: 0, wallTurning: 0, wallWhy: {}, tracks: [], blockedTicks: 0, blocked: [], stuckTicks: 0, stuck: [], holds: [], eng: [], kills: 0, hs: 0, rounds: new Set() };
+  const M = window.__botMetrics = { ticks: 0, botTicks: 0, wallTicks: 0, wallTurning: 0, wallWhy: {}, tracks: [], blockedTicks: 0, blocked: [], stuckTicks: 0, stuck: [], stuckAt: [], noWay: [], holds: [], eng: [], kills: 0, hs: 0, rounds: new Set() };
   const seen = new Map(), streak = new Map(), runs = new Map(), engOf = new Map(), cur = new Map(), prevAng = new Map();
   const live = () => g.match.phase === 'live' || g.match.phase === 'planted';
   const ang = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))) / D2R;
@@ -1208,6 +1209,7 @@ const botMetricsJs = `(() => { const g = window.__playGame, D2R = Math.PI / 180,
       run('b' + b.index, near, M.blocked);
       if (going && speed < 30) M.stuckTicks++;
       run('s' + b.index, going && speed < 30, M.stuck);
+      if (runs.get('s' + b.index) === 192) M.stuckAt.push({ pos: b.pos.map(Math.round), place: g.placeOf(c) || '?', task: br.task, to: br.path[br.pi]?.map(Math.round), goal: br.goal?.map(Math.round) });
       if (br.task === 'hold' && speed < 20) {
         const mine = M.holds.filter((h) => h.round === g.match.round && h.bot === c.name);
         if (!mine.some((h) => Math.hypot(h.pos[0] - b.pos[0], h.pos[1] - b.pos[1]) < 150)) M.holds.push({ round: g.match.round, bot: c.name, team: c.team, phase: g.match.phase, pos: b.pos.slice(), yaw: br.holdYaw ?? b.yaw, nth: mine.length, order: !!br.order });
@@ -1231,6 +1233,7 @@ const botMetricsJs = `(() => { const g = window.__playGame, D2R = Math.PI / 180,
     }
   };
   const tick = g.tick; g.tick = function (...a) { const r = tick.apply(this, a); sample(); return r; };
+  for (const { brain } of g.bots) { const goTo = brain.goTo; brain.goTo = function (goal) { goTo.call(this, goal); if (this.path?.[0]?.direct) M.noWay.push({ from: this.bot.pos.map(Math.round), goal: goal.map(Math.round), task: this.task }); }; }
   const shoot = g.botShoot; g.botShoot = function (b, ...a) { const en = cur.get(b); if (en && g.now - en.last < 0.25) { en.shots++; if (en.shot == null) en.shot = +(g.now - en.t0).toFixed(3); } return shoot.call(this, b, ...a); };
   const damage = g.damage; g.damage = function (c, dmg, o = {}) {
     const b = o.attacker?.bot ? g.botOf(o.attacker) : null, en = b && cur.get(b);
@@ -1286,7 +1289,7 @@ const botMetricsJs = `(() => { const g = window.__playGame, D2R = Math.PI / 180,
         rounds: M.rounds.size, botSeconds: Math.round(M.botTicks / 64),
         wallAimPct: pct(M.wallTicks, bt), wallAimTurningPct: pct(M.wallTurning, bt), wallWhy: M.wallWhy, wallFollows: M.tracks.length, wallFollowSecs: +M.tracks.reduce((s, t) => s + t.secs, 0).toFixed(1),
         blockedSecsPerRound: +(M.blockedTicks / 64 / Math.max(1, M.rounds.size)).toFixed(1), blockedOver1s: M.blocked.length, blockedOver3s: M.blocked.filter((x) => x >= 3).length,
-        stuckSecsPerRound: +(M.stuckTicks / 64 / Math.max(1, M.rounds.size)).toFixed(1), stuckOver3s: M.stuck.filter((x) => x >= 3).length,
+        stuckSecsPerRound: +(M.stuckTicks / 64 / Math.max(1, M.rounds.size)).toFixed(1), stuckOver3s: M.stuck.filter((x) => x >= 3).length, noWay: M.noWay.length,
         holds: holds.length, stareAtWallPct: pct(holds.filter((h) => h.stare).length, holds.length), medianSight: med(holds.map((h) => h.sight)), medianCover: med(holds.map((h) => h.cover)),
         ctWatchesWayInPct: pct(ctLive.filter((h) => h.watches).length, ctLive.length), sameSpotAgainPct: pct(again, later), crowdedPct: pct(crowded, holds.length),
         fights: eng.length, firstShotS: med(eng.map((e) => e.shot)), firstHitS: med(hits.map((e) => e.hit.dt)), firstHitHeadPct: pct(hits.filter((e) => e.hit.head).length, hits.length),
@@ -1295,7 +1298,7 @@ const botMetricsJs = `(() => { const g = window.__playGame, D2R = Math.PI / 180,
         headWithin1degAt200msPct: pct(eng.filter((e) => e.err[0.2] != null && e.err[0.2] < 1).length, eng.filter((e) => e.err[0.2] != null).length),
         peakTurnDegS: med(eng.map((e) => e.peak)), kills: M.kills, headshotKillPct: pct(M.hs, M.kills),
       },
-      holds, eng: eng.slice(0, 400), tracks: M.tracks, blocked: M.blocked,
+      holds, eng: eng.slice(0, 400), tracks: M.tracks, blocked: M.blocked, stuckAt: M.stuckAt, noWay: M.noWay,
     };
   };
   return 1; })()`;
@@ -1670,7 +1673,7 @@ async function runBotsSmoke(win) {
   await wait(3000);
   for (const map of maps) {
     for (const tier of tiers) {
-      await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: 'competitive', map: '${map}', difficulty: '${tier}', teamSize: 5, length: 'long', quality: 'balanced' })); })(); 1`);
+      await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, mode: '${process.env.CS2SIM_SMOKE_MODE || 'competitive'}', map: '${map}', difficulty: '${tier}', teamSize: 5, length: 'long', quality: 'balanced' })); })(); 1`);
       await js(`document.querySelector('#topbar [data-page=stats]').click(); setTimeout(() => document.querySelector('#topbar [data-page=play]').click(), 200); 1`);
       await wait(1500);
       if (!(await smokeStartMap(win, map, 'bots'))) continue;

@@ -85,6 +85,14 @@ export const SETUPS = {
   },
 };
 
+// A match's positions: its map's, in Wingman only those on what's left of the map (Inferno's B and banana are closed off).
+export function setupOf(game) {
+  const s = SETUPS[game.map.info.id];
+  if (!s || game.mode !== 'wingman') return s;
+  const open = ({ at }) => game.nav.reaches([at[0] - 64, at[1] - 64, at[2] - 64], [at[0] + 64, at[1] + 64, at[2] + 64]);
+  return { CT: Object.fromEntries(Object.entries(s.CT).map(([k, list]) => [k, list.filter(open)])), T: s.T.filter(open) };
+}
+
 // A map's position by side and id ('CT:jungle'), or null.
 export function setupPosition(mapId, key) {
   const s = SETUPS[mapId];

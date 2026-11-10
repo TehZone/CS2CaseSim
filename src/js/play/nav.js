@@ -88,6 +88,11 @@ export class NavMesh {
     return best;
   }
 
+  // Is any of the mesh in a box? (A callout or a position on the part of the map that's closed off in Wingman isn't.)
+  reaches(min, max) {
+    return this.areas.some((a) => a.max[0] >= min[0] && a.min[0] <= max[0] && a.max[1] >= min[1] && a.min[1] <= max[1] && a.max[2] >= min[2] - 40 && a.min[2] <= max[2] + 40);
+  }
+
   // A random spot inside a box (e.g. a bomb site) on walkable ground.
   randomPointIn(min, max, accept = () => true, tries = 80) {
     const list = this.areas.filter((a) => a.max[0] >= min[0] && a.min[0] <= max[0] && a.max[1] >= min[1] && a.min[1] <= max[1]
@@ -186,6 +191,19 @@ export class NavMesh {
     }
     return null;
   }
+}
+
+// nav.json with areas taken out, the links and ladders to them too, and links cut ([from, to]: through a wall): what's
+// left of the map in Wingman. Paths, hiding spots and random spots are all on what's left, so a bot never sets off for
+// the far side of a wall.
+export function withoutAreas(data, closed = [], cut = []) {
+  const gone = new Set(closed), left = (ids) => ids.filter((id) => !gone.has(id));
+  const walled = new Set(cut.map(([from, to]) => from + '>' + to));
+  return {
+    ...data,
+    areas: data.areas.filter((a) => !gone.has(a.id)).map((a) => ({ ...a, e: a.e.map((ids) => left(ids).filter((id) => !walled.has(a.id + '>' + id))) })),
+    ladders: (data.ladders || []).map((l) => ({ ...l, topAreas: left(l.topAreas), bottomAreas: left(l.bottomAreas) })).filter((l) => l.topAreas.length && l.bottomAreas.length),
+  };
 }
 
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);

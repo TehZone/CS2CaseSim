@@ -8,7 +8,7 @@
 // a terrorists' default spreads over the real map control (top mid, palace, ramp, apps...). The brains (ai.js) play
 // their part of it.
 import { lineupsFor, nadeFor } from './utility.js';
-import { SETUPS } from './setups.js';
+import { setupOf } from './setups.js';
 
 const rnd = () => Math.random();
 const pick = (a) => a[Math.floor(rnd() * a.length)];
@@ -111,7 +111,7 @@ export function teamPlan(game, side, econ = 'full') {
     if (strat === 'default') for (const x of throws) x.early = x.lineup.purpose.includes('default') && !x.lineup.purpose.includes(site);
     // A default's spread: each on a real position (setups.js): the lurker on the other site's side, the entry in mid,
     // the rest over the others, one a part of the map before two.
-    const positions = new Map(), spread = strat === 'default' && SETUPS[game.map.info.id]?.T;
+    const positions = new Map(), spread = strat === 'default' && setupOf(game)?.T;
     if (spread) {
       const left = spread.slice().sort(() => rnd() - 0.5), take = (ok) => { const i = left.findIndex(ok); return i < 0 ? null : left.splice(i, 1)[0]; };
       const order = bots.slice().sort((a, b) => (roles.get(b.c) === 'lurk') - (roles.get(a.c) === 'lurk') || (roles.get(b.c) === 'entry') - (roles.get(a.c) === 'entry'));
@@ -139,16 +139,16 @@ export function teamPlan(game, side, econ = 'full') {
   const assign = new Map();
   const order = bots.map((b) => b.c).sort(() => rnd() - 0.5);
   const n = order.length;
-  const two = sites.includes('B') ? 'B' : sites[0] || 'A';
-  const mid = game.midSpot ? 'mid' : rnd() < 0.5 ? 'A' : two;
-  let layout = n >= 5 ? ['A', 'A', two, two, mid] : n === 4 ? ['A', 'A', two, two] : n === 3 ? ['A', two, mid] : n === 2 ? ['A', two] : [rnd() < 0.5 ? 'A' : two];
+  const two = sites.includes('B') ? 'B' : sites[0] || 'A', one = sites.includes('A') ? 'A' : two; // (Wingman's one site, A or B, is both)
+  const mid = game.midSpot ? 'mid' : rnd() < 0.5 ? one : two;
+  let layout = n >= 5 ? [one, one, two, two, mid] : n === 4 ? [one, one, two, two] : n === 3 ? [one, two, mid] : n === 2 ? [one, two] : [rnd() < 0.5 ? one : two];
   const hit = game.tSiteHistory || [];
   const stack = hit.length >= 2 && hit[hit.length - 1] === hit[hit.length - 2] && n >= 4 && rnd() < skill ? hit[hit.length - 1] : null;
-  if (stack) layout = layout.map((s, i) => (i < Math.ceil(n * 0.6) ? stack : s === stack ? (stack === 'A' ? two : 'A') : s));
+  if (stack) layout = layout.map((s, i) => (i < Math.ceil(n * 0.6) ? stack : s === stack ? (stack === one ? two : one) : s));
   order.forEach((c, i) => assign.set(c, layout[i % layout.length]));
   // Each one's position on its site (setups.js): the usual ones the more often, an AWPer's for an AWPer, never two on
   // one (more than there are: spots.js's own spots for the rest).
-  const setup = SETUPS[game.map.info.id]?.CT, pos = new Map();
+  const setup = setupOf(game)?.CT, pos = new Map();
   if (setup) {
     for (const s of new Set(layout)) {
       const left = (setup[s] || []).slice();

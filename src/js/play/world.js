@@ -354,6 +354,22 @@ function overlayMaterial(src, vm, mode) {
   return m;
 }
 
+// CS2's unlit surfaces (F_UNLIT: Debris's black_unlit, generic.vfx's colour texture times its tint, black there): drawn
+// as they are, no sun, shadow, lightmap or probe on them, as in CS2. The exporter makes them glTF's KHR_materials_unlit,
+// which three loads as a MeshBasicMaterial: none of a lit material's emissive, normal scale, roughness... Each keeps a
+// material of its own (its colour in it), drawn by itself (not batched).
+const isUnlit = (m, vm) => !m.isMeshStandardMaterial || !!vm.IntParams?.F_UNLIT;
+function unlitMaterial(src) {
+  const m = new THREE.MeshBasicMaterial({ map: src.map, color: src.color, opacity: src.opacity, transparent: src.transparent, alphaTest: src.alphaTest,
+    side: src.side, depthWrite: src.transparent ? false : src.depthWrite });
+  if (m.transparent) Object.assign(m, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+  m.onBeforeCompile = centroidVaryings; // (as the lit surfaces: no texture from past a silhouette's edge)
+  m.customProgramCacheKey = () => 'cs2unlit';
+  m.userData.basic = true;
+  m.userData.unlit = true;
+  return m;
+}
+
 // Glass (csgo_glass; the exporter gives it neither colour nor transparency, so it came out a solid white slab) and
 // water (csgo_water_fancy, left out before): see-through, reflecting the map's sky more at glancing angles like CS2's,
 // water tinted its g_vWaterFogColor with waves running over it.
@@ -693,11 +709,16 @@ function fragmentCenter(geo, out) {
 
 // A prop with a skeleton (a door, Nuke's vent covers and slats, Train's hanging cables...): the exporter leaves its mesh
 // at the origin and puts it in place with its bones. Its vertices where its bones (at rest) put them, in world space: a
-// geometry sharing everything else with the original.
+// geometry sharing everything else with the original. A door's model comes turned by its root bone on top of that (Nuke's
+// would stand wide open, Overpass's lie flat; the model's physics has it as CS2 does): door turns it back, about its hinge.
 const IDENTITY = new THREE.Matrix4();
-export function bakeSkin(o) {
+export function bakeSkin(o, door = false) {
   const src = o.geometry, a = src.attributes, n = a.position.count;
   const sk = o.skeleton, base = new THREE.Matrix4().multiplyMatrices(o.matrixWorld, o.bindMatrixInverse);
+  if (door) {
+    const root = sk.bones.find((b) => !b.parent?.isBone), hinge = root.parent.matrixWorld;
+    base.premultiply(hinge.clone().multiply(new THREE.Matrix4().makeRotationFromQuaternion(root.quaternion.clone().invert())).multiply(hinge.clone().invert()));
+  }
   const bones = sk.bones.map((b, i) => new THREE.Matrix4().multiplyMatrices(base, b.matrixWorld).multiply(sk.boneInverses[i]).multiply(o.bindMatrix));
   const P = floats(a.position), N = floats(a.normal), T = floats(a.tangent), SI = floats(a.skinIndex), SW = floats(a.skinWeight);
   const pos = new Float32Array(n * 3), nor = N && new Float32Array(n * 3), tan = T && new Float32Array(n * 4);
@@ -803,13 +824,15 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   const looksOf = (m) => {
     if (!looks.has(m)) {
       const t = (x) => x?.uuid || '';
-      looks.set(m, JSON.stringify([m.userData?.vmat || m.name, t(m.map), t(m.normalMap), t(m.roughnessMap), t(m.metalnessMap), t(m.aoMap), t(m.emissiveMap),
-        m.emissive.getHex(), m.emissiveIntensity, m.opacity, m.transparent, m.alphaTest, m.side, m.roughness, m.metalness, m.normalScale.x, m.normalScale.y, m.aoMapIntensity]));
+      // (Any material: an unlit one has no emissive or normal scale.)
+      looks.set(m, JSON.stringify([m.type, m.userData?.vmat || m.name, t(m.map), t(m.normalMap), t(m.roughnessMap), t(m.metalnessMap), t(m.aoMap), t(m.emissiveMap),
+        m.emissive?.getHex() ?? 0, m.emissiveIntensity, m.opacity, m.transparent, m.alphaTest, m.side, m.roughness, m.metalness, m.normalScale?.x, m.normalScale?.y, m.aoMapIntensity]));
     }
     return looks.get(m);
   };
   const center = new THREE.Vector3();
-  // Entities CS2 starts switched off (Wingman's barricades, doors and blocker walls...: see disabledNodes): left out.
+  // Entities CS2 starts switched off (Retakes' blockers; Wingman's barricades, doors and walls but in Wingman: see
+  // disabledNodes, modes.js wingmanInfo): left out.
   const off = new Set(info.hidden || []), offNodes = new Set();
   for (const g of info.glass || []) for (const n of g.remainder || []) off.delete(n); // (shown when it breaks: see glass[i].after)
   if (off.size) gltf.scene.traverse((o) => { const a = gltf.parser.associations.get(o); if (a?.nodes !== undefined && off.has(a.nodes)) offNodes.add(o); });
@@ -831,13 +854,15 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     if (HIDDEN.test(m.name || '') || HIDDEN.test(vm.Name || '') || HIDDEN_SHADERS.test(vm.ShaderName || '')) return;
     if (BALL.test(o.name) || BALL.test(o.parent?.name || '')) { props.push(o); return; }
     const lmUv = lightmapUv(vm.ShaderName);
-    const lm = !!(lightMap && o.geometry.attributes[lmUv] && LIGHTMAPPED.test(vm.ShaderName || ''));
-    // Decals, glass and water keep a material each; the rest share one per look, whatever their colour (addFactor).
-    const shader = vm.ShaderName || '', own = /static_overlay|csgo_glass|csgo_water/.test(shader);
+    // Decals, glass, water and unlit surfaces keep a material each; the rest share one per look, whatever their colour
+    // (addFactor).
+    const shader = vm.ShaderName || '', overlay = shader.includes('static_overlay') ? vm.IntParams?.F_BLEND_MODE | 0 : -1, clear = /csgo_glass|csgo_water/.test(shader);
+    const unlit = overlay !== 2 && overlay !== 3 && !clear && isUnlit(m, vm), own = overlay >= 0 || clear || unlit;
+    const lm = !unlit && !!(lightMap && o.geometry.attributes[lmUv] && LIGHTMAPPED.test(shader));
     const key = (own ? m.uuid : looksOf(m)) + (lm ? ':lm' : ':amb');
     if (!variants.has(key)) {
-      const overlay = shader.includes('static_overlay') ? vm.IntParams?.F_BLEND_MODE | 0 : -1;
       if (overlay === 2 || overlay === 3) variants.set(key, overlayMaterial(m, vm, overlay)); // a decal that multiplies or adds: unlit
+      else if (unlit) variants.set(key, unlitMaterial(m));
       // (Glass without its textures, exported before version 12, as it was.)
       else if (shader.includes('csgo_water') || (shader.includes('csgo_glass') && !glassOf(vm, info.layers || {}, loadLayer, m.color))) variants.set(key, clearMaterial(m, vm, sky, shader.includes('csgo_water')));
       if (variants.has(key)) originals.add(m);
@@ -866,10 +891,10 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
     // A see-through two-sided surface in one pass, as CS2 draws it (three draws it twice, back then front, and has to
     // look its shader up again each time).
     variants.get(key).forceSinglePass = true;
-    const geo = o.isSkinnedMesh ? bakeSkin(o) : o.geometry, matrix = o.isSkinnedMesh ? IDENTITY : o.matrixWorld;
+    const mover = moverOf(o);
+    const geo = o.isSkinnedMesh ? bakeSkin(o, mover?.[0] === 'd') : o.geometry, matrix = o.isSkinnedMesh ? IDENTITY : o.matrixWorld;
     fragmentCenter(geo, center).applyMatrix4(matrix);
     const cell = variants.get(key).transparent ? `${Math.floor(center.x / (CELL * IN))},${Math.floor(center.z / (CELL * IN))}` : 'all';
-    const mover = moverOf(o);
     const gk = key + '|' + (mover || cell);
     if (!groups.has(gk)) groups.set(gk, { material: variants.get(key), list: [], mover });
     groups.get(gk).list.push({ geo, matrix: matrix.clone(), color: own ? null : m.color });
@@ -883,7 +908,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   const arrays = new TextureArrays(renderer, aniso), slotsFor = new Map(), byKind = new Map();
   // What a material compiles to (its shader) apart from its textures' sizes, and those sizes: members of a batch share
   // both. A decal that multiplies or adds (an overlay, MeshBasicMaterial) batches with others of its blend.
-  const overlayOf = (v) => v.userData.basic && !v.userData.clear && !v.userData.animated && v.isMeshBasicMaterial;
+  const overlayOf = (v) => v.userData.basic && !v.userData.clear && !v.userData.animated && !v.userData.unlit && v.isMeshBasicMaterial;
   for (const [gk, g] of groups) {
     const v = g.material;
     if (g.mover?.[0] === 'd' || g.mover?.[0] === 'r' || v.userData.clear || v.userData.parallax || (v.userData.basic && !overlayOf(v))) continue;
@@ -891,7 +916,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
       const L = layerData.get(v), slots = slotsOf(v, L);
       const glow = !!(v.emissiveMap || v.emissive?.getHex());
       const shaderKey = !slots ? null : overlayOf(v) ? ['ov', v.blending, v.blendSrc, v.blendDst, v.side, v.depthWrite].join('|')
-        : [v.userData.lm, v.userData.lmUv, L?.key || '', v.normalScale.x, v.normalScale.y, v.roughness, v.metalness, v.aoMapIntensity, v.side, !!v.aoMap,
+        : [v.userData.lm, v.userData.lmUv, L?.key || '', v.normalScale?.x, v.normalScale?.y, v.roughness, v.metalness, v.aoMapIntensity, v.side, !!v.aoMap,
           v.alphaTest, v.transparent, glow].join('|');
       const present = slots ? SLOTS.filter((k) => slots[k]) : [];
       slotsFor.set(v, slots && { slots, glow, shaderKey: shaderKey + '|' + present.join(','), sizes: Object.fromEntries(present.map((k) => [k, slots[k].image])),
@@ -1103,6 +1128,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
         if (!o.isMesh || Array.isArray(o.material)) return;
         const m = o.material, vm = m.userData?.vmat || {};
         if (HIDDEN.test(m.name || '') || HIDDEN.test(vm.Name || '') || HIDDEN_SHADERS.test(vm.ShaderName || '')) { o.visible = false; return; }
+        if (!mats.has(m) && isUnlit(m, vm) && !/static_overlay|csgo_glass|csgo_water/.test(vm.ShaderName || '')) mats.set(m, unlitMaterial(m));
         if (!mats.has(m)) {
           const v = m.clone();
           v.vertexColors = false; v.envMap = null;
@@ -1130,7 +1156,7 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
       // And the opaque ones batched like the map's (see batch.js): its colour textures in arrays, a draw per size.
       const skyArrays = new TextureArrays(renderer, Math.min(4, aniso)), kinds = new Map(), skyBatches = [];
       for (const [mat, list] of byMat) {
-        const slots = !mat.transparent && !(mat.alphaTest > 0) && !mat.userData.parallax && slotsOf(mat, null);
+        const slots = !mat.transparent && !(mat.alphaTest > 0) && !mat.userData.parallax && !mat.userData.unlit && slotsOf(mat, null);
         if (!slots || Object.keys(slots).length !== 1) continue;
         const k = TextureArrays.kind(slots.map, true) + '|' + mat.side;
         if (!kinds.has(k)) kinds.set(k, []);

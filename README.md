@@ -77,7 +77,15 @@ The modes:
   as in CS2, without changing the result; planted, the red LED on its circuit board lights with each beep, faster as it
   runs down, and you can see it from across the site), win by elimination, bomb, defuse or time,
   halftime side swap and overtime (MR3 with $12,500, sides swapping after 3; or ties as draws).
-- **Wingman**: 2v2 on one bomb site, 90-second rounds, first to 9.
+- **Wingman**: 2v2, 90-second rounds, first to 9, on CS2's Wingman maps in your install (its gamemodes.txt says which:
+  Inferno, Nuke, Overpass, Vertigo, Debris, El Dorado, Poseidon; other maps aren't offered, and with none installed
+  there's nothing to pick) in their real Wingman versions, read from CS2's files. CS2 keeps one file per map, and a
+  Pulse graph switches things as the map starts. So Overpass and Nuke play their B, Inferno and Vertigo their A, with
+  Wingman's walls, fences, barricades and doors drawn and solid (bullets, grenades and players meet them as any wall of
+  that kind), its own spawns and buy zones, and the other site's signs gone; bots stay on what's left of the nav mesh, and
+  plan by the callouts and positions on it. Debris, El Dorado and Poseidon are built with one site and played whole. The
+  site isn't written anywhere in CS2's files: it's the one both teams can still walk to. A private match has a Bomb
+  site choice only on a map with no site of its own.
 - **Deathmatch**: free-for-all or teams for 5, 10 or 15 minutes. You respawn after two seconds away from enemies, every
   gun is free from the buy menu anywhere (you respawn with what you picked), points for kills (more for headshots,
   pistols and the knife).
@@ -299,10 +307,11 @@ What's in a match:
   pane, the frames behind it shifting as you move and blurred through the frosted glass, the room or the sky behind
   those, the ones lit from outside glowing); water (waves, sky reflections, the map's water colour); metal that reflects the light around it like
   CS2's cubemaps (Vertigo's lift doors); props with a skeleton (doors, Nuke's vent covers and slats) where their bones
-  put them; the map's sky as bright as CS2 draws it (Cache's four times its texture), its
+  put them, a door shut in its frame as CS2 has it; the map's sky as bright as CS2 draws it (Cache's four times its texture), its
   3D skybox, its collision mesh, nav mesh with ladders, spawns, bomb sites, buy zones and callout areas. Things
-  another mode switches on (Wingman's barricades, fences and doors on Vertigo, Nuke, Overpass and Inferno; Retakes'
-  blockers) are left out, as in competitive. Doors open with E (CS2's swing and
+  another mode switches on are left out, as in competitive: Retakes' blockers always, Wingman's barricades, fences and
+  doors on Vertigo, Nuke, Overpass and Inferno but in Wingman (the export keeps its version apart, so no other mode
+  loads it). Doors open with E (CS2's swing and
   sounds; bots open them too), breakable glass and props break when shot (windows, Nuke's vent covers, bottles), every
   surface sounds like CS2's when shot (Inferno's church bells ring), and the map's trigger_hurt volumes hurt the moment
   you touch one (falling off Vertigo kills you as you reach the street).

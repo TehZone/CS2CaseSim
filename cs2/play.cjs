@@ -4,17 +4,17 @@
 const fs = require('fs');
 const path = require('path');
 const { parseEntities } = require('./vanity.cjs');
-const { parseKV3 } = require('./kv.cjs');
+const { parseKV1, parseKV3 } = require('./kv.cjs');
 const { readEXR } = require('./exr.cjs');
 const { decodePNG, encodePNG } = require('./png.cjs');
 
 const IN = 0.0254; // the exporter writes game inches as metres
-const PLAY_VERSION = 13; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading;
+const PLAY_VERSION = 14; // map exports (2: texture layers, sharper textures, non-solid brushes left out; 3: sun mask, probes, grading;
 // 4: entities that start switched off left out, trigger_hurt volumes; 5: csgo_environment(_blend)'s other layers and height maps;
 // 6: doors and breakable glass; 7: the 3D skybox; 8: no texture over 1024 after it; 9: breakable props too; 10: props named
 // breakable (Mirage's vent covers) and what's left of a breakable once broken (Mirage's shutter frame); 11: soundscapes;
 // 12: the windows' and glass's own textures, the sky's brightness; 13: props that break by their own prop data, Nuke's
-// vent slats and Cache's vents, and each breakable's health)
+// vent slats and Cache's vents, and each breakable's health; 14: the map's Wingman version)
 const PROBE_MAX = 8; // probe irradiance is stored as 8-bit sRGB of value / PROBE_MAX
 const DATA_VERSION = 7; // weapon stats + sound events (6: maps' ambience sounds, every surface's bullet impact sound; 7: how CS2
 // plays each event, and its reverb presets)
@@ -129,6 +129,11 @@ function buildCollision(worldPhys, entityPhys, ents = []) {
     for (const b of brushes) { const d = Math.hypot(b.o[0] - o[0], b.o[1] - o[1], b.o[2] - o[2]); if (d < bd) { bd = d; best = b.e; } }
     if (!best || brushSolid(best)) add(entityPhys, n, F_PLAYER | F_BULLET | F_GRENADE);
   }
+  return packCollision(parts, surfaces);
+}
+
+// parts: [{ tris (9 floats each), flags, surface (index into surfaces) }] as collision.bin.
+function packCollision(parts, surfaces) {
   const count = parts.reduce((s, p) => s + p.tris.length / 9, 0);
   const buf = Buffer.alloc(count * 38);
   const pos = new Float32Array(buf.buffer, buf.byteOffset, count * 9);
@@ -145,8 +150,8 @@ function buildCollision(worldPhys, entityPhys, ents = []) {
 
 // Entities CS2 starts switched off, for a game mode to switch on (Wingman's barricades, doors and blocker walls on
 // Vertigo, Nuke, Overpass and Inferno; Retakes' blockers): the glTF nodes of their models, to leave out of the drawn
-// world (their collision is left out by brushSolid). A brush entity's nodes are named after its model
-// ("<model>.hammer_mesh_0"); a prop's after its model too, at the entity's origin.
+// world (their collision is left out by brushSolid; Wingman's come back in Wingman: see wingmanSetup). A brush entity's
+// nodes are named after its model ("<model>.hammer_mesh_0"); a prop's after its model too, at the entity's origin.
 function disabledNodes(json, ents) {
   const brushes = new Set(), props = [];
   for (const e of ents) {
@@ -315,7 +320,8 @@ function gameVolumes(entityPhys, ents) {
   return out;
 }
 
-const spawnList = (ents, cls) => ents.filter((e) => e.classname === cls && e.enabled !== 'false' && e.enabled !== '0')
+const spawnOn = (e) => e.enabled !== 'false' && e.enabled !== '0';
+const spawnList = (ents, cls, on = spawnOn) => ents.filter((e) => e.classname === cls && on(e))
   .map((e) => ({ origin: vec(e.origin), yaw: vec(e.angles)[1] || 0, priority: +e.priority || 0 }));
 
 function mapInfo(ents) {
@@ -457,6 +463,230 @@ function compactNav(text) {
       id: a.id, flags: a.flags, c: a.corners.map((p) => p.map(r)), e: a.connections, h: a.hiding.map((s) => s.slice(0, 3).map(r)),
     })),
     ladders: (j.ladders || []).map((l) => ({ id: l.id, width: r(l.width), length: r(l.length), dir: l.dir, top: l.top.map(r), bottom: l.bottom.map(r), topAreas: l.topAreas, bottomAreas: l.bottomAreas })),
+  };
+}
+
+// ---- Wingman ----------------------------------------------------------------------------------------------
+// CS2 keeps one file per map: its Wingman version is that map with things switched as it loads. A Pulse graph (a
+// point_pulse's) asks GetIsWingman and fires inputs at groups of entities: walls, barricades and doors on, nav blockers
+// closed, spawns and buy zones swapped, the other site's signs off. Which site is left isn't written anywhere: it's
+// the one both teams can still walk to. A map made for it (Debris, Eldorado, Poseidon) just has the one site.
+
+// CS2's Wingman maps, for when gamemodes.txt can't be read.
+const WINGMAN_POOL = ['de_debris', 'de_eldorado', 'de_poseidon', 'de_overpass', 'de_vertigo', 'de_nuke', 'de_inferno'];
+
+// gamemodes.txt -> the maps of the Wingman mode (classic's scrimcomp2v2): its map groups, by name or through a template.
+function wingmanPool(text) {
+  const gm = Object.values(parseKV1(text))[0] || {};
+  const groups = gm.gameTypes?.classic?.gameModes?.scrimcomp2v2?.mapgroupsMP || {};
+  const names = Object.entries(groups).flatMap(([k, v]) => (k === 'template#include' ? Object.keys(gm['templates#include']?.[v] || {}) : [k]));
+  return [...new Set(names.flatMap((g) => Object.keys(gm.mapgroups?.[g]?.maps || {})))];
+}
+
+// The map's Pulse graphs (its point_pulses'): their files in CS2.
+const pulseGraphs = (ents) => [...new Set(ents.filter((e) => e.classname === 'point_pulse' && e.graph_def).map((e) => String(e.graph_def).replace(/^resource_name:"?|"$/g, '')))];
+
+// A Pulse graph (decompiled .vpulse) -> what it does in Wingman: [{ target, input }] in order, the steps after its
+// GetIsWingman check; null when it never asks.
+function wingmanSteps(text) {
+  const g = parseKV3(text);
+  const fired = new Map((g.m_OutputConnections || []).map((o) => [String(o.m_SourceOutput).split(':').pop(), o]));
+  const call = (x) => g.m_InvokeBindings?.[x.m_nInvokeBindingIndex];
+  for (const chunk of g.m_Chunks || []) {
+    const code = chunk.m_Instructions || [];
+    const at = code.findIndex((x) => x.m_nCode === 'LIBRARY_INVOKE' && call(x)?.m_FuncName === 'CCSPointPulseAPI::GetIsWingman');
+    if (at < 0 || code[at + 1]?.m_nCode !== 'JUMP_COND') continue;
+    const steps = [];
+    for (let i = code[at + 1].m_nDestInstruction; code[i] && code[i].m_nCode !== 'RETURN_VOID'; i++) {
+      if (code[i].m_nCode !== 'CELL_INVOKE') continue;
+      const o = fired.get(String(g.m_Cells?.[call(code[i])?.m_nCellIndex]?.m_nEditorNodeID));
+      if (o) steps.push({ target: o.m_TargetEntity, input: o.m_TargetInput });
+    }
+    return steps;
+  }
+  return null;
+}
+
+const entityName = (e) => String(e.targetname || '').replace('[PR#]', '');
+const SWITCHED_ON = /^(Enable|SetEnabled|BlockNav)$/i, SWITCHED_OFF = /^(Disable|SetDisabled|Kill)$/i;
+// The entities those steps turn on and off.
+function wingmanEntities(ents, steps) {
+  const named = (re) => { const names = new Set(steps.filter((s) => re.test(s.input)).map((s) => s.target)); return ents.filter((e) => names.has(entityName(e))); };
+  return { on: named(SWITCHED_ON), off: named(SWITCHED_OFF) };
+}
+
+// A model's physics (its _physics.glb) where the entity puts it, a part per physics group: [{ tris, extras }].
+function placedPhysics(glb, e) {
+  const [p, y, r] = (vec(e.angles).length === 3 ? vec(e.angles) : [0, 0, 0]).map((a) => (a * Math.PI) / 180);
+  const sp = Math.sin(p), cp = Math.cos(p), sy = Math.sin(y), cy = Math.cos(y), sr = Math.sin(r), cr = Math.cos(r);
+  // Source's angles as a matrix: the columns are forward, left and up.
+  const R = [[cp * cy, sp * sr * cy - cr * sy, sp * cr * cy + sr * sy], [cp * sy, sp * sr * sy + cr * cy, sp * cr * sy - sr * cy], [-sp, sr * cp, cr * cp]];
+  const S = vec(e.scales).length === 3 ? vec(e.scales) : [1, 1, 1], O = vec(e.origin);
+  return glb.json.nodes.filter((n) => n.mesh !== undefined).map((n) => {
+    const tris = meshTriangles(glb, n.mesh, nodeMatrix(n));
+    for (let i = 0; i < tris.length; i += 3) {
+      const x = tris[i] * S[0], y2 = tris[i + 1] * S[1], z = tris[i + 2] * S[2];
+      for (let c = 0; c < 3; c++) tris[i + c] = O[c] + R[c][0] * x + R[c][1] * y2 + R[c][2] * z;
+    }
+    return { tris, extras: n.extras };
+  });
+}
+
+// An entity's bounds from its physics: { min, max }, or null without any.
+function physicsBox(glb, e) {
+  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+  for (const { tris } of placedPhysics(glb, e)) {
+    const b = bounds(tris);
+    for (let c = 0; c < 3; c++) { min[c] = Math.min(min[c], b.min[c]); max[c] = Math.max(max[c], b.max[c]); }
+  }
+  return Number.isFinite(min[0]) ? { min, max } : null;
+}
+
+// What Wingman makes solid: its brushes as their physics groups say (a wall, a player clip, a grenade clip), its props as
+// their models': [{ tris, flags, surface (its name) }]. physics(e): the entity's model's _physics.glb.
+function wingmanSolids(on, physics) {
+  return on.flatMap((e) => {
+    const solid = e.classname === 'func_brush' ? String(e.solidity ?? '0') !== '1' : /^prop_/.test(e.classname) && String(e.solid ?? '6') !== '0';
+    const glb = solid ? physics(e) : null;
+    if (!glb) return [];
+    return placedPhysics(glb, e).map(({ tris, extras }) => ({ tris, flags: collisionFlags(extras), surface: String(extras?.SurfaceProperty || 'default') })).filter((s) => s.flags && s.tris.length);
+  });
+}
+
+// Those as collision.bin.
+function wingmanCollision(solids) {
+  const surfaces = [...new Set(solids.map((s) => s.surface))];
+  return packCollision(solids.map((s) => ({ ...s, surface: surfaces.indexOf(s.surface) })), surfaces);
+}
+
+// Does a nav area's floor touch a box? (Its outline and the box's, seen from above, and within pad in height.)
+function areaInBox(a, box, pad) {
+  const xs = a.c.map((p) => p[0]), ys = a.c.map((p) => p[1]), zs = a.c.map((p) => p[2]);
+  if (Math.max(...xs) <= box.min[0] || Math.min(...xs) >= box.max[0] || Math.max(...ys) <= box.min[1] || Math.min(...ys) >= box.max[1]) return false;
+  if (Math.max(...zs) < box.min[2] - pad || Math.min(...zs) > box.max[2] + pad) return false;
+  const n = a.c.length;
+  const inside = (x, y) => {
+    let c = false;
+    for (let i = 0, j = n - 1; i < n; j = i++) { const p = a.c[i], q = a.c[j]; if ((p[1] > y) !== (q[1] > y) && x < ((q[0] - p[0]) * (y - p[1])) / (q[1] - p[1]) + p[0]) c = !c; }
+    return c;
+  };
+  const R = [[box.min[0], box.min[1]], [box.max[0], box.min[1]], [box.max[0], box.max[1]], [box.min[0], box.max[1]]];
+  if (a.c.some((p) => p[0] > box.min[0] && p[0] < box.max[0] && p[1] > box.min[1] && p[1] < box.max[1]) || R.some((p) => inside(p[0], p[1]))) return true;
+  const side = (p, q, r) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  for (let i = 0; i < n; i++) for (let j = 0; j < 4; j++) {
+    const p = a.c[i], q = a.c[(i + 1) % n], r = R[j], s = R[(j + 1) % 4];
+    if (side(p, q, r) * side(p, q, s) < 0 && side(r, s, p) * side(r, s, q) < 0) return true;
+  }
+  return false;
+}
+
+// Does a walk from p to q (a player's height over it) go through a box?
+function walkHitsBox(p, q, box) {
+  let t0 = 0, t1 = 1;
+  for (let c = 0; c < 2; c++) {
+    const d = q[c] - p[c];
+    if (Math.abs(d) < 1e-9) { if (p[c] < box.min[c] || p[c] > box.max[c]) return false; continue; }
+    const a = (box.min[c] - p[c]) / d, b = (box.max[c] - p[c]) / d;
+    t0 = Math.max(t0, Math.min(a, b)); t1 = Math.min(t1, Math.max(a, b));
+    if (t0 > t1) return false;
+  }
+  const z = p[2] + (q[2] - p[2]) * ((t0 + t1) / 2);
+  return z + 72 >= box.min[2] && z <= box.max[2];
+}
+
+// Does the segment p to q cross a triangle of tris (9 floats each)?
+function segmentHits(p, q, t) {
+  const dx = q[0] - p[0], dy = q[1] - p[1], dz = q[2] - p[2];
+  for (let i = 0; i < t.length; i += 9) {
+    const ax = t[i + 3] - t[i], ay = t[i + 4] - t[i + 1], az = t[i + 5] - t[i + 2], bx = t[i + 6] - t[i], by = t[i + 7] - t[i + 1], bz = t[i + 8] - t[i + 2];
+    const hx = dy * bz - dz * by, hy = dz * bx - dx * bz, hz = dx * by - dy * bx, det = ax * hx + ay * hy + az * hz;
+    if (Math.abs(det) < 1e-9) continue;
+    const sx = p[0] - t[i], sy = p[1] - t[i + 1], sz = p[2] - t[i + 2], u = (sx * hx + sy * hy + sz * hz) / det;
+    if (u < 0 || u > 1) continue;
+    const rx = sy * az - sz * ay, ry = sz * ax - sx * az, rz = sx * ay - sy * ax, v = (dx * rx + dy * ry + dz * rz) / det;
+    if (v < 0 || u + v > 1) continue;
+    const k = (bx * rx + by * ry + bz * rz) / det;
+    if (k >= 0 && k <= 1) return true;
+  }
+  return false;
+}
+
+const CROUCH_JUMP = 66; // the highest ledge a player gets up onto (nav.js)
+// Does a walk from p to q go through something solid ([{ tris, box }])? Knee and head high on a player.
+function walkHitsSolid(p, q, solids) {
+  const lo = [0, 1, 2].map((c) => Math.min(p[c], q[c])), hi = [0, 1, 2].map((c) => Math.max(p[c], q[c]) + 72);
+  return solids.some(({ tris, box }) => box.min.every((v, c) => v <= hi[c]) && box.max.every((v, c) => v >= lo[c])
+    && [24, 60].some((h) => segmentHits([p[0], p[1], p[2] + h], [q[0], q[1], q[2] + h], tris)));
+}
+
+// The nav areas (compactNav's) left in Wingman, as CS2's bots find them: those its blockers touch are closed, and what
+// that cuts off from both teams' spawns goes with them. A spawn on a closed area leaves it by its own side of the blocker.
+// solids (what stops a player: [{ tris }]) count too: not every wall has a blocker (the floor under Vertigo's fence).
+// { closed: the ids gone, cut: the links [from, to] left that walk through a wall, reach: { T, CT }: the ids each team
+// can walk to }.
+function wingmanReach(nav, blockers, spawns, solids = []) {
+  const byId = new Map(nav.areas.map((a) => [a.id, a]));
+  const walls = solids.map((s) => { const b = bounds(s.tris); return { tris: s.tris, box: { min: b.min.map((v) => v - 1), max: b.max.map((v) => v + 1) } }; });
+  const blocked = new Set(nav.areas.filter((a) => blockers.some((b) => areaInBox(a, b, 8))).map((a) => a.id));
+  const links = new Map(nav.areas.map((a) => [a.id, a.e.flat()]));
+  for (const l of nav.ladders || []) for (const b of l.bottomAreas) for (const t of l.topAreas) { links.get(b)?.push(t); links.get(t)?.push(b); }
+  const center = (a) => [0, 1, 2].map((k) => a.c.reduce((s, p) => s + p[k], 0) / a.c.length);
+  const under = (o) => nav.areas.filter((a) => areaInBox(a, { min: [o[0] - 1, o[1] - 1, o[2] - 96], max: [o[0] + 1, o[1] + 1, o[2] + 24] }, 0))
+    .sort((a, b) => Math.abs(center(a)[2] - o[2]) - Math.abs(center(b)[2] - o[2]))[0];
+  // The middle of the edge a shares with b. A ladder's two ends have none (nothing's built over one).
+  const gate = (a, b) => {
+    const i = a.e.findIndex((l) => l.includes(b.id));
+    return i < 0 ? null : [0, 1, 2].map((k) => (a.c[i][k] + a.c[(i + 1) % a.c.length][k]) / 2);
+  };
+  const walled = (a, b) => { const mid = gate(a, b); return !!mid && (walkHitsSolid(center(a), mid, walls) || walkHitsSolid(mid, center(b), walls)); };
+  // Out of reach above (the way down from a room Wingman shuts the door of, Nuke's upper Secret)?
+  const tooHigh = (a, b) => { const from = gate(a, b), to = gate(b, a); return !!from && !!to && to[2] - from[2] > CROUCH_JUMP; };
+  const flood = (list) => {
+    const seen = new Set(), stack = [];
+    const add = (id) => { if (!seen.has(id) && !blocked.has(id) && byId.has(id)) { seen.add(id); stack.push(id); } };
+    for (const { origin } of list) {
+      const a = under(origin);
+      if (!a) continue;
+      add(a.id);
+      if (blocked.has(a.id)) for (const id of links.get(a.id)) if (byId.has(id) && !blockers.some((b) => walkHitsBox(origin, center(byId.get(id)), b))) add(id);
+    }
+    while (stack.length) { const a = byId.get(stack.pop()); for (const id of links.get(a.id)) if (byId.has(id) && !tooHigh(a, byId.get(id)) && !walled(a, byId.get(id))) add(id); }
+    return seen;
+  };
+  const reach = { T: flood(spawns.T), CT: flood(spawns.CT) };
+  const open = (id) => reach.T.has(id) || reach.CT.has(id);
+  const cut = nav.areas.filter((a) => open(a.id)).flatMap((a) => [...new Set(a.e.flat())].filter((id) => open(id) && walled(a, byId.get(id))).map((id) => [a.id, id]));
+  return { closed: nav.areas.map((a) => a.id).filter((id) => !open(id)), cut, reach };
+}
+
+// Which of the map's bomb sites is left: the only one both teams can walk to (or the only one there is), else null.
+function wingmanSite(nav, bombsites, reach) {
+  if (bombsites.length === 1) return 0;
+  const open = bombsites.map((s, i) => {
+    const on = nav.areas.filter((a) => areaInBox(a, s, 40)).map((a) => a.id);
+    return on.some((id) => reach.T.has(id)) && on.some((id) => reach.CT.has(id)) ? i : -1;
+  }).filter((i) => i >= 0);
+  return open.length === 1 ? open[0] : null;
+}
+
+// A map's Wingman version for map.json: its site (an index into bombsites) and what differs from the map as exported:
+// { site, spawns, buyzones, show, hide (glTF nodes), closed (nav areas), cut (nav links) }. ents: the map's entities; nav:
+// compactNav's; json: world.glb's; on, off: wingmanEntities'; solids: wingmanSolids'; physics(e): the entity's model's
+// _physics.glb.
+function wingmanSetup({ ents, nav, json, bombsites, on, off, solids, physics }) {
+  const isOn = new Set(on), isOff = new Set(off);
+  const enabled = (e) => (spawnOn(e) || isOn.has(e)) && !isOff.has(e);
+  const spawns = { T: spawnList(ents, 'info_player_terrorist', enabled), CT: spawnList(ents, 'info_player_counterterrorist', enabled) };
+  const box = (e) => { const glb = physics(e); return glb && physicsBox(glb, e); };
+  const { closed, cut, reach } = wingmanReach(nav, on.filter((e) => e.classname === 'func_nav_blocker').map(box).filter(Boolean), spawns, solids.filter((s) => s.flags & F_PLAYER));
+  const find = entityNodes(json);
+  const nodes = (list) => list.filter((e) => e.model).flatMap((e) => (/^func_/.test(e.classname) ? find.brush(e) : find.prop(e)));
+  const zones = ents.filter((e) => e.classname === 'func_buyzone' && !isOff.has(e)).map((e) => ({ team: +e.teamnum === 2 ? 'T' : 'CT', ...box(e) })).filter((z) => z.min);
+  return {
+    site: wingmanSite(nav, bombsites, reach),
+    ...(on.concat(off).some((e) => /^info_player_/.test(e.classname)) ? { spawns } : {}),
+    ...(on.some((e) => e.classname === 'func_buyzone') ? { buyzones: zones } : {}),
+    show: nodes(on), hide: nodes(off), closed, cut,
   };
 }
 
@@ -618,5 +848,6 @@ function mapSoundscapes(ents) {
 module.exports = {
   PLAY_VERSION, DATA_VERSION, F_PLAYER, F_BULLET, F_GRENADE, IRR_MAX, readGlb, buildCollision, brushSolid, gameVolumes, mapInfo, bakeLightmap, bakeSky,
   probeVolumes, bakeProbes, toneMapping, disabledNodes, hurtVolume, surfaceImpacts, doorNodes, glassNodes,
+  WINGMAN_POOL, wingmanPool, pulseGraphs, wingmanSteps, wingmanEntities, wingmanSolids, wingmanCollision, wingmanReach, wingmanSite, wingmanSetup,
   weaponStats, soundEventFiles, modelPath, propBreakData, soundEventInfo, reverbPreset, mapSoundscapes, parseEntities, compactNav, NAV_VERSION, parseKV3,
 };
