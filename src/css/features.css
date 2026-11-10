@@ -216,7 +216,7 @@ body:not(.is-staff) .staff-only { display: none !important; }
 
 /* ---------- item database ---------- */
 .db-note { background: linear-gradient(90deg, rgba(56, 92, 138, .42), rgba(30, 44, 62, .38)); border: 1px solid rgba(106, 166, 232, .3); border-left: 3px solid var(--blue); color: #c3cdd8; padding: 8px 12px; margin-bottom: 14px; font-size: 13px; backdrop-filter: var(--glass); }
-.db .db-search { flex: 1 1 320px; min-width: 220px; }
+.db .db-search { flex: 1 1 200px; min-width: 200px; } /* (it grows to fill: the basis only says when the toolbar wraps) */
 .db-card { cursor: pointer; }
 .db-count { font-size: 11px; color: var(--green); letter-spacing: .03em; }
 .db-count.none { color: var(--dim); }
@@ -267,6 +267,28 @@ a.db-owner:hover { text-decoration: underline; }
 .fr.r3 { color: #1b0f05; background: linear-gradient(90deg, #e3a473, #b8703c); border-color: #e3a473; }
 .fr.low { box-shadow: inset 0 -2px 0 rgba(79, 181, 74, .9); }
 .fr.high { box-shadow: inset 0 -2px 0 rgba(217, 74, 58, .9); }
+/* a copy's pattern and how many copies share it (×N, more than one in gold: click to see them); the pattern box */
+.db-pat { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.db-patn { font: inherit; font-size: 11px; line-height: 15px; padding: 0 5px; border-radius: 2px; cursor: pointer; color: var(--muted); background: rgba(255, 255, 255, .04); border: 1px solid var(--line); }
+.db-patn.dup { color: var(--gold2); border-color: rgba(228, 174, 57, .45); background: rgba(228, 174, 57, .08); }
+.db-patn:hover { color: #fff; border-color: rgba(255, 255, 255, .4); }
+.db .toolbar .input.db-pat-in { width: 96px; }
+.db .toolbar .input[data-owner] { width: 170px; }
+.db-pat-sum { display: flex; align-items: center; gap: 8px; margin: -6px 0 12px; padding: 7px 12px; font-size: 13px; color: #c3cdd8; background: var(--well); border: 1px solid var(--line); border-left: 3px solid var(--gold2); }
+.db-pat-sum b { color: var(--hi); font-variant-numeric: tabular-nums; }
+/* float records: the #1 big, then the list */
+.db-rec-seg button { white-space: nowrap; padding-left: 10px; padding-right: 10px; letter-spacing: .04em; }
+.db-rec-top { display: flex; align-items: center; gap: 18px; margin-bottom: 14px; padding: 12px 16px; background: var(--panel-grad); border: 1px solid var(--line); border-left: 3px solid var(--rc); backdrop-filter: var(--glass); }
+.db-rec-img img { width: 168px; aspect-ratio: 4 / 3; object-fit: contain; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .6)); }
+.db-rec-what { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.db-rec-float { font-size: 28px; font-weight: 700; color: var(--hi); font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.db-rec-line { font-size: 13px; color: #c3cdd8; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.db-recitem { display: inline-flex; align-items: center; gap: 8px; color: var(--hi); text-decoration: none; }
+.db-recitem img { width: 44px; height: 33px; object-fit: contain; }
+.db-recitem:hover span { text-decoration: underline; }
+.db-rec-table .db-recn { width: 48px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.db-table tr.db-rec1 td { background: rgba(228, 174, 57, .09); }
+@media (max-width: 700px) { .db-rec-top { flex-direction: column; align-items: flex-start; } .db-rec-float { font-size: 22px; } }
 
 /* first-person inspect: rotate/flip do not apply */
 .inspect.fp [data-a=flip], .inspect.fp [data-a=reset] { display: none; }

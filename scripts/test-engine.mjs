@@ -767,6 +767,39 @@ function tierFreq(box, n) {
   check('float ranks: an equal float ranks by who had it first', tie.get('y').low === 1 && tie.get('x').low === 2);
   const n = DB.countCopies([...copies.map((c) => c.item), { t: 'sticker', id: 'k' }, { t: 'chicken', id: 'h' }]);
   check('item database counts copies by item', n['skin:s'] === 10 && n['sticker:k'] === 1 && !('chicken:h' in n));
+
+  // Float records: every skin together, both ends, by category; only what has a float.
+  const rec = [mk('r1', 0.3), { item: { uid: 'r2', t: 'skin', id: 'other', fl: 0.001, at: 0 } }, mk('r3', 0.95, { stt: true }), mk('r4', 0.0005, { sv: true }),
+    { item: { uid: 'r5', t: 'sticker', id: 'k' } }, mk('r6', null), mk('r7', 0.3, { at: -1 })];
+  const uids = (l) => l.map((c) => (c.item || c).uid).join();
+  check('float records: the lowest floats of every skin together, an equal float by who had it first, nothing without a float', uids(DB.floatRecords(rec)) === 'r4,r2,r7,r1,r3', uids(DB.floatRecords(rec)));
+  check('float records: the highest are the lowest read backwards', uids(DB.floatRecords(rec, { dir: 'high' })) === 'r3,r1,r7,r2,r4', uids(DB.floatRecords(rec, { dir: 'high' })));
+  check('float records: by category, at most the limit, items or copies, none of none', uids(DB.floatRecords(rec, { cat: 'n' })) === 'r2,r7,r1' && uids(DB.floatRecords(rec, { cat: 'st', dir: 'high' })) === 'r3'
+    && uids(DB.floatRecords(rec, { cat: 'sv' })) === 'r4' && uids(DB.floatRecords(rec, { limit: 2 })) === 'r4,r2' && uids(DB.floatRecords(rec.map((c) => c.item), { limit: 1 })) === 'r4' && DB.floatRecords([]).length === 0);
+  {
+    // (it keeps only the best `limit` as it goes: the same as sorting every copy, ties and categories included)
+    let s = 7; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+    const many = Array.from({ length: 3000 }, (_, i) => mk('m' + i, rnd() < 0.2 ? [0.1, 0.5, 0.9][i % 3] : rnd(), { at: Math.floor(rnd() * 5), stt: rnd() < 0.3, sv: rnd() < 0.1 }));
+    const sortAll = (dir, cat) => many.filter((c) => cat === 'all' || DB.copyCategory(c.item) === cat).sort((a, b) => (dir === 'high' ? DB.byFloat(b.item, a.item) : DB.byFloat(a.item, b.item)));
+    const same = ['low', 'high'].every((dir) => ['all', 'n', 'st', 'sv'].every((cat) => [1, 7, 100, 5000].every((limit) =>
+      uids(DB.floatRecords(many, { dir, cat, limit })) === uids(sortAll(dir, cat).slice(0, limit)))));
+    check('float records: the best few kept while going through them give what sorting them all would', same && DB.floatRecords(many, { limit: 0 }).length === 0);
+  }
+
+  // Patterns among an item's copies: how many share each, and copies in pattern order.
+  const pc = [mk('p1', 0.2, { sd: 661 }), mk('p2', 0.1, { sd: 661 }), mk('p3', 0.4, { sd: 661, stt: true }), mk('p4', 0.3, { sd: 5 }), mk('p5', null, { sd: null }), mk('p6', 0.05, { sd: 1000 }), mk('z0', 0.5, { sd: 0 })];
+  const pats = DB.patternCounts(pc), pn = (i, cat) => DB.patternCount(pats, pc[i].item, cat);
+  check('patterns: how many copies share each pattern, over all of them or one category', pn(0) === 3 && pn(0, 'n') === 2 && pn(2, 'st') === 1 && pn(2, 'n') === 2 && pn(3) === 1 && pn(6) === 1
+    && pn(4) === 0 && DB.patternCount(pats, { sd: 7 }) === 0 && DB.patternCounts(pc.map((c) => c.item)).get('all:661') === 3);
+  const byPat = pc.map((c) => c.item).sort(DB.byPattern).map((it) => it.uid).join();
+  check('patterns: copies by pattern number, then float, and one with no pattern last', byPat === 'z0,p4,p2,p1,p3,p6,p5', byPat);
+  // (a pattern of null and none at all are the same: no NaN, which would leave the order to chance)
+  const noSd = [{ uid: 'q1', sd: null, fl: 0.1 }, { uid: 'q2', fl: 0.2 }];
+  const { floatString } = await import('../src/js/engine/items.js');
+  check('a float as the game shows it: plain decimals under 1e-6 too, its 32-bit value', floatString(5e-8) === '0.00000005000000058430487' && floatString(0.25) === '0.25'
+    && Number(floatString(1e-10)) === Math.fround(1e-10) && floatString(0) === '0' && floatString(null) === '—', floatString(5e-8));
+  check('patterns: a copy with sd null and one with no sd compare by float', DB.byPattern(noSd[0], noSd[1]) < 0 && DB.byPattern(noSd[1], noSd[0]) > 0
+    && [{ uid: 'q3', fl: 0.3 }, { uid: 'q4', sd: 2, fl: 0.9 }, ...noSd].sort(DB.byPattern).map((it) => it.uid).join() === 'q4,q1,q2,q3');
 }
 
 // ---- charms --------------------------------------------------------------------------------------------------

@@ -3,6 +3,13 @@
 // three lowest and three highest floats of the item, counted apart for StatTrak™ and Souvenir copies). Online that's
 // everyone on the server; offline, you and the NPC players (engine/npcs.js). Click an owner to visit their profile. A
 // skin's current Market listings show under its copies.
+// A skin's copies sort by pattern (paint seed) too, and each shows how many copies of the skin share its pattern (×N, in
+// the category picked: counted over every copy, not only the rows shown); the pattern box shows only one pattern's copies.
+// (Online, an item with more copies than the server sends at once, 5,000, comes with the counts of every copy and the
+// copies at both ends of each category's floats, so its float records and ranks are among them; the page says so.)
+// Float records (the main view's "Lowest floats" and "Highest floats"): the copies with the lowest and highest floats of
+// any skin in the game, every skin together, by category. Online the server works them out over every player (db.floats,
+// server/dbfloats.mjs); offline, over what the database shows (floatRecords).
 import { esc, money, imgUrl, debounce } from '../util.js';
 import { D, WEARS, wearOf, WEAR_BY_KEY } from '../data.js';
 import * as I from '../items.js';
@@ -15,15 +22,24 @@ import { openProfile } from './community-online.js';
 import { openInspect, patternTag, toast } from '../ui.js';
 import { net } from '../net/online.js';
 import { marketWindow, skinListings, localSold, lowestPrice } from '../engine/market.js';
-import { floatRanks, countCopies, copyCategory, CATEGORY_NAME, itemKey } from '../engine/database.js';
+import { floatRanks, countCopies, copyCategory, CATEGORY_NAME, itemKey, floatRecords, FLOAT_TOP, patternCounts, patternCount, byPattern } from '../engine/database.js';
 
 const PAGE = 60;
 const TYPES = [['all', 'All items'], ['skin', 'Weapon skins'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['tool', 'Tools']];
 const WEAPON_CATS = [['all', 'All weapons'], ['rifle', 'Rifles'], ['pistol', 'Pistols'], ['smg', 'SMGs'], ['heavy', 'Heavy']];
 const SORTS = [['owned', 'Most copies'], ['pricey', 'Price: high → low'], ['cheap', 'Price: low → high'], ['rarity', 'Rarity'], ['name', 'Name']];
-const COPY_SORTS = [['low', 'Float: low → high'], ['high', 'Float: high → low'], ['value', 'Value'], ['new', 'Newest']];
-const view = { type: 'all', cat: 'all', q: '', sort: 'owned', owned: false, page: 0, key: null, copyCat: 'all', wear: 'all', copySort: 'low', owner: '' };
+const COPY_SORTS = [['low', 'Float: low → high'], ['high', 'Float: high → low'], ['pattern', 'Pattern: low → high'], ['value', 'Value'], ['new', 'Newest']];
+// Float records: which end, which copies, how many.
+const REC_DIRS = [['low', 'Lowest floats'], ['high', 'Highest floats']];
+const REC_CATS = [['all', 'All'], ['n', 'Normal'], ['st', 'StatTrak™'], ['sv', 'Souvenir']];
+const REC_TOPS = [50, FLOAT_TOP];
+const REC_MS = 15000; // (online, a list is asked for again after this: the server keeps its own about as long)
+const view = { type: 'all', cat: 'all', q: '', sort: 'owned', owned: false, page: 0, key: null, copyCat: 'all', wear: 'all', copySort: 'low', owner: '', pattern: null, patText: '',
+  rec: null, recCat: 'all', recTop: FLOAT_TOP };
+// The pattern box's number: 0 to 1000 (a leading # allowed); null for anything else, which filters nothing.
+const patternOf = (s) => { const m = /^#?\s*(\d{1,4})$/.exec(s); return m && +m[1] <= 1000 ? +m[1] : null; };
 let root, offs = [], index = null, indexAt = 0, copies = null, copiesKey = null, loading = false;
+let recs = null, recsReq = null; // (the float records shown, and the request they're from: { key, at })
 
 const now = () => (online() ? net.serverNow() : Date.now());
 const soldFor = (w) => (online() ? net.marketSold(w) : localSold(S, w));
@@ -48,6 +64,8 @@ function catalog() {
   for (const t of Object.values(I.TOOLS)) add('tool', t, 'tool', 'Tool', t.n, t.p);
   return (CATALOG = out);
 }
+let BY_KEY = null;
+const entryOf = (key) => (BY_KEY ||= new Map(catalog().map((e) => [e.key, e]))).get(key);
 // An entry's picture (tools' come with the game).
 const pictureOf = (e, size) => (e.t === 'tool' ? I.itemImage({ t: e.t, id: e.id }, size) : imgUrl(e.img, size));
 
@@ -69,12 +87,39 @@ function sourcesOf(id) {
 export function render(r) {
   root = r;
   offs.forEach((o) => o());
-  offs = [on('state', () => { if (!online()) { index = null; if (view.key) copiesKey = null; draw(); } })];
+  offs = [on('state', () => { if (!online()) offlineChanged(); })];
   index = null;
+  recsReq = null;
   copiesKey = null; // (an item left open is read again: its owners may be from before you logged in)
   draw();
 }
 export function destroy() { offs.forEach((o) => o()); offs = []; root = null; }
+
+// Offline, after anything changed (an action, the NPC players' tick): what's on screen is worked out again and drawn over
+// what's there (no "Looking up…" in between), the box being typed in kept as it was.
+function offlineChanged() {
+  if (!root) return;
+  recsReq = null;
+  if (view.key) {
+    index = null;
+    const k = view.key, e = entryOf(k);
+    if (!e || loading || copiesKey !== k) return;
+    loadCopies(e).then((r) => { if (root && view.key === k && copiesKey === k && !loading) { copies = r; keepFocus(draw); } });
+  } else if (view.rec) { index = null; draw(); } // (the list on screen stays until the new one is worked out)
+  else loadIndex().then(() => { if (root && !view.key && !view.rec) keepFocus(draw); });
+}
+// Redraws, giving the box being typed in back as it was: focused, its caret, and what's typed but not yet applied.
+const BOXES = ['.db-search', '[data-pattern]', '[data-owner]'];
+function keepFocus(redraw) {
+  const a = document.activeElement, sel = a && root?.contains(a) ? BOXES.find((s) => a.matches(s)) : null;
+  const was = sel && { value: a.value, start: a.selectionStart, end: a.selectionEnd };
+  redraw();
+  const n = sel && root?.querySelector(sel);
+  if (!n) return;
+  n.value = was.value;
+  n.focus();
+  try { n.setSelectionRange(was.start, was.end); } catch { /* (a box that has no caret) */ }
+}
 
 // Offline, everything the NPC players own (and yours): [{ owner, npc | me, item }].
 const offlineCopies = () => [...ownedItems(S).map((item) => ({ owner: S.social?.me?.name || 'You', me: true, item })), ...worldCopies(S.social)];
@@ -100,9 +145,19 @@ async function loadCopies(e) {
   return net.social('db.item', { t: e.t, id: e.id });
 }
 
+// The copies with the lowest or highest floats of any skin: { copies: [{ owner, me, item }] }, best first, FLOAT_TOP of them.
+async function loadRecords(dir, cat) {
+  if (!online()) {
+    if (!S.social) await act('npc.tick').catch(() => {});
+    return { copies: floatRecords(offlineCopies(), { dir, cat }) };
+  }
+  return net.social('db.floats', { dir, cat, limit: FLOAT_TOP });
+}
+
 function draw() {
   if (!root) return;
   if (view.key) return drawItem();
+  if (view.rec) return drawRecords();
   if (!index) { root.innerHTML = '<div class="page"><div class="empty">Loading the item database…</div></div>'; loadIndex().then(() => root && draw()); return; }
   const counts = index.counts || {};
   let list = catalog();
@@ -130,6 +185,7 @@ function draw() {
       ${view.type === 'skin' ? `<select class="input" data-cat>${WEAPON_CATS.map(([k, n]) => `<option value="${k}" ${view.cat === k ? 'selected' : ''}>${n}</option>`).join('')}</select>` : ''}
       <select class="input" data-sort>${SORTS.map(([k, n]) => `<option value="${k}" ${view.sort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <label class="check"><input type="checkbox" data-owned ${view.owned ? 'checked' : ''}> Owned by someone</label>
+      <div class="seg db-rec-seg" title="Float records: the copies with the lowest and highest floats of any skin in the game">${REC_DIRS.map(([k, n]) => `<button data-rec="${k}">${k === 'low' ? '▼' : '▲'} ${n}</button>`).join('')}</div>
       <span class="spacer"></span><span class="muted">${list.length.toLocaleString()} items</span>
     </div>
     ${shown.length ? `<div class="grid">${shown.map((e) => `<div class="card db-card" data-key="${esc(e.key)}" style="--rc:${e.rc}">
@@ -148,10 +204,14 @@ function draw() {
   root.querySelector('[data-owned]').addEventListener('change', (e) => { view.owned = e.target.checked; view.page = 0; draw(); });
   root.querySelectorAll('[data-pg]').forEach((b) => b.addEventListener('click', () => { view.page += +b.dataset.pg; draw(); root.scrollTop = 0; }));
   root.querySelectorAll('.db-card').forEach((c) => c.addEventListener('click', () => openItem(c.dataset.key)));
+  // (from here, always every skin's record: a category is picked on the records page)
+  root.querySelectorAll('[data-rec]').forEach((b) => b.addEventListener('click', () => { view.rec = b.dataset.rec; view.recCat = 'all'; root.scrollTop = 0; draw(); }));
 }
 
-function openItem(key) {
-  view.key = key; view.copyCat = 'all'; view.wear = 'all'; view.copySort = 'low'; view.owner = '';
+// (o: the copies' filters and sort to open on, when not the usual ones)
+function openItem(key, o = {}) {
+  view.key = key; view.copyCat = 'all'; view.wear = 'all'; view.copySort = 'low'; view.owner = ''; view.pattern = null; view.patText = '';
+  Object.assign(view, o);
   copies = null; copiesKey = null;
   root.scrollTop = 0;
   draw();
@@ -170,7 +230,7 @@ function drawItem() {
   if (!e) { view.key = null; return draw(); }
   if (copiesKey !== e.key) {
     copiesKey = e.key;
-    root.innerHTML = `<div class="page db"><div class="page-head"><button class="btn sm ghost" data-back>‹ Item Database</button><h1>${esc(e.bottom)}</h1></div><div class="empty">Looking up every copy…</div></div>`;
+    root.innerHTML = `<div class="page db"><div class="page-head"><button class="btn sm ghost" data-back>${backLabel()}</button><h1>${esc(e.bottom)}</h1></div><div class="empty">Looking up every copy…</div></div>`;
     root.querySelector('[data-back]').addEventListener('click', back);
     loading = true;
     loadCopies(e).then((r) => { copies = r; }).catch((err) => { copies = { copies: [], applied: [], err: err.message }; }).finally(() => { loading = false; if (root && view.key === e.key) draw(); });
@@ -179,16 +239,25 @@ function drawItem() {
   if (loading || !copies) return;
   const d = I.itemDef({ t: e.t, id: e.id }), skin = e.t === 'skin', all = copies.copies || [];
   const sv = skin && (souvenirs(e.id) || all.some((c) => c.item.sv));
+  // (online, an item with more copies than the server sends comes with the counts of every copy, and the copies at both
+  // ends of each category's floats: its ranks and records are among those, out of every copy)
+  const big = copies.counts || null, total = big ? big.total : all.length;
   const ranks = skin ? floatRanks(all) : new Map();
+  if (big) for (const r of ranks.values()) r.of = big.cats[r.cat] || r.of;
+  // How many copies share each pattern: over every copy (not only the rows shown), by category. A vanilla has none.
+  const pats = skin && !d.v ? (big ? new Map(Object.entries(big.pats)) : patternCounts(all)) : null;
+  const patternsHeld = pats ? [...pats.keys()].filter((k) => k.startsWith('all:')).length : 0;
   let rows = all.slice();
   if (view.copyCat !== 'all') rows = rows.filter((c) => copyCategory(c.item) === view.copyCat);
   if (view.wear !== 'all') rows = rows.filter((c) => c.item.fl != null && wearOf(c.item.fl) === view.wear);
   if (view.owner) rows = rows.filter((c) => c.owner.toLowerCase().includes(view.owner));
-  const sorts = { low: (a, b) => (a.item.fl ?? 2) - (b.item.fl ?? 2), high: (a, b) => (b.item.fl ?? -1) - (a.item.fl ?? -1), value: (a, b) => I.itemValue(b.item) - I.itemValue(a.item), new: (a, b) => (b.item.at || 0) - (a.item.at || 0) };
+  if (pats && view.pattern != null) rows = rows.filter((c) => c.item.sd === view.pattern);
+  const sorts = { low: (a, b) => (a.item.fl ?? 2) - (b.item.fl ?? 2), high: (a, b) => (b.item.fl ?? -1) - (a.item.fl ?? -1), pattern: (a, b) => byPattern(a.item, b.item),
+    value: (a, b) => I.itemValue(b.item) - I.itemValue(a.item), new: (a, b) => (b.item.at || 0) - (a.item.at || 0) };
   rows.sort(sorts[skin ? view.copySort : view.copySort === 'value' ? 'value' : 'new']);
-  const cats = { n: 0, st: 0, sv: 0 };
-  for (const c of all) cats[copyCategory(c.item)]++;
-  const owners = new Set(all.map((c) => c.owner)).size;
+  const cats = big ? { ...big.cats } : { n: 0, st: 0, sv: 0 };
+  if (!big) for (const c of all) cats[copyCategory(c.item)]++;
+  const owners = big ? big.owners : new Set(all.map((c) => c.owner)).size;
   const floats = all.map((c) => c.item.fl).filter((f) => f != null);
   const col = skin && d.col ? D.collections.find((c) => c.id === d.col)?.n : null;
   const from = skin ? sourcesOf(e.id) : [];
@@ -197,16 +266,17 @@ function drawItem() {
   const priceRows = skin && !d.v ? WEARS.filter((x) => d.p[x.k]) : [];
   const shownRows = rows.slice(0, 500);
   root.innerHTML = `<div class="page db">
-    <div class="page-head"><button class="btn sm ghost" data-back>‹ Item Database</button><h1>${esc(e.bottom)}</h1><span class="sub">${esc(e.top)}</span></div>
+    <div class="page-head"><button class="btn sm ghost" data-back>${backLabel()}</button><h1>${esc(e.bottom)}</h1><span class="sub">${esc(e.top)}</span></div>
     <div class="db-item">
       <div class="db-hero" style="--rc:${e.rc}"><img src="${pictureOf(e, 'l')}" alt=""><div class="rbar"></div>${e.t === 'tool' ? '' : '<button class="btn sm" data-inspect>Inspect</button>'}</div>
       <div class="db-facts">
         <div class="db-stats">
-          <div><b>${all.length.toLocaleString()}</b><span>${all.length === 1 ? 'copy' : 'copies'}</span></div>
+          <div><b>${total.toLocaleString()}</b><span>${total === 1 ? 'copy' : 'copies'}</span></div>
           <div><b>${owners.toLocaleString()}</b><span>${owners === 1 ? 'owner' : 'owners'}</span></div>
           ${skin && d.stt ? `<div><b class="st">${cats.st.toLocaleString()}</b><span>StatTrak™</span></div>` : ''}
           ${skin && sv ? `<div><b class="sv">${cats.sv.toLocaleString()}</b><span>Souvenir</span></div>` : ''}
           ${floats.length ? `<div><b>${Math.min(...floats).toFixed(6)}</b><span>lowest float</span></div><div><b>${Math.max(...floats).toFixed(6)}</b><span>highest float</span></div>` : ''}
+          ${patternsHeld ? `<div title="How many different patterns its copies have"><b>${patternsHeld.toLocaleString()}</b><span>${patternsHeld === 1 ? 'pattern' : 'patterns'}</span></div>` : ''}
           ${e.t === 'sticker' ? `<div><b>${(copies.applied || []).length.toLocaleString()}</b><span>applied to guns</span></div>` : ''}
         </div>
         <dl class="db-dl">
@@ -222,22 +292,26 @@ function drawItem() {
       </div>
     </div>
     ${copies.err ? `<div class="db-note">Couldn't reach the server's database: ${esc(copies.err)}</div>` : ''}
-    <h2 class="db-h2">Every copy${all.length ? ` <span class="muted">(${all.length.toLocaleString()})</span>` : ''}</h2>
+    <h2 class="db-h2">Every copy${total ? ` <span class="muted">(${total.toLocaleString()})</span>` : ''}</h2>
+    ${big ? `<div class="db-note">There are ${total.toLocaleString()} copies, more than the server sends at once. These are the ${all.length.toLocaleString()} with the ${skin ? 'lowest and highest floats' : 'oldest and newest'} in each category, so the list, its filters and its float figures cover them; the copy, owner, category${pats ? ', pattern (×N)' : ''} and float rank counts are of every copy.</div>` : ''}
     ${all.length ? `<div class="toolbar">
       ${skin ? `<div class="seg" data-cats>${[['all', 'All'], ['n', 'Normal'], ...(d.stt ? [['st', 'StatTrak™']] : []), ...(sv ? [['sv', 'Souvenir']] : [])].map(([k, n]) => `<button data-v="${k}" class="${view.copyCat === k ? 'active' : ''}">${n}${k !== 'all' ? ` <span class="dim">${cats[k]}</span>` : ''}</button>`).join('')}</div>
         ${!d.v ? `<select class="input" data-wear><option value="all">All wears</option>${WEARS.filter((x) => d.p[x.k]).map((x) => `<option value="${x.k}" ${view.wear === x.k ? 'selected' : ''}>${x.n}</option>`).join('')}</select>` : ''}
-        <select class="input" data-csort>${COPY_SORTS.map(([k, n]) => `<option value="${k}" ${view.copySort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>` : ''}
+        <select class="input" data-csort>${COPY_SORTS.filter(([k]) => k !== 'pattern' || pats).map(([k, n]) => `<option value="${k}" ${view.copySort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>` : ''}
+      ${pats ? `<input class="input db-pat-in" type="search" inputmode="numeric" data-pattern placeholder="Pattern #" value="${esc(view.patText)}" title="A pattern number (0 to 1000): only the copies with it">` : ''}
       <input class="input" type="search" data-owner placeholder="Owner…" value="${esc(view.owner)}">
       <span class="spacer"></span><span class="muted">${rows.length.toLocaleString()} shown</span></div>
-    <div class="db-table-wrap"><table class="price-table db-table"><thead><tr>${skin ? '<th class="db-rank-col">Float rank</th><th>Float</th><th>Seed</th>' : ''}<th>Item</th><th>Owner</th><th>Value</th><th></th></tr></thead><tbody>
-      ${shownRows.map((c, i) => copyRow(c, i, skin, ranks)).join('')}</tbody></table></div>
+    ${pats && view.pattern != null ? patternSummary(pats, view.pattern, view.copyCat)
+      : pats && view.patText ? `<div class="db-pat-sum"><span>“${esc(view.patText)}” isn't a pattern number: patterns go from 0 to 1000.</span><span class="spacer"></span><button class="btn sm ghost" data-patclear>Clear</button></div>` : ''}
+    <div class="db-table-wrap"><table class="price-table db-table"><thead><tr>${skin ? `<th class="db-rank-col">Float rank</th><th>Float</th><th title="${pats ? `The pattern (paint seed), and how many ${view.copyCat === 'all' ? '' : CATEGORY_NAME[view.copyCat] + ' '}copies of this skin have it` : 'The pattern (paint seed)'}">Pattern</th>` : ''}<th>Item</th><th>Owner</th><th>Value</th><th></th></tr></thead><tbody>
+      ${shownRows.length ? shownRows.map((c, i) => copyRow(c, i, skin, ranks, pats)).join('') : `<tr><td colspan="${skin ? 7 : 4}" class="muted">No copy matches these filters.</td></tr>`}</tbody></table></div>
     ${rows.length > shownRows.length ? `<div class="muted" style="margin-top:8px">Showing the first ${shownRows.length} of ${rows.length.toLocaleString()}.</div>` : ''}`
     : `<div class="empty" style="padding:30px">${online() ? 'Nobody on the server has one yet.' : 'Nobody has one yet.'}</div>`}
     ${e.t === 'sticker' && copies.applied?.length ? `<h2 class="db-h2">Applied to guns <span class="muted">(${copies.applied.length.toLocaleString()})</span></h2>
       <div class="db-table-wrap"><table class="price-table db-table"><thead><tr><th>Gun</th><th>Float</th><th>Owner</th><th>Value</th><th></th></tr></thead><tbody>
       ${copies.applied.slice(0, 300).map((c, i) => `<tr><td>${esc(I.itemName(c.item))}</td><td>${c.item.fl != null ? c.item.fl.toFixed(6) : '—'}</td><td>${ownerCell(c)}</td><td>${money(I.itemValue(c.item))}</td><td><button class="btn sm" data-ainsp="${i}">Inspect</button></td></tr>`).join('')}</tbody></table></div>` : ''}
     ${skin && listings.length ? `<h2 class="db-h2">For sale on the Market now <span class="muted">(${listings.length})</span></h2>
-      <div class="db-table-wrap"><table class="price-table db-table"><thead><tr><th>Float</th><th>Seed</th><th>Item</th><th>Price</th><th></th></tr></thead><tbody>
+      <div class="db-table-wrap"><table class="price-table db-table"><thead><tr><th>Float</th><th>Pattern</th><th>Item</th><th>Price</th><th></th></tr></thead><tbody>
       ${listings.map((l, i) => `<tr><td>${floatCell(l.item)}</td><td>${l.item.sd ?? '—'}</td><td>${itemCell(l.item)}</td><td>${money(l.p)}</td><td><button class="btn sm" data-linsp="${i}">Inspect</button></td></tr>`).join('')}</tbody></table></div>` : ''}
   </div>`;
   root.querySelector('[data-back]').addEventListener('click', back);
@@ -250,14 +324,25 @@ function drawItem() {
   root.querySelector('[data-csort]')?.addEventListener('change', (ev) => { view.copySort = ev.target.value; draw(); });
   const own = root.querySelector('[data-owner]');
   own?.addEventListener('input', debounce(() => { view.owner = own.value.toLowerCase().trim(); draw(); const n = root?.querySelector('[data-owner]'); n?.focus(); n?.setSelectionRange(n.value.length, n.value.length); }, 220));
+  // The pattern box (a number 0 to 1000, kept as typed: anything else filters nothing and says so; empty shows every copy
+  // again), and a copy's ×N, which shows its pattern's copies.
+  const pat = root.querySelector('[data-pattern]');
+  pat?.addEventListener('input', debounce(() => {
+    view.patText = pat.value.trim();
+    view.pattern = patternOf(view.patText);
+    keepFocus(draw);
+  }, 220));
+  root.querySelectorAll('[data-pat]').forEach((b) => b.addEventListener('click', () => { view.pattern = Number(b.dataset.pat); view.patText = b.dataset.pat; draw(); }));
+  root.querySelector('[data-patclear]')?.addEventListener('click', () => { view.pattern = null; view.patText = ''; draw(); });
+  root.querySelector('[data-catall]')?.addEventListener('click', () => { view.copyCat = 'all'; draw(); });
   root.querySelectorAll('[data-cinsp]').forEach((b) => b.addEventListener('click', () => inspectCopy(shownRows[+b.dataset.cinsp].item)));
-  root.querySelectorAll('[data-npc]').forEach((a) => a.addEventListener('click', (ev) => { ev.preventDefault(); openPerson(a.dataset.npc); }));
-  root.querySelectorAll('[data-player]').forEach((a) => a.addEventListener('click', (ev) => { ev.preventDefault(); openProfile(+a.dataset.player); }));
+  bindOwners();
   root.querySelectorAll('[data-ainsp]').forEach((b) => b.addEventListener('click', () => inspectCopy(copies.applied[+b.dataset.ainsp].item)));
   root.querySelectorAll('[data-linsp]').forEach((b) => b.addEventListener('click', () => inspectCopy(listings[+b.dataset.linsp].item)));
 }
 
-const floatCell = (it) => (it.fl == null ? '—' : `<span class="db-float"><b class="wk" style="--wc:${WEAR_BY_KEY[wearOf(it.fl)].c}">${wearOf(it.fl)}</b>${it.fl.toFixed(8)}<i class="floatline"><i style="left:${it.fl * 100}%"></i></i></span>`);
+// (dp: decimals; the float records show more, where the first eight are often zeros or nines)
+const floatCell = (it, dp = 8) => (it.fl == null ? '—' : `<span class="db-float"><b class="wk" style="--wc:${WEAR_BY_KEY[wearOf(it.fl)].c}">${wearOf(it.fl)}</b>${it.fl.toFixed(dp)}<i class="floatline"><i style="left:${it.fl * 100}%"></i></i></span>`);
 const itemCell = (it) => {
   const pat = I.patternInfo(it);
   return `<span class="db-name ${it.stt ? 'stt' : it.sv ? 'sv' : ''}">${it.stt ? 'StatTrak™' : it.sv ? 'Souvenir' : 'Normal'}</span>${pat.label ? ' ' + patternTag(pat) : ''}${it.sn ? ` <span class="tag sn" title="Serial number">#${it.sn}</span>` : ''}${I.nameTagHtml(it)}
@@ -269,9 +354,33 @@ const ownerCell = (c) => {
   const name = `${esc(c.owner)}${c.me ? ' <span class="dim">(you)</span>' : ''}`;
   return to ? `<a href="#" class="db-owner ${c.me ? 'me' : 'other'}" ${to} title="Visit ${c.me ? 'your' : `${esc(c.owner)}'s`} profile">${name}</a>` : `<span class="db-owner ${c.me ? 'me' : ''}">${name}</span>`;
 };
-function copyRow(c, i, skin, ranks) {
+// A copy's pattern, and how many copies of its skin have it (in the category picked): ×N, which shows only those.
+function patternCell(it, pats) {
+  if (it.sd == null) return '—';
+  const sd = esc(String(it.sd)), cat = view.copyCat, n = pats ? patternCount(pats, it, cat) : 0;
+  if (!n) return `<span class="db-pat">${sd}</span>`;
+  const of = cat === 'all' ? '' : CATEGORY_NAME[cat] + ' ';
+  const say = n === 1 ? `The only ${of}copy of this skin with pattern ${sd}` : `${n.toLocaleString()} ${of}copies of this skin have pattern ${sd}`;
+  return `<span class="db-pat">${sd}<button class="db-patn ${n > 1 ? 'dup' : ''}" data-pat="${sd}" title="${say}${view.pattern == null ? `: click to see only ${n === 1 ? 'it' : 'them'}` : ''}">×${n.toLocaleString()}</button></span>`;
+}
+// Above the copies while the pattern box has a number: how many copies of the skin have that pattern, by category. With
+// a category picked (cat), that category's count first, then every category's, which it hides.
+function patternSummary(pats, sd, cat = 'all') {
+  const n = (k) => pats.get(k + ':' + sd) || 0, all = n('all');
+  const by = ['n', 'st', 'sv'].filter((k) => n(k)), split = by.map((k) => `${n(k).toLocaleString()} ${CATEGORY_NAME[k]}`).join(', ');
+  const have = (x, of = '') => `<b>${x.toLocaleString()}</b> ${of}${x === 1 ? 'copy' : 'copies'} of this skin ${x === 1 ? 'has' : 'have'} pattern <b>${sd}</b>`;
+  let say;
+  if (cat === 'all') say = all ? have(all) + (by.length > 1 || (by.length && by[0] !== 'n') ? ` (${split})` : '') : `No copy of this skin has pattern <b>${sd}</b>`;
+  else {
+    const mine = n(cat), name = CATEGORY_NAME[cat];
+    say = mine ? have(mine, name + ' ') : `No ${name} copy of this skin has pattern <b>${sd}</b>`;
+    if (all > mine) say += ` <span class="dim">·</span> ${all.toLocaleString()} in every category (${split}) <button class="btn sm ghost" data-catall>Show every category</button>`;
+  }
+  return `<div class="db-pat-sum"><span>${say}</span><span class="spacer"></span><button class="btn sm ghost" data-patclear>Show every pattern</button></div>`;
+}
+function copyRow(c, i, skin, ranks, pats) {
   const it = c.item, r = ranks.get(it.uid);
-  return `<tr class="${r ? 'ranked' : ''}">${skin ? `<td class="db-rank-col"><div class="db-ranks">${rankBadges(r, copyCategory(it))}</div></td><td>${floatCell(it)}</td><td>${it.sd ?? '—'}</td>` : ''}
+  return `<tr class="${r ? 'ranked' : ''}">${skin ? `<td class="db-rank-col"><div class="db-ranks">${rankBadges(r, copyCategory(it))}</div></td><td>${floatCell(it)}</td><td>${patternCell(it, pats)}</td>` : ''}
     <td>${skin ? itemCell(it) : esc(I.itemName(it))}</td><td>${ownerCell(c)}</td><td>${money(I.itemValue(it))}</td>
     <td>${it.t === 'tool' ? '' : `<button class="btn sm" data-cinsp="${i}">Inspect</button>`}</td></tr>`;
 }
@@ -281,3 +390,76 @@ function inspectCopy(item) {
 }
 
 function back() { view.key = null; copies = null; copiesKey = null; draw(); }
+// (an item opened from the float records goes back to them)
+const backLabel = () => (view.rec ? '‹ Float records' : '‹ Item Database');
+
+// Owners' links to their profiles, wherever a page has them.
+function bindOwners() {
+  root.querySelectorAll('[data-npc]').forEach((a) => a.addEventListener('click', (ev) => { ev.preventDefault(); openPerson(a.dataset.npc); }));
+  root.querySelectorAll('[data-player]').forEach((a) => a.addEventListener('click', (ev) => { ev.preventDefault(); openProfile(+a.dataset.player); }));
+}
+
+// ---- float records: the lowest and highest floats of any skin --------------------------------------------------------
+function drawRecords() {
+  const dir = view.rec, key = `${online() ? 'on' : 'off'}|${dir}|${view.recCat}`;
+  // (asked again when it's a different list or a while old; the one on screen stays until the answer comes)
+  if (!recsReq || recsReq.key !== key || Date.now() - recsReq.at > REC_MS) {
+    const req = recsReq = { key, at: Date.now() };
+    loadRecords(dir, view.recCat).then((r) => ({ ...r, key }), (err) => ({ copies: [], err: err.message, key }))
+      .then((r) => { if (recsReq !== req) return; recs = r; if (root && view.rec && !view.key) draw(); });
+  }
+  const head = `<div class="page-head"><button class="btn sm ghost" data-back>‹ Item Database</button><h1>Float records</h1>
+    <span class="sub">The ${dir === 'low' ? 'lowest' : 'highest'} floats of any ${view.recCat === 'all' ? '' : CATEGORY_NAME[view.recCat] + ' '}skin ${online() ? 'on the server, every player\'s' : 'in the database (you and the NPC traders)'}, every skin together. Open one to see every copy of its skin.</span></div>`;
+  const toGrid = () => { view.rec = null; draw(); };
+  if (recs?.key !== key) {
+    root.innerHTML = `<div class="page db">${head}<div class="empty">Looking through every skin…</div></div>`;
+    root.querySelector('[data-back]').addEventListener('click', toGrid);
+    return;
+  }
+  const list = (recs.copies || []).slice(0, view.recTop);
+  root.innerHTML = `<div class="page db">${head}
+    ${recs.err ? `<div class="db-note">Couldn't reach the server's database: ${esc(recs.err)}</div>` : ''}
+    <div class="toolbar">
+      <div class="seg" data-rdir>${REC_DIRS.map(([k, n]) => `<button data-v="${k}" class="${dir === k ? 'active' : ''}">${k === 'low' ? '▼' : '▲'} ${n}</button>`).join('')}</div>
+      <div class="seg" data-rcat>${REC_CATS.map(([k, n]) => `<button data-v="${k}" class="${view.recCat === k ? 'active' : ''}">${n}</button>`).join('')}</div>
+      <div class="seg" data-rtop>${REC_TOPS.map((n) => `<button data-v="${n}" class="${view.recTop === n ? 'active' : ''}">Top ${n}</button>`).join('')}</div>
+      <span class="spacer"></span><span class="muted">${list.length.toLocaleString()} ${list.length === 1 ? 'copy' : 'copies'}</span>
+    </div>
+    ${list.length ? `${recordTop(list[0], dir)}
+      <div class="db-table-wrap"><table class="price-table db-table db-rec-table"><thead><tr><th>#</th><th>Skin</th><th>Float</th><th>Pattern</th><th>Details</th><th>Owner</th><th>Value</th><th></th></tr></thead><tbody>
+      ${list.map((c, i) => recordRow(c, i, dir)).join('')}</tbody></table></div>`
+    : `<div class="empty" style="padding:30px">${recs.err ? '' : `No ${view.recCat === 'all' ? '' : CATEGORY_NAME[view.recCat] + ' '}skin with a float ${online() ? 'on the server' : 'in the database'} yet.`}</div>`}
+  </div>`;
+  root.querySelector('[data-back]').addEventListener('click', toGrid);
+  root.querySelectorAll('[data-rdir] button').forEach((b) => b.addEventListener('click', () => { view.rec = b.dataset.v; draw(); }));
+  root.querySelectorAll('[data-rcat] button').forEach((b) => b.addEventListener('click', () => { view.recCat = b.dataset.v; draw(); }));
+  root.querySelectorAll('[data-rtop] button').forEach((b) => b.addEventListener('click', () => { view.recTop = +b.dataset.v; draw(); }));
+  // (its skin's page opens on the same end and category, so the record is at the top of its copies)
+  root.querySelectorAll('[data-key]').forEach((a) => a.addEventListener('click', (ev) => {
+    ev.preventDefault(); openItem(a.dataset.key, { copySort: dir, copyCat: view.recCat });
+  }));
+  bindOwners();
+  root.querySelectorAll('[data-rinsp]').forEach((b) => b.addEventListener('click', () => inspectCopy(list[+b.dataset.rinsp].item)));
+}
+const recordName = (e, it) => (e ? `${esc(e.top)} | ${esc(e.bottom)}` : esc(I.itemName(it)));
+// The #1, big, above the list.
+function recordTop(c, dir) {
+  const it = c.item, e = entryOf(itemKey(it)), w = WEAR_BY_KEY[wearOf(it.fl)];
+  const what = `${dir === 'low' ? 'Lowest' : 'Highest'} float of any ${view.recCat === 'all' ? '' : CATEGORY_NAME[view.recCat] + ' '}skin ${online() ? 'on the server' : 'in the database'}`;
+  return `<div class="db-rec-top" style="--rc:${e?.rc || 'transparent'}">
+    ${e ? `<a href="#" class="db-rec-img" data-key="${esc(e.key)}" title="Open ${recordName(e, it)}"><img src="${pictureOf(e, 'm')}" alt=""></a>` : ''}
+    <div class="db-rec-what">
+      <div><span class="fr ${dir} r1">#1</span> <span class="muted">${what}</span></div>
+      <div class="db-rec-float">${it.fl.toFixed(14)}</div>
+      <div class="db-rec-line">${e ? `<a href="#" class="db-recitem" data-key="${esc(e.key)}"><span>${recordName(e, it)}</span></a>` : recordName(e, it)}
+        <span class="dim">·</span> <b class="wk" style="--wc:${w.c}">${w.k}</b> ${esc(w.n)} <span class="dim">·</span> Pattern ${it.sd != null ? esc(String(it.sd)) : '—'}
+        <span class="dim">·</span> ${itemCell(it)} <span class="dim">·</span> ${ownerCell(c)}</div>
+    </div></div>`;
+}
+function recordRow(c, i, dir) {
+  const it = c.item, e = entryOf(itemKey(it)), n = i + 1, name = recordName(e, it);
+  return `<tr class="${n === 1 ? 'db-rec1' : ''}"><td class="db-recn">${n <= 3 ? `<span class="fr ${dir} r${n}">#${n}</span>` : `#${n}`}</td>
+    <td>${e ? `<a href="#" class="db-recitem" data-key="${esc(e.key)}" title="Open ${name}: every copy of it"><img loading="lazy" src="${pictureOf(e, 's')}" alt=""><span>${name}</span></a>` : name}</td>
+    <td>${floatCell(it, 12)}</td><td>${it.sd != null ? esc(String(it.sd)) : '—'}</td><td>${itemCell(it)}</td><td>${ownerCell(c)}</td><td>${money(I.itemValue(it))}</td>
+    <td><button class="btn sm" data-rinsp="${i}">Inspect</button></td></tr>`;
+}

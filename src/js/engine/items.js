@@ -434,8 +434,11 @@ export function loadoutSlot(item) {
   return d.w ? 'w:' + d.w : null;
 }
 
+// A float as the game shows it (its 32-bit value, every digit), in plain decimals: 5e-8 is 0.00000005000000058430487.
 export function floatString(f) {
-  return f == null ? '—' : String(Math.fround(f));
+  if (f == null) return '—';
+  const s = String(Math.fround(f)), m = /^(\d)(?:\.(\d+))?e-(\d+)$/.exec(s); // (JavaScript writes what's under 1e-6 as 5e-8)
+  return m ? '0.' + '0'.repeat(+m[3] - 1) + m[1] + (m[2] || '') : s;
 }
 
 export { WEARS };

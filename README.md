@@ -461,7 +461,14 @@ What's in a match:
   see every copy that exists with its owner, float, seed, pattern and stickers (online: everyone on the server;
   offline: you and the NPC players; each owner is a link to their profile), its float rank (#1-#3 lowest and highest, StatTrak™ and Souvenir copies ranked apart), the
   guns a sticker is applied to, and a skin's current Market listings. Your own top floats carry the same #1-#3 badge
-  in your inventory and the item details (a lone copy has no rank)
+  in your inventory and the item details (a lone copy has no rank). A skin's copies sort by pattern too, each with how
+  many copies of the skin share its pattern (×N, in the category picked; click it, or type a number in the pattern box,
+  to see only that pattern's copies). Float records (Lowest floats / Highest floats): the top 50 or 100 floats of any
+  skin in the game, every skin together, for all copies or Normal, StatTrak™ or Souvenir ones, with the #1 up top;
+  online over every player's inventory and Storage Units (the server's `db.floats`: one pass over every save for all eight
+  lists, at most every 15 seconds), offline over you and the NPC players. An item with more than 5,000 copies on the
+  server shows the 5,000 at both ends of each category's floats (its records and float ranks among them), with its copy,
+  owner and pattern counts over every copy
 - Rare Special Items (knives and gloves) show CS:GO's classic gold "?" medallion in case contents and the roulette
 - Serial numbers on everything you unbox (cases, packages, capsules, the Armory, case battles), counted per item in
   unboxing order (offline in your save, online across the whole server). Market buys and trade-ups have none; unboxed

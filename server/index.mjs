@@ -355,6 +355,10 @@ export async function startServer({
   const DB_IN = DB_TYPES.map((t) => `'${t}'`).join(', ');
   // Everything a player owns, for a FROM clause: what's in their Storage Units counts as much as their inventory.
   const OWNED = (u) => `jsonb_array_elements(COALESCE(${u}.state->'inv', '[]'::jsonb) || COALESCE(${u}.state->'stored', '[]'::jsonb))`;
+  // The lowest and highest floats on the server (db.floats): server/dbfloats.mjs, which says what they cost.
+  const { FloatRecords, ItemCopies } = await import('./dbfloats.mjs');
+  const floats = srv.floats = new FloatRecords({ db, fresh: dbFresh, owned: OWNED });
+  const itemCopies = srv.itemCopies = new ItemCopies({ db, owned: OWNED }); // (db.item past the copies it sends)
 
   // (ws: the connection asking, which a push to the player's other tabs leaves out)
   async function social(user, m, a, ws) {
@@ -373,14 +377,18 @@ export async function startServer({
       const t = String(a.t || ''), id = String(a.id || '').slice(0, 80);
       if (!DB_TYPES.includes(t) || !id) throw new GameError('Unknown item');
       await dbFresh();
-      const { rows } = await db.query(`SELECT u.id, u.name, it FROM users u, ${OWNED('u')} AS it
-        WHERE it->>'t' = $1 AND it->>'id' = $2 LIMIT 5000`, [t, id]);
-      const row = (x) => ({ owner: x.name, id: x.id, me: x.id === user.id, item: publicCopy(typeof x.it === 'string' ? JSON.parse(x.it) : x.it) });
+      const cap = itemCopies.cap, { rows } = await db.query(`SELECT u.id, u.name, it FROM users u, ${OWNED('u')} AS it
+        WHERE it->>'t' = $1 AND it->>'id' = $2 LIMIT ${cap + 1}`, [t, id]);
+      // More than it sends: the copies at both ends of its floats, and the counts of every copy (counts).
+      const many = rows.length > cap ? await itemCopies.many(t, id) : null;
+      const row =(x) => ({ owner: x.name, id: x.id, me: x.id === user.id, item: publicCopy(typeof x.it === 'string' ? JSON.parse(x.it) : x.it) });
       // A sticker: also the guns it's applied to.
       const applied = t !== 'sticker' ? [] : (await db.query(`SELECT u.id, u.name, it FROM users u, ${OWNED('u')} AS it
         WHERE it->'stk' @> $1::jsonb LIMIT 5000`, [JSON.stringify([{ id }])])).rows;
-      return { r: { copies: rows.map(row), applied: applied.map(row) } };
+      return { r: { copies: (many ? many.copies : rows).map(row), applied: applied.map(row), ...(many ? { counts: many.counts } : {}) } };
     }
+    // The copies with the lowest or highest floats of any skin: { dir: 'low' | 'high', cat, limit } → { dir, cat, copies }.
+    if (m === 'db.floats') return { r: await floats.rpc(user, a) };
     if (m === 'db.ranks') {
       // Every copy of the skins you own, ranked by float in its category (lowest and highest, as floatRanks does it):
       // { uid: { low?, high?, of, cat } } for your copies in a top three.

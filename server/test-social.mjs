@@ -102,6 +102,10 @@ try {
     h0.me.id === alice.id && h0.me.name === 'alice' && Object.keys(h0.me).sort().join() === personKeys && h0.me.online === true && h0.me.level >= 1 && typeof h0.me.seen === 'number'
     && [h0.friends, h0.requests, h0.sent, h0.blocked, h0.chats].every((l) => Array.isArray(l) && !l.length) && h0.settings.dms === 'everyone', JSON.stringify(h0.me));
   check('an unknown social request is refused, and the db.* ones still answer', /Unknown request/.test((await refused(alice.s('nope')))?.message) && typeof (await alice.s('db.index')).players === 'number');
+  // (nobody has a skin yet)
+  const noFloats = await alice.s('db.floats', { dir: 'low' }), noHigh = await alice.s('db.floats', { dir: 'high', cat: 'st', limit: 5 });
+  check('float records: an empty server has none, either way, and says which list it is', Array.isArray(noFloats.copies) && !noFloats.copies.length && !noHigh.copies.length
+    && noFloats.dir === 'low' && noFloats.cat === 'all' && noHigh.dir === 'high' && noHigh.cat === 'st', JSON.stringify([noFloats, noHigh]));
 
   // ---- find -------------------------------------------------------------------------------------------------------
   const online = await alice.s('find', { q: '' });
@@ -690,6 +694,107 @@ try {
   await erin.s('block', { id: renamee.id, on: false });
   await bob.s('friend', { id: renamee.id, on: false });
   renamee.close();
+
+  // ---- the item database's float records (db.floats) -----------------------------------------------------------------
+  {
+    const DB = await import('../src/js/engine/database.js');
+    const { ownedItems } = await import('../src/js/engine/storage.js');
+    const { FLOATS_MS } = await import('./dbfloats.mjs');
+    const def = Object.values(D.skins).find((s) => !s.v && s.stt), vanilla = Object.values(D.skins).find((s) => s.v);
+    const mk = (fl, x = {}) => makeSkinItem(def, { src: 'test', fl, stt: false, ...x });
+    // (far past every float the other tests' skins rolled: the ends of the lists are these)
+    const aLow = mk(1e-7), aStored = { ...mk(5e-8), su: 'unit-x', sat: Date.now() }, aHigh = mk(0.9999998, { stt: true });
+    const bSt = mk(2e-7, { stt: true }), bSv = mk(3e-7, { sv: true }), bHigh = mk(0.9999999), bVanilla = makeSkinItem(vanilla, { src: 'test' });
+    const sticker = { uid: 'stk-floats', t: 'sticker', id: Object.keys(D.stickers)[0], at: Date.now(), src: 'test' };
+    await giveItems(alice, [aLow, aHigh]);
+    await server.store.withUser(alice.id, async (e) => { e.st.stored = [...(e.st.stored || []), aStored]; server.store.markDirty(e); });
+    await giveItems(bob, [bSt, bSv, bHigh, bVanilla, sticker]);
+    await server.store.flush();
+    const F = server.srv.floats;
+    F.cache = null; // (the empty server's lists, from the start)
+    F.now = () => clock;
+    // What the lists should be: the engine's floatRecords over every player's inventory and Storage Units.
+    const everyone = (await server.db.query('SELECT id, state FROM users')).rows.flatMap((u) => ownedItems(typeof u.state === 'string' ? JSON.parse(u.state) : u.state).map((item) => ({ id: u.id, item })));
+    const want = (o) => DB.floatRecords(everyone, { limit: DB.FLOAT_TOP, ...o }).map((c) => c.item.uid).join();
+    const got = (r) => r.copies.map((c) => c.item.uid).join();
+    const sorted = (r, dir) => r.copies.every((c, i, l) => !i || (dir === 'low' ? l[i - 1].item.fl <= c.item.fl : l[i - 1].item.fl >= c.item.fl));
+    const low = await alice.s('db.floats', { dir: 'low' }), high = await alice.s('db.floats', { dir: 'high' });
+    check('float records: the lowest floats of every skin on the server, lowest first, as the engine orders them', got(low) === want({ dir: 'low' }) && sorted(low, 'low')
+      && low.copies[0].item.uid === aStored.uid && low.copies[1].item.uid === aLow.uid && low.copies.length > 5, `${low.copies.length}: ${low.copies.slice(0, 4).map((c) => c.item.fl).join(', ')}`);
+    check('float records: a Storage Unit\'s skin counts, and each copy says whose it is (yours or a player\'s, for the link)', low.copies[0].owner === 'alice' && low.copies[0].id === alice.id && low.copies[0].me === true
+      && low.copies.find((c) => c.item.uid === bSt.uid)?.id === bob.id && low.copies.find((c) => c.item.uid === bSt.uid)?.me === false && !('src' in low.copies[0].item) && !('su' in low.copies[0].item));
+    check('float records: the highest floats, highest first', got(high) === want({ dir: 'high' }) && sorted(high, 'high') && high.copies[0].item.uid === bHigh.uid && high.copies[1].item.uid === aHigh.uid,
+      high.copies.slice(0, 3).map((c) => c.item.fl).join(', '));
+    const every = [...low.copies, ...high.copies];
+    check('float records: only skins with a float: no vanilla knife, no sticker', every.every((c) => c.item.t === 'skin' && typeof c.item.fl === 'number') && !every.some((c) => c.item.uid === bVanilla.uid || c.item.uid === sticker.uid));
+    const st = await alice.s('db.floats', { dir: 'low', cat: 'st' }), sv = await alice.s('db.floats', { dir: 'low', cat: 'sv' }), n = await alice.s('db.floats', { dir: 'high', cat: 'n' });
+    check('float records: by category, StatTrak™, Souvenir or Normal copies only', got(st) === want({ dir: 'low', cat: 'st' }) && st.copies[0].item.uid === bSt.uid && st.copies.every((c) => c.item.stt && !c.item.sv)
+      && got(sv) === want({ dir: 'low', cat: 'sv' }) && sv.copies[0].item.uid === bSv.uid && sv.copies.every((c) => c.item.sv)
+      && got(n) === want({ dir: 'high', cat: 'n' }) && n.copies[0].item.uid === bHigh.uid && n.copies.every((c) => !c.item.stt && !c.item.sv), `${st.copies.length} st, ${sv.copies.length} sv, ${n.copies.length} n`);
+    const three = await alice.s('db.floats', { dir: 'low', limit: 3 }), one = await bob.s('db.floats', { dir: 'high', limit: 1 });
+    check('float records: a limit gives the first of the same list', got(three) === low.copies.slice(0, 3).map((c) => c.item.uid).join() && one.copies.length === 1 && one.copies[0].item.uid === bHigh.uid && one.copies[0].me === true);
+    const bad = await Promise.all([{ dir: 'sideways' }, { dir: 5 }, { cat: 'gold' }, { cat: ['st'] }, { limit: 0 }, { limit: DB.FLOAT_TOP + 1 }, { limit: 2.5 }, { limit: '5' }].map((a) => refused(alice.s('db.floats', a))));
+    check('float records: a wrong direction, category or limit is refused', bad.every((e) => e?.code === 'bad'), bad.map((e) => e?.message).join(' | '));
+    // Kept a little while for everyone: a lower float shows once that's past.
+    const cLow = mk(1e-9);
+    await giveItems(carol, [cLow]);
+    await server.store.flush();
+    const cached = await carol.s('db.floats', { dir: 'low', limit: 1 });
+    passTime(FLOATS_MS + 1);
+    const later = await carol.s('db.floats', { dir: 'low', limit: 1 });
+    check('float records: kept a few seconds for every player, then asked again', cached.copies[0].item.uid === aStored.uid && cached.copies[0].me === false && later.copies[0].item.uid === cLow.uid && later.copies[0].me === true);
+    // One pass over every save gives all eight lists, however many are asked for; a slow pass counts from when it ended.
+    let passes = 0;
+    F.db = { query: (...q) => { passes++; return server.db.query(...q).finally(() => passTime(FLOATS_MS * 2)); } }; // (each pass "takes" 30 s)
+    passTime(FLOATS_MS + 1);
+    const eight = await Promise.all(['low', 'high'].flatMap((dir) => DB.COPY_CATS.map((cat) => carol.s('db.floats', { dir, cat }))));
+    const afterSlow = await bob.s('db.floats', { dir: 'high', cat: 'sv' });
+    F.db = server.db;
+    const now = (await server.db.query('SELECT id, state FROM users')).rows.flatMap((u) => ownedItems(typeof u.state === 'string' ? JSON.parse(u.state) : u.state).map((item) => ({ id: u.id, item })));
+    const wantAll = ['low', 'high'].flatMap((dir) => DB.COPY_CATS.map((cat) => DB.floatRecords(now, { dir, cat }).map((c) => c.item.uid).join()));
+    check('float records: one pass gives every direction and category, each as the engine has it', passes === 1 && eight.every((r, i) => got(r) === wantAll[i]), `${passes} passes`);
+    check('float records: a pass that took longer than they\'re kept is kept from when it ended, not run again at once', passes === 1 && got(afterSlow) === wantAll[7], `${passes} passes`);
+  }
+
+  // ---- the item database: an item with more copies than db.item sends (ItemCopies) -----------------------------------
+  {
+    const DB = await import('../src/js/engine/database.js');
+    const { ownedItems } = await import('../src/js/engine/storage.js');
+    const C = server.srv.itemCopies, cap0 = C.cap;
+    const def = Object.values(D.skins).filter((s) => !s.v && s.stt)[3];
+    const mk = (fl, sd, x = {}) => makeSkinItem(def, { src: 'test', fl, sd, stt: false, ...x });
+    // 14 copies over three players, an inventory and a Storage Unit: patterns 7 (×4: 2 Normal, 1 StatTrak™, 1 Souvenir), 9, 11.
+    const lowest = { ...mk(1e-9, 7), su: 'unit-many', sat: Date.now() }, highest = mk(0.9999999, 9, { stt: true });
+    const theirs = [mk(0.2, 7), mk(0.3, 7, { stt: true }), mk(0.4, 9), mk(0.5, 11), mk(0.6, 11, { sv: true }), mk(0.7, 7, { sv: true })];
+    const yours = [mk(0.15, 9), mk(0.25, 11), mk(0.35, 7), mk(0.45, 9, { stt: true }), mk(0.55, 11, { stt: true })];
+    await giveItems(dave, theirs);
+    await giveItems(erin, [highest, mk(0.65, 9, { sv: true })]);
+    await giveItems(carol, yours);
+    await server.store.withUser(carol.id, async (e) => { e.st.stored = [...(e.st.stored || []), lowest]; server.store.markDirty(e); });
+    await server.store.flush();
+    const every = (await server.db.query('SELECT id, state FROM users')).rows.flatMap((u) => ownedItems(typeof u.state === 'string' ? JSON.parse(u.state) : u.state).map((item) => ({ id: u.id, item })))
+      .filter((c) => c.item.t === 'skin' && c.item.id === def.id);
+    const small = await carol.s('db.item', { t: 'skin', id: def.id });
+    check('db.item: an item with no more copies than it sends sends every one, and no counts', small.copies.length === every.length && every.length >= 14 && !('counts' in small), `${small.copies.length} of ${every.length}`);
+    C.cap = 18; // (three categories: the three lowest and three highest of each)
+    const big = await carol.s('db.item', { t: 'skin', id: def.id });
+    C.cap = cap0;
+    const pats = DB.patternCounts(every), cats = { n: 0, st: 0, sv: 0 };
+    for (const c of every) cats[DB.copyCategory(c.item)]++;
+    const ends = new Set(['n', 'st', 'sv'].flatMap((k) => { const l = every.filter((c) => DB.copyCategory(c.item) === k).sort((a, b) => DB.byFloat(a.item, b.item)); return [...l.slice(0, 3), ...l.slice(-3)].map((c) => c.item.uid); }));
+    const sameSet = (r) => r.copies.length === ends.size && r.copies.every((c) => ends.has(c.item.uid));
+    check('db.item: more copies than it sends: at most that many, the lowest and highest floats of each category', sameSet(big) && big.copies.length <= 18 && big.copies.length < every.length
+      && big.copies.some((c) => c.item.uid === lowest.uid && c.me === true) && big.copies.some((c) => c.item.uid === highest.uid && c.id === erin.id), `${big.copies.length} of ${every.length}: ${big.copies.map((c) => c.item.fl).join()}`);
+    const rankOf = (m) => JSON.stringify([...m].map(([uid, r]) => [uid, r.low, r.high]).sort());
+    check('db.item: so float ranks over the copies sent are every copy\'s', rankOf(DB.floatRanks(big.copies.map((c) => c.item))) === rankOf(DB.floatRanks(every)));
+    check('db.item: and the counts of every copy: in all, owners, by category, and by pattern as the engine counts them', big.counts.total === every.length && big.counts.owners === new Set(every.map((c) => c.id)).size
+      && JSON.stringify(big.counts.cats) === JSON.stringify(cats) && Object.keys(big.counts.pats).length === pats.size && [...pats].every(([k, n]) => big.counts.pats[k] === n)
+      && big.counts.pats['all:7'] >= 5 && big.counts.pats['sv:7'] >= 1, JSON.stringify(big.counts));
+    C.cap = 4; // (less than three an end: still the three ranks need)
+    const tiny = await carol.s('db.item', { t: 'skin', id: def.id });
+    C.cap = cap0;
+    check('db.item: a cap under three an end still sends each category\'s three lowest and highest floats', sameSet(tiny) && tiny.counts.total === every.length);
+  }
 
   // ---- last online --------------------------------------------------------------------------------------------------
   // (Set far back, as a player who only chats leaves it: a save is the only other thing that moves it.)
