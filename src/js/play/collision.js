@@ -326,6 +326,10 @@ function triNormal(P, i) {
   return [nx / l, ny / l, nz / l];
 }
 
+// How far into a triangle's plane a box can be and still only graze it (see the end of sweepBoxTri): float error. A box
+// into one by more than that (its top 1/32 into a crouch gap's ceiling, its feet into a step it walks into) is stopped
+// at the edge as before.
+const GRAZE = 0.01;
 // Swept AABB (centre c, half extents e, moving by v over t in [0,1]) against one triangle, by the separating axis
 // theorem with time of impact: the box face normals, the triangle normal and the 9 edge cross products.
 // Writes { t, n, solid } into out and returns true on a hit before maxT. Allocates nothing (bots call it thousands of
@@ -376,7 +380,21 @@ function sweepBoxTri(P, i, c, e, v, maxT, out) {
     return true;
   }
   if (hit < 0) return false;
-  const lx = AX[hit * 3], ly = AX[hit * 3 + 1], lz = AX[hit * 3 + 2], s = hitSign / Math.sqrt(lx * lx + ly * ly + lz * lz);
+  let lx = AX[hit * 3], ly = AX[hit * 3 + 1], lz = AX[hit * 3 + 2], s = hitSign / Math.sqrt(lx * lx + ly * ly + lz * lz);
+  // Met at an edge (an axis across the triangle's plane, not its face) while the box only grazes that plane: a box
+  // against a flat wall, moving along it, that comes to the next triangle of the same wall (the diagonal between a
+  // quad's two, or a flush piece). The triangle is a sheet the box is beside, not an edge in its way: the edge's axis
+  // tilts out of the wall, and a flat wall became a ramp to ride up (El Dorado's clip by CT spawn, to its roof). So it
+  // doesn't stop a box moving along the plane or away from it, and one pressing into it meets its face.
+  const nx = AX[9], ny = AX[10], nz = AX[11], nl = Math.sqrt(nx * nx + ny * ny + nz * nz);
+  if (nl > 1e-9 && Math.abs(lx * nx + ly * ny + lz * nz) < 0.9999 * nl * Math.sqrt(lx * lx + ly * ly + lz * lz)) {
+    const d = (ax * nx + ay * ny + az * nz) - (vx * nx + vy * ny + vz * nz) * tEnter; // the plane from the box's centre then
+    const r = ex * Math.abs(nx) + ey * Math.abs(ny) + ez * Math.abs(nz);
+    if (r - Math.abs(d) <= GRAZE * nl) {
+      if ((vx * nx + vy * ny + vz * nz) * Math.sign(d) <= 1e-9 * nl) return false;
+      lx = nx; ly = ny; lz = nz; s = -Math.sign(d) / nl;
+    }
+  }
   out.t = tEnter; out.solid = false;
   out.n[0] = lx * s; out.n[1] = ly * s; out.n[2] = lz * s;
   return true;
