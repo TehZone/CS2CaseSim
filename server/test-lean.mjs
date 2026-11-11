@@ -72,7 +72,7 @@ async function client(token, { caps, deflate = true } = {}) {
       if (m.t === 'res') { const p = c.pending.get(m.id); c.pending.delete(m.id); m.ok ? p.res(p.whole ? m : m.r) : p.rej(Object.assign(new Error(m.err), { code: m.code })); }
     });
   });
-  ws.send(JSON.stringify({ t: 'hello', token, data: D.generatedAt, v: 1, app: '1.1.2', ...(caps !== undefined ? { caps } : {}) }));
+  ws.send(JSON.stringify({ t: 'hello', token, data: D.lock, v: 1, app: '1.1.2', ...(caps !== undefined ? { caps } : {}) }));
   await welcome;
   c.rpc = (ns, m, args) => new Promise((res, rej) => { const id = ++c.seq; c.pending.set(id, { res, rej }); ws.send(JSON.stringify({ t: 'rpc', id, ns, m, args })); });
   c.act = (m, a) => c.rpc('act', m, a);

@@ -209,7 +209,7 @@ function connect({ asked = false } = {}) {
     // being taken in (prices synced first) is after it, but the game's state is still the offline save then, which mustn't
     // get it: it waits in `early`.
     let welcomed = false, early = null;
-    sock.onopen = () => sock.send(JSON.stringify({ t: 'hello', token: saved().token, data: D.generatedAt, v: PROTOCOL, app: build.version, caps: CAPS }));
+    sock.onopen = () => sock.send(JSON.stringify({ t: 'hello', token: saved().token, data: D.lock, v: PROTOCOL, app: build.version, caps: CAPS }));
     sock.onmessage = async (e) => {
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
@@ -299,7 +299,7 @@ async function syncPrices(pricedAt) {
   D.pricedAt = p.pricedAt;
   if (p !== kept && isPatch(p)) { try { localStorage.setItem(PRICES_KEY, JSON.stringify(p)); } catch {} }
 }
-const isPatch = (p) => !!p && typeof p === 'object' && typeof p.pricedAt === 'string' && p.generatedAt === D.generatedAt
+const isPatch = (p) => !!p && typeof p === 'object' && typeof p.pricedAt === 'string' && p.generatedAt === D.lock
   && ['skins', 'stickers', 'agents', 'cases'].every((k) => p[k] && typeof p[k] === 'object');
 // The kept patch, or null (none, unreadable, or from another data build).
 function keptPrices() {

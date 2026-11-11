@@ -19,7 +19,7 @@ import { worldCopies, crowd } from '../engine/npcs.js';
 import { ownedItems } from '../engine/storage.js';
 import { openPerson } from './community.js';
 import { openProfile } from './community-online.js';
-import { openInspect, patternTag, toast } from '../ui.js';
+import { openInspect, patternTag, toast, creatorHTML } from '../ui.js';
 import { net } from '../net/online.js';
 import { marketWindow, skinListings, localSold, lowestPrice } from '../engine/market.js';
 import { floatRanks, countCopies, copyCategory, CATEGORY_NAME, itemKey, floatRecords, FLOAT_TOP, patternCounts, patternCount, byPattern } from '../engine/database.js';
@@ -283,6 +283,7 @@ function drawItem() {
           <dt>Rarity</dt><dd style="color:${e.rc}">${esc(e.rn)}</dd>
           ${skin && !d.v ? `<dt>Float range</dt><dd><div class="floatwrap"><div class="floatbar"><div class="range" style="left:${d.mn * 100}%;right:${(1 - d.mx) * 100}%"></div></div></div>${d.mn.toFixed(2)} – ${d.mx.toFixed(2)}</dd>` : ''}
           ${col ? `<dt>Collection</dt><dd>${esc(col)}</dd>` : ''}
+          ${creatorHTML(d) ? `<dt>Made by</dt><dd>${creatorHTML(d)}</dd>` : ''}
           ${from.length ? `<dt>Found in</dt><dd>${from.slice(0, 6).map(esc).join(', ')}${from.length > 6 ? ` and ${from.length - 6} more` : ''}</dd>` : ''}
           ${d.t ? `<dt>Tournament</dt><dd>${esc(d.t)}</dd>` : ''}
           ${!priceRows.length ? `<dt>Price</dt><dd>${money(e.price)}</dd>` : ''}

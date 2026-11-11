@@ -176,10 +176,11 @@ function slabPrice(idx, stickers) {
   return Math.round(d[Math.floor(d.length * 0.1)] * 100) / 100;
 }
 
-// Mutates game data in place with fresh prices. Returns counts for reporting.
+// Mutates game data in place with fresh prices. Returns counts for reporting. Custom content (`cx`, CUSTOM_CONTENT.md) has
+// no market: its prices are its pack's, and are left as they are.
 function applyPrices(data, idx) {
   let skins = 0, stickers = 0, agents = 0, cases = 0, charms = 0;
-  for (const s of Object.values(data.skins)) { s.p = priceSkin(idx, s); skins++; }
+  for (const s of Object.values(data.skins)) { if (s.cx) continue; s.p = priceSkin(idx, s); skins++; }
   for (const s of Object.values(data.stickers)) {
     const p = priceOf(idx, s.n, null);
     if (p != null) { s.p = p; stickers++; }
@@ -189,7 +190,7 @@ function applyPrices(data, idx) {
     if (p != null) { a.p = p; agents++; }
   }
   for (const c of data.cases) {
-    if (c.custom) continue;
+    if (c.custom || c.cx) continue;
     const p = priceOf(idx, c.n, null);
     if (p != null) { c.price = p; cases++; }
   }

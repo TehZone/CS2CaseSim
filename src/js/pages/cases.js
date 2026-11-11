@@ -1,12 +1,12 @@
 import { esc, money, imgUrl, round2 } from '../util.js';
-import { D, WEARS, casePrice, caseTiers, rarityColor, DOPPLER_PHASE_WEIGHT, collectionBox, eventShort, CASE_KINDS, keyFor } from '../data.js';
+import { D, WEARS, casePrice, caseTiers, rarityColor, phaseWeight, collectionBox, eventShort, CASE_KINDS, keyFor } from '../data.js';
 import * as I from '../items.js';
 import { S, save, emit, setAutoOpening } from '../state.js';
 import { autoSellLabel, autoSellModal, autoSellRules } from '../autosell.js';
 import { act, can, online } from '../backend.js';
 import { net } from '../net/online.js';
 import { sfx } from '../audio.js';
-import { toast, openModal, itemCard, patternTag, sellItems, openInspect, showItemDetail, rarityOddsHTML } from '../ui.js';
+import { toast, openModal, itemCard, patternTag, sellItems, openInspect, showItemDetail, rarityOddsHTML, creatorHTML } from '../ui.js';
 import { playCaseIntro } from '../caseintro.js';
 import { UNIT_CAP, UNIT_PRICE, unitsOf } from '../engine/storage.js';
 import { buyUnit } from './storage.js';
@@ -80,7 +80,7 @@ export function caseEV(c) {
     let avg;
     if (k === 'rare') {
       avg = c.rare.reduce((s, g) => {
-        const ws = g.map((id) => (g.length > 1 ? DOPPLER_PHASE_WEIGHT[D.skins[id].ph] ?? 0.2 : 1));
+        const ws = g.map((id) => (g.length > 1 ? phaseWeight(D.skins[id]) : 1));
         const t = ws.reduce((a, b) => a + b, 0);
         return s + g.reduce((a, id, i) => a + (ws[i] / t) * expectedSkin(D.skins[id], 'case'), 0);
       }, 0) / c.rare.length;
@@ -441,6 +441,7 @@ function skinPreview(c, ids, odds) {
           ${sv ? '<dt>Souvenir</dt><dd>Always (with match stickers)</dd>' : `<dt>StatTrak™</dt><dd>${canStt ? 'Available (10% of drops)' : 'Not available'}</dd>`}
           ${s.col && D.colById[s.col] ? `<dt>Collection</dt><dd>${esc(D.colById[s.col].n)}</dd>` : ''}
           <dt>Finish style</dt><dd>${esc(s.st || '—')}</dd>
+          ${creatorHTML(s) ? `<dt>Made by</dt><dd>${creatorHTML(s)}</dd>` : ''}
         </dl>
         <table class="price-table">
           <tr><th>Exterior</th><th>Price</th>${col2 ? `<th>${col2}</th>` : ''}</tr>

@@ -10,3 +10,5 @@ server/.data/
 .claude/settings.local.json
 .discord-token
 .discord-token.txt
+custom-reference/
+custom-staging/

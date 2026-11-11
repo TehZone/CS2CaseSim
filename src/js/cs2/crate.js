@@ -7,6 +7,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cs2Crate, cs2Status } from './api.js';
 import { texture } from './textures.js';
+import { D } from '../data.js';
 
 const loader = new GLTFLoader();
 const gltfs = new Map();
@@ -59,7 +60,9 @@ function shadowTexture() {
 }
 
 class CrateScene {
-  constructor(gltf, decals) {
+  // art: a custom case's emblem (CUSTOM_CONTENT.md), in place of the crate's own: CS2's crates carry theirs in a material
+  // of its own (…_decal), older ones as a decal over the body.
+  constructor(gltf, decals, art = null) {
     this.scene = new THREE.Scene();
     this.root = cloneSkinned(gltf.scene);
     this.root.traverse((o) => {
@@ -67,7 +70,8 @@ class CrateScene {
       o.frustumCulled = false;
       o.material = o.material.clone();
       o.material.envMapIntensity = 0.75;
-      if (decals[o.material.name]) addDecal(o.material, decals[o.material.name]);
+      if (art && /_decal$/.test(o.material.name)) { o.material.map = art; o.material.needsUpdate = true; }
+      else if (decals[o.material.name]) addDecal(o.material, art || decals[o.material.name]);
     });
     this.scene.add(this.root);
     this.scene.environment = env;
@@ -188,15 +192,18 @@ class CrateScene {
 // The container's 3D crate ready to play, or null (no CS2 install, or a container without one: capsules, older
 // souvenir packages). `id` is the container's item id ("crate-4001").
 export async function loadCrate(id) {
-  const def = String(id).replace(/^crate-/, '');
+  // A custom case (CUSTOM_CONTENT.md) plays a real case's crate (its `crate.base`) with its own emblem on it, if it has one.
+  const cx = D.caseById[id]?.cx ? D.caseById[id].crate : null;
+  const def = cx ? String(cx.base) : String(id).replace(/^crate-/, '');
   if (!/^\d+$/.test(def) || !(await cs2Status()).available) return null;
   const info = await cs2Crate(def);
   if (!info?.model) return null;
-  const [gltf, decals] = await Promise.all([
+  const [gltf, decals, art] = await Promise.all([
     loadGltf(info.model),
     Promise.all(Object.entries(info.decals || {}).map(async ([m, url]) => [m, await texture(url, { srgb: true })])),
+    cx?.art ? texture(cx.art, { srgb: true }) : null,
   ]);
   if (!gltf.animations.some((a) => a.name === 'fall')) return null;
   sharedRenderer();
-  return new CrateScene(gltf, Object.fromEntries(decals));
+  return new CrateScene(gltf, Object.fromEntries(decals), art);
 }

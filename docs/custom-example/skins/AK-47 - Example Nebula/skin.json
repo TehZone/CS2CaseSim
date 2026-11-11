@@ -1,0 +1,13 @@
+{
+  "name": "AK-47 | Example Nebula",
+  "rarity": "Classified",
+  "float": [0, 0.7],
+  "stattrak": true,
+  "prices": { "FN": 42.5, "MW": 24, "FT": 15.75, "WW": 13.2, "BS": 11.4 },
+  "finish": {
+    "style": "Custom Paint Job",
+    "model": "hd",
+    "roughness": 0.45
+  },
+  "credit": "Example pack (procedural textures from docs/custom-example/make-textures.mjs)"
+}

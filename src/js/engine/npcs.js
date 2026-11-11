@@ -54,13 +54,17 @@ const FAV_GUNS = ['AK-47', 'M4A4', 'M4A1-S', 'AWP', 'USP-S', 'Glock-18', 'Desert
 // grail), and items for their own collection.
 const OLD_MAJOR = /2014|Katowice 2015|Cologne 2015/;
 const skinOf = (it) => (it.t === 'skin' ? I.itemDef(it) : null);
+// (Collectors who go by a finish's name, Doppler, Case Hardened or Fade, go by CS2's own finishes: a custom one is none of
+// them whatever it's called or however its phases are named. A custom Fade is a Fade by its pack's rule, as its value is:
+// patterns.js.)
+const isFade = (d) => (d?.cx ? d.pr === 'Fade' : /Fade/.test(d?.fin || ''));
 export const FOCUS = {
   doppler: { n: 'Doppler collector', bio: 'Every phase, every knife. Ruby / Sapphire / Black Pearl / Emerald over everything.',
-    fit: (it, d = skinOf(it)) => (d?.ph ? (/Ruby|Sapphire|Black Pearl|Emerald/.test(d.ph) ? 1.3 : 0.7) : 0), pool: (s) => !!s.ph },
+    fit: (it, d = skinOf(it)) => (d?.ph && !d.cx ? (/Ruby|Sapphire|Black Pearl|Emerald/.test(d.ph) ? 1.3 : 0.7) : 0), pool: (s) => !!s.ph && !s.cx },
   bluegem: { n: 'Blue gem hunter', bio: 'Case Hardened only. Show me your blue.',
-    fit: (it, d = skinOf(it)) => (d?.fin === 'Case Hardened' ? ({ t0: 2, t1: 1.4, t2: 1, t3: 0.7 }[I.patternInfo(it).tier] ?? 0.3) : 0), pool: (s) => s.fin === 'Case Hardened' },
+    fit: (it, d = skinOf(it)) => (d?.fin === 'Case Hardened' && !d.cx ? ({ t0: 2, t1: 1.4, t2: 1, t3: 0.7 }[I.patternInfo(it).tier] ?? 0.3) : 0), pool: (s) => s.fin === 'Case Hardened' && !s.cx },
   fade: { n: 'Fade collector', bio: 'Full fades and nothing less.',
-    fit: (it, d = skinOf(it)) => (/Fade/.test(d?.fin || '') ? (I.patternInfo(it).mult > 1 ? 1.2 : 0.5) : 0), pool: (s) => /Fade/.test(s.fin || '') },
+    fit: (it, d = skinOf(it)) => (isFade(d) ? (I.patternInfo(it).mult > 1 ? 1.2 : 0.5) : 0), pool: (s) => isFade(s) },
   lowfloat: { n: 'Low float collector', bio: '0.00x or bust. Float is everything.',
     fit: (it) => (it.t === 'skin' && it.fl != null ? (it.fl < 0.001 ? 1.6 : it.fl < 0.01 ? 1 : I.floatMultiplier(it) > 1 ? 0.6 : 0) : 0), pool: (s) => !s.v && s.mn < 0.01 },
   serial: { n: 'Serial number collector', bio: 'Low serials, #1s and funny numbers.',
@@ -206,9 +210,9 @@ const lowest = (s) => (s.v ? s.p.V[0] : Math.min(...Object.values(s.p).map((r) =
 // Every skin (by its cheapest price, for picking within a budget) and each collector's kind, worked out once.
 let skinIndex = null;
 function index() {
-  if (skinIndex?.data === D.generatedAt) return skinIndex;
+  if (skinIndex?.data === D.lock) return skinIndex;
   const list = Object.values(D.skins).filter((s) => s.cat !== 'equipment' && Number.isFinite(lowest(s))).map((s) => ({ s, p: lowest(s) })).sort((a, b) => a.p - b.p);
-  skinIndex = { data: D.generatedAt, list: list.map((x) => x.s), all: list, plain: list.filter((x) => !x.s.star), pools: {},
+  skinIndex = { data: D.lock, list: list.map((x) => x.s), all: list, plain: list.filter((x) => !x.s.star), pools: {},
     old: Object.values(D.stickers).filter((x) => OLD_MAJOR.test(x.t || '') && x.p > 0), souvenirs: D.cases.filter((c) => c.kind === 'souvenir' && c.pools) };
   for (const f of FOCI) skinIndex.pools[f] = skinIndex.list.filter(FOCUS[f].pool);
   return skinIndex;
@@ -340,7 +344,7 @@ const starts = new Map();
 export function inventoryOf(so, n) {
   if (so.npcs[n.id]) return so.npcs[n.id].inv;
   let gen = starts.get(so.seed);
-  if (!gen || gen.data !== D.generatedAt) starts.set(so.seed, (gen = { data: D.generatedAt, inv: new Map() }));
+  if (!gen || gen.data !== D.lock) starts.set(so.seed, (gen = { data: D.lock, inv: new Map() }));
   if (!gen.inv.has(n.id)) gen.inv.set(n.id, startingState(so.seed, n).inv.map((it, k) => ({ ...it, uid: `${n.id}:${k}` })));
   return gen.inv.get(n.id);
 }

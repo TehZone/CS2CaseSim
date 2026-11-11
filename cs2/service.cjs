@@ -89,6 +89,43 @@ const WORLD_SHADERS = /lightmappedgeneric|static_overlay|environment_blend|csgo_
 // Glove composite textures csgo_customglove samples as raw hemi-octahedral normals.
 const GLOVE_RAW_TEXTURES = /^g_t(Normal|DetailNormal\d|DamageNormal\d|SurfaceNormal\d|SubstrateNormal\d|TintId)$/;
 
+// Custom content (CUSTOM_CONTENT.md): a custom paint kit's own textures are 'custom:<url>', the url one the app serves
+// (custom/<item id>/<file>.png, shipped with the game). They're never looked for in CS2's files.
+const CUSTOM_TEX = 'custom:';
+const isCustomTex = (v) => typeof v === 'string' && v.startsWith(CUSTOM_TEX);
+const customUrl = (v) => (/^custom\/[\w./-]+\.png$/.test(v.slice(CUSTOM_TEX.length)) && !v.includes('..') ? v.slice(CUSTOM_TEX.length) : null);
+const TEMPLATES_VERSION = 1;
+// Sets a custom kit's values into a CS2 Workshop template's loose variables ({ 'alias.name': spec }, see
+// scripts/build-custom.mjs kitVars), as a finish made in CS2's Workshop tools has them. Returns the ones it found.
+function setLooseVars(doc, vars) {
+  const found = new Set();
+  for (const point of doc.m_Points || []) {
+    for (const proc of point.m_vecCompositeMaterialAssemblyProcedures || []) {
+      for (const c of proc.m_vecCompositeInputContainers || []) {
+        if (c.m_nCompositeMaterialInputContainerSourceType !== 'CONTAINER_SOURCE_TYPE_LOOSE_VARIABLES') continue;
+        for (const v of c.m_vecLooseVariables || []) {
+          const key = c.m_strAlias + '.' + v.m_strName, spec = vars[key];
+          if (!spec) continue;
+          found.add(key);
+          if (spec.texture != null) v.m_strTextureRuntimeResourcePath = CUSTOM_TEX + spec.texture;
+          else if (spec.bool != null) v.m_bValueBoolean = !!spec.bool;
+          else if (spec.color) v.m_cValueColor4 = [...spec.color.slice(0, 3).map((x) => Math.round(Math.max(0, Math.min(255, x)))), 255];
+          else if (spec.int != null) v.m_nValueIntX = spec.int | 0;
+          else if (spec.value != null) {
+            const xs = [].concat(spec.value), mins = spec.min != null ? [].concat(spec.min) : null, maxs = spec.max != null ? [].concat(spec.max) : null;
+            ['X', 'Y', 'Z', 'W'].slice(0, xs.length).forEach((axis, i) => {
+              v['m_flValueFloat' + axis] = xs[i];
+              if (mins) v[`m_flValueFloat${axis}_Min`] = mins[i];
+              if (maxs) v[`m_flValueFloat${axis}_Max`] = maxs[i];
+            });
+          }
+        }
+      }
+    }
+  }
+  return found;
+}
+
 // CS2's own case-opening sounds.
 const CASE_SOUNDS = {
   unlock: 'sounds/ui/panorama/case_unlock_01.vsnd',
@@ -116,8 +153,11 @@ const MEDAL_ICON = (y, l) => `panorama/images/econ/status_icons/service_medal_${
 
 class CS2Service {
   // shrinkImages(files, maxSize): optional, makes backdrop textures smaller after export (Electron passes one).
-  constructor({ cacheDir, cliPath, cliEnv = {}, log = () => {}, shrinkImages = null }) {
+  // customKits(): custom content's paint kits ({ fid: kit }, the custom data's `kits`), read when one is asked for.
+  constructor({ cacheDir, cliPath, cliEnv = {}, log = () => {}, shrinkImages = null, customKits = null }) {
     this.shrinkImages = shrinkImages;
+    this.customKits = customKits;
+    this.customKitJobs = new Map();
     this.vanityJobs = new Map();
     this.crateJobs = new Map();
     this.cacheDir = cacheDir;
@@ -571,7 +611,7 @@ class CS2Service {
     const index = await this.ensureIndex();
     const w = index.weapons[weapon] || (EXTRA_MODELS[weapon] && { model: EXTRA_MODELS[weapon] });
     if (!w) throw new Error('Unknown weapon ' + weapon);
-    const kit = paint ? index.paints[paint] : null;
+    const kit = paint ? index.paints[paint] || await this.customKit(paint) : null;
     if (paint && !kit) throw new Error('Paint kit not found: ' + paint);
 
     const { gltfFile, info } = await this.model(w.model);
@@ -584,10 +624,13 @@ class CS2Service {
     const result = { model: this.url(gltfFile), meshes: info.meshes, mesh: mesh.name, material, materials: info.materials, inputs, kit, textures: {}, shader: null };
     if (!kit || !inputs) return result;
 
-    // Every texture referenced by the weapon inputs and both paint passes.
+    // Every texture referenced by the weapon inputs and both paint passes (a custom kit's own come with the game).
     const vtex = new Set(Object.values(inputs.textures));
     for (const pass of [kit.color, kit.rough, kit.final]) {
-      for (const v of Object.values(pass || {})) if (v && v.kind === 'texture' && v.value) vtex.add(v.value);
+      for (const v of Object.values(pass || {})) {
+        if (!v || v.kind !== 'texture' || !v.value) continue;
+        if (isCustomTex(v.value)) { const u = customUrl(v.value); if (u) result.textures[v.value] = u; } else vtex.add(v.value);
+      }
     }
     const files = await this.cs2.extract([...vtex]);
     for (const [vpk, local] of Object.entries(files)) {
@@ -602,6 +645,93 @@ class CS2Service {
     }).filter(Boolean).join(',');
     result.shader = { combo, source: await this.cs2.shaderSource(kit.shader, combo || 'S_PAINT_STYLE=0') };
     return result;
+  }
+
+  // ---- custom content (CUSTOM_CONTENT.md) ----------------------------------------------------------------------------------
+  // A custom item's paint kit (fid 'cx_…'), resolved into the shape of the index's kits, or null if there's no such kit.
+  //   kind 'weapon' (guns, knives): one of CS2's own Workshop templates (workshop/paintkits/templates/<template>.vcompmat,
+  //     what a finish made in CS2's Workshop tools is built on) with the pack's values in its exposed variables, then
+  //     resolved by the same code as CS2's 1,400 kits: the same shader variant, passes and seed rolls as a real finish.
+  //   kind 'glove': a CS2 glove kit of that glove type (`base`: its leather and fabric, normal map and wear) with the
+  //     pack's own pattern on it.
+  // Made again when the kit's definition changes (a rebuilt pack in development).
+  customKit(fid) {
+    const def = this.customKits?.()?.[fid];
+    if (!def || typeof def !== 'object') return Promise.resolve(null);
+    const key = JSON.stringify(def), hit = this.customKitJobs.get(fid);
+    if (hit?.key === key) return hit.job;
+    const job = def.kind === 'glove' ? this.customGloveKit(fid, def) : this.customWeaponKit(fid, def);
+    this.customKitJobs.set(fid, { key, job });
+    job.catch(() => { if (this.customKitJobs.get(fid)?.job === job) this.customKitJobs.delete(fid); });
+    return job;
+  }
+
+  // CS2's Workshop templates and the materials they use, read from the player's install once (again after a CS2 update
+  // changes them): { docs: { path: vcompmat }, vmats: { path: vmat } }.
+  workshopTemplates() {
+    if (!this.templatesJob) {
+      this.templatesJob = (async () => {
+        const cs2 = this.ensureCS2();
+        const file = path.join(this.cacheDir, 'custom', 'templates.json');
+        const inputs = ['workshop/paintkits/'];
+        const c = await cs2.cached(file, inputs, (x) => x.version === TEMPLATES_VERSION);
+        if (c?.docs) return c;
+        const docs = await cs2.dump('workshop/paintkits/templates/', 'vcompmat_c');
+        const vmats = await cs2.dump('workshop/paintkits/', 'vmat_c');
+        return cs2.save(file, { version: TEMPLATES_VERSION, docs, vmats }, inputs);
+      })();
+      this.templatesJob.catch(() => { this.templatesJob = null; });
+    }
+    return this.templatesJob;
+  }
+
+  async customWeaponKit(fid, def) {
+    if (!/^[a-z_]+$/.test(String(def.template))) throw new Error('Bad template ' + def.template);
+    const { docs, vmats } = await this.workshopTemplates();
+    const p = `workshop/paintkits/templates/${def.template}.vcompmat`;
+    if (!docs[p]) throw new Error('CS2 has no Workshop template ' + def.template);
+    const doc = JSON.parse(JSON.stringify(docs[p]));
+    const found = setLooseVars(doc, def.vars || {});
+    const missing = Object.keys(def.vars || {}).filter((k) => !found.has(k));
+    if (missing.length) this.log(`custom kit ${fid}: ${def.template} has no ${missing.join(', ')} (left out)`);
+    const wear = def.wear || [0, 1];
+    const kit = this.cs2.resolvePaint({ name: fid, use_legacy_model: def.legacy ? '1' : '0', wear_remap_min: String(wear[0]), wear_remap_max: String(wear[1]) },
+      0, { path: `custom/${fid}.vcompmat`, doc }, {}, vmats);
+    return { ...kit, custom: true };
+  }
+
+  async customGloveKit(fid, def) {
+    const index = await this.ensureIndex();
+    const base = index.paints[def.base];
+    if (base?.shader !== 'csgo_customglove') throw new Error('CS2 has no glove kit ' + def.base);
+    if (base.color.F_BACKWARDS_COMPATIBILITY?.value) throw new Error(`${def.base} is a layered glove kit: custom gloves start from a classic one`);
+    const url = (u) => (customUrl(CUSTOM_TEX + u) ? CUSTOM_TEX + u : null);
+    if (!url(def.pattern)) throw new Error('Bad custom glove pattern ' + def.pattern);
+    const kit = JSON.parse(JSON.stringify(base));
+    const set = (k, kind, value) => { kit.color[k] = { kind, value }; };
+    const rot = def.rotation || [0, 0], off = def.offset || [[0, 0], [0, 0]];
+    set('F_PATTERN', 'int', 1);
+    set('g_tPattern', 'texture', url(def.pattern));
+    set('g_nPatternMode', 'int', def.mode ?? 3);
+    set('g_nPatternReplaceIndex', 'int', def.layer ?? 1); // (1 to 4; the renderer counts from 0)
+    set('g_fPatternTexCoordScale', 'float', def.scale ?? 1);
+    // CS2 mirrors a pattern on one hand (both hands share one UV layout). A picture painted on that layout shows as
+    // painted on both with the fix-up off (see glove.js handParams).
+    set('g_bFlipFixup', 'int', def.mirror ? 1 : 0);
+    kit.color.g_fPatternTexCoordRotation = { kind: 'float', value: rot[0], min: rot[0], max: rot[1] };
+    kit.color.g_fPatternTexCoordOffset = { kind: 'float2', value: off[0], min: off[0], max: off[1] };
+    (def.tints || []).slice(0, 8).forEach((c, i) => set('g_vColorTint' + (i + 1), 'vec', [...c.slice(0, 3), 0]));
+    if (def.palette) set('g_vPatternPaletteIndices', 'vec', def.palette.slice(0, 4));
+    if (def.layerMask && url(def.layerMask)) set('g_tLayerMask', 'texture', url(def.layerMask));
+    const fix = (r) => {
+      if (r.name === 'g_fPatternTexCoordRotation') Object.assign(r, { min: rot[0], max: rot[1] });
+      if (r.name === 'g_fPatternTexCoordOffset') Object.assign(r, { min: off[0], max: off[1] });
+    };
+    (kit.rolls || []).forEach(fix);
+    for (const s of kit.rollSets || []) s.vars.forEach(fix);
+    kit.wear = def.wear || kit.wear;
+    // (Its picture's colours are read as sRGB where they're the glove's colour: modes 2 and 3.)
+    return { ...kit, id: 0, compmat: `custom/${fid}.vcompmat`, custom: true, srgb: (def.mode ?? 3) >= 2 ? ['g_tPattern'] : [] };
   }
 
   // ---- Play mode ----------------------------------------------------------------------------------------
@@ -1491,13 +1621,16 @@ class CS2Service {
   async prepareGlove(gltfFile, info, kit) {
     const mesh = info.meshes.find((m) => m.name === 'viewmodel') || info.meshes[0];
     const hands = mesh.materials.filter((n) => /^glove_/.test(n));
-    const tex = Object.entries(kit.color).filter(([, v]) => v?.kind === 'texture' && v.value);
+    const all = Object.entries(kit.color).filter(([, v]) => v?.kind === 'texture' && v.value);
+    const tex = all.filter(([, v]) => !isCustomTex(v.value)), own = all.filter(([, v]) => isCustomTex(v.value) && customUrl(v.value));
     const isRaw = (n) => GLOVE_RAW_TEXTURES.test(n);
     const [files, rawFiles] = await Promise.all([
       this.cs2.extract(tex.filter(([n]) => !isRaw(n)).map(([, v]) => v.value)),
       this.cs2.extract(tex.filter(([n]) => isRaw(n)).map(([, v]) => v.value), { raw: true }),
     ]);
     const urls = (found) => Object.fromEntries(Object.entries(found).filter(([, f]) => f).map(([vpk, f]) => [vpk.replace(/_c$/, ''), this.url(f)]));
+    // (A custom pair's own textures: custom content, CUSTOM_CONTENT.md.)
+    const ownUrls = Object.fromEntries(own.map(([, v]) => [v.value, customUrl(v.value)]));
     // Older kits use the "Source1 texture layout"; the newest (Source2 height blending) layer surface and substrate
     // materials and may tint by ID. SPIRV-Cross needs GLSL ES 3.10 for that variant (the renderer converts it).
     const f = (n) => (kit.color[n]?.value ? 1 : 0);
@@ -1505,7 +1638,7 @@ class CS2Service {
     const combo = `S_BACKWARDS_COMPATIBILITY=${layered},S_ANISOTROPIC_GLOSS=${f('F_ANISOTROPIC_GLOSS')},S_TINT_ID=${layered && f('F_TINT_ID')}`;
     return {
       model: this.url(gltfFile), meshes: info.meshes, mesh: mesh.name, material: hands[0] || null, materials: info.materials,
-      inputs: null, kit, glove: true, hands, textures: urls(files), rawTextures: urls(rawFiles),
+      inputs: null, kit, glove: true, hands, textures: { ...urls(files), ...ownUrls }, rawTextures: urls(rawFiles),
       shader: { combo, layered: !!layered, source: await this.cs2.shaderSource(kit.shader, combo, { es: layered ? 310 : 300 }) },
     };
   }

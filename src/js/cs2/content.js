@@ -18,7 +18,7 @@ async function prepareContent() {
   return {
     skins,
     stickers: [...new Set(Object.values(D.stickers).map((s) => s.sm).filter(Boolean))],
-    crates: D.cases.map((c) => /^crate-(\d+)$/.exec(c.id)?.[1]).filter(Boolean),
+    crates: D.cases.map((c) => (c.cx ? c.crate?.base : /^crate-(\d+)$/.exec(c.id)?.[1])).filter(Boolean), // (a custom case: the crate it borrows)
     agents: [...AGENTS.T, ...AGENTS.CT],
     anims: botClips(weapons, { gestures: true }),
     weapons,

@@ -424,7 +424,8 @@ async function loadTextures(renderer, prep, variant) {
     const name = m ? m[1] : u;
     let t = whiteTex();
     if (url(name)) {
-      t = await texture(url(name), { srgb: variant.srgb.test(name), exact: true });
+      // (A custom pair's picture is sRGB where it's the glove's own colour: kit.srgb, see CS2Service.customGloveKit.)
+      t = await texture(url(name), { srgb: variant.srgb.test(name) || !!prep.kit.srgb?.includes(name), exact: true });
       if (/Point|Dummy/.test(m?.[2] || '')) { t.minFilter = t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; }
       owned.push(t);
     }

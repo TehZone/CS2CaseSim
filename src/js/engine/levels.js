@@ -89,11 +89,13 @@ export function addXp(prof, xp, { r = rand, now = Date.now() } = {}) {
 const POOL_CASES = 6;
 let pool = null;
 export function dropPool() {
-  if (pool?.data === D.generatedAt) return pool;
-  const cases = D.cases.filter((c) => c.kind === 'case' && !c.custom && c.price != null)
-    .sort((a, b) => String(b.date || '').replace(/\//g, '-').localeCompare(String(a.date || '').replace(/\//g, '-'))).slice(0, POOL_CASES);
+  if (pool?.data === D.lock) return pool;
+  // (Custom cases only when their pack says so, on top of the six: a new custom case never pushes a real one out.)
+  const cases = D.cases.filter((c) => c.kind === 'case' && !c.custom && !c.cx && c.price != null)
+    .sort((a, b) => String(b.date || '').replace(/\//g, '-').localeCompare(String(a.date || '').replace(/\//g, '-'))).slice(0, POOL_CASES)
+    .concat(D.cases.filter((c) => c.cx && c.levelDrops && c.kind === 'case' && c.price != null));
   const collections = D.collections.filter((c) => /timed-drops/.test(c.id));
-  pool = { data: D.generatedAt, cases, collections };
+  pool = { data: D.lock, cases, collections };
   return pool;
 }
 // One of the timed-drop skins, rarer grades five times rarer each (a Classified is a lucky reward).

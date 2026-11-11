@@ -1,0 +1,14 @@
+{
+  "name": "★ Karambit | Example Aurora",
+  "float": [0, 0.08],
+  "prices": { "FN": 1450, "MW": 1290 },
+  "pricesStatTrak": { "FN": 1690, "MW": 1480 },
+  "patternRule": "Fade",
+  "finish": {
+    "style": "Anodized Airbrushed",
+    "colors": ["#0c1430", "#21e6a1", "#7b4dff", "#ff4fa3"],
+    "rotation": [-60, -50],
+    "offset": [[0.15, 0.15], [0.15, 0.15]],
+    "pearlescence": 0.3
+  }
+}

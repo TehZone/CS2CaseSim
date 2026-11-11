@@ -30,6 +30,8 @@ const SIZES = { s: '/256fx192f', m: '/512fx384f', l: '/1024fx768f' };
 // on disk and same-origin (needed to read pixels for the 3D inspect and sticker compositing).
 export function imgUrl(img, size = 'm') {
   if (!img) return '';
+  // Custom content's pictures ship in the game (src/custom/<id>/icon.png, and icon-l.png twice the size): no proxy.
+  if (img.startsWith('custom/')) return size === 'l' ? img.replace(/\.png$/, '-l.png') : img;
   const full = img.startsWith('~') ? STEAM + img.slice(1) + (SIZES[size] || '') : img;
   return 'img?u=' + encodeURIComponent(full);
 }

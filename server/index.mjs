@@ -33,6 +33,7 @@ import { Admin, banText, networkBanText } from './admin.mjs';
 import { Release, releaseFromEnv } from './release.mjs';
 import { Passive, PASSIVE_TICK_MS } from './passive.mjs';
 import { D, initData } from '../src/js/engine/data.js';
+import { lockBase, dataLock, hasCustom, customPriceHash, stableJson } from '../src/js/engine/custom.js';
 import { makeCtx, runAction, delta, GameError } from '../src/js/engine/actions.js';
 import { dropEmbed } from './drops.mjs';
 import { marketWindow } from '../src/js/engine/market.js';
@@ -41,6 +42,7 @@ import { ownedValue } from '../src/js/engine/storage.js';
 import { forConnection, leanAct, leanPush, leanState, statsBefore, storedOfUnit, sumsSent, unitSums, unitsChange } from './lean.mjs';
 
 const require = createRequire(import.meta.url);
+const { parseVersion, compareVersions } = require('../shared/release.cjs');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROTOCOL = 1;
 // Capabilities a game can announce in its hello. Each names a set of message shapes, frozen once a game that announces it is
@@ -86,6 +88,47 @@ const IN_TRANSACTION = /^(storage|tools|index)\./;
 // What a player opens or trades up to themselves: the rare ones go to the Discord server (see drops.mjs). Not a case battle's
 // drops, which another seat may have opened, and not a level-up reward, which isn't opened.
 const OPENED = new Set(['case.open', 'armory.redeem', 'tradeup.sign']);
+
+// src/data/custom.json (custom content, built by scripts/build-custom.mjs), or null when there is none. One that's there
+// but can't be read stops the server: without it its lock would let in no game built with it.
+export function readCustom(file) {
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
+  return JSON.parse(text);
+}
+
+// The release gate: which custom content the server runs. A build of custom content into the game says the version it
+// ships in (custom.app, stamped by scripts/build-custom.mjs). Games without that content can't play with a server that has
+// it (the data lock), and nobody has it before that version's release is published. So with the release feed on
+// (server/release.mjs, production), content whose lock differs from what the server ran last waits for that release:
+// until the feed's required version is at least custom.app, the server runs the content it ran last (kept in the database,
+// kv 'custom': what the published release has), or none. Pushing new custom content before publishing its release then
+// locks no game out, 1.1.3 included. Once the release is out the server restarts into it (startServer's `restart`).
+// Content with the same lock (new prices, new textures) runs at once. Without the release feed (development, tests) the
+// file's content always runs.
+// Returns { use: the custom content to run, held: null or { app, lock } (what waits), save: what to keep as run last }.
+export async function customGate({ db, custom, generatedAt, releaseOn, log = () => {} }) {
+  const lockOf = (c) => dataLock(generatedAt, hasCustom(c) ? c : null);
+  if (!releaseOn) return { use: custom, held: null, save: false, live: null };
+  const kv = async (k) => {
+    const { rows } = await db.query('SELECT v FROM kv WHERE k = $1', [k]);
+    return rows[0] && (typeof rows[0].v === 'string' ? JSON.parse(rows[0].v) : rows[0].v);
+  };
+  let live = null, required = null;
+  // (Kept as its text: jsonb would reorder its keys, and a skin's prices are in wear order.)
+  try { const k = await kv('custom'); live = typeof k?.json === 'string' ? JSON.parse(k.json) : null; } catch (e) { log('[custom] could not read the custom content run last', e.message); }
+  try { required = (await kv('release'))?.version ?? null; } catch (e) { log('[custom] could not read the required version', e.message); }
+  live = hasCustom(live) ? live : null;
+  const lock = lockOf(custom), go = { use: custom, held: null, save: true, live };
+  if (lock === lockOf(live)) return go;
+  // (Content removed: there's no version to wait for, so it goes at once; CUSTOM_CONTENT.md says to release that quickly.)
+  if (!hasCustom(custom)) return go;
+  const app = parseVersion(custom.app) ? custom.app : null;
+  if (app && required && compareVersions(required, app) >= 0) return go;
+  log(`[custom] custom content for version ${app || '(none: rebuild it with npm run custom)'} waits for its release (required now: ${required || 'none'}): `
+    + `running ${live ? 'the custom content run last' : 'none'} until then (data lock ${lockOf(live)})`);
+  return { use: live, held: { app, lock }, save: false, live };
+}
 
 // The bot's options from the environment (false: no token, no bot). The token is read, never logged.
 export function discordFromEnv({ env = process.env, tokenFile = env.DISCORD_TOKEN_FILE, log = console.log } = {}) {
@@ -134,11 +177,26 @@ export async function startServer({
   commit = process.env.SERVER_COMMIT || process.env.RENDER_GIT_COMMIT || null,
   // Passive income (server/passive.mjs): the server's clock, and how often it looks for whole minutes due (tests set both).
   clock = Date.now, passiveTick = PASSIVE_TICK_MS,
+  // Custom content (src/js/engine/custom.js): undefined reads src/data/custom.json if there is one; tests pass a build's
+  // object, or false for none. restart: how the server starts again (run directly: it stops, and systemd starts it), for
+  // custom content that waited for its release (customGate) once the release is out.
+  custom: customOpt, restart = null,
 } = {}) {
   const data = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/game-data.json'), 'utf8'));
-  initData(data, { keys: JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/keys.json'), 'utf8')) });
+  const custom = customOpt === undefined ? readCustom(path.join(ROOT, 'src/data/custom.json')) : customOpt || null;
   const db = await openDb(dbOpts);
   log(`[server] database: ${db.kind}`);
+  const gate = await customGate({ db, custom, generatedAt: data.generatedAt, releaseOn: releaseOpt !== false, log });
+  initData(data, { keys: JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/keys.json'), 'utf8')), custom: gate.use });
+  if (D.cx) log(`[server] custom content: ${D.cx.skins} skins, ${D.cx.cases} cases (data lock ${D.lock})`);
+  // (What runs now is what the published release has: kept for the next start, which may be before the next release.)
+  if (gate.save) {
+    const now = hasCustom(gate.use) ? gate.use : null;
+    if (stableJson(now) !== stableJson(gate.live)) {
+      await (now ? db.query("INSERT INTO kv (k, v) VALUES ('custom', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify({ json: JSON.stringify(now) })]) : db.query("DELETE FROM kv WHERE k = 'custom'"))
+        .catch((e) => log('[custom] could not keep the custom content run', e.message));
+    }
+  }
   const store = new Store(db, { log });
   const sockets = new Map(); // userId -> Set<ws>
   // The latest kick of each player ({ seq, at, msg }): a hello already under way when it happened is refused with it.
@@ -267,7 +325,22 @@ export async function startServer({
   const admin = new Admin(srv, discord, { admins });
   srv.admin = admin;
   await admin.init();
-  const release = new Release(srv, releaseOpt);
+  // (Custom content that waits for its release, customGate: once the feed shows that version, the server starts again with
+  // it. A game that has it asking to play is a sign the release is out, so the feed is read then too, at most once a minute.)
+  let restarting = false, lastAsk = 0;
+  const onVersion = (v) => {
+    if (!gate.held?.app || restarting || compareVersions(v, gate.held.app) < 0) return;
+    restarting = true;
+    log(`[custom] version ${v} is out: starting again with its custom content (data lock ${gate.held.lock})`);
+    if (restart) setTimeout(restart, 3000).unref?.(); // (a moment for the "update the game" notices to go out)
+    else log('[custom] (no restart here: start the server again to run it)');
+  };
+  srv.customWaits = () => {
+    if (!gate.held || restarting || Date.now() - lastAsk < 60000) return;
+    lastAsk = Date.now();
+    release.poll().catch(() => {});
+  };
+  const release = new Release(srv, releaseOpt === false ? false : { ...releaseOpt, onVersion });
   srv.release = release;
   await release.init();
   srv.now = clock; // (passive income's time, and the clock a new or reset account's starts from)
@@ -279,12 +352,19 @@ export async function startServer({
   // ~135 KB. It takes a second or two, so it's made on zlib's own threads, not the one everything else runs on: nothing
   // waits for it but the server's start, and after a refresh gzip goes out until it's ready, never the old prices.)
   let pricePatch = null, pricePatchGz = null, pricePatchBr = null, brBuild = 0;
+  // Custom items' prices are their pack's, outside the lock: a deploy can change them alone. A game that kept the patch for
+  // the pricedAt the welcome names takes it from there without asking (src/js/net/online.js), so new ones need a new
+  // pricedAt. `cxp` (only with custom content) is the hash of the custom prices the patch was made with; `marketAt` (only
+  // when it differs from pricedAt) is when the marketplaces' prices were last read, which the daily refresh goes by.
+  const cxp = customPriceHash(D);
+  let marketAt = D.pricedAt;
   const buildPatch = () => {
     const pick = (obj, f) => Object.fromEntries(Object.values(obj).map((x) => [x.id, f(x)]));
     pricePatch = {
-      generatedAt: D.generatedAt, pricedAt: D.pricedAt,
+      generatedAt: D.lock, pricedAt: D.pricedAt, // (the data lock: a game takes the patch only for its own data)
       skins: pick(D.skins, (s) => s.p), stickers: pick(D.stickers, (s) => s.p), agents: pick(D.agents, (a) => a.p),
       cases: Object.fromEntries(D.cases.filter((c) => !c.custom).map((c) => [c.id, c.price])),
+      ...(cxp ? { cxp } : {}), ...(marketAt && marketAt !== D.pricedAt ? { marketAt } : {}),
     };
     const text = JSON.stringify(pricePatch);
     pricePatchGz = zlib.gzipSync(text);
@@ -300,26 +380,41 @@ export async function startServer({
       resolve();
     }));
   };
+  // (Saved prices, from before this start. A custom item's are always its pack's, as this deploy has it: they're skipped.)
   const applyPatch = (p) => {
-    for (const [id, v] of Object.entries(p.skins)) if (D.skins[id]) D.skins[id].p = v;
+    for (const [id, v] of Object.entries(p.skins)) if (D.skins[id] && !D.skins[id].cx) D.skins[id].p = v;
     for (const [id, v] of Object.entries(p.stickers)) if (D.stickers[id]) D.stickers[id].p = v;
     for (const [id, v] of Object.entries(p.agents)) if (D.agents[id]) D.agents[id].p = v;
-    for (const [id, v] of Object.entries(p.cases)) if (D.caseById[id]) D.caseById[id].price = v;
+    for (const [id, v] of Object.entries(p.cases)) if (D.caseById[id] && !D.caseById[id].cx) D.caseById[id].price = v;
     D.pricedAt = p.pricedAt;
   };
+  let cxPricesNew = false;
   try {
     const { rows } = await db.query("SELECT v FROM kv WHERE k = 'prices'");
     const saved = rows[0] && (typeof rows[0].v === 'string' ? JSON.parse(rows[0].v) : rows[0].v);
-    if (saved?.generatedAt === D.generatedAt && saved.pricedAt > (D.pricedAt || '')) { applyPatch(saved); log(`[prices] using prices from ${saved.pricedAt}`); }
+    // (Prices saved for this game data build, whatever custom content was there then: the real items' ids are the build's.)
+    if (saved && lockBase(saved.generatedAt) === D.generatedAt && saved.pricedAt > (D.pricedAt || '')) {
+      applyPatch(saved);
+      marketAt = saved.marketAt || saved.pricedAt;
+      log(`[prices] using prices from ${saved.pricedAt}`);
+    }
+    // Custom prices other than the saved patch's (a deploy changed them, or brought custom content): a new pricedAt, so
+    // games download the patch instead of using one they kept. (Without custom content, and none saved, as before.)
+    if ((cxp || saved?.cxp) && saved?.cxp !== cxp) cxPricesNew = true;
   } catch (e) { log('[prices] could not load saved prices', e.message); }
+  if (cxPricesNew) {
+    D.pricedAt = new Date().toISOString();
+    log(`[prices] custom prices changed: the price patch is new (${D.pricedAt})`);
+  }
   await buildPatch();
+  if (cxPricesNew) await db.query("INSERT INTO kv (k, v) VALUES ('prices', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(pricePatch)]).catch((e) => log('[prices] save failed', e.message));
   async function refreshPrices() {
     try {
       log('[prices] refreshing from marketplaces…');
       const raw = await pricing.fetchSources(fetch, (m) => log('[prices]', m));
       if (!Object.values(raw).some(Boolean)) return;
       pricing.applyPrices({ skins: D.skins, stickers: D.stickers, agents: D.agents, cases: D.cases }, pricing.buildIndex(raw));
-      D.pricedAt = new Date().toISOString();
+      D.pricedAt = marketAt = new Date().toISOString();
       buildPatch();
       await db.query("INSERT INTO kv (k, v) VALUES ('prices', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(pricePatch)]);
       log('[prices] updated', D.pricedAt);
@@ -328,7 +423,8 @@ export async function startServer({
   const DAY = 24 * 3600 * 1000;
   let priceTimer = null;
   if (priceRefresh) {
-    const age = Date.now() - Date.parse(D.pricedAt || 0);
+    // (By when the marketplaces were read, not when custom prices last changed the patch.)
+    const age = Date.now() - Date.parse(marketAt || 0);
     setTimeout(refreshPrices, age > DAY ? 20000 : age > 0 ? DAY - age : DAY).unref?.();
     priceTimer = setInterval(refreshPrices, DAY);
     priceTimer.unref?.();
@@ -411,7 +507,8 @@ export async function startServer({
       // many of them are compressed: behind a proxy, that the compression got through it.)
       if (url.pathname === '/health') {
         const conns = [...wss.clients];
-        return json(res, 200, { ok: true, online: sockets.size, data: D.generatedAt, pricedAt: D.pricedAt, requiredVersion: release.required, discord: { connected: !!discord.status().connected }, commit,
+        // (customWaits: the version whose release the pushed custom content waits for, customGate; only while it does.)
+        return json(res, 200, { ok: true, online: sockets.size, data: D.lock, pricedAt: D.pricedAt, requiredVersion: release.required, ...(gate.held ? { customWaits: gate.held.app || 'a rebuild', customLock: gate.held.lock } : {}), discord: { connected: !!discord.status().connected }, commit,
           ws: { connections: conns.length, deflate: conns.filter((c) => /permessage-deflate/.test(c.extensions)).length } });
       }
       if (url.pathname === '/') {
@@ -595,7 +692,12 @@ export async function startServer({
         const outdated = release.refusal(msg.app); // (first: an old game gets the reason it can read, whatever else differs)
         if (outdated) return refuse(outdated);
         if (msg.v !== PROTOCOL) return refuse({ t: 'fatal', error: 'Your game is a different version from the server. Update the game.', code: 'version' });
-        if (msg.data !== D.generatedAt) return refuse({ t: 'fatal', error: 'Your game data is a different version from the server. Update the game (or the server).', code: 'version' });
+        // (A game with the custom content that waits for its release: the release is out, or about to be. customGate.)
+        if (gate.held && msg.data === gate.held.lock && msg.data !== D.lock) {
+          srv.customWaits();
+          return refuse({ t: 'fatal', error: 'The server is switching to this version of the game. Try again in a few minutes.', code: 'version' });
+        }
+        if (msg.data !== D.lock) return refuse({ t: 'fatal', error: 'Your game data is a different version from the server. Update the game (or the server).', code: 'version' });
         // The capabilities it announced that this server has (unknown ones are left out). The welcome names them back only
         // to a game that sent caps at all: an older game's welcome is unchanged.
         const asked = Array.isArray(msg.caps);
@@ -792,9 +894,18 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const argv = process.argv.slice(2);
   const arg = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : undefined; };
   const admins = arg('--admins'), tokenFile = arg('--discord-token-file');
+  // --custom <dir>: another build of custom content (node scripts/build-custom.mjs --try prints it), to try it online
+  // against a local server without putting it in src/. Never in production.
+  const customDir = arg('--custom');
+  if (customDir && process.env.NODE_ENV === 'production') { console.error('--custom is for a local server, not production.'); process.exit(1); }
+  const customTry = customDir ? readCustom(path.join(path.resolve(customDir), 'data', 'custom.json')) : undefined;
+  if (customDir && !customTry) { console.error(`--custom ${customDir}: no data/custom.json there (build one: node scripts/build-custom.mjs --src <packs> --try).`); process.exit(1); }
   const s = await startServer({
     ...(admins != null ? { admins: list(admins) } : {}),
     ...(tokenFile ? { discord: discordFromEnv({ tokenFile }) } : {}),
+    ...(customTry ? { custom: customTry } : {}),
+    // (Exits once it's closed: systemd's Restart=always starts it again, on the commit the deploy checked out.)
+    restart: () => stop(),
   });
   let stopping = false;
   const stop = async () => {

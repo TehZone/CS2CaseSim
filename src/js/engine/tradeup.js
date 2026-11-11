@@ -10,7 +10,7 @@
 //   is drawn. So P(outcome) = inputs from the outcome's collection / total tickets.
 // Output float: each input float is normalised to its own skin's range, those are averaged, and the average is
 //   mapped onto the output skin's range: out = min + avg * (max - min).
-import { D, DOPPLER_PHASE_WEIGHT } from './data.js';
+import { D, phaseWeight } from './data.js';
 import { makeSkinItem } from './items.js';
 import { rand, pickWeighted } from './util.js';
 
@@ -98,7 +98,7 @@ export function tradeupContract(items) {
 // Signs a valid contract: returns the new item (the caller removes the inputs).
 export function rollTradeup(contract, r = rand) {
   const o = pickWeighted(contract.outcomes.map((x) => [x, x.chance]), r);
-  const id = o.ids.length > 1 ? pickWeighted(o.ids.map((i) => [i, DOPPLER_PHASE_WEIGHT[D.skins[i].ph] ?? 0.2]), r) : o.ids[0];
+  const id = o.ids.length > 1 ? pickWeighted(o.ids.map((i) => [i, phaseWeight(D.skins[i])]), r) : o.ids[0];
   const skin = D.skins[id];
   return makeSkinItem(skin, { src: TRADEUP_SRC, stt: contract.stt && skin.stt, fl: skin.v ? null : o.fl, r });
 }

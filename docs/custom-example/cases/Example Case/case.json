@@ -1,0 +1,14 @@
+{
+  "name": "Example Case",
+  "price": 2.95,
+  "key": true,
+  "date": "2026-11-11",
+  "collection": "The Example Collection",
+  "items": {
+    "Mil-Spec": ["Dual Berettas | Hideout", "MAC-10 | Light Box", "Nova | Dark Sigil", "SSG 08 | Dezastre"],
+    "Restricted": ["M4A1-S | Example Circuit", "Glock-18 | Block-18", "M4A4 | Etch Lord"],
+    "Classified": ["AK-47 | Example Nebula"]
+  },
+  "rare": ["★ Karambit | Example Aurora", "★ Sport Gloves | Example Circuit", "★ Karambit | Doppler"],
+  "crate": { "base": "Kilowatt Case" }
+}

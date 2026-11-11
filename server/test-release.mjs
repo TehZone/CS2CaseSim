@@ -40,7 +40,7 @@ function connect(token, app) {
   ws.on('close', () => { c.closed = true; });
   return new Promise((resolve, reject) => {
     ws.on('error', reject);
-    ws.on('open', () => ws.send(JSON.stringify({ t: 'hello', token, data: D.generatedAt, v: 1, ...(app === null ? {} : { app }) })));
+    ws.on('open', () => ws.send(JSON.stringify({ t: 'hello', token, data: D.lock, v: 1, ...(app === null ? {} : { app }) })));
     ws.on('message', (raw) => {
       const m = JSON.parse(raw);
       c.msgs.push(m);

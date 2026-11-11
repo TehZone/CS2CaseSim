@@ -21,7 +21,15 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 const cacheArg = process.argv.indexOf('--cache'); // --cache <dir> (or CS2SIM_CACHE): e.g. the app's own map exports
 const CS2_CACHE = (cacheArg > 0 && process.argv[cacheArg + 1]) || process.env.CS2SIM_CACHE || path.join(ROOT, 'cache', 'cs2');
 const TMP = path.join(process.env.LOCALAPPDATA || '', 'Temp');
+// Custom content (CUSTOM_CONTENT.md): src/data/custom.json and src/custom/, or another build of the packs with --custom <dir>
+// (or CS2SIM_CUSTOM): `node scripts/build-custom.mjs --out <dir>`.
+const customArg = process.argv.indexOf('--custom');
+const CUSTOM_DIR = (customArg > 0 && process.argv[customArg + 1]) || process.env.CS2SIM_CUSTOM || null;
+const CUSTOM_ROOT = CUSTOM_DIR ? path.resolve(CUSTOM_DIR) : SRC;
+const customText = () => { try { return fs.readFileSync(path.join(CUSTOM_ROOT, 'data', 'custom.json'), 'utf8'); } catch { return null; } };
+if (CUSTOM_DIR && customText() == null) console.warn(`[custom] ${CUSTOM_ROOT} has no data/custom.json: serving no custom content (build one with node scripts/build-custom.mjs --try)`);
 const cs2 = new CS2Service({
+  customKits: () => { try { return JSON.parse(customText() || 'null')?.kits || {}; } catch { return {}; } },
   cacheDir: CS2_CACHE,
   // The app's own (patched) extractor when it's there, else a development build.
   cliPath: process.env.CS2SIM_CLI || [path.join(ROOT, 'tools', 's2v', 'Source2Viewer-CLI.exe'), path.join(TMP, 'vrfcli', 'Source2Viewer-CLI.exe')].find((f) => fs.existsSync(f)),
@@ -102,6 +110,14 @@ http.createServer(async (req, res) => {
       const f = path.normalize(path.join(CS2_CACHE, decodeURIComponent(url.pathname.slice('/cs2cache/'.length))));
       if (!f.startsWith(CS2_CACHE) || !fs.existsSync(f)) return res.writeHead(404).end();
       res.writeHead(200, { 'content-type': MIME[path.extname(f)] || 'application/octet-stream', 'cache-control': 'max-age=3600' });
+      return fs.createReadStream(f).pipe(res);
+    }
+    if (url.pathname === '/data/custom.json') return res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(customText() ?? 'null');
+    if (url.pathname.startsWith('/custom/') && CUSTOM_ROOT !== SRC) {
+      const root = path.join(CUSTOM_ROOT, 'custom');
+      const f = path.normalize(path.join(root, decodeURIComponent(url.pathname.slice('/custom/'.length))));
+      if (!f.startsWith(root + path.sep) || !fs.existsSync(f)) return res.writeHead(404).end();
+      res.writeHead(200, { 'content-type': MIME[path.extname(f)] || 'application/octet-stream', 'cache-control': 'no-store' });
       return fs.createReadStream(f).pipe(res);
     }
     const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html';

@@ -1,0 +1,8 @@
+{
+  "name": "★ Sport Gloves | Example Circuit",
+  "float": [0.06, 0.8],
+  "prices": { "FN": 980, "MW": 610, "FT": 420, "WW": 360, "BS": 300 },
+  "finish": {
+    "mode": "color"
+  }
+}

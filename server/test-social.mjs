@@ -55,7 +55,7 @@ async function client(token) {
       c.events.push(m);
     });
   });
-  ws.send(JSON.stringify({ t: 'hello', token, data: D.generatedAt, v: 1 }));
+  ws.send(JSON.stringify({ t: 'hello', token, data: D.lock, v: 1 }));
   c.welcome = await welcome;
   c.id = c.user.id;
   const ask = (ns, m, args) => new Promise((res, rej) => { const id = ++c.seq; c.pending.set(id, { res, rej }); ws.send(JSON.stringify({ t: 'rpc', id, ns, m, args })); });
@@ -653,7 +653,7 @@ try {
     const c = { ws, unknown: [], closed: false, handled: 0 };
     ws.on('close', () => { c.closed = true; });
     ws.on('error', reject);
-    ws.on('open', () => ws.send(JSON.stringify({ t: 'hello', token: tok.carol, data: D.generatedAt, v: 1, app: '1.1.0' })));
+    ws.on('open', () => ws.send(JSON.stringify({ t: 'hello', token: tok.carol, data: D.lock, v: 1, app: '1.1.0' })));
     ws.on('message', (raw) => {
       const m = JSON.parse(raw);
       if (m.t === 'welcome') { c.welcome = m; resolve(c); return; }

@@ -35,8 +35,10 @@ function initPaths() {
   const cli = app.isPackaged
     ? path.join(process.resourcesPath, 's2v', 'Source2Viewer-CLI.exe')
     : process.env.CS2SIM_CLI || path.join(__dirname, 'tools', 's2v', 'Source2Viewer-CLI.exe');
-  cs2 = new CS2Service({ cacheDir: cs2Cache, cliPath: cli, log: (m) => console.log('[cs2]', m), shrinkImages });
+  cs2 = makeCS2(cli);
 }
+// (One place for its options: Settings' clear makes a new one, which must read custom content's paint kits too.)
+const makeCS2 = (cliPath) => new CS2Service({ cacheDir: cs2Cache, cliPath, log: (m) => console.log('[cs2]', m), shrinkImages, customKits });
 
 // Play mode calls from the renderer (one channel, whitelisted).
 const PLAY_CALLS = {
@@ -99,6 +101,24 @@ async function handleImage(url) {
   }
 }
 
+// Custom content's data (src/data/custom.json, made by scripts/build-custom.mjs), as text, or null when there's none. In
+// development `--custom <dir>` (npm start -- --custom <dir>) or CS2SIM_CUSTOM=<dir> uses another build's
+// (`node scripts/build-custom.mjs --try` prints the command): never in a packaged game, which only ever has its own.
+const CUSTOM_ARG = process.argv.indexOf('--custom');
+const CUSTOM_DIR = (CUSTOM_ARG > 0 && process.argv[CUSTOM_ARG + 1]) || process.env.CS2SIM_CUSTOM || '';
+const CUSTOM_DEV = !app.isPackaged && CUSTOM_DIR ? path.resolve(CUSTOM_DIR) : null;
+if (CUSTOM_DEV && !fs.existsSync(path.join(CUSTOM_DEV, 'data', 'custom.json'))) console.warn(`[custom] ${CUSTOM_DEV} has no data/custom.json: no custom content (build one with node scripts/build-custom.mjs --try)`);
+const CUSTOM_DATA = CUSTOM_DEV ? path.join(CUSTOM_DEV, 'data', 'custom.json') : path.join(SRC, 'data', 'custom.json');
+let customText;
+function readCustomText() {
+  if (customText === undefined) { try { customText = fs.readFileSync(CUSTOM_DATA, 'utf8'); } catch { customText = null; } }
+  return customText;
+}
+// Its paint kits, for the 3D (CS2Service): { fid: kit } (see scripts/build-custom.mjs).
+function customKits() {
+  try { return JSON.parse(readCustomText() || 'null')?.kits || {}; } catch { return {}; }
+}
+
 function readRefreshedData() {
   // Only use refreshed prices if they were computed on top of this exact bundled data build.
   try {
@@ -124,6 +144,22 @@ async function handleApp(req) {
   if (url.pathname === '/data/game-data.json') {
     const refreshed = readRefreshedData();
     if (refreshed) return new Response(refreshed, { headers: { 'content-type': MIME['.json'] } });
+  }
+  // Custom content (CUSTOM_CONTENT.md): data/custom.json and its pictures and textures under custom/, from the game's own
+  // src/, or in development from a build of the packs elsewhere (CS2SIM_CUSTOM). A game without any gets null.
+  if (url.pathname === '/data/custom.json') {
+    const text = readCustomText();
+    return new Response(text ?? 'null', { headers: { 'content-type': MIME['.json'] } });
+  }
+  if (CUSTOM_DEV && url.pathname.startsWith('/custom/')) {
+    const root = path.join(CUSTOM_DEV, 'custom');
+    const f = path.normalize(path.join(root, decodeURIComponent(url.pathname.slice('/custom/'.length))));
+    if (!f.startsWith(root + path.sep)) return new Response('forbidden', { status: 403 });
+    try {
+      return new Response(await fs.promises.readFile(f), { headers: { 'content-type': MIME[path.extname(f).toLowerCase()] || 'application/octet-stream' } });
+    } catch {
+      return new Response('not found', { status: 404 });
+    }
   }
   const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html';
   const file = path.normalize(path.join(SRC, rel));
@@ -198,7 +234,7 @@ function registerIpc() {
     cs2.prepareCancel();
     cs2.flush(); // nothing left to write into the folder once it's gone
     fs.rmSync(cs2Cache, { recursive: true, force: true });
-    cs2 = new CS2Service({ cacheDir: cs2Cache, cliPath: cs2.cliPath, log: (m) => console.log('[cs2]', m), shrinkImages });
+    cs2 = makeCS2(cs2.cliPath);
     return true;
   });
 
@@ -266,6 +302,9 @@ const SMOKE = !!process.env.CS2SIM_SMOKE;
 // (CS2SIM_SMOKE_USERDATA: another profile, for a second smoke run beside the first; with CS2SIM_CACHE at the first's
 // cs2cache it needs nothing exported again.)
 if (SMOKE) app.setPath('userData', process.env.CS2SIM_SMOKE_USERDATA ? path.resolve(process.env.CS2SIM_SMOKE_USERDATA) : path.join(app.getPath('temp'), 'cs2sim-smoke'));
+// A try-out of another build's custom content plays on a save of its own (userData-custom), never the installed game's:
+// that one has no such items, and both open at once would write over each other. (--user-data-dir still picks another.)
+else if (CUSTOM_DEV && !app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', app.getPath('userData') + '-custom');
 // The frame rate is the monitor's (vsync) unless the player unlocked it in Play's settings (display.json, read at start:
 // Chromium only takes these switches before it starts). A perf run always measures as fast as Play goes.
 const displayFile = path.join(app.getPath('userData'), 'display.json');

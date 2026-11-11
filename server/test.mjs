@@ -45,7 +45,7 @@ async function client(token) {
       c.events.push(m);
     });
   });
-  ws.send(JSON.stringify({ t: 'hello', token, data: D.generatedAt, v: 1 }));
+  ws.send(JSON.stringify({ t: 'hello', token, data: D.lock, v: 1 }));
   c.welcome = await welcome;
   c.rpc = (ns, m, args) => new Promise((res, rej) => { const id = ++c.seq; c.pending.set(id, { res, rej }); ws.send(JSON.stringify({ t: 'rpc', id, ns, m, args })); });
   c.act = (m, a) => c.rpc('act', m, a);

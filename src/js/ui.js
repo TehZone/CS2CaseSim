@@ -410,6 +410,17 @@ async function slabSticker(sticker) {
   return true;
 }
 
+// Who made a custom item (CUSTOM_CONTENT.md), as HTML, or '' for the game's own: a Steam Workshop finish's creator, linked to
+// their profile and to the Workshop item (links open in the browser), else the pack's credit.
+export function creatorHTML(d) {
+  if (!d?.cx) return '';
+  const ws = d.ws && /^\d{1,20}$/.test(String(d.ws.id)) ? d.ws : null;
+  if (!ws) return d.credit ? esc(d.credit) : '';
+  const link = (url, text) => `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+  const by = /^\d{17}$/.test(String(ws.sid || '')) ? link(`https://steamcommunity.com/profiles/${ws.sid}`, esc(ws.by)) : esc(ws.by);
+  return `${by} <span class="muted">· ${link(`https://steamcommunity.com/sharedfiles/filedetails/?id=${ws.id}`, 'Steam Workshop')}</span>`;
+}
+
 // ---- item detail ---------------------------------------------------------------------------
 function detailBody(item) {
   const d = I.itemDef(item);
@@ -452,6 +463,8 @@ function detailBody(item) {
   if (item.sn) kv.push(['Serial number', `#${item.sn.toLocaleString()}${I.serialLabel(item.sn) ? ` <span class="muted">· ${I.serialLabel(item.sn)}</span>` : ''}`]);
   else if (['skin', 'sticker', 'agent', 'charm'].includes(item.t)) kv.push(['Serial number', '<span class="muted">None (only unboxed items are numbered)</span>']);
   if (item.src) kv.push(['Obtained from', esc(item.src)]);
+  const made = creatorHTML(d);
+  if (made) kv.push(['Made by', made]);
 
   const lines = [];
   if (item.t === 'skin') {

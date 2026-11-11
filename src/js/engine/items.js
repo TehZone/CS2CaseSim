@@ -1,6 +1,6 @@
 // Item generation (rolls, floats, seeds) and valuation (market price x float x pattern + applied stickers).
 // Shared by the client and the multiplayer server (no DOM). Images live in the client's items.js.
-import { D, WEARS, WEAR_BY_KEY, wearOf, RARITY, rarityColor, caseTiers, DOPPLER_PHASE_WEIGHT, eventShort } from './data.js';
+import { D, WEARS, WEAR_BY_KEY, wearOf, RARITY, rarityColor, caseTiers, phaseWeight, eventShort } from './data.js';
 import { analyzePattern } from './patterns.js';
 import { BREED, chickenValue, chickenName } from './chickens.js';
 import { rand, pick, pickWeighted, round2, uid } from './util.js';
@@ -135,7 +135,7 @@ export function rollFromCase(c, r = rand) {
     if (tier === 'rare') {
       const group = pick(c.rare, r);
       skinId = group.length > 1
-        ? pickWeighted(group.map((id) => [id, DOPPLER_PHASE_WEIGHT[D.skins[id].ph] ?? 0.2]), r)
+        ? pickWeighted(group.map((id) => [id, phaseWeight(D.skins[id])]), r)
         : group[0];
     } else skinId = pick(c.pools[tier], r);
     const skin = D.skins[skinId];

@@ -6,6 +6,7 @@
 // what it is). The community's Tier 1 lists below only add to that.
 // For the 100 skins the CS.MONEY Wiki's rare patterns cover (rare-patterns-data.js), its groups go on top: see RARE at the end.
 import { seeded } from './util.js';
+import { rotationRoll } from './rng.js';
 import { D } from './data.js';
 import { CASE_HARDENED } from './case-hardened-data.js';
 import { RARE_PATTERNS, RARE_FADES } from './rare-patterns-data.js';
@@ -92,7 +93,9 @@ export const playside = (skin) => CASE_HARDENED[skin.wid]?.[skin.fid]?.side ?? n
 export function basePattern(skin, seed) {
   const out = { mult: 1, label: '', tier: '', info: [] };
   if (!skin || skin.v || seed == null) return out;
-  const fin = skin.fin;
+  // A custom finish isn't one of CS2's, whatever it's called: no rule goes by its name, only the one its pack chose (`pr`,
+  // 'Fade': a fade percentage from the seed). See CUSTOM_CONTENT.md.
+  const fin = skin.cx ? (skin.pr === 'Fade' ? 'Fade' : '') : skin.fin;
 
   if (fin === 'Case Hardened' || fin === 'Heat Treated') {
     if (skin.wid === 'studded_hydra_gloves' && fin === 'Case Hardened') {
@@ -127,8 +130,10 @@ export function basePattern(skin, seed) {
   }
 
   if (fin === 'Fade' || fin === 'Amber Fade') {
-    const r = seeded(seed, 'fade-' + skin.wid);
-    const pct = 80 + 20 * Math.pow(r, 0.9);
+    // A custom Fade's percentage is the rotation the seed turns its pattern to, as the 3D draws it: 80% at its "rotation"
+    // range's first angle, 100% at the second (CS2's own Fades' real percentages go by their rotation the same way).
+    const r = skin.cx ? rotationRoll(seed) : seeded(seed, 'fade-' + skin.wid);
+    const pct = skin.cx ? 80 + 20 * r : 80 + 20 * Math.pow(r, 0.9);
     out.fade = pct;
     out.info.push(['Fade', pct.toFixed(1) + '%']);
     if (pct >= 99.5) { out.mult = 1.5; out.tier = 't1'; out.label = 'Full Fade'; }
@@ -271,7 +276,7 @@ export const RARE = {
 };
 
 // The wiki's entry for a skin ({ set, groups } or { set: 'Fade', fade }), or null: it doesn't cover the skin.
-export const rarePatterns = (skin) => (skin && !skin.v ? RARE_PATTERNS[skin.wid]?.[skin.fid] ?? null : null);
+export const rarePatterns = (skin) => (skin && !skin.v && !skin.cx ? RARE_PATTERNS[skin.wid]?.[skin.fid] ?? null : null);
 
 // A seed's group on a skin the wiki covers, as { label, tier, mult, wiki, info? }, or null. A seed in two groups (a #1 that's
 // also a Tier 1, a Talon's Tricolor that's also a Yellow Tip) has the one worth more, unless one goes first (a Gold Gem). Every

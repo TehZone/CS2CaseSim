@@ -2,11 +2,12 @@
 // Shared by the client and the multiplayer server: the caller loads game-data.json (and keys.json beside it) and passes
 // them to initData().
 import { round2 } from './util.js';
+import { mergeCustom } from './custom.js';
 
 export const D = {
   cases: [], skins: {}, stickers: {}, agents: {}, collections: [], events: {}, proTeams: {}, pros: {},
   charms: {}, charmCollections: [], slab: null, keys: {}, keyOf: {},
-  keyPrice: 2.49, generatedAt: '', pricedAt: '',
+  keyPrice: 2.49, generatedAt: '', pricedAt: '', lock: '', cx: null,
 };
 
 export const WEARS = [
@@ -45,11 +46,18 @@ export const DOPPLER_PHASE_WEIGHT = {
   'Phase 1': 0.22, 'Phase 2': 0.22, 'Phase 3': 0.22, 'Phase 4': 0.22,
   Ruby: 0.045, Sapphire: 0.045, 'Black Pearl': 0.03, Emerald: 0.06,
 };
+// How often a finish's phase drops against its other phases (a custom item's own `pw`, else CS2's Doppler phase shares).
+export const phaseWeight = (s) => s?.pw ?? DOPPLER_PHASE_WEIGHT[s?.ph] ?? 0.2;
 export const CASE_KINDS = { case: 'Cases', souvenir: 'Souvenir Packages', package: 'Packages', capsule: 'Capsules', autograph: 'Capsules' };
 
-export function initData(json, { keys = {} } = {}) {
+// `custom`: src/data/custom.json (custom content, see custom.js), or null for none. D.lock is the data lock the game and the
+// server compare: D.generatedAt exactly without custom content.
+export function initData(json, { keys = {}, custom = null } = {}) {
   Object.assign(D, json);
   for (const c of D.cases) c.custom = false;
+  D.lock = D.generatedAt;
+  D.cx = null;
+  mergeCustom(D, custom);
   D.cases.push(makeAgentLocker());
   D.caseById = Object.fromEntries(D.cases.map((c) => [c.id, c]));
   initKeys(keys);

@@ -1,0 +1,15 @@
+{
+  "name": "M4A1-S | Example Circuit",
+  "rarity": "Restricted",
+  "float": [0, 0.8],
+  "prices": { "FN": 9.8, "MW": 5.1, "FT": 3.4, "WW": 3, "BS": 2.6 },
+  "pricesStatTrak": { "FN": 21, "MW": 11.5, "FT": 7.2, "WW": 6.4, "BS": 5.5 },
+  "finish": {
+    "style": "Hydrographic",
+    "colors": ["#15181f", "#ff8a1f", "#3de3a0", "#2c7bff"],
+    "scale": 1.5,
+    "rotation": [-10, 10],
+    "offset": [[0, 0], [1, 1]],
+    "roughness": 0.5
+  }
+}

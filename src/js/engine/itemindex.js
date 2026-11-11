@@ -106,26 +106,53 @@ function group(sets, ids, make) {
   });
 }
 
+// A custom case's goals (custom content, custom.js) are for what only it has. Its rare bonus is any one of its own custom
+// knives and gloves: a real knife it also holds, found in a real case (maybe long ago), doesn't pay it. With no custom ones,
+// its gold slot shares a real case's bonus when it's exactly that case's, and has none otherwise. The same for finishing
+// it: a custom case of real skins only shares a real set's goal when it's exactly that set, and has none of its own
+// otherwise (a mix of real cases' skins would be finished by what players found in those).
+// cx: the ids of the custom sets (custom cases and their collections). Returns set id -> { set, rare }: what each one's goals
+// go by, where that isn't simply its items.
+const isCx = (id) => !!D.skins[id]?.cx;
+function cxGoalIds(sets, cx) {
+  const out = new Map();
+  if (!cx.size) return out;
+  const real = { set: new Set(), rare: new Set() };
+  const key = (ids) => [...ids].sort().join();
+  for (const s of sets) if (!cx.has(s.id)) { if (s.ids.length) real.set.add(key(s.ids)); if (s.rare.length) real.rare.add(key(s.rare)); }
+  for (const s of sets) {
+    if (!cx.has(s.id)) continue;
+    const own = s.rare.filter(isCx);
+    out.set(s.id, {
+      set: s.ids.some(isCx) || real.set.has(key(s.ids)) ? s.ids : [],
+      rare: own.length ? own : real.rare.has(key(s.rare)) ? s.rare : [],
+    });
+  }
+  return out;
+}
+
 let cache = null;
 function tables() {
-  if (cache?.data === D.generatedAt) return cache;
+  if (cache?.data === D.lock) return cache;
   const sets = D.cases.map((c) => makeSet(c.id, c.n, c.kind, c.img, c, c.custom));
   // A collection with a case is what that case holds (the Huntsman Collection lists five skins no box drops); the others
   // drop from the Armory. Charm collections too.
   for (const col of D.collections) sets.push(makeSet(col.id, col.n, 'collection', col.img, col.caseId ? { ...D.caseById[col.caseId], rare: null } : collectionBox(col)));
   for (const col of D.charmCollections || []) sets.push(makeSet(col.id, col.n, 'charms', col.img, charmBox(col)));
+  const own = cxGoalIds(sets, new Set([...D.cases, ...D.collections].filter((c) => c.cx).map((c) => c.id)));
+  const setIds = (s) => own.get(s.id)?.set ?? s.ids, rareIds = (s) => own.get(s.id)?.rare ?? s.rare;
   const goals = new Map();
-  for (const g of group(sets, (s) => s.ids, (lead, list) => {
+  for (const g of group(sets, setIds, (lead, list) => {
     const opens = Math.min(...list.map((s) => s.opens));
     for (const s of list) s.goal = lead.id;
     // (Its key stays the collection's, but what you opened was the case, so that's what it's called.)
     const face = list.find((s) => s.kind === 'case') || lead;
     return { key: lead.id, n: face.n, face: face.id, kind: 'set', ids: lead.ids, opens, reward: rewardFor(opens), sets: list.map((s) => s.id) };
   })) goals.set(g.key, g);
-  for (const g of group(sets, (s) => s.rare, (lead, list) => {
+  for (const g of group(sets, rareIds, (lead, list) => {
     const key = 'rare-' + lead.id;
     for (const s of list) s.rareGoal = key;
-    return { key, n: lead.n, face: lead.id, kind: 'rare', ids: lead.rare, opens: 0, reward: RARE_REWARD, sets: list.map((s) => s.id) };
+    return { key, n: lead.n, face: lead.id, kind: 'rare', ids: rareIds(lead), opens: 0, reward: RARE_REWARD, sets: list.map((s) => s.id) };
   })) goals.set(g.key, g);
   const setById = new Map(sets.map((s) => [s.id, s]));
   // Item id -> the goals and sets it's part of.
@@ -133,7 +160,7 @@ function tables() {
   const put = (id, kind, x) => { if (!byItem.has(id)) byItem.set(id, { goals: [], sets: [] }); byItem.get(id)[kind].push(x); };
   for (const g of goals.values()) for (const id of g.ids) put(id, 'goals', g);
   for (const s of sets) for (const id of new Set([...s.ids, ...s.rare])) put(id, 'sets', s);
-  return (cache = { data: D.generatedAt, sets, setById, goals, byItem });
+  return (cache = { data: D.lock, sets, setById, goals, byItem });
 }
 export const allSets = () => tables().sets;
 export const setOf = (id) => tables().setById.get(id) || null;
@@ -212,7 +239,7 @@ export function mergeIndex(a, b) {
 // between players moves an item as it is, `moved` says which of them changed hands.
 let boxNames = null;
 function fromBox(src) {
-  if (boxNames?.data !== D.generatedAt) boxNames = { data: D.generatedAt, names: new Set([...D.cases.map((c) => c.n), CARE_SRC]) };
+  if (boxNames?.data !== D.lock) boxNames = { data: D.lock, names: new Set([...D.cases.map((c) => c.n), CARE_SRC]) };
   return typeof src === 'string' && (boxNames.names.has(src) || src.startsWith('Armory · '));
 }
 // What can be recovered, once:

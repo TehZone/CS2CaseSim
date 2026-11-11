@@ -25,8 +25,9 @@ export class Release {
   constructor(srv, opts) {
     this.srv = srv;
     this.on = opts !== false;
-    const { feed = RELEASE_FEED, every = 5 * MIN, grace = 5 * MIN, fetcher = (...a) => fetch(...a) } = opts || {};
-    Object.assign(this, { feed, every, grace, fetcher });
+    // (onVersion(version): told each time the required version changes, after the change is saved.)
+    const { feed = RELEASE_FEED, every = 5 * MIN, grace = 5 * MIN, fetcher = (...a) => fetch(...a), onVersion = null } = opts || {};
+    Object.assign(this, { feed, every, grace, fetcher, onVersion });
     this.required = null; // the version the game must be at least, null while no release has been seen
     this.failing = false;
     this.timer = this.dropTimer = null;
@@ -72,6 +73,7 @@ export class Release {
     await this.srv.db.query("INSERT INTO kv (k, v) VALUES ('release', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify({ version: m.version, at: Date.now() })])
       .catch((e) => this.srv.log('[release] could not save the required version', e.message));
     this.warnConnected();
+    try { this.onVersion?.(m.version); } catch (e) { this.srv.log('[release] onVersion failed', e?.message || e); }
     return true;
   }
 
