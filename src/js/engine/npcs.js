@@ -432,13 +432,19 @@ export function makeOffer(so, st, { r, now }) {
   if (!mine.length) return null;
   const people = activeCrowd(so.seed).filter((n) => !isBlocked(so, n.id, now));
   const cands = [];
+  // What each of them could pay (their money and part of what they own), worked out once per person: it's the same for
+  // every item of yours, and a big inventory has thousands of them (npcState as before: the first time they're considered).
+  const means = new Map();
+  const meansOf = (n) => {
+    if (!means.has(n.id)) { const s = npcState(so, n.id); means.set(n.id, s.money + s.inv.reduce((t, x) => t + I.itemValue(x), 0) * 0.6); }
+    return means.get(n.id);
+  };
   for (const it of mine) {
     const v = I.itemValue(it);
     for (const n of people) {
       const k = interest(n, it);
       if (!k || (n.type === 'player' && v < 5) || (n.type === 'beginner' && v < 2)) continue;
-      const s = npcState(so, n.id);
-      const max = Math.min(buyValue(n, it), s.money + s.inv.reduce((t, x) => t + I.itemValue(x), 0) * 0.6);
+      const max = Math.min(buyValue(n, it), meansOf(n));
       if (max < v * (n.type === 'beginner' ? 0.3 : 0.6)) continue; // (a beginner may not see what it's worth)
       cands.push([[it, n, max], (n.type === 'collector' ? 4 : 1) * k * Math.sqrt(v)]);
     }

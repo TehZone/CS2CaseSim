@@ -74,8 +74,8 @@ const updateMessages = () => {
 // already reading that chat.
 function startNpcLoop() {
   const tick = async () => {
-    // (Not during a match: they catch up afterwards, and the match's frames stay smooth.)
-    if (online() || document.querySelector('.play-canvas')) return;
+    // (Not during a match or while a case opening's reel plays: they catch up on the next one, and the frames stay smooth.)
+    if (online() || document.querySelector('.play-canvas, .opening')) return;
     let r;
     try { r = await act('npc.tick'); } catch { return; }
     for (const e of (r.events || []).slice(0, 2)) {

@@ -1,7 +1,7 @@
 import { esc, money, imgUrl, round2 } from '../util.js';
 import { D, WEARS, casePrice, caseTiers, rarityColor, phaseWeight, collectionBox, eventShort, CASE_KINDS, keyFor } from '../data.js';
 import * as I from '../items.js';
-import { S, save, emit, setAutoOpening } from '../state.js';
+import { S, save, holdSaves, emit, setAutoOpening } from '../state.js';
 import { autoSellLabel, autoSellModal, autoSellRules } from '../autosell.js';
 import { act, can, online } from '../backend.js';
 import { net } from '../net/online.js';
@@ -659,7 +659,8 @@ export async function openCase(c, n, { uids = null, buy = false } = {}) {
   opening = true;
   let r;
   try {
-    // Rolled and saved (or rolled on the server) before the animation, so nothing is lost if the app closes.
+    // Rolled before the animation (offline into the save, which is written once the opening's over, or as the game closes;
+    // online on the server), so nothing is lost if the app closes.
     const args = { ...(uids ? { uids } : {}), autoSell: autoSellRules() };
     r = buy && !uids ? (await buyAndOpen(c, n, args)).r : await act('case.open', { id: c.id, n, ...args });
   } catch (e) {
@@ -677,12 +678,16 @@ export async function openCase(c, n, { uids = null, buy = false } = {}) {
     opening = false;
   }
   if (r.autoSold) toast(`Auto-sold ${r.items.filter((i) => i.as).length} item${r.items.filter((i) => i.as).length === 1 ? '' : 's'} for <b class="green">${money(r.autoSold)}</b>`, 'good');
-  if (view.mode === 'case' && view.caseId === c.id && rootEl?.isConnected) renderCase(rootEl, c);
   const need = shortfall(c, n);
   showResults(c, r.items, n, {
     againLabel: need.cost ? `Buy & open again (${money(need.cost)})` : `Open again (${ownedCases(c).length} left)`,
     again: () => openCase(c, n, { buy: true }),
   });
+  // The case page behind the results (what you have left), a frame later: drawn in the same moment as the results, the
+  // two made the reveal stutter.
+  // (Only while the Cases page shows it: a case opened from the inventory leaves the inventory where it was.)
+  const here = () => view.mode === 'case' && view.caseId === c.id && rootEl?.isConnected && rootEl.dataset.page === 'cases';
+  if (here()) requestAnimationFrame(() => setTimeout(() => { if (here()) renderCase(rootEl, c); }, 0));
 }
 // A case from your inventory (its details or right-click menu).
 export function openCrate(item) {
@@ -714,9 +719,16 @@ function cubicBezier(x1, y1, x2, y2) {
   };
 }
 const cs2Ease = cubicBezier(0.075, 0.82, 0.165, 1), fastEase = (t) => 1 - Math.pow(1 - t, 4.4);
+// The same curves for the reels' own animations (Web Animations): CSS's cubic-bezier is the one above, and the fast spin's
+// is drawn through 101 points of it (linear(): within a pixel of it all the way).
+const CS2_EASING = 'cubic-bezier(0.075, 0.82, 0.165, 1)';
+const FAST_EASING = `linear(${Array.from({ length: 101 }, (_, i) => +fastEase(i / 100).toFixed(5)).join(', ')})`;
 // `intro(stage)` (optional) plays first in the overlay and returns { done, skip } (see caseintro.js).
 export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro = null } = {}) {
-  return new Promise((resolve) => {
+  return new Promise((done) => {
+    // (A save that comes due while it plays waits for it to end: state.js holdSaves.)
+    holdSaves(true);
+    const resolve = () => { holdSaves(false); done(); };
     const n = items.length;
     const ov = document.createElement('div');
     ov.className = 'opening' + (intro ? ' intro' : '');
@@ -736,10 +748,14 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro 
     // measure after layout
     const spin = () => requestAnimationFrame(() => {
       const fast = S.settings.fast;
-      const anims = reels.map(({ strip, reel }, si) => {
+      // (Every reel measured first, then filled: measured one after another was filled, the browser laid the whole
+      // overlay out again for each of up to 10 reels in the frame the spin starts.)
+      const sizes = reels.map(({ strip, reel }) => {
         const tileW = reel.children[0].getBoundingClientRect().width;
-        const slotW = tileW + (parseFloat(getComputedStyle(reel).columnGap) || 0);
-        const center = strip.clientWidth / 2;
+        return { tileW, slotW: tileW + (parseFloat(getComputedStyle(reel).columnGap) || 0), center: strip.clientWidth / 2 };
+      });
+      const anims = reels.map(({ reel }, si) => {
+        const { tileW, slotW, center } = sizes[si];
         // Tiles shrink as more cases open at once (and a strip can be wide), so the reel gets as many more as it takes to
         // fill the strip on both sides of the marker, at the start and past the item it stops on. It still scrolls 32.
         const side = Math.ceil(center / slotW) + 1;
@@ -752,14 +768,15 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro 
         reel.style.transform = `translateX(${-from}px)`;
         return { reel, win, slotW, center, from, target, dur: (fast ? 2400 : CS2_SPIN) + si * (fast ? 120 : 350), lastIdx: -1, done: false };
       });
-      const start = performance.now();
+      // (the frame's time: the reels' animations start from it too)
+      const start = document.timeline?.currentTime ?? performance.now();
       const ease = fast ? fastEase : cs2Ease;
       let ticks = 0, finished = false;
       const finish = () => {
         if (finished) return;
         finished = true;
         window.removeEventListener('keydown', onKey, true);
-        for (const a of anims) a.reel.style.transform = `translateX(${-a.target}px)`;
+        for (const a of anims) { a.reel.style.transform = `translateX(${-a.target}px)`; a.anim?.cancel(); }
         for (const a of anims) a.reel.children[a.win].classList.add('win');
         const best = Math.max(...items.map((i) => I.rarityRank(i)));
         sfx.reveal(best);
@@ -770,9 +787,8 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro 
         let allDone = true;
         anims.forEach((a, i) => {
           const t = Math.min(1, (now - start) / a.dur);
-          const x = a.from + ease(t) * (a.target - a.from);
-          a.reel.style.transform = `translateX(${-x}px)`;
           if (i === 0 && fast) {
+            const x = a.from + ease(t) * (a.target - a.from);
             const idx = Math.floor((x + a.center) / a.slotW);
             if (idx !== a.lastIdx) { a.lastIdx = idx; if (t < 1) sfx.tick(); }
           }
@@ -787,6 +803,14 @@ export function playRoulette(c, items, title = `Unlocking ${esc(c.n)}`, { intro 
       };
       const onKey = (e) => { if (e.code === 'Space' || e.key === 'Escape') { e.preventDefault(); finish(); } };
       if (skipAll) return finish();
+      // The reels move by animations of their own, on the same curves and times, which the browser runs off the page's
+      // main thread: whatever else the game does meanwhile (a save, the NPC players, a page drawn behind) can't make them
+      // stutter, as it did when every frame's position was set from here. The frames here only play the ticks and see the end.
+      for (const a of anims) {
+        a.anim = a.reel.animate([{ transform: `translateX(${-a.from}px)` }, { transform: `translateX(${-a.target}px)` }],
+          { duration: a.dur, easing: fast ? FAST_EASING : CS2_EASING, fill: 'forwards' });
+        a.anim.startTime = start;
+      }
       requestAnimationFrame(step);
       window.addEventListener('keydown', onKey, true);
       ov.addEventListener('click', finish);

@@ -1,7 +1,7 @@
 import { esc, money, debounce } from '../util.js';
 import * as I from '../items.js';
 import { S, on } from '../state.js';
-import { act } from '../backend.js';
+import { act, online } from '../backend.js';
 import { itemCard, showItemDetail, itemContextMenu, sellItems, openModal, toast } from '../ui.js';
 import { D, rarityColor } from '../data.js';
 import { SELL_RANKS } from '../autosell.js';
@@ -85,7 +85,46 @@ function drawPage() {
   root.querySelector('[data-sort]').addEventListener('change', (e) => { view.sort = e.target.value; draw(); });
   const q = root.querySelector('input[type=search]');
   q.addEventListener('input', debounce(() => { view.q = q.value.toLowerCase(); draw(); }, 200));
+  // The cards' clicks, for every card the list has now or later (the list keeps the cards that didn't change: patchCards).
+  const list = root.querySelector('[data-list]');
+  const cardOf = (e) => { const c = e.target.closest('.card[data-uid]'); return c && list.contains(c) ? S.inv.find((i) => i.uid === c.dataset.uid) : null; };
+  list.addEventListener('click', (e) => {
+    const it = cardOf(e);
+    if (!it) return;
+    if (view.select) {
+      if (view.selected.has(it.uid)) view.selected.delete(it.uid); else if (I.tradable(it)) view.selected.add(it.uid);
+      draw();
+    } else if (I.isUnit(it)) openUnit(it);
+    else showItemDetail(it, { onChange: () => draw() });
+  });
+  // Right-click: CS2's item menu (inspect, equip, stickers, lock, sell).
+  list.addEventListener('contextmenu', (e) => {
+    const it = cardOf(e);
+    if (it && !view.select) itemContextMenu(e, it, { onChange: () => draw() });
+  });
   draw();
+}
+
+// The list's cards made again only where they changed: a card that's the same as last time stays as it is on the page, so
+// after a drop only the new cards are made and laid out, not every card in the list (drawn again after every drop of an
+// auto open, that took most of the page's time). cards: [[uid, html]] in order.
+function patchCards(grid, cards) {
+  const old = new Map([...grid.children].map((el) => [el.dataset.uid, el]));
+  const keep = new Set(cards.filter(([uid, html]) => old.get(uid)?.cardHtml === html).map(([uid]) => uid));
+  if (!keep.size) {
+    grid.innerHTML = cards.map(([, html]) => html).join('');
+    [...grid.children].forEach((el, i) => { el.cardHtml = cards[i][1]; });
+    return;
+  }
+  for (const [uid, el] of old) if (!keep.has(uid)) el.remove();
+  const tpl = document.createElement('template');
+  let at = grid.firstElementChild;
+  for (const [uid, html] of cards) {
+    let el = keep.has(uid) ? old.get(uid) : null;
+    if (!el) { tpl.innerHTML = html; el = tpl.content.firstElementChild; el.cardHtml = html; }
+    if (el === at) at = el.nextElementSibling;
+    else grid.insertBefore(el, at);
+  }
 }
 
 // What changes with the inventory: the totals, the buttons that count what's selected, and the list.
@@ -101,7 +140,11 @@ function draw() {
   const selItems = S.inv.filter((i) => view.selected.has(i.uid));
   const selValue = selItems.reduce((s, i) => s + I.itemValue(i), 0);
   const scroll = root.scrollTop;
-  refreshRanks().then((changed) => { if (changed && root) draw(); }); // (the float rank badges)
+  // (The float rank badges. Offline they're worked out right here, before the cards below are: drawing it all again for
+  // them would only double the work after every drop. Online they come from the server a moment later.)
+  // (Offline too, the first time, while what the NPC players own is still being worked out a slice at a time: floatranks.js.)
+  const asked = refreshRanks(), later = online() || !!asked.later;
+  asked.then((changed) => { if (changed && later && root) draw(); });
 
   root.querySelector('[data-sum]').innerHTML = `<div>Items<b>${S.inv.length}</b></div>
     <div>Inventory value<b class="green">${money(totalValue)}</b></div>
@@ -114,25 +157,16 @@ function draw() {
        <button class="btn primary" data-a="sellsel" ${selItems.length ? '' : 'disabled'}>Sell ${selItems.length} (${money(selValue)})</button>
        <button class="btn ghost" data-a="done">Done</button>`
     : `<button class="btn" data-a="loadout">Loadout</button><button class="btn" data-a="bulk">Bulk sell…</button><button class="btn" data-a="select">Select</button>`;
-  root.querySelector('[data-list]').innerHTML = `${items.length ? `<div class="grid">${items.slice(0, view.limit).map((i) => itemCard(i, { selectable: view.select, selected: view.selected.has(i.uid) })).join('')}</div>` : `<div class="empty">${S.inv.length ? 'Nothing matches your filters.' : 'Your inventory is empty. Open some cases!'}</div>`}
-    ${items.length > view.limit ? `<div class="pager"><button class="btn" data-a="more">Show more (${items.length - view.limit} more)</button></div>` : ''}`;
+  const list = root.querySelector('[data-list]');
+  if (items.length) {
+    let grid = list.firstElementChild;
+    if (!grid?.classList.contains('grid')) { list.innerHTML = '<div class="grid"></div><div data-pager></div>'; grid = list.firstElementChild; }
+    patchCards(grid, items.slice(0, view.limit).map((i) => [i.uid, itemCard(i, { selectable: view.select, selected: view.selected.has(i.uid) })]));
+    list.querySelector('[data-pager]').innerHTML = items.length > view.limit ? `<div class="pager"><button class="btn" data-a="more">Show more (${items.length - view.limit} more)</button></div>` : '';
+  } else list.innerHTML = `<div class="empty">${S.inv.length ? 'Nothing matches your filters.' : 'Your inventory is empty. Open some cases!'}</div>`;
   root.scrollTop = scroll;
 
   root.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', () => action(b.dataset.a, items)));
-  root.querySelectorAll('.card[data-uid]').forEach((c) => c.addEventListener('click', () => {
-    const it = S.inv.find((i) => i.uid === c.dataset.uid);
-    if (!it) return;
-    if (view.select) {
-      if (view.selected.has(it.uid)) view.selected.delete(it.uid); else if (I.tradable(it)) view.selected.add(it.uid);
-      draw();
-    } else if (I.isUnit(it)) openUnit(it);
-    else showItemDetail(it, { onChange: () => draw() });
-  }));
-  // Right-click: CS2's item menu (inspect, equip, stickers, lock, sell).
-  root.querySelectorAll('.card[data-uid]').forEach((c) => c.addEventListener('contextmenu', (e) => {
-    const it = S.inv.find((i) => i.uid === c.dataset.uid);
-    if (it && !view.select) itemContextMenu(e, it, { onChange: () => draw() });
-  }));
 }
 
 async function action(a, items) {

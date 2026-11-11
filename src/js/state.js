@@ -1,6 +1,5 @@
 // The player's state as the UI sees it. Offline it is the local save; online it mirrors the server account
 // (updated from the changes the server sends back). Changes go through backend.js actions, not direct edits.
-import { debounce } from './util.js';
 import * as E from './engine/economy.js';
 import { backfillSerials, retireOld, isUnit } from './engine/items.js';
 import { applyChange, backfillIndex } from './engine/itemindex.js';
@@ -60,7 +59,16 @@ function storeSave(text) {
     try { localStorage.removeItem(PRICES_KEY); localStorage.setItem(LS_KEY, text); } catch {}
   }
 }
+// Writing a save out takes a moment once the inventory is big (thousands of items: tens of milliseconds), so save() waits
+// 0.8 s for more changes, and while a case opening plays (holdSaves: the case dropping in, the reel) a save that comes
+// due waits for it to end, as long as saveHold.max at most: in the middle of the opening that moment was a stutter.
+// (A save written now takes the place of one waiting; closing the game writes it whatever: saveSync.)
+export const saveHold = { max: 20000 };
+let saveTimer = null, holds = 0, heldSince = 0;
 export function saveNow() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  heldSince = 0;
   const text = serialize();
   if (window.native) return window.native.writeSave(text);
   storeSave(text);
@@ -70,7 +78,24 @@ export function saveSync() {
   if (window.native) window.native.writeSaveSync(text);
   else storeSave(text);
 }
-export const save = debounce(saveNow, 800);
+export function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveDue, 800);
+}
+function saveDue() {
+  saveTimer = null;
+  if (!holds) return saveNow();
+  heldSince ||= Date.now();
+  const left = heldSince + saveHold.max - Date.now();
+  if (left <= 0) return saveNow();
+  saveTimer = setTimeout(saveDue, left); // (written when the hold ends, or once it has waited saveHold.max)
+}
+// holdSaves(true) while an opening plays, holdSaves(false) when it's over (they nest): one that came due meanwhile is
+// written then, after the usual wait.
+export function holdSaves(on) {
+  holds = Math.max(0, holds + (on ? 1 : -1));
+  if (!holds && heldSince) { heldSince = 0; save(); }
+}
 
 function announceAll() {
   emit('reset');
