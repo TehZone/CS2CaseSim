@@ -1,10 +1,8 @@
-A player Market is here, MVPs pay, and the bots play to win.
+Play sounds and moves like CS2: every footstep, sound you can place, CS2's movement speeds, and grenades that can't be duplicated.
 
-- Market: buy and sell items with other players. Search every item in the game to see who has it listed, browse every listing, and filter by price, wear, StatTrak™, Souvenir and rarity. Sell from your inventory or the Sell tab, and change or cancel your listings any time. Offline, the NPC traders list their items too.
-- Store: the game's own restocking shop is now called the Store.
-- Play: every round MVP pays $250, shown on the end screen.
-- Play: the minimap moves smoothly every frame, and your teammates' dots are where they really are.
-- Play: bots push, peek and take fights instead of standing around waiting.
-- Admin panel: in offline mode everyone can use it on their own offline save. It never works online.
-- Trade: choosing items keeps the list where you scrolled it.
-- Case opening runs much smoother, even with a big inventory and the Inventory page open.
+- Sound: every footstep plays now (half of them were silent), and other players' steps are louder.
+- Sound: ambience and music are quieter, so gunshots and footsteps stand out, and loud fights no longer distort.
+- Sound: much more directional. Left and right are clearly apart, and sounds behind, above and below you each sound different.
+- Settings: turn on a speed bar in Play's settings to see your speed in units per second.
+- Movement: walking and crouching go at CS2's speeds with every weapon, getting shot slows you by that weapon's own amount, and planting, defusing and freeze time stop you on the spot.
+- Grenades: jump-throws no longer fly too far, and switching weapons right after a throw can't keep the grenade. You can buy at most 4 grenades a round, as in CS2.
