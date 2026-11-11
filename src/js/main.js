@@ -27,7 +27,7 @@ import * as p2p from './pages/p2pmarket.js';
 import { npcOf, crowd, inventoryOf } from './engine/npcs.js';
 import { initMatchmaking } from './matchmaking.js';
 import { initProfile } from './profile.js';
-import { initAccount, discordSection, bindDiscordSection, openResetModal, staffPc } from './account.js';
+import { initAccount, discordSection, bindDiscordSection, openResetModal } from './account.js';
 import { initUpdates } from './update.js';
 import { initPassive } from './passive.js';
 import { PAY, PASSIVE } from './engine/levels.js';
@@ -123,7 +123,7 @@ function accountModal() {
       foot: '<button class="btn danger" data-out>Log out (play offline)</button><button class="btn ghost" data-close>Close</button>',
     });
     bindDiscordSection(m);
-    m.el.querySelector('[data-out]').addEventListener('click', () => { net.logout(); m.close(); toast('Back to your offline save.', ''); go(currentName === 'trade' || (currentName === 'admin' && !staffPc()) ? 'cases' : currentName); });
+    m.el.querySelector('[data-out]').addEventListener('click', () => { net.logout(); m.close(); toast('Back to your offline save.', ''); go(currentName === 'trade' ? 'cases' : currentName); });
     return;
   }
   const m = openModal({
@@ -149,7 +149,8 @@ function accountModal() {
       await net.login(name, pass, { register });
       m.close();
       toast(`${register ? 'Account created. ' : ''}Online as <b>${esc(net.me().name)}</b>`, 'good');
-      go(currentName);
+      // (The offline admin panel doesn't come online with you: online it's for this server's staff.)
+      go(currentName === 'admin' && !(net.account()?.staff >= 1) ? 'cases' : currentName);
     } catch (e) {
       err.textContent = e.message;
       m.el.querySelectorAll('.modal-foot .btn').forEach((b) => (b.disabled = false));

@@ -475,6 +475,11 @@ What's in a match:
   summary, Everyone or Friends
   only for who can message you, block and report. A report gives staff the last 30 messages with that player; nothing
   else lets staff read a chat.
+- Admin panel (More → Admin). Offline every player has it, for their own offline save only: edit your money, stats and
+  items, snapshots of your save (one is saved before every change) and their restore, export, import and reset, and the
+  NPC traders (edit, block, reset, a new NPC world), with a log of every change. It never works online and never touches
+  an online account: the offline save stays on your PC, apart from your online account. Online it's for the server's
+  staff (moderators and admins, from the Discord roles; see DEPLOY.md), and the server checks everything they do
 - Item Database (like CSFloat's): search every skin, knife, glove, sticker, charm and agent in the game; open one to
   see every copy that exists with its owner, float, seed, pattern and stickers (online: everyone on the server;
   offline: you and the NPC players; each owner is a link to their profile), its float rank (#1-#3 lowest and highest, StatTrak™ and Souvenir copies ranked apart), the

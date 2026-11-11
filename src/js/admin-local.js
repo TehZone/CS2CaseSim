@@ -1,12 +1,12 @@
 // The admin panel offline: the requests pages/admin.js sends the server online (server/admin.mjs), answered in the same
 // shapes from this PC's save and its 2,000 NPC traders, with the same checks (engine/admin.js). Your save is snapshotted
 // before every change to it and every change is logged; the snapshots, the log and the notes stay in this PC's
-// IndexedDB (db 'cs2-admin'), never in the save. Only on a staff PC (account.js staffPc()) and never online (there the
-// server answers). Refusals are GameErrors with the server's codes ('bad', 'perm', 'stale', 'missing', 'reserved',
-// 'full'), plus 'online', 'offline' (a request that needs the server) and 'storage' (no IndexedDB).
+// IndexedDB (db 'cs2-admin'), never in the save. Every player has it, for their own offline save, and only while
+// offline: online the server answers, for its staff only. Nothing here reaches an online account (the offline save is
+// kept apart while you play online: state.js). Refusals are GameErrors with the server's codes ('bad', 'perm', 'stale',
+// 'missing', 'reserved', 'full'), plus 'online', 'offline' (a request that needs the server) and 'storage' (no IndexedDB).
 import { S, save, applyDelta, replaceState } from './state.js';
 import { online, act } from './backend.js';
-import { staffPc } from './account.js';
 import { playPrefs } from './pages/play-settings.js';
 import { GameError, makeCtx, delta, give, take, takeForStaff, clearNameForStaff } from './engine/actions.js';
 import { freshState, upgradeState } from './engine/economy.js';
@@ -45,12 +45,12 @@ async function exec(m, a) {
   if (!Object.hasOwn(METHODS, m)) fail('Unknown request');
   return METHODS[m](a);
 }
+// (Checked again right before anything is changed: you may have gone online while a request waited on storage.)
 function gate() {
   if (online()) fail('The offline admin panel only works on your offline save', 'online');
-  if (!staffPc()) fail('The admin panel works offline only on a PC that has signed in to a staff account', 'perm');
 }
-// (Who did it, in the log, snapshots, notes and blocks: the staff account that unlocked this PC.)
-const actor = () => staffPc()?.name || 'Staff';
+// (Who did it, in the log, snapshots, notes and blocks: you, by your offline profile's name.)
+const actor = () => myName();
 
 // ---- this PC's IndexedDB -------------------------------------------------------------------------------------------------
 // snapshots: { id, label, kind, by, created, size }, and the saves themselves in states: { id, state (JSON), config }
@@ -178,6 +178,7 @@ async function change(t, action, what, plan, apply, { snap = t?.id === 'me', at 
     }
     if ('noop' in p) { await dropSnap(id).catch(() => {}); return p.noop; }
   }
+  gate(); // (never on an online account's state: S is the offline save only while offline)
   const { answer, detail } = apply(p);
   save();
   const log = detail ? await writeLog(action, t, detail, at) : null;
@@ -189,6 +190,7 @@ const socialChanged = () => announce({ social: S.social });
 
 // The NPC world, made by the social tick if the save has none yet (a new save, or one just reset).
 async function ensureSocial() {
+  gate(); // (act() would go to the server online)
   if (!S.social) await act('npc.tick').catch(() => {});
   gate();
   if (!S.social) fail("The NPC world couldn't be made");

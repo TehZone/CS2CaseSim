@@ -1,10 +1,10 @@
-// The admin panel (staff only): the server at a glance, its players (find one, then ban, kick or warn them, edit
-// their stats and items, read the configs their game synced, save and restore snapshots of their account), the bans,
+// The admin panel. Online it's for staff only: the server at a glance, its players (find one, then ban, kick or warn them,
+// edit their stats and items, read the configs their game synced, save and restore snapshots of their account), the bans,
 // the audit log and the server's settings. The server checks every request against your staff level (1 moderator,
 // 2 admin, 3 owner, from your linked Discord roles) and refuses what you can't do; this page only hides it.
-// Offline, on a PC that has signed in to a staff account (account.js), the same page works on this PC's save and its
-// 2,000 NPC traders through admin-local.js: your numbers, items, configs and snapshots, the traders' money, items and
-// blocks, the local log, and the save itself (export, import, reset, a new NPC world).
+// Offline every player has it, for their own offline save and its 2,000 NPC traders, through admin-local.js: your
+// numbers, items, configs and snapshots, the traders' money, items and blocks, the local log, and the save itself
+// (export, import, reset, a new NPC world). None of that reaches an online account: the offline save stays on this PC.
 import { esc, money, timeAgo, debounce } from '../util.js';
 import { D, WEAR_BY_KEY, wearOf } from '../data.js';
 import * as I from '../items.js';
@@ -14,7 +14,7 @@ import { sfx } from '../audio.js';
 import { toast, openModal, confirmDialog as askUser, openInspect } from '../ui.js';
 import { levelIconHtml } from '../profile.js';
 import { net } from '../net/online.js';
-import { LEVEL_NAMES, staffPc } from '../account.js';
+import { LEVEL_NAMES } from '../account.js';
 import { localAdmin } from '../admin-local.js';
 import { FOCUS } from '../engine/npcs.js';
 import { ownedItems, unitCount, unitsOf } from '../engine/storage.js';
@@ -81,8 +81,8 @@ export function render(r) {
 export function destroy() { offs.forEach((o) => o()); offs = []; root = null; }
 
 // ---- who may do what (the server decides; this hides what it would refuse) ----------------------
-// (Offline, on a staff PC, it's your own save: every tool.)
-const myLevel = () => (online() ? net.account()?.staff || 0 : staffPc() ? 3 : 0);
+// (Offline it's your own save: every tool, for every player.)
+const myLevel = () => (online() ? net.account()?.staff || 0 : 3);
 const isAdmin = () => myLevel() >= 2;
 const isSelf = (u) => u?.id != null && (online() ? u.id === net.me()?.id : u.id === 'me');
 const canPunish = (u) => myLevel() >= 1 && !isSelf(u) && myLevel() > (u.staff || 0);
@@ -294,16 +294,17 @@ function draw() {
     if (view.tab === 'reports' && !online()) view.tab = 'dash';
   }
   const lvl = shownLevel = myLevel();
+  // (Only online: offline every player has the panel, for their own save.)
   if (lvl < 1) {
-    root.innerHTML = `<div class="page"><div class="empty">${online() ? "The admin panel is for this server's moderators and admins."
-      : 'The admin panel needs an online account with staff rights. Click <b>Offline</b> at the top right to log in.'}</div></div>`;
+    root.innerHTML = `<div class="page"><div class="empty">Online, the admin panel is for this server's moderators and admins.
+      Offline it works on your own offline save: log out (click your name at the top right) to use it there.</div></div>`;
     return;
   }
-  const pc = online() ? null : staffPc();
+  const off = !online();
   root.innerHTML = `<div class="page adm">
-    <div class="page-head"><h1>Admin</h1><span class="sub">${pc ? `Offline save on this PC · unlocked by ${esc(pc.name)} (${esc(levelName(pc.level))}) on <span class="fair">${esc(pc.server)}</span>`
+    <div class="page-head"><h1>Admin</h1><span class="sub">${off ? 'Your offline save on this PC · changes here stay offline and never reach an online account'
       : `${esc(net.me()?.name || '')} ${staffChip(lvl)} on <span class="fair">${esc(net.serverUrl())}</span> · <span data-online-text>${esc(net.onlineText())}</span>`}</span></div>
-    <div class="seg adm-tabs" data-tabs>${TABS.filter(([k]) => !pc || k !== 'reports').map(([k, n]) => `<button data-v="${k}" class="${view.tab === k ? 'active' : ''}">${pc ? OFF_TABS[k] || n : n}</button>`).join('')}</div>
+    <div class="seg adm-tabs" data-tabs>${TABS.filter(([k]) => !off || k !== 'reports').map(([k, n]) => `<button data-v="${k}" class="${view.tab === k ? 'active' : ''}">${off ? OFF_TABS[k] || n : n}</button>`).join('')}</div>
     <div class="adm-body" data-body></div>
   </div>`;
   root.querySelectorAll('[data-tabs] button').forEach((b) => b.addEventListener('click', () => {
@@ -362,7 +363,6 @@ function drawDash(el) {
 
 // Offline: this PC's save, its NPC world and the latest changes made here.
 function drawLocalDash(el, o) {
-  const pc = staffPc() || {};
   const stats = [
     ['Balance', money(+o.money || 0)], ['Items', num(o.items)], ['Inventory value', money(+o.invValue || 0)], ['Level', profLevel(o.level)],
     ['Cases opened', num(o.opened)], ['Traders online', `${num(o.activeNow)} <small class="dim">of ${num(o.npcs)}</small>`], ['Blocked traders', num(o.blocked)], ['Snapshots', num(o.snapshots)],
@@ -373,8 +373,9 @@ function drawLocalDash(el, o) {
       <div class="panel"><h3>Your save</h3><dl class="kv"><dt>Saved</dt><dd>${when(o.lastSaved)}</dd><dt>Size</dt><dd>${kb(o.saveBytes)}</dd>
         <dt>Kept</dt><dd>On this PC only: offline progress never goes online</dd></dl>
         <div class="adm-panel-foot"><button class="btn ghost sm" data-go="server">Save & world</button></div></div>
-      <div class="panel"><h3>Your access</h3><div class="adm-state">${staffChip(pc.level)}<span class="muted">unlocked by ${esc(pc.name)}</span></div>
-        <ul class="adm-access">${LOCAL_ACCESS.map((t) => `<li class="yes">${t}</li>`).join('')}</ul></div>
+      <div class="panel"><h3>Your access</h3><div class="adm-state"><span class="chip gold">Your offline save</span><span class="muted">every player has this offline</span></div>
+        <ul class="adm-access">${LOCAL_ACCESS.map((t) => `<li class="yes">${t}</li>`).join('')}</ul>
+        <p class="muted adm-note">Only while offline, and only on your own save: your online account isn't touched, and online the panel is for the server's staff.</p></div>
       <div class="panel"><h3>NPC traders</h3>${NPC_ROWS.map(([k, label]) => swHtml(label, obj(o.settings)[k] !== false, true)).join('')}
         <div class="adm-panel-foot"><button class="btn ghost sm" data-go="server">NPC settings</button></div></div>
     </div>
@@ -385,7 +386,7 @@ function drawLocalDash(el, o) {
   el.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => { view.tab = b.dataset.go; invalidate(TAB_DATA[view.tab]); draw(); }));
   wireOpen(el);
 }
-// What the panel does offline (your own save: all of it, whatever your level online).
+// What the panel does offline (your own save: all of it, for every player, whatever their level online).
 const LOCAL_ACCESS = [
   'Edit your money, stats and items; read and import your configs',
   'Save, restore and delete snapshots of your save',
@@ -617,10 +618,10 @@ function actionButtons(u, ban) {
 
 // Offline: your own save, or an NPC trader (who they are, where you stand, their block).
 function localHeadHtml(p, ban) {
-  const u = p.user, n = u.npc, pc = staffPc() || {};
+  const u = p.user, n = u.npc;
   const facts = n
     ? [['Trader', esc(typeName(n))], ['Country', n.country ? cc(n.country) : '<span class="dim">—</span>'], ['Friend', esc(friendText(n.friend))], ['Trades with you', num(+n.trades || 0)]]
-    : [['Save', 'Offline, on this PC'], ['Unlocked by', `${esc(pc.name)} <span class="dim">(${esc(levelName(pc.level))}) on ${esc(pc.server)}</span>`]];
+    : [['Save', 'Offline, on this PC'], ['Online account', '<span class="dim">Not affected: it is kept on the server</span>']];
   if (u.cooldown) facts.push(['Ranked cooldown', `${esc(formatWait(u.cooldown))} left`]);
   const chips = n
     ? `${u.online != null ? `<span class="chip ${u.online ? 'green' : ''}"><span class="adm-dot ${u.online ? 'on' : ''}"></span>${u.online ? 'Online' : 'Offline'}</span>` : ''}<span class="chip">NPC trader</span>${ban ? '<span class="chip red">Blocked</span>' : ''}`
@@ -847,7 +848,7 @@ function drawOverview(el, p) {
   el.innerHTML = `<div class="summary adm-summary">${sum.map(([k, v]) => `<div>${k}<b>${v}</b></div>`).join('')}</div>
     <div class="adm-editor"><div>${groups.filter(([t]) => left(t)).map(panel).join('')}</div><div>${groups.filter(([t]) => !left(t)).map(panel).join('')}</div></div>
     <div class="actions adm-save">${edit ? `<button class="btn primary" data-save disabled>Save changes</button><button class="btn ghost" data-undo disabled>Undo changes</button>
-      <span class="muted adm-note">Only what you change is sent. An auto snapshot is saved before every edit.</span><span class="spacer"></span><button class="btn" data-raw>Raw JSON</button>`
+      <span class="muted adm-note">Only what you change is ${online() ? 'sent' : 'saved'}. An auto snapshot is saved before every edit.</span><span class="spacer"></span><button class="btn" data-raw>Raw JSON</button>`
       : '<span class="muted">Moderators can see these numbers; only admins can change them.</span>'}</div>`;
   if (!edit) return;
   const inputs = [...el.querySelectorAll('[data-f]')], save = el.querySelector('[data-save]'), undo = el.querySelector('[data-undo]');
@@ -898,7 +899,7 @@ function drawNpcOverview(el, p) {
       <div><div class="panel"><h3>Who they are</h3><dl class="kv">${who.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></div></div>
     </div>
     <div class="actions adm-save"><button class="btn primary" data-save disabled>Save changes</button><button class="btn ghost" data-undo disabled>Undo changes</button>
-      <span class="muted adm-note">Mood: how likely they are to take your friend request (each trade with you raises it). Only what you change is sent.</span></div>`;
+      <span class="muted adm-note">Mood: how likely they are to take your friend request (each trade with you raises it). Only what you change is saved.</span></div>`;
   const inputs = [...el.querySelectorAll('[data-f]')], save = el.querySelector('[data-save]'), undo = el.querySelector('[data-undo]');
   inputs.forEach((i) => { i.dataset.was = i.value; });
   const changed = () => inputs.filter((i) => i.value !== i.dataset.was);
@@ -1031,7 +1032,7 @@ function drawInvList(el, p) {
     if (removeBtn) { removeBtn.disabled = !v.sel.size; removeBtn.textContent = v.sel.size ? `Remove ${plural(v.sel.size, 'item')}` : 'Remove selected'; }
   };
   updateSel();
-  if (!shown.length) { box.innerHTML = `<div class="empty adm-empty">${all.length ? 'No item matches that.' : 'Their inventory is empty.'}</div>`; return; }
+  if (!shown.length) { box.innerHTML = `<div class="empty adm-empty">${all.length ? 'No item matches that.' : isSelf(p.user) ? 'Your inventory is empty.' : 'Their inventory is empty.'}</div>`; return; }
   const row = (i, n) => {
     // (A listed item, i.lid, is on the Market: it comes back to the inventory when its listing comes down, in the Market tab.)
     const res = reserved.has(i.uid) || !!i.lid, wk = i.t === 'skin' && i.fl != null ? wearOf(i.fl) : null;

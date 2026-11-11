@@ -214,7 +214,8 @@ async function runServerChecks() {
     const in_ = await p.eval(`(async () => { const net = await ${online}; try { await net.login('e2e_staff', 'local-test-pass-1', { register: true }); return 'let in'; } catch (e) { return e.message; } })()`);
     check('packaged: the latest version is let in', in_ === 'let in', in_);
     await wait(500);
-    check('packaged: a test server saying you\'re staff doesn\'t unlock the offline admin panel on this PC',
+    // (Offline every player has the admin panel, for their own save; online only the server's staff.)
+    check('packaged: a test server saying you\'re staff shows the admin panel online, and leaves no staff record on this PC',
       (await p.eval(`document.body.classList.contains('is-staff')`)) && !(await p.eval(`localStorage.getItem('cs2-admin-pc')`)));
     await p.eval(`document.querySelector('#account').click()`);
     await wait(300);

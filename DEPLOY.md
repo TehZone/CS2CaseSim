@@ -178,6 +178,8 @@ Who gets what in the game's admin panel:
 - The **Moderator** role: **Moderator** (look up players, ban, kick, warn, sign out, notes, save snapshots, read and
   close player reports, clear a reported summary).
   Other role names: set `DISCORD_ADMIN_ROLES` and `DISCORD_MOD_ROLES` (comma-separated).
+- Offline (not logged in), every player has the panel for their own offline save only. It never works online and never
+  touches an account on the server: online, these levels decide who has it.
 - Nobody can act on staff at or above their own level, or ban themselves. Every action is in the audit log, and
   posted to a text channel with `mod-log` in its name (or the channel id in `DISCORD_LOG_CHANNEL`).
 - Rare drops online (knives, gloves, Dopplers and Blue Gems, opened or traded up to, see `server/drops.mjs`) go to a text channel with `rare-drops`
