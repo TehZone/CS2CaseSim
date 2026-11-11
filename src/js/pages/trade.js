@@ -11,16 +11,19 @@ import { net } from '../net/online.js';
 
 const view = { with: null, theirInv: [], mine: new Set(), theirs: new Set(), myMoney: 0, theirMoney: 0, msg: '', q: '', loading: false };
 let root = null, offs = [], startWith = null;
+// The offer being made, while it's on screen (drawCompose): its two item pickers, drawn again in place as things change so
+// neither list jumps back to the top or loses its search.
+let pickers = null;
 
 export function render(r) {
   root = r;
   offs.forEach((o) => o());
-  offs = [net.on('players', () => drawPlayers()), net.on('trades', () => drawOffers()), on('inv', () => drawCompose())];
+  offs = [net.on('players', () => drawPlayers()), net.on('trades', () => drawOffers()), on('inv', () => { if (pickers) { pickers.mine.redraw(); totals(); } else drawCompose(); })];
   draw();
   if (startWith && online()) { view.counterOf = null; view.msg = ''; pickPlayer(startWith); }
   startWith = null;
 }
-export function destroy() { offs.forEach((o) => o()); offs = []; root = null; }
+export function destroy() { offs.forEach((o) => o()); offs = []; root = null; pickers = null; }
 
 // Make offer on a player's profile: this page, with an offer to them started.
 export function offerTo(name) {
@@ -81,28 +84,45 @@ async function pickPlayer(name, prefill = null) {
   drawPlayers(); drawCompose();
 }
 
+// What each side of the offer is worth: { give, get }.
+function offerValues() {
+  const sum = (items, set) => items.filter((i) => set.has(i.uid)).reduce((s, i) => s + I.itemValue(i), 0);
+  return { give: sum(S.inv, view.mine) + (+view.myMoney || 0), get: sum(view.theirInv, view.theirs) + (+view.theirMoney || 0) };
+}
+// The two sides' totals, in place (choosing items or money draws nothing else again).
+function totals() {
+  const el = root?.querySelector('[data-compose]');
+  if (!el || !pickers) return;
+  const { give, get } = offerValues();
+  el.querySelector('[data-give]').textContent = money(give);
+  el.querySelector('[data-get]').textContent = money(get);
+}
+
 function drawCompose() {
   const el = root?.querySelector('[data-compose]');
   if (!el) return;
+  pickers = null;
   if (!view.with) { el.innerHTML = '<div class="panel"><h3>New offer</h3><div class="muted">Pick a player on the left to see their inventory.</div></div>'; return; }
   if (view.loading) { el.innerHTML = `<div class="panel"><h3>Trading with ${esc(view.with)}</h3><div class="muted">Loading their inventory…</div></div>`; return; }
-  const sum = (items, set) => items.filter((i) => set.has(i.uid)).reduce((s, i) => s + I.itemValue(i), 0);
-  const give = sum(S.inv, view.mine) + (+view.myMoney || 0), get = sum(view.theirInv, view.theirs) + (+view.theirMoney || 0);
+  const { give, get } = offerValues();
   el.innerHTML = `<div class="panel"><h3>Offer to ${esc(view.with)}</h3>
     <div class="offer-sides">
-      <div class="offer-side"><h4>You give · <span class="green">${money(give)}</span></h4>
+      <div class="offer-side"><h4>You give · <span class="green" data-give>${money(give)}</span></h4>
         <label class="check" style="margin-bottom:8px">Money <input class="input" type="number" min="0" step="0.01" data-mym value="${view.myMoney}" style="width:110px"></label><div data-mypick></div></div>
-      <div class="offer-side"><h4>You get · <span class="green">${money(get)}</span></h4>
+      <div class="offer-side"><h4>You get · <span class="green" data-get>${money(get)}</span></h4>
         <label class="check" style="margin-bottom:8px">Money <input class="input" type="number" min="0" step="0.01" data-thm value="${view.theirMoney}" style="width:110px"></label><div data-thpick></div></div>
     </div>
     <div class="open-row" style="margin-top:12px">
       <input class="input" data-msg placeholder="Message (optional)" maxlength="140" value="${esc(view.msg)}" style="flex:1">
       <button class="btn gold" data-send>Send offer</button>
     </div></div>`;
-  mountPicker(el.querySelector('[data-mypick]'), { items: () => S.inv.filter(I.tradable), selected: view.mine, onChange: () => drawCompose(), empty: 'No unlocked items' });
-  mountPicker(el.querySelector('[data-thpick]'), { items: () => view.theirInv, selected: view.theirs, onChange: () => drawCompose(), empty: 'They have no tradable items' });
-  el.querySelector('[data-mym]').addEventListener('change', (e) => { view.myMoney = Math.max(0, +e.target.value || 0); drawCompose(); });
-  el.querySelector('[data-thm]').addEventListener('change', (e) => { view.theirMoney = Math.max(0, +e.target.value || 0); drawCompose(); });
+  pickers = {
+    mine: mountPicker(el.querySelector('[data-mypick]'), { items: () => S.inv.filter(I.tradable), selected: view.mine, onChange: totals, empty: 'No unlocked items' }),
+    theirs: mountPicker(el.querySelector('[data-thpick]'), { items: () => view.theirInv, selected: view.theirs, onChange: totals, empty: 'They have no tradable items' }),
+  };
+  const amount = (e, k) => { view[k] = Math.max(0, +e.target.value || 0); if (+e.target.value !== view[k]) e.target.value = view[k]; totals(); };
+  el.querySelector('[data-mym]').addEventListener('change', (e) => amount(e, 'myMoney'));
+  el.querySelector('[data-thm]').addEventListener('change', (e) => amount(e, 'theirMoney'));
   el.querySelector('[data-msg]').addEventListener('input', (e) => { view.msg = e.target.value; });
   el.querySelector('[data-send]').addEventListener('click', send);
 }
