@@ -2069,6 +2069,257 @@ const shotAt = (p, from, elev, dist = 500) => {
   ok(!mm.mapsFor('wingman').length && mm.mapsFor('competitive').length === 3, "wingman: no maps till CS2's list has been read");
 }
 
+// ---- bots play actively (ai.js, strats.js, skill.js): they go in earlier, take fights, chase, trade and plant ----------
+{
+  const { Brain } = await import('../src/js/play/ai.js');
+  const S = await import('../src/js/play/strats.js');
+  const K = await import('../src/js/play/skill.js');
+  const silver = K.skillParams(0), ge = K.skillParams(1);
+  // A default hits with time left to plant and play the bomb, an execute early (they used to hit at 35 s left, and an
+  // execute at 70).
+  const mk = (i) => ({ c: { team: 'T', name: 'T' + i, skill: 0.6, nades: {}, hasC4: i === 0, alive: true }, weapons: { primary: { id: 'weapon_ak47' } }, pos: [0, 0, 0], brain: { d: { utility: 0 } } });
+  const game = { map: { info: { id: 'test_active', bombsites: [{ site: 'A' }, { site: 'B' }] } }, midSpot: null, lineups: [], tSiteHistory: [], bots: [0, 1, 2, 3, 4].map(mk) };
+  let def = Infinity, exec = Infinity;
+  for (let r = 0; r < 60; r++) {
+    game.forceStrat = 'default'; def = Math.min(def, S.teamPlan(game, 'T', 'full').execAt);
+    game.forceStrat = 'exec'; exec = Math.min(exec, S.teamPlan(game, 'T', 'full').execAt);
+  }
+  ok(def >= 50 && exec >= 80, `plans: a default hits with 50 s or more on the clock, an execute by 80 s left at the latest (${def.toFixed(0)} s, ${exec.toFixed(0)} s)`);
+  // Gathering: half of them there for a few seconds and they go, the rest on their way (they waited for the last one).
+  const at = (x) => ({ c: { team: 'T', alive: true }, pos: [x, 0, 0] });
+  const g2 = { match: { time: 90 }, bots: [at(0), at(50), at(100), at(3000), at(4000)], botOf: () => null };
+  const plan = { side: 'T', stage: 'gather', site: 'A', staging: [0, 0, 0], throws: [], execAt: 70, igl: null };
+  S.advancePlan(g2, plan, 10);
+  const first = plan.stage;
+  S.advancePlan(g2, plan, 10 + (S.GATHER_WAIT ?? 6) + 0.1);
+  ok(first === 'gather' && plan.stage === 'execute', `plans: three of five gathered for ${S.GATHER_WAIT ?? 6} s go in (${first}, then ${plan.stage}), not waiting for the last two`);
+
+  // Gunfire nearby draws most bots to it, a Global Elite too; footsteps a patient one holds its angle for.
+  const g3 = { lineOfSight: () => true, nav: { groundAt: () => 0 }, match: { bomb: { state: 'carried' } } };
+  const hearer = (d) => Object.assign(Object.create(Brain.prototype), { game: g3, bot: { pos: [0, 0, 0], eye: () => [0, 0, 64], c: { hasC4: false } }, d });
+  let shots = 0, steps = 0, far = 0;
+  for (let i = 0; i < 300; i++) {
+    const h = hearer(ge); h.hear([800, 0, 0], 2600, i); if (h.goSee?.(i + 1)) shots++;
+    const f = hearer(ge); f.hear([500, 0, 0], 900, i); if (f.goSee?.(i + 1)) steps++;
+    const x = hearer(ge); x.hear([2400, 0, 0], 2600, i); if (x.goSee?.(i + 1)) far++;
+  }
+  ok(shots > 210 && steps < 60 && far === 0, `hearing: a Global Elite goes to a fight it hears 800 units off (${shots} of 300; it used to hold its angle for ${Math.round(300 * (1 - ge.patience))} of them), not to footsteps (${steps}) nor a fight across the map (${far})`);
+  // But not to a decoy's bursts, a patient one (they drew a Global Elite most of the decoy's 15 s, a Silver about half:
+  // the best bots were the easiest to fool); a fight's bursts don't change its mind each time (each rolled again: it
+  // went, came back, went); and a CT holds its post for gunfire about the site it holds (an execute's drew them off their
+  // angles), going to a fight out of the site's way.
+  {
+    const share = (x) => Math.round(x * 100) + '%';
+    // A decoy 1200 units off for its 15 s, bursts 0.8 to 2.4 s apart (grenades.js): how much of it the bot wants to go.
+    const pulled = (d, decoy = true) => {
+      let on = 0, n = 0;
+      for (let i = 0; i < 200; i++) {
+        const br = Object.assign(hearer(d), { game: { ...g3, nades: { decoys: decoy ? [{ pos: [1200, 0, 0] }] : [] } } });
+        for (let t = 0, next = 0.3; t < 15; t += 0.25, n++) {
+          while (next <= t) { br.hear([1200, 0, 0], 2600, next); next += 0.8 + Math.random() * 1.6; }
+          if (br.goSee?.(t)) on++;
+        }
+      }
+      return on / n;
+    };
+    const dGe = pulled(ge), dSilver = pulled(silver), real = pulled(ge, false);
+    ok(dGe < 0.2 && dSilver > 0.5 && real > 0.6, `hearing: a decoy 1200 units off draws a Global Elite ${share(dGe)} of its 15 s, a Silver ${share(dSilver)} (a real fight's gunfire there, a Global Elite ${share(real)})`);
+    // The same fight, bursts a second or two apart: the bot goes or it doesn't, for the fight (even odds here).
+    let steady = 0, went = 0, changed = 0;
+    for (let i = 0; i < 200; i++) {
+      const br = hearer({ ...ge, join: 0.5 }), seen = new Set();
+      [0, 1.6, 3.4, 5.1, 6.9].forEach((t, k) => { br.hear([900 + k * 40, 0, 0], 2600, t); seen.add(!!br.goSee?.(t + 0.3)); });
+      if (seen.size === 1) steady++;
+      if (seen.has(true)) went++;
+      // (One somewhere else is decided anew.)
+      const o = hearer({ ...ge, join: 0.5 }); o.hear([900, 0, 0], 2600, 0);
+      const first = !!o.goSee?.(0.3); o.hear([0, 1100, 0], 2600, 1.5);
+      if (first !== !!o.goSee?.(1.8)) changed++;
+    }
+    ok(steady === 200 && went > 60 && went < 140 && changed > 50, `hearing: a fight's bursts a second or two apart don't change a bot's mind (${steady} of 200 kept to it, ${went} going), a fight somewhere else is decided anew (${changed} changed)`);
+    // A CT holding A: gunfire about A, out of sight (an execute coming in), and gunfire 1300 units off out of the site's way.
+    const ctc = { team: 'CT', hasC4: false, alive: true };
+    const gs = { ...g3, map: { info: { bombsites: [{ site: 'A', min: [-300, -300, 0], max: [300, 300, 100] }, { site: 'B', min: [4000, 4000, 0], max: [4600, 4600, 100] }] } } };
+    const holder = (side) => Object.assign(Object.create(Brain.prototype), { game: gs, d: ge, bot: { pos: [0, 0, 0], eye: () => [0, 0, 64], c: side === 'CT' ? ctc : { team: 'T', hasC4: false, alive: true } },
+      plan: side === 'CT' ? { side, assign: new Map([[ctc, 'A']]), rotate: null } : { side, stage: 'execute', throws: [] } });
+    let onSite = 0, away = 0, tOnSite = 0;
+    for (let i = 0; i < 300; i++) {
+      const a = holder('CT'); a.hear([800, 300, 0], 2600, i); if (a.goSee?.(i + 1)) onSite++;
+      const m = holder('CT'); m.hear([1300, 0, 0], 2600, i); if (m.goSee?.(i + 1)) away++;
+      const x = holder('T'); x.hear([800, 300, 0], 2600, i); if (x.goSee?.(i + 1)) tOnSite++;
+    }
+    ok(onSite < 60 && away > 210 && tOnSite > 210, `hearing: a Global Elite CT holds its post for gunfire about the site it holds (${onSite} of 300 went), goes to a fight out of the site's way (${away}); a terrorist goes to one on the site (${tOnSite})`);
+  }
+
+  // An enemy it was fighting gets out of sight: after a moment it goes after them, where it last saw them.
+  const foe = { team: 'CT', alive: true, health: 100 }, me = { team: 'T', alive: true, health: 100, hasC4: false };
+  const g4 = { combatants: [me, { team: 'T', alive: true }, foe, { team: 'CT', alive: true }], hostile: (a, b) => a.team !== b.team, match: { bomb: { state: 'carried' } } };
+  const chaser = (d, gun = 'weapon_ak47') => Object.assign(Object.create(Brain.prototype), { game: g4, bot: { pos: [0, 0, 0], c: me, weapons: { primary: { id: gun } } }, d,
+    target: { c: foe, visible: false, lostAt: 10 }, lastSeen: { pos: [600, 0, 0], t: 10 }, chase: null });
+  const tries = (d, t = 11, gun) => { let n = 0; for (let i = 0; i < 200; i++) { const p = chaser(d, gun).chaseTo?.(t); if (p && p[0] === 600) n++; } return n; };
+  const even = tries(ge), soon = tries(ge, 10.2), awp = tries(ge, 11, 'weapon_awp');
+  ok(even > 90 && soon === 0 && awp === 0, `chase: a Global Elite goes after an enemy that got out of sight a second ago, two against two (${even} of 200; it gave the fight up), not the moment they're gone (${soon}), and not with an AWP (${awp})`);
+  g4.combatants.push({ team: 'CT', alive: true }, { team: 'CT', alive: true });
+  const outGe = tries(ge), outSilver = tries(silver);
+  foe.health = 40;
+  const hurt = tries(ge);
+  ok(outGe === 0 && outSilver > 90 && hurt > 90, `chase: outnumbered, a Global Elite holds (${outGe}) unless they're hurt (${hurt}); a Silver goes anyway (${outSilver})`);
+  g4.match.bomb.state = 'planted';
+  const planted = tries(silver);
+  g4.match.bomb.state = 'carried';
+  ok(planted === 0 && tries(silver) > 90, `chase: not with the bomb down (${planted}: the bomb comes first)`);
+  // Grenades still go out: a terrorist with its smoke for the hit still to throw doesn't go after anyone first.
+  const thrower = chaser({ ...ge, chase: 1 });
+  thrower.plan = { stage: 'execute', throws: [{ by: me, done: false }] };
+  const busy = thrower.chaseTo?.(11);
+  thrower.plan.throws[0].done = true; thrower.chase = null;
+  const hb = Object.assign(hearer({ ...ge, join: 1 }), { plan: { stage: 'gather', throws: [{ by: null, done: false }] } });
+  hb.bot.c.team = 'T'; hb.plan.throws[0].by = hb.bot.c; hb.hear([800, 0, 0], 2600, 0);
+  const joinBusy = hb.goSee?.(1);
+  hb.plan.throws[0].done = true;
+  ok(busy === null && thrower.chaseTo?.(11)?.[0] === 600 && joinBusy === false && hb.goSee?.(1) === true, 'chase: one with its own smoke for the hit still to throw neither chases nor goes to a fight (then it does)');
+  const one = chaser({ ...ge, chase: 1 }), p1 = one.chaseTo?.(11), p2 = one.chaseTo?.(12);
+  ok(p1 && p2 === p1 && one.chaseTo(16) === null, 'chase: decided once each time they get away, for a few seconds');
+
+  // Holding a spot with nothing going on: a look out along the way in, then back.
+  const g5 = { nav: { path: (a, b) => ({ points: [a.slice(), b.slice()] }) }, match: { bomb: { state: 'carried' } } };
+  const holder = (d, gun = 'weapon_m4a1') => {
+    const br = Object.assign(Object.create(Brain.prototype), { game: g5, bot: { pos: [0, 0, 0], vel: [0, 0, 0], c: { team: 'CT', health: 100 }, weapons: { primary: { id: gun } } }, d, plan: {}, task: 'hold', probe: null, probeAt: null, closest: null });
+    br.setTask = function (task, goal) { this.task = task; this.goal = goal.slice(); };
+    return br;
+  };
+  const spot = { pos: [0, 0, 0], look: [0, 0], at: [1000, 0, 64] };
+  const look = (br, from, to) => { for (let t = from; t < to; t += 0.25) { if (br.probing?.(t, spot)) return t; br.task = 'hold'; } return null; };
+  const h5 = holder({ ...ge, probe: 1 }), went = look(h5, 0, 30), to = h5.goal;
+  ok(went != null && h5.task === 'goto' && to?.[0] >= 250 && to?.[0] <= 550 && Math.abs(to?.[1]) < 1e-6, `probe: a CT that has held its spot a while (${went} s) with nothing going on looks out along the way in, ${to?.[0]?.toFixed(0)} units out, short of where they'd show`);
+  h5.bot.pos = (to || [0, 0, 0]).slice();
+  const there = !!h5.probing?.(went + 0.5, spot) && h5.task === 'hold' && Math.abs(h5.holdYaw) < 1;
+  const back = h5.probing?.(went + 4, spot) === false && h5.probe === null;
+  ok(there && back, 'probe: there it watches the way they would come a moment, then goes back to its spot');
+  const a5 = holder({ ...ge, probe: 1 }, 'weapon_awp'), r5 = holder({ ...ge, probe: 1 }), s5 = holder({ ...ge, probe: 1 });
+  r5.plan = { rotate: 'A', sightings: new Map([[{ alive: true }, { site: 'A', t: 0 }]]) }; s5.heard = { t: 0 };
+  ok(went != null && look(a5, 0, 40) == null && look(r5, 0, 9.9) == null && look(s5, 0, 3.9) == null, "probe: an AWPer holds its angle; nobody wanders while the team's just seen where they are, or just after a noise");
+  ok(look(r5, 10, 60) != null, "probe: once nothing's been seen on the site the call was for in a while, a CT looks out again (a fake, or a hit that's waiting)");
+  // A terrorist taking map control in a default looks out more often than a CT holding its site.
+  const gaps = (team) => { let n = 0, sum = 0; for (let i = 0; i < 40; i++) { const h = holder({ ...ge, probe: 1 }); h.bot.c.team = team; const a = look(h, 0, 30); h.bot.pos = [0, 0, 0]; h.probe = null; h.task = 'hold'; const b = look(h, a ?? 0, 60); if (a != null && b != null) { n++; sum += b - a; } } return n ? sum / n : Infinity; };
+  const gT = gaps('T'), gCT = gaps('CT');
+  ok(gT < 12.5 && gCT > 12.5, `probe: a terrorist in a default looks out every ${gT.toFixed(1)} s or so, a CT every ${gCT.toFixed(1)} s`);
+  // The CTs' early push: the round's aggressive one goes further out at once, and only the once.
+  const ag = holder({ ...ge, probe: 0 });
+  ag.plan = { aggro: ag.bot.c };
+  const pushed = look(ag, 0, 3), pto = ag.goal;
+  ag.bot.pos = [0, 0, 0]; ag.probe = null; ag.task = 'hold';
+  ok(pushed != null && pushed <= 1.5 && pto?.[0] >= 700 && pto?.[0] <= 880 && look(ag, 3, 60) == null, `push: the CTs' aggressive player goes ${pto?.[0]?.toFixed(0)} units out along its way in as soon as it's on its spot, once a round`);
+  const awper = (b) => /awp/.test(b.weapons.primary.id);
+  const cts = [0, 1, 2, 3, 4].map((i) => ({ ...mk(i), c: { ...mk(i).c, team: 'CT', hasC4: false }, weapons: { primary: { id: i === 2 ? 'weapon_awp' : 'weapon_m4a1' } } }));
+  const gct = { ...game, bots: cts, forceStrat: null };
+  let pushes = 0, awpPush = 0;
+  for (let r = 0; r < 300; r++) { const a = S.teamPlan(gct, 'CT', 'full').aggro; if (a) { pushes++; if (awper(cts.find((b) => b.c === a))) awpPush++; } }
+  ok(pushes > 80 && pushes < 160 && awpPush === 0, `push: ${pushes} rounds of 300 one CT plays aggressive early, never the AWPer`);
+
+  // The lurker comes on to the site a few seconds into the execute (it stayed out on the other side till the last 30 s).
+  const lurker = { team: 'T' }, lk = Object.assign(Object.create(Brain.prototype), { game: { match: { time: 60 } }, bot: { c: lurker }, lurkFor: 6 });
+  const p6 = { lurk: lurker, stage: 'execute', execStart: 20 };
+  ok(lk.lurking?.(p6, 23) === true && lk.lurking?.(p6, 27) === false, 'lurk: the lurker stays out until a few seconds into the execute, then comes on to the site behind the rotating CTs');
+
+  // Trading: most bots go for a teammate's killer, a Silver too (15% did), and run there (they walked after any glimpse).
+  ok(silver.trade >= 0.4 && ge.trade > 0.9, `trade: a Silver trades a teammate ${Math.round(silver.trade * 100)}% of the time, a Global Elite ${Math.round(ge.trade * 100)}%`);
+  const w = Object.assign(Object.create(Brain.prototype), { plan: {}, task: 'goto', lastSeen: { t: 9 }, target: null, trade: { until: 12 }, retaking: false });
+  const trading = w.walking(10);
+  w.trade = null; w.retaking = true;
+  const retaking = w.walking(10);
+  w.retaking = false;
+  ok(!trading && !retaking && w.walking(10), 'walking: a bot runs to trade a teammate and to retake, and walks after a glimpse of an enemy otherwise');
+
+  // The bomb carrier on the site: it plants after a glimpse of an enemy once a moment has passed, with time short at once.
+  const site = { site: 'A' }, carrier = (time) => Object.assign(Object.create(Brain.prototype), { game: { match: { time, siteAt: () => site } }, bot: { pos: [0, 0, 0] }, target: null, lastSeen: { t: 9 } });
+  ok(carrier(20).plantNow?.(10) === true && carrier(60).plantNow?.(10) === false && carrier(60).plantNow?.(12) === true, 'plant: with 20 s left the carrier plants a second after seeing an enemy (it waited two and a half), with time to spare it waits that long');
+
+  // A CT's early smoke not thrown in the first half minute: its lineup's aim and its last steps onto the spot are
+  // dropped with it (it went on facing the smoke's angle, pulled back onto the spot, for the rest of the round).
+  {
+    const ctc = { team: 'CT', name: 'CT0', alive: true, health: 100, defuser: true, nades: { weapon_smokegrenade: 1 } };
+    const lineup = { kind: 'smoke', pos: [100, 100, 0], land: [900, 0, 0], pitch: -20, yaw: 90, strength: 1 };
+    const gx = { liveAt: 0, respawnMode: false, match: { phase: 'live', time: 90, bomb: { state: 'carried' } }, map: { info: { bombsites: [] } }, drops: { list: [] },
+      nades: { inFire: () => false, smokedAt: () => false, fireSmokedBy: () => null }, combatants: [ctc], hostile: (a, x) => a.team !== x.team, botThrowAim: () => false };
+    const br = Object.assign(Object.create(Brain.prototype), { game: gx, d: ge, startDelay: 0, nadeAt: Infinity, order: null, trade: null, target: null, heard: null, lastSeen: null,
+      bot: { pos: [100, 100, 0], vel: [0, 0, 0], yaw: 0, pitch: 0, index: 0, c: ctc, weapons: { primary: { id: 'weapon_m4a1' } }, pendingThrow: null },
+      plan: { side: 'CT', assign: new Map([[ctc, 'A']]), pos: new Map(), sightings: new Map(), throws: [{ lineup, by: ctc, nade: 'weapon_smokegrenade', phase: 0, done: false }] },
+      spots: {}, path: null, task: 'hold', lineupFace: null, approach: null, lineupAim: null });
+    br.setTask = function (task, goal) { this.task = task; this.goal = goal; };
+    let err = null;
+    try { br.decide(20); } catch (e) { err = e; }
+    const lining = !!br.lineupFace && !!br.approach && br.task === 'lineup';
+    try { br.decide(31); } catch (e) { err = e; }
+    ok(!err && lining && br.lineupFace === null && br.approach === null, `lineup: a CT's smoke not out in the first half minute is given up, its aim and its spot with it (lining up at 20 s: ${lining}; at 31 s still facing it: ${!!br.lineupFace}, drawn to its spot: ${!!br.approach}${err ? ', ' + err.message : ''})`);
+  }
+
+  // The execute: a pop flash late (its thrower still on the way) is waited for a few seconds, not for good; on time, the
+  // entry goes in as it bursts, and a late one doesn't send them back out.
+  {
+    const A = await import('../src/js/play/ai.js');
+    const entry = { team: 'T' }, other = { team: 'T' }, thrower = { alive: true };
+    const br = (c, index) => Object.assign(Object.create(Brain.prototype), { bot: { index, c }, d: ge });
+    const plan = { execStart: 10, roles: new Map([[entry, 'entry'], [other, 'support']]), throws: [{ phase: 2, done: false, by: thrower }] };
+    const waitE = br(entry, 0).entryDelay(plan), waitO = br(other, 3).entryDelay(plan);
+    plan.throws[0].done = true; plan.flashAt = 13.3;
+    const onTime = br(entry, 0).entryDelay(plan);
+    plan.flashAt = 17.5;
+    const late = br(entry, 0).entryDelay(plan);
+    ok(Number.isFinite(waitE) && waitE <= (A.POP_WAIT ?? 0) + 0.01 && waitO > waitE && waitO < 8 && Math.abs(onTime - 3.05) < 0.01 && late <= waitE + 0.01,
+      `execute: a pop flash that isn't out is waited for ${waitE} s (the entry; the rest a moment after, ${waitO?.toFixed(2)} s), not until it's given up; on time the entry goes as it bursts (${onTime?.toFixed(2)} s), a late one doesn't hold them back (${late?.toFixed(2)} s)`);
+  }
+
+  // Gathering: half of them there, the rest on the way, go in after a few seconds only once the throwers are on their
+  // spots or nearly (the execute's smokes went out late, or not at all).
+  {
+    const bots = [0, 50, 100, 3000, 4000].map((x, i) => ({ c: { team: 'T', alive: true, name: 'T' + i }, pos: [x, 0, 0] }));
+    const gx = { match: { time: 90 }, bots, botOf: (c) => bots.find((b) => b.c === c) };
+    const go = (from) => {
+      const plan = { side: 'T', stage: 'gather', site: 'A', staging: [0, 0, 0], execAt: 70, igl: null, throws: [{ lineup: { pos: [from, 0, 0] }, by: bots[3].c, done: false }] };
+      S.advancePlan(gx, plan, 10); S.advancePlan(gx, plan, 10 + (S.GATHER_WAIT ?? 6) + 0.1);
+      return plan.stage;
+    };
+    ok(go(3000 + 300) === 'gather' && go(3000 + 20) === 'execute' && go(3000) === 'execute', `plans: half gathered go in without the last two once the smoker's on its spot, or as near as it gets (${go(3000)}, ${go(3020)}), not while it's on its way (${go(3300)})`);
+    // Four of five there, the smoker on its spot with a molotov to throw from another one later: they go at once (its
+    // molotov's spot, which it can't be on yet, held the execute back till the clock).
+    const plan = { side: 'T', stage: 'gather', site: 'A', staging: [0, 0, 0], execAt: 70, igl: null, throws: [
+      { lineup: { pos: [3000, 0, 0] }, by: bots[3].c, done: false }, { lineup: { pos: [3000, 2000, 0] }, by: bots[3].c, done: false }] };
+    bots[4].pos = [200, 0, 0];
+    S.advancePlan(gx, plan, 10);
+    ok(plan.stage === 'execute', `plans: gathered, the smoker on its spot, they go in at once though its molotov's from another spot (${plan.stage})`);
+  }
+
+  // A lineup's spot it can't quite get onto (a teammate, a corner in the way): once it's got no nearer for a moment it
+  // throws from as near as it gets (it stood there aimed until the throw was given up).
+  {
+    const A = await import('../src/js/play/ai.js');
+    const lineup = { kind: 'smoke', pos: [0, 0, 0], land: [900, 0, 0], pitch: -20, yaw: 30, strength: 1 };
+    const thrown = [];
+    const tc = { team: 'T', alive: true, nades: { weapon_smokegrenade: 1 } };
+    const mkT = (pos) => {
+      const br = Object.assign(Object.create(Brain.prototype), { game: { liveAt: 0, nades: { smokedAt: () => false, fireSmokedBy: () => null }, botThrowAim: (b, id) => (thrown.push(b), true) },
+        d: { ...ge, utilityErr: 0 }, plan: { side: 'T', stage: 'execute', execStart: 0 }, approach: null, lineupAim: null, lineupFace: null, task: 'goto' });
+      br.bot = { pos, vel: [0, 0, 0], yaw: 30, pitch: -20, c: tc, pendingThrow: null };
+      return br;
+    };
+    const x = { lineup, nade: 'weapon_smokegrenade', phase: 0, done: false };
+    const stuck = mkT([20, 0, 0]);
+    stuck.doLineup(x, 0.5); const early = thrown.length;
+    stuck.doLineup(x, 0.5 + (A.STUCK_LINEUP ?? 1.5) * 0.6); const soon = thrown.length;
+    stuck.doLineup(x, 0.5 + (A.STUCK_LINEUP ?? 1.5) + 0.1);
+    const walking = mkT([30, 0, 0]), y = { ...x, done: false };
+    for (let i = 0; i < 8; i++) { walking.bot.pos[0] = 30 - i * 3.4; walking.doLineup(y, 0.5 + i * 0.25); } // (30 to 6 units off in 1.75 s)
+    ok(early === 0 && soon === 0 && thrown.length === 1 && x.done && !y.done, `lineup: 20 units off its spot and getting no nearer, it throws from there after a moment (${thrown.length} thrown${x.done ? '' : ', still waiting'}); one still walking onto it doesn't (${y.done ? 'thrown' : 'not yet'})`);
+    // Its smoke for the execute still to throw, it doesn't run off to trade a teammate (the smoke never went out).
+    const killer = {}, gt = { bodyOf: () => ({ feet: [500, 0, 0] }), nav: { groundAt: () => 0 } };
+    const mate = (throws) => { const br = Object.assign(Object.create(Brain.prototype), { game: gt, d: { ...ge, trade: 1 }, target: null, task: 'hold', lineupFace: null, plan: { side: 'T', stage: 'execute', throws } }); br.bot = { pos: [0, 0, 0], c: tc }; return br; };
+    const smoker = mate([{ by: tc, done: false }]), free = mate([{ by: tc, done: true }]);
+    smoker.traded(killer, [400, 0, 0], 10); free.traded(killer, [400, 0, 0], 10);
+    ok(!smoker.trade && free.trade?.c === killer, `trade: one with its execute smoke still to throw stays on it (${smoker.trade ? 'went to trade' : 'stayed'}); with it thrown it goes for the killer (${free.trade ? 'went' : 'stayed'})`);
+  }
+}
+
 // ---- the radar (radar.js, game.js radarData): every frame, where the frame draws things, so it moves evenly -------------
 // (Its drawing, in WebGL into the game's canvas, needs a browser: what it draws and what it costs a frame were checked in
 // a match. These are the numbers it's given and works out.)

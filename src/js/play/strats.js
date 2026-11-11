@@ -1,12 +1,12 @@
 // Team play for the bots, like players at their ranks. Each round: the economy call (save, force, full buy) and a plan,
 // called by the team's best player in the chat. Terrorists rush a site, execute one with lineups (smokes, then molotovs,
-// then pop flashes as the entry goes in), take mid and split, or play a default for picks and hit a site late (a rush or
-// a default by any of the site's ways in, not always the shortest from their spawn); each bot
+// then pop flashes as the entry goes in), take mid and split, or play a default for picks and hit a site later, with time
+// left to plant (a rush or a default by any of the site's ways in, not always the shortest from their spawn); each bot
 // has a role (entry, support with the utility, lurker, AWPer). Counter-terrorists split up over the sites (stacking the
-// one that keeps getting hit, at higher ranks), throw their early utility at the chokes, rotate on information and retake
-// together. On the maps setups.js knows, each CT plays a real position on its site (jungle, stairs, ticket booth...), and
-// a terrorists' default spreads over the real map control (top mid, palace, ramp, apps...). The brains (ai.js) play
-// their part of it.
+// one that keeps getting hit, at higher ranks; now and then one pushing out early for a pick), throw their early utility
+// at the chokes, rotate on information and retake together. On the maps setups.js knows, each CT plays a real position
+// on its site (jungle, stairs, ticket booth...), and a terrorists' default spreads over the real map control (top mid,
+// palace, ramp, apps...). The brains (ai.js) play their part of it.
 import { lineupsFor, nadeFor } from './utility.js';
 import { setupOf } from './setups.js';
 
@@ -23,6 +23,8 @@ const pickUsual = (list) => {
 const isAwp = (b) => /awp|ssg08|scar20|g3sg1/.test(b.weapons.primary?.id || '');
 
 export const teamSkill = (bots) => avg(bots.map((b) => b.c.skill ?? 0.42));
+// The chance a CT side has one player pushing out early in a round (see teamPlan).
+export const AGGRO = 0.4;
 // Your own side's spawn (the game's enemySpawnCenter is named for who it's the enemy of).
 export const ownSpawn = (game, side) => game.enemySpawnCenter(side === 'T' ? 'CT' : 'T');
 
@@ -127,8 +129,9 @@ export function teamPlan(game, side, econ = 'full') {
     const ways = game.spots?.place('hold:' + site)?.ways.length || 0;
     const route = (strat === 'rush' || strat === 'default') && ways > 1 ? Math.floor(rnd() * ways) : 0;
     const via = route ? game.spots.door(site, route) : null, from = route ? game.spots.place('hold:' + site).ways[route].from : null;
-    // When it goes (seconds left on the clock): a rush at once; an execute once they've gathered; a default late.
-    const execAt = strat === 'rush' ? 999 : strat === 'default' ? 35 + rnd() * 20 : strat === 'split' ? 55 + rnd() * 15 : 70 + rnd() * 15;
+    // When it goes (seconds left on the clock): a rush at once; an execute once they've gathered; a default after its
+    // half minute or so of map control, with time left to plant and play the bomb (not at the death).
+    const execAt = strat === 'rush' ? 999 : strat === 'default' ? 50 + rnd() * 20 : strat === 'split' ? 65 + rnd() * 15 : 80 + rnd() * 15;
     const by = from === 'mid' ? ' through mid' : from ? ` from ${from}` : '';
     const call = { rush: `Rush ${site}${by}, don't stop!`, exec: `Execute ${site}: smokes, then flashes, then we go`, default: `Default. Play for picks, we hit ${site}${by} late`,
       split: `Split ${site}: two through mid, the rest with me` }[strat] + (econ === 'eco' ? ' (saving: pistols only)' : econ === 'force' ? ' (force buy)' : '');
@@ -172,22 +175,36 @@ export function teamPlan(game, side, econ = 'full') {
   const where = [...new Set(layout)].map((s) => [s, bots.filter((b) => assign.get(b.c) === s && pos.has(b.c)).map((b) => pos.get(b.c).name)]).filter(([, n]) => n.length);
   const setupCall = where.length ? where.map(([s, n]) => (s === 'mid' ? 'mid ' : s + ' ') + n.join(' and ')).join(', ') : null;
   const call = stack ? `Stack ${stack}, they keep coming there` : econ === 'eco' ? 'Saving this round, play safe' : econ === 'force' ? 'Force buy, play for picks' : setupCall;
-  return { side, assign, pos, igl, throws, econ, call, stack, stage: 'hold', rotate: null, sightings: new Map() };
+  // Now and then one of them plays aggressive early: out along its way in for information or a pick, then back to its
+  // spot (see Brain.probing). Never the AWPer.
+  const pushers = bots.filter((b) => !isAwp(b));
+  const aggro = pushers.length && rnd() < AGGRO ? pick(pushers).c : null;
+  return { side, assign, pos, igl, throws, econ, call, stack, stage: 'hold', rotate: null, sightings: new Map(), aggro };
 }
 
 // A terrorist plan moves on: from the default's setup to gathering by the site late in the round (or after a pick), and
-// from gathering to the execute once most of them are there and the throwers are on their spots (or time's short).
+// from gathering to the execute once most of them are there and the throwers are on their spots, or half of them have
+// been there a few seconds with the throwers on their spots (the rest on their way: they don't stand waiting for the
+// last one; the smokes go out, though), or time's short.
+export const GATHER_WAIT = 6;
 export function advancePlan(game, plan, t) {
   if (plan?.side !== 'T' || plan.stage === 'execute') return;
   const left = game.match.time;
-  if (plan.stage === 'setup' && (left <= plan.execAt + 18 || plan.pick)) plan.stage = 'gather';
+  if (plan.stage === 'setup' && (left <= plan.execAt + 12 || plan.pick)) plan.stage = 'gather';
   if (plan.stage !== 'gather') return;
   const stage = plan.staging || stagingPoint(game, plan.site);
   const bots = game.bots.filter((b) => b.c.team === 'T' && b.c.alive);
-  const onSpot = (x) => { const b = game.botOf(x.by); return b && Math.hypot(b.pos[0] - x.lineup.pos[0], b.pos[1] - x.lineup.pos[1]) < 6; };
-  const pending = plan.throws.filter((x) => !x.done && x.by.alive);
+  const off = (x) => { const b = game.botOf(x.by); return b ? Math.hypot(b.pos[0] - x.lineup.pos[0], b.pos[1] - x.lineup.pos[1]) : Infinity; };
+  // (On it, or standing as near as it gets: see Brain.doLineup.)
+  const onSpot = (x) => { const d = off(x), v = game.botOf(x.by)?.vel; return d < 6 || (d < 40 && (!v || Math.hypot(v[0], v[1]) < 30)); };
+  // (Each thrower's next lineup, the one it's on its way to or waiting on: one with a smoke and a molotov from two spots
+  // can only be on one of them, and waiting for both to be held the execute back to the clock every time.)
+  const next = new Map();
+  for (const x of plan.throws) if (!x.done && x.by.alive && !next.has(x.by)) next.set(x.by, x);
+  const pending = [...next.values()];
   const there = bots.filter((b) => Math.hypot(b.pos[0] - stage[0], b.pos[1] - stage[1]) < 700 || pending.some((x) => x.by === b.c && onSpot(x)));
-  if (left <= plan.execAt || left < 40 || (there.length >= Math.ceil(bots.length * 0.75) && pending.every(onSpot))) {
+  if (there.length >= Math.ceil(bots.length / 2) && pending.every(onSpot)) plan.halfThere ??= t; else plan.halfThere = null;
+  if (left <= plan.execAt || left < 45 || (there.length >= Math.ceil(bots.length * 0.75) && pending.every(onSpot)) || (plan.halfThere != null && t - plan.halfThere >= GATHER_WAIT)) {
     plan.stage = 'execute';
     plan.execStart = t;
     if (plan.igl?.alive) game.radio?.say(plan.igl, 'letsgo', `Go ${plan.site}, go go go!`);

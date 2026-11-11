@@ -1,11 +1,14 @@
 // Bot brains: what CS2's bots do in a competitive round. Terrorists pick a bomb site, walk there over the nav mesh and
 // plant; counter-terrorists split up to hold the sites and rotate on contact; after the plant both teams play the bomb
 // (retake and defuse). They hold spots with cover facing the ways in (spots.js), different ones round to round (on the
-// maps setups.js knows, the positions players take there); a CT outnumbered on its site falls back to retake. In a
-// fight a bot reacts after a human-like delay and aims like a player's hand (aim.js: a flick that lands a little off,
-// a correction, then following with a lag), stops to shoot, controls part of the recoil and fires in bursts. It knows
-// where enemies are from what it sees and, roughly, from what it hears: it looks for a noise behind a wall where they'd
-// come from (the corner, the doorway), not at them through it. Bots buy by their money like CS2's bots (eco, force,
+// maps setups.js knows, the positions players take there); a CT outnumbered on its site falls back to retake. They don't
+// stand about waiting: from a spot held a while with nothing going on they look out along the way in (an info peek, a
+// step out for a pick; one CT a round pushes out early), they go after an enemy that got out of sight (a higher rank when
+// the odds allow it), to a fight they hear nearby and for a teammate's killer, and the bomb goes down with time to
+// spare. In a fight a bot reacts after a human-like delay and aims like a player's hand (aim.js: a flick that lands a
+// little off, a correction, then following with a lag), stops to shoot, controls part of the recoil and fires in bursts.
+// It knows where enemies are from what it sees and, roughly, from what it hears: it looks for a noise behind a wall where
+// they'd come from (the corner, the doorway), not at them through it. Bots buy by their money like CS2's bots (eco, force,
 // full buy, an AWP now and then). Your teammates follow your radio commands (radio.js): go to a site, rush, follow you,
 // hold, regroup, fall back, cover you.
 import { FLAG_BULLET, FLAG_PLAYER } from './collision.js';
@@ -38,6 +41,15 @@ const dist2 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
 const _view = [0, 0], _at = [0, 0], _aimOut = [0, 0];
 const NO_LADDERS = new Set(); // bots climb ladders on their paths themselves (climb)
+// How long after the last sighting on the site the rotate call was for its CTs keep still there (see probing), seconds.
+export const ALERT = 10;
+// How long into an execute the team waits for its pop flash before going onto the site without it, seconds (on time,
+// it bursts about three seconds in: see entryDelay).
+export const POP_WAIT = 4.5;
+// How long a bot a few steps from its lineup's spot, getting no nearer, keeps trying before it throws from where it is.
+export const STUCK_LINEUP = 1.5;
+// Gunfire again about where the last was within this long is the same fight going on (see hear), seconds: goSee's while.
+export const FIGHT_GOES_ON = 4;
 const _chest = [0, 0, 0];
 // A path point that's a jump it hasn't made yet (b: the bot).
 const jumpAhead = (p, b) => p.jump && b.pos[2] < p[2] + p.jump - STEP_HEIGHT;
@@ -99,6 +111,7 @@ export class Brain {
     this.hurtBy = null; this.hurtAt = -99; this.holdPitch = null;
     this.dodge = 0; this.dodgeUntil = 0; this.dodgeFor = null; this.dodgeFlips = 0; this.viaDone = false;
     this.closest = null; this.badPlant = null; this.fetch = null; this.skip = new WeakSet(); this.after = null;
+    this.chase = null; this.probe = null; this.probeAt = null; this.pushed = false; this.lurkFor = rnd(4, 9);
     this.aim = new Aim();
   }
 
@@ -315,8 +328,23 @@ export class Brain {
     const h = this.heard;
     if (h?.src && t - h.t < 1.2 && dist2(h.src, pos) < 250) { h.t = t; return; }
     const clear = this.game.lineOfSight(b.eye(), [pos[0], pos[1], pos[2] + 40]);
-    // An impatient (lower-ranked) bot goes to see; a patient one holds its angle and waits for it.
-    this.heard = { ...this.guess(pos, d, clear ? 0.05 : 0.14), t, peek: Math.random() > this.d.patience };
+    // Footsteps (and a grenade going off): an impatient (lower-ranked) bot goes to see, a patient one holds its angle and
+    // waits for them. Gunfire is a fight going on, a teammate's as often as not: most go to it, a good player as much as
+    // anyone (join), decided once for the fight (more bursts about there don't roll again: it went, came back, went).
+    // Not a decoy's bursts (no one's there to fight; a patient player isn't drawn by it, an impatient one goes to see, as
+    // for footsteps: it drew a Global Elite most of its 15 s, a Silver about half), nor a CT's for gunfire about the site
+    // it holds (an execute coming in: a patient one holds its post and its angle; the rotate call brings the others).
+    const fight = loud >= 2500 && !this.decoyAt(pos) && !this.onPost(pos);
+    const same = fight && h?.fight && t - h.t < FIGHT_GOES_ON && dist2(h.src, pos) < 600;
+    this.heard = { ...this.guess(pos, d, clear ? 0.05 : 0.14), t, fight, peek: same ? h.peek : Math.random() < (fight ? this.d.join ?? 0 : 1 - this.d.patience) };
+  }
+  // A decoy going off there (its bursts, see grenades.js).
+  decoyAt(pos) { return !!this.game.nades?.decoys?.some((x) => dist2(x.pos, pos) < 1); }
+  // About the site a CT holds (the site and 700 units round it, as its sightings count: see reportContact).
+  onPost(pos) {
+    if (this.plan?.side !== 'CT') return false;
+    const s = this.game.map?.info?.bombsites?.find((x) => x.site === this.ctSite());
+    return !!s && pos[0] > s.min[0] - 700 && pos[0] < s.max[0] + 700 && pos[1] > s.min[1] - 700 && pos[1] < s.max[1] + 700;
   }
   // Roughly where something at pos (d away) is, on the ground there: off by share of the distance (one standard
   // deviation) and a little more.
@@ -325,10 +353,11 @@ export class Brain {
     return { pos: [x, y, this.game.nav?.groundAt(x, y, pos[2] + 8, 16, 200) ?? pos[2]], src: pos.slice(), watch: null };
   }
   // A teammate just died near here: go for the killer (trading), as fast as its rank goes; where the killer is it knows
-  // only roughly (where the shots came from).
+  // only roughly (where the shots came from). Not one with a lineup of its own to throw first (see throwing): the
+  // execute's smoke goes out rather than its thrower running off with it.
   traded(killer, pos, t) {
-    if (this.target?.visible || Math.random() > this.d.trade) return;
-    this.trade = { c: killer, pos: pos.slice(), until: t + 4 };
+    if (this.target?.visible || this.throwing() || Math.random() > this.d.trade) return;
+    this.trade = { c: killer, pos: pos.slice(), until: t + 5 };
     const at = this.game.bodyOf(killer).feet;
     this.heard = { ...this.guess(at, dist2(at, this.bot.pos), 0.1), t };
     this.nextThink = t;
@@ -483,7 +512,15 @@ export class Brain {
   }
 
   // ---- objectives -------------------------------------------------------------------------------------------------
+  // (A lineup it was on and isn't any more, its moment gone (a CT's smoke past the first half minute, a retake's once
+  // the clock's too short): its aim and its last steps onto the spot go with it. It went on facing the throw's angle,
+  // drawn back onto the spot, not throwing anything else, for the rest of the round.)
   decide(t) {
+    this.lining = false;
+    this.think(t);
+    if (!this.lining && (this.lineupFace || this.approach) && !this.bot.pendingThrow) { this.lineupFace = null; this.approach = null; this.lineupAim = null; }
+  }
+  think(t) {
     const g = this.game, m = g.match, b = this.bot, c = this.c, bomb = m.bomb;
     if (t - g.liveAt < this.startDelay) return;
     if (this.target?.visible && !this.target.c.alive) this.target = null;
@@ -493,9 +530,12 @@ export class Brain {
     if (this.followOrder(t)) return;
     // A CT outnumbered where it holds falls back (see fallBack), rather than trading into them.
     if (c.team === 'CT' && bomb.state !== 'planted') { const back = this.fallBack(this.ctSite(), t, siteBox); if (back) return this.holdAt(back.spot, t, back.face); }
-    // Trading a teammate who just went down nearby, or going to see a noise (impatient ones), before the plan.
+    // Trading a teammate who just went down nearby, after an enemy it was fighting who got out of sight (see chaseTo), or
+    // going to see a noise (footsteps: impatient ones; a fight nearby: most), before the plan.
     if (this.trade && t < this.trade.until && !this.target?.visible && bomb.state !== 'planted') return this.setTask('goto', this.trade.pos);
-    if (this.heard?.peek && t - this.heard.t < 3 && !this.target?.visible && bomb.state !== 'planted' && dist2(this.heard.pos, b.pos) > 120) return this.setTask('goto', this.heard.pos);
+    const after = this.chaseTo(t);
+    if (after) return this.setTask('goto', after, 48);
+    if (this.goSee(t)) return this.setTask('goto', this.heard.pos);
     // No rifle? Grab one lying nearby.
     if (!b.weapons.primary && !this.target?.visible && (bomb.state !== 'planted' || c.team === 'T')) {
       const loot = g.drops.list.filter((it) => it.id !== 'defuser' && !this.skip.has(it) && !/^weapon_(glock|usp_silencer|hkp2000|elite|p250|tec9|fiveseven|cz75a|deagle|revolver)$/.test(it.id) && !g.nades.inFire(it.pos))
@@ -529,14 +569,15 @@ export class Brain {
       }
       if (c.hasC4 && site) {
         if (!this.calledSite && Math.hypot(site.min[0] - b.pos[0], site.min[1] - b.pos[1]) < 2200) { this.calledSite = true; g.radio.chatter(c, 'goingToPlant', { site: site.site }); }
-        if (m.siteAt(b.pos) && !this.recentlySawEnemy(t, 2.5)) { this.setTask('plant'); g.botPlant(b, t); return; }
+        if (this.plantNow(t)) { this.setTask('plant'); g.botPlant(b, t); return; }
         // (Right onto its spot: near isn't enough, it has to be in the site.)
         if (stage === 'execute' && (going || plan.rush)) return this.setTask('goto', this.plantSpot(site), 4);
         return this.holdGather(plan.site, t, plan.route);
       }
       if (stage === 'setup') return this.setupHold(plan, role, t);
-      // The lurker: by the other site's way in, for the CTs rotating out of it.
-      if (plan.lurk === c && m.time > 30 && siteBox(plan.site === 'A' ? 'B' : 'A')) return this.holdGather(plan.site === 'A' ? 'B' : 'A', t);
+      // The lurker: by the other site's way in, for the CTs rotating out of it (a look out for a pick now and then), until
+      // the execute's under way (see lurking).
+      if (this.lurking(plan, t) && siteBox(plan.site === 'A' ? 'B' : 'A')) return this.holdGather(plan.site === 'A' ? 'B' : 'A', t, 0, true);
       if (stage === 'gather' || !going) return this.holdGather(plan.site, t, plan.route);
       return this.holdIn(site, t, true);
     }
@@ -576,10 +617,11 @@ export class Brain {
       if (smoke ? t - g.liveAt < 30 && this.doLineup(early, t, true)
         : coming && dist2(l.pos, b.pos) < 600 && !this.wastes(l.kind, l.land) && this.doLineup(early, t, true, (early.until ||= t + 6))) return;
     }
-    if (site === 'mid' && g.midSpot) { const s = this.spotAt(this.plan.pos?.get(c) && site === assigned ? 'pos:CT:' + this.plan.pos.get(c).id : 'mid:CT', () => g.midSpot); return this.holdAt(s.pos, t, null, s.look); }
+    // (Each holding its spot, with a look out along the way in now and then: see probing.)
+    if (site === 'mid' && g.midSpot) { const s = this.spotAt(this.plan.pos?.get(c) && site === assigned ? 'pos:CT:' + this.plan.pos.get(c).id : 'mid:CT', () => g.midSpot); if (this.probing(t, s)) return; return this.holdAt(s.pos, t, null, s.look); }
     // Its position there (setups.js), unless it's rotated to another site.
     const p = site === assigned && this.plan.pos?.get(c);
-    if (p && siteBox(site)) { const s = this.spotAt('pos:CT:' + p.id, () => this.siteSpot(siteBox(site), 'hold')); return this.holdAt(s.pos, t, this.game.enemySpawnCenter(c.team), s.look); }
+    if (p && siteBox(site)) { const s = this.spotAt('pos:CT:' + p.id, () => this.siteSpot(siteBox(site), 'hold')); if (this.probing(t, s)) return; return this.holdAt(s.pos, t, this.game.enemySpawnCenter(c.team), s.look); }
     return this.holdIn(siteBox(site), t, false);
   }
 
@@ -601,6 +643,91 @@ export class Brain {
   }
 
   recentlySawEnemy(t, s) { return this.lastSeen && t - this.lastSeen.t < s; }
+  get awper() { return /awp|ssg08|scar20|g3sg1/.test(this.bot.weapons?.primary?.id || ''); }
+  // The bomb carrier on a site plants once it's seen no one for a moment; with the clock running out, at once (it used
+  // to wait two and a half seconds after any glimpse of an enemy, and the round ran out).
+  plantNow(t) { const m = this.game.match; return !!m.siteAt(this.bot.pos) && !this.target?.visible && !this.recentlySawEnemy(t, m.time < 25 ? 0.5 : 2.5); }
+
+  // An enemy it was fighting got out of sight (back behind a corner, through a door): after a moment holding the angle
+  // (they may peek again), it goes after them to where it last saw them, rather than giving the fight up. A higher rank
+  // only when its team isn't outnumbered or they're hurt (a Silver whatever the odds); not an AWPer (it holds its angle),
+  // not hurt itself, not the bomb carrier or one with a lineup to throw, not with the bomb down (the bomb comes first),
+  // nor far. Decided once each time they get away (chase: the rank's chance). Returns where to go, or null.
+  chaseTo(t) {
+    const g = this.game, b = this.bot, tg = this.target, seen = this.lastSeen;
+    if (!tg || tg.visible || !tg.c.alive || !seen || g.match.bomb?.state === 'planted' || this.c.hasC4 || tg.lostAt == null || this.throwing()) return null;
+    const lost = t - tg.lostAt;
+    if (lost < 0.6 || lost > 5) return null;
+    if (this.chase?.c !== tg.c || this.chase.lostAt !== tg.lostAt) {
+      let mates = 0, foes = 0;
+      for (const x of g.combatants) if (x.alive) { if (x.team === this.c.team) mates++; else if (g.hostile(this.c, x)) foes++; }
+      const worth = this.d.skill < 0.35 || mates >= foes || tg.c.health < 60;
+      const go = !this.awper && this.c.health >= 35 && worth && dist2(seen.pos, b.pos) < 1400 && Math.random() < (this.d.chase ?? 0);
+      this.chase = { c: tg.c, lostAt: tg.lostAt, go };
+    }
+    return this.chase.go && dist2(seen.pos, b.pos) > 60 ? seen.pos : null;
+  }
+  // A lineup of its own to throw (lining it up now, or a terrorist's for the hit once the default's over): it doesn't
+  // go off after a fight first (the execute's smokes would never go out).
+  throwing() {
+    return this.task === 'lineup' || !!this.lineupFace || (this.c.team === 'T' && this.plan?.stage !== 'setup' && !!this.plan?.throws?.some((x) => x.by === this.c && !x.done));
+  }
+  // Going to see what it heard (see hear): footsteps for a few seconds after; a fight (gunfire) within reach for a while
+  // longer. Not with the bomb down; neither the bomb carrier nor a bot with a lineup to throw leaves it for a fight.
+  goSee(t) {
+    const h = this.heard;
+    if (!h?.peek || this.target?.visible || this.game.match.bomb?.state === 'planted' || (h.fight && (this.c.hasC4 || this.throwing()))) return false;
+    const d = dist2(h.pos, this.bot.pos);
+    return t - h.t < (h.fight ? FIGHT_GOES_ON : 3) && d > 120 && (!h.fight || d < 1800);
+  }
+  // Holding a spot (s: { pos, look, at }) with nothing going on (nothing seen or heard for a while): now and then a look
+  // along the way the enemy would come, a few hundred units towards where they'd first show (s.at) and back: an info peek
+  // from a CT's spot, a step out into the map for a pick from a default's. Every 9 to 18 s (a terrorist taking map
+  // control, 6 to 12), by the rank's chance (probe); not an AWPer, not hurt, not while its team knows where they are (a
+  // CT after the rotate call, while they've been seen there lately). Returns whether that's what it's doing.
+  probing(t, s) {
+    const g = this.game, b = this.bot, p = this.probe, every = () => (this.c.team === 'T' ? rnd(6, 12) : rnd(9, 18));
+    // (A CT once its team has seen where they are: not while they're about the site the call was for, again once nothing's
+    // been seen there for a while, a fake or a hit that's waiting.)
+    const alert = this.c.team === 'CT' && !!this.plan?.rotate && this.contactAt(this.plan.rotate, t, ALERT) > 0;
+    if (p) {
+      if (!this.target?.visible && t < p.until && !alert) {
+        if (p.there == null && dist2(p.to, b.pos) > 40 && !(this.closest && dist2(this.closest.goal, p.to) < 1 && dist2(this.closest.at, b.pos) < 40)) { this.setTask('goto', p.to); return true; }
+        p.there ??= t;
+        if (t - p.there < p.look) { this.task = 'hold'; this.path = null; this.holdYaw = p.yaw; this.holdPitch = p.pitch; return true; }
+      }
+      this.probe = null; this.probeAt = t + every(); this.holdYaw = null; this.holdPitch = null;
+      return false;
+    }
+    if (!s?.at || this.task !== 'hold' || dist2(s.pos, b.pos) > 48) return false;
+    // (The CTs' early push, when it's this one's round for it (plan.aggro, see strats.js): the first time, at once, further
+    // out and for longer.)
+    const push = this.c.team === 'CT' && this.plan?.aggro === this.c && !this.pushed;
+    if (this.probeAt == null) { this.probeAt = t + (push ? rnd(0.3, 1.5) : rnd(4, 10)); return false; }
+    if (t < this.probeAt) return false;
+    this.probeAt = t + every();
+    if (push) this.pushed = true;
+    if (this.awper || this.c.health < 60 || alert || this.recentlySawEnemy(t, 6) || (this.heard && t - this.heard.t < 4) || !(push || Math.random() < (this.d.probe ?? 0))) return false;
+    const pts = g.nav?.path(b.pos, [s.at[0], s.at[1], s.at[2] - 64])?.points;
+    if (!pts || pts.length < 2) return false;
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    const want = Math.min(push ? rnd(700, 1100) : rnd(250, 550), total - (push ? 120 : 200));
+    if (want < 150) return false;
+    let to = pts[pts.length - 1];
+    for (let i = 1, run = 0; i < pts.length; i++) {
+      const a = pts[i - 1], q = pts[i], l = Math.hypot(q[0] - a[0], q[1] - a[1]);
+      if (run + l >= want) { const k = (want - run) / l; to = [a[0] + (q[0] - a[0]) * k, a[1] + (q[1] - a[1]) * k, a[2] + (q[2] - a[2]) * k]; break; }
+      run += l;
+    }
+    const [pitch, yaw] = angleTo([to[0], to[1], to[2] + 64], s.at);
+    const look = push ? rnd(5, 9) : rnd(1.2, 2.5);
+    this.probe = { to: [to[0], to[1], to[2]], until: t + 3 + want / 150 + look, look, there: null, pitch, yaw };
+    return this.probing(t, s);
+  }
+  // The lurker stays out on the other site's side until a few seconds into the execute (the CTs rotating out past it),
+  // then comes on to the site behind them.
+  lurking(plan, t) { return plan.lurk === this.c && this.game.match.time > 30 && !(plan.execStart != null && plan.stage === 'execute' && t > plan.execStart + this.lurkFor); }
 
   // A lineup (utility.js) for its plan: to the exact spot, still, the aim (off by its rank's error), and the throw when
   // its moment comes (now: at once; else smokes as the execute starts, molotovs just after, pop flashes last). Returns
@@ -611,7 +738,11 @@ export class Brain {
     if (!(this.c.nades[x.nade] > 0) || late || b.pendingThrow?.lineup === l) { if (!b.pendingThrow) x.done = true; this.lineupFace = null; this.approach = null; return false; }
     const d = dist2(l.pos, b.pos);
     if (d > 40) { this.approach = null; this.lineupFace = null; this.setTask('goto', l.pos); return true; }
-    this.task = 'lineup'; this.path = null; this.approach = l.pos;
+    // (Its last steps onto the spot: as near as it gets is near enough once it's got no nearer for a moment, a teammate
+    // or a corner in the way. It stood there aimed until the throw was given up, the execute without its smoke.)
+    if (this.approach !== l.pos || d < this.approachBest - 1) { this.approachBest = d; this.approachAt = t; }
+    const blocked = t - this.approachAt > STUCK_LINEUP;
+    this.task = 'lineup'; this.path = null; this.approach = l.pos; this.lining = true;
     this.lineupAim ||= [(Math.random() * 2 - 1) * this.d.utilityErr, (Math.random() * 2 - 1) * this.d.utilityErr];
     const aim = this.lineupFace = [l.pitch + this.lineupAim[0], l.yaw + this.lineupAim[1]];
     const ready = now || (plan.stage === 'execute' && t >= plan.execStart + [0, 0.5, 1.1][x.phase]);
@@ -619,7 +750,7 @@ export class Brain {
     // waits till that's gone, doing what it would otherwise meanwhile (an execute's goes on without it).
     if (ready && this.wastes(l.kind, l.land)) { if (!now) x.done = true; this.lineupAim = null; this.lineupFace = null; this.approach = null; return false; }
     if (d < 3 && Math.hypot(b.vel[0], b.vel[1]) < 8) { b.pos[0] = l.pos[0]; b.pos[1] = l.pos[1]; b.vel[0] = b.vel[1] = 0; } // (exactly on it)
-    const still = d < 3 && Math.hypot(b.vel[0], b.vel[1]) < 8;
+    const still = (d < 3 || blocked) && Math.hypot(b.vel[0], b.vel[1]) < 8;
     const aimed = Math.abs(wrap(b.yaw - aim[1])) < 0.5 && Math.abs(b.pitch - aim[0]) < 0.5;
     if (ready && still && aimed && g.botThrowAim(b, x.nade, { pitch: aim[0], yaw: aim[1], strength: l.strength, jump: l.jump, lineup: l })) {
       x.done = true; x.thrownAt = t;
@@ -645,29 +776,33 @@ export class Brain {
     return this.spots[key];
   }
   // Its own spot near where the team gathers for a site (coming in by one of its ways: see strats.js), watching the way
-  // out of it.
-  holdGather(siteId, t, route = 0) {
+  // out of it. probe: a look out along it now and then (a default's spread, the lurker: see probing), not while the team
+  // gathers to go in.
+  holdGather(siteId, t, route = 0, probe = false) {
     const s = this.spotAt('gather:' + siteId + (route ? '/' + route : ''), () => {
       const p = this.game.spots?.staging(siteId, route) || stagingPoint(this.game, siteId);
       return this.game.nav.randomPointIn([p[0] - 260, p[1] - 260, p[2] - 120], [p[0] + 260, p[1] + 260, p[2] + 120])?.point || p;
     });
+    if (probe && this.probing(t, s)) return;
     return this.holdAt(s.pos, t, this.siteCenter(this.game.map.info.bombsites.find((x) => x.site === siteId)), s.look);
   }
   // A default: spread out for map control (the lurker on the other site's way in, the entry in mid, the rest by both
-  // sites' ways in), holding there until it's time to gather.
+  // sites' ways in), holding there until it's time to gather, with a step out for a pick now and then (see probing).
   setupHold(plan, role, t) {
     const g = this.game, p = plan.positions?.get(this.c);
-    if (p) { const s = this.spotAt('pos:T:' + p.id, () => g.nav.randomPointIn([p.at[0] - 150, p.at[1] - 150, p.at[2] - 100], [p.at[0] + 150, p.at[1] + 150, p.at[2] + 100])?.point || p.at.slice()); return this.holdAt(s.pos, t, null, s.look); }
+    if (p) { const s = this.spotAt('pos:T:' + p.id, () => g.nav.randomPointIn([p.at[0] - 150, p.at[1] - 150, p.at[2] - 100], [p.at[0] + 150, p.at[1] + 150, p.at[2] + 100])?.point || p.at.slice()); if (this.probing(t, s)) return; return this.holdAt(s.pos, t, null, s.look); }
     const other = g.map.info.bombsites.map((x) => x.site).find((x) => x !== plan.site) || plan.site;
-    if (role === 'entry' && g.midSpot) { const s = this.spotAt('mid:T', () => g.midSpot); return this.holdAt(s.pos, t, null, s.look); }
-    return role === 'lurk' || !(this.bot.index % 2) ? this.holdGather(other, t) : this.holdGather(plan.site, t, plan.route);
+    if (role === 'entry' && g.midSpot) { const s = this.spotAt('mid:T', () => g.midSpot); if (this.probing(t, s)) return; return this.holdAt(s.pos, t, null, s.look); }
+    return role === 'lurk' || !(this.bot.index % 2) ? this.holdGather(other, t, 0, true) : this.holdGather(plan.site, t, plan.route, true);
   }
   // When it goes onto the site in the execute (seconds after it starts): the entry first, as the pop flash bursts if
-  // there is one, the rest a moment apart (closer at higher ranks, near enough to trade).
+  // there is one, the rest a moment apart (closer at higher ranks, near enough to trade). A pop flash that isn't out
+  // POP_WAIT s in (its thrower still on the way to its spot) isn't waited for any longer: they went in only once it was
+  // out or given up on, eight seconds in, the team standing about at the site meanwhile.
   entryDelay(plan) {
     if (plan.rush) return (this.bot.index % 5) * 0.25;
-    if (plan.throws?.some((x) => x.phase === 2 && !x.done && x.by.alive)) return Infinity; // the pop flash isn't out yet
-    const base = Math.max(0.8, (plan.flashAt ?? 0) - (plan.execStart ?? 0) - 0.25);
+    const pop = plan.throws?.some((x) => x.phase === 2 && !x.done && x.by.alive);
+    const base = pop ? POP_WAIT : Math.min(POP_WAIT, Math.max(0.8, (plan.flashAt ?? 0) - (plan.execStart ?? 0) - 0.25));
     const k = plan.roles?.get(this.c) === 'entry' ? 0 : 1 + (this.bot.index % 4) * 0.6;
     return base + k * (1.2 - this.d.skill * 0.6);
   }
@@ -848,10 +983,12 @@ export class Brain {
     if (s && !this.path && this.task === 'goto' && dist2(s, b.pos) < 48 && !this.game.match.siteAt(b.pos)) { (this.badPlant ||= []).push(s); delete this.spots[key]; }
     return this.siteSpot(site, 'plant');
   }
-  // Holding a bomb site: the CTs' spots watch the terrorists' ways in, the terrorists' (once they've taken it) the CTs'.
+  // Holding a bomb site: the CTs' spots watch the terrorists' ways in (with a look out now and then: see probing), the
+  // terrorists' (once they've taken it) the CTs'.
   holdIn(site, t, attacking) {
     if (!site) return;
     const s = this.spotAt((attacking ? 'push:' : 'hold:') + site.site, () => this.siteSpot(site, attacking ? 'push' : 'hold'));
+    if (!attacking && this.probing(t, s)) return;
     this.holdAt(s.pos, t, attacking ? null : this.game.enemySpawnCenter(this.c.team), s.look);
   }
   // There, then still, facing look ([pitch, yaw]) or towards faceTo (else the enemy's spawn).
@@ -1244,7 +1381,9 @@ export class Brain {
   // Off the ladder: where it was sent meanwhile (see goTo).
   climbed() { if (this.after) { const [goal, near] = this.after; this.after = null; this.goTo(goal, near); } }
 
-  walking(t) { return !this.plan?.rush && (this.task === 'hold' || (this.lastSeen && t - this.lastSeen.t < 6 && !this.target?.visible)); }
+  // Walking (quietly, as you'd hold shift) while holding, and for a few seconds after seeing an enemy; not in a rush, a
+  // retake against the clock or on its way to trade a teammate.
+  walking(t) { return !this.plan?.rush && !this.retaking && !(this.trade && t < this.trade.until) && (this.task === 'hold' || (this.lastSeen && t - this.lastSeen.t < 4 && !this.target?.visible)); }
 }
 
 export { setOf };

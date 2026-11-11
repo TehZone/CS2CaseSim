@@ -1,9 +1,10 @@
 // How good a bot is, from its rank: one number, skill (0 a Silver I, 1 The Global Elite), that sets everything it does —
 // how fast it reacts and turns, how far off its first shot is and how it controls a spray, where its crosshair rests,
-// how quickly it stops to shoot (counter-strafing), how much utility it throws and how well, how patient it is and how
-// quickly it trades a teammate. Matchmaking finds a match's bots around your own rank (matchedSkill); a private match's
-// come from the ranks you pick, each its own rank within it: a skill group in Competitive and Wingman, a CS Rating in
-// Premier (see ranks.js, premier.js).
+// how quickly it stops to shoot (counter-strafing), how much utility it throws and how well, how patient it is, how
+// quickly it trades a teammate and how actively it plays (chasing, looking out from its spot, going to a fight).
+// Matchmaking finds a match's bots around your own rank (matchedSkill); a private match's come from the ranks you pick,
+// each its own rank within it: a skill group in Competitive and Wingman, a CS Rating in Premier (see ranks.js,
+// premier.js).
 import { SKILL_GROUPS, groupValue, mmrOfGroup } from '../engine/ranks.js';
 
 export const BOT_TIERS = {
@@ -94,7 +95,12 @@ const RANGE = {
   utility: [0.12, 0.97], utilityErr: [6, 0.05],
   // Patience: holding an angle and waiting for the team rather than peeking alone; trading: going for a teammate's
   // killer at once.
-  patience: [0.15, 0.92], trade: [0.15, 0.95],
+  patience: [0.15, 0.92], trade: [0.45, 0.97],
+  // Playing actively (decisions only, not its aim): going after an enemy that got out of sight (chase: a Global Elite
+  // when the odds are with it, see Brain.chaseTo), a look out along the way in from a spot it's held a while (probe: an
+  // info peek, a step out for a pick), going to a fight it hears nearby (join: once a fight; not a decoy's bursts, nor
+  // a CT off the site it holds for gunfire there, see Brain.hear).
+  chase: [0.7, 0.6], probe: [0.45, 0.6], join: [0.55, 0.85],
 };
 
 // Everything a bot of skill s does differently (see Brain).
@@ -110,6 +116,6 @@ export function skillParams(s) {
     // Gold Nova's a few tenths of a degree out, a Silver's by degrees.)
     burst: Math.round(v.burst), crosshair: v.crosshair, strafe: v.strafe, discipline: v.discipline, utility: v.utility,
     utilityErr: RANGE.utilityErr[1] + (RANGE.utilityErr[0] - RANGE.utilityErr[1]) * (1 - e) ** 2, patience: v.patience,
-    trade: v.trade, popFlash: s > 0.55, executes: s > 0.35,
+    trade: v.trade, chase: v.chase, probe: v.probe, join: v.join, popFlash: s > 0.55, executes: s > 0.35,
   };
 }
