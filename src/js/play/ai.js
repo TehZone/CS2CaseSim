@@ -99,7 +99,7 @@ export class Brain {
 
   roundStart(plan) {
     this.plan = plan || {};
-    this.blindUntil = 0; this.nadeAt = 0; this.thrown = new Set();
+    this.blindUntil = 0; this.nadeAt = 0; this.thrown = new Set(); this.nadeTry = {};
     this.path = null; this.goal = null; this.target = null; this.lastSeen = null; this.heard = null;
     this.task = 'idle';
     this.holdYaw = null; this.baseYaw = null; this.heading = null; this.stuckTries = 0; this.restUntil = 0; this.glanceAt = 0; this.glanceOff = 0;
@@ -219,9 +219,10 @@ export class Brain {
     if (this.target?.visible) moving = this.fight(dt, t);
     else if (this.task === 'plant' || this.task === 'defuse') moving = false;
     if (b.mode === 'plant' || b.mode === 'defuse') moving = false;
-    // A lineup's grenade in hand: still on its spot till it leaves the hand (the throw was worked out from exactly there;
-    // its next task waits).
-    if (b.pendingThrow?.lineup && !b.pendingThrow.released) moving = false;
+    // A grenade in hand, the pin out: still till it leaves the hand. A lineup's was worked out from exactly there (its
+    // next task waits); any other was aimed standing (aimThrow), and on the run 1.25x the bot's speed would go with it,
+    // hundreds of units past.
+    if (b.pendingThrow && !b.pendingThrow.released) moving = false;
     this.move(dt, t, moving);
     if (!this.target?.visible && b.mode === 'move') this.look(dt, t);
   }
@@ -890,8 +891,10 @@ export class Brain {
     const g = this.game, m = g.match, b = this.bot, c = this.c, n = c.nades, bomb = m.bomb;
     const has = (id) => n[id] > 0;
     const go = (id, target, high = false) => {
-      if (!has(id) || this.thrown.has(id + (target ? Math.round(target[0] / 400) : ''))) return false;
+      if (!has(id) || this.thrown.has(id + (target ? Math.round(target[0] / 400) : '')) || t < (this.nadeTry?.[id] ?? 0)) return false;
       if (g.botThrow(b, id, target, high)) { this.thrown.add(id + Math.round(target[0] / 400)); this.nadeAt = t + 1.2; return true; }
+      // No throw from here gets it there (game.js botThrow, flown on the map): again in a second, from wherever it is then.
+      (this.nadeTry ||= {})[id] = t + 1;
       return false;
     };
     const fire = has('weapon_molotov') ? 'weapon_molotov' : 'weapon_incgrenade';

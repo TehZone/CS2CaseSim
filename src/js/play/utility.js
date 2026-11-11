@@ -1,9 +1,9 @@
 // The bots' utility lineups (src/data/lineups.json, found by scripts/build-lineups.mjs on each map's geometry): a spot to
 // stand on, an aim and a throw that put a smoke, a molotov or a pop flash where it does its job. Each is checked again on
 // this match's collision (doors and all) when the map loads, so one a door now blocks isn't used.
-import { throwVelocity, throwOrigin, simulateFlight } from './flight.js';
+import { throwVelocity, throwOrigin, simulateFlight, jumpThrow } from './flight.js';
 
-const EYE = 64, JUMP = 301.993;
+const EYE = 64;
 let all = null;
 
 export async function loadLineups(mapId, col) {
@@ -16,10 +16,12 @@ export async function loadLineups(mapId, col) {
   });
 }
 
-// Where a lineup's grenade goes off, thrown from its spot (pitch and yaw nudged by err: [dp, dy] degrees).
+// Where a lineup's grenade goes off, thrown from its spot (pitch and yaw nudged by err: [dp, dy] degrees), standing or
+// as CS2's jump-throw (flight.js jumpThrow).
 export function landing(col, l, err = [0, 0]) {
-  const eye = [l.pos[0], l.pos[1], l.pos[2] + EYE], pitch = l.pitch + err[0], yaw = l.yaw + err[1];
-  return simulateFlight(col, throwOrigin(col, eye, pitch, yaw, l.strength), throwVelocity(pitch, yaw, l.strength, l.jump ? [0, 0, JUMP] : [0, 0, 0]), l.kind);
+  const stand = [l.pos[0], l.pos[1], l.pos[2] + EYE], pitch = l.pitch + err[0], yaw = l.yaw + err[1];
+  const { eye, vel } = l.jump ? jumpThrow(stand, [0, 0, 0], col) : { eye: stand, vel: [0, 0, 0] };
+  return simulateFlight(col, throwOrigin(col, eye, pitch, yaw, l.strength), throwVelocity(pitch, yaw, l.strength, vel), l.kind);
 }
 
 // The lineups a side has for a purpose ('A', 'B', 'mid', 'default', 'holdA', 'retakeB'...), by kind.

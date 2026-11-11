@@ -8,7 +8,7 @@ import { FLAG_BULLET } from './collision.js';
 import { toGl } from './world.js';
 import { SmokeSystem } from './smoke.js';
 import { FireArt, GroundFire } from './fire.js';
-import { GRAVITY, flightStep, throwVelocity, throwOrigin, throwSpeed, aimPitch, FUSE } from './flight.js';
+import { GRAVITY, flightStep, throwVelocity, throwOrigin, throwSpeed, aimPitch, simulateFlight, FUSE } from './flight.js';
 
 export const NADES = {
   weapon_hegrenade: { kind: 'he', name: 'HE Grenade', short: 'HE', fuse: FUSE.he, bounce: 'HEGrenade.Bounce', boom: 'BaseGrenade.Explode', pin: 'HEGrenade.PullPin_Grenade', throw: 'HEGrenade.Throw' },
@@ -46,6 +46,51 @@ export function aimThrow(from, to, strength, preferHigh = false) {
   const root = Math.sqrt(disc);
   const angle = Math.atan((v2 + (preferHigh ? root : -root)) / (g * dx)); // elevation of the actual throw
   return aimPitch(-(angle * 180) / Math.PI); // (the pitch to look at for that: the throw raises it)
+}
+
+// The pitch for a bot's throw of `kind` (a flight.js kind) to go off at `to`, not just to come down there first: a smoke
+// rolls on after it lands (aimed at its landing, one came to rest 250 to 350 units past), an HE goes off where it's got
+// to on its fuse. The arc (aimThrow), flown on the map from the eye with the thrower's velocity (flight.js, as the game
+// flies it), then aimed short (or long) by however far past it went, a few times: { pitch, yaw, miss } (the closest; miss:
+// how far from `to` it goes off, up and down too: an HE bursting 400 units over its target is no use), or null.
+// budget: { left } flights at most, shared between calls (see botAim).
+export function aimFor(col, eye, to, kind, strength, { preferHigh = false, vel = [0, 0, 0], tries = 4, budget = null } = {}) {
+  const yaw = (Math.atan2(to[1] - eye[1], to[0] - eye[0]) * 180) / Math.PI, dir = [Math.cos((yaw * Math.PI) / 180), Math.sin((yaw * Math.PI) / 180)];
+  let at = to.slice(), best = null;
+  for (let i = 0; i < tries; i++) {
+    const pitch = aimThrow(eye, at, strength, preferHigh);
+    if (pitch == null || pitch < -89 || pitch > 89) break;
+    if (budget && !(budget.left-- > 0)) break;
+    const r = simulateFlight(col, throwOrigin(col, eye, pitch, yaw, strength), throwVelocity(pitch, yaw, strength, vel), kind);
+    if (!r) break;
+    const ex = r.pos[0] - to[0], ey = r.pos[1] - to[1], miss = Math.hypot(ex, ey, r.pos[2] - to[2]);
+    if (!best || miss < best.miss) best = { pitch, yaw, miss };
+    if (miss < 16) break;
+    const past = ex * dir[0] + ey * dir[1]; // (how far past it, along the throw)
+    at = [at[0] - dir[0] * past, at[1] - dir[1] * past, at[2]];
+  }
+  return best;
+}
+
+// How near its target a bot's aimed grenade has to go off to be thrown (a smoke's cloud, a molotov's fire, an HE's blast
+// and a flash's burst all reach past that).
+export const AIM_OK = 150;
+// A bot's aimed throw (not a lineup) of `kind` at `to` from `eye`, flown on the map (aimFor): each strength in turn (full,
+// else medium, else a lob), its preferred arc then the other one (a flash lobbed high at a site 1000 units off bursts on
+// its fuse 500 short; thrown flat it gets there), until one goes off within AIM_OK: { pitch, yaw, miss, strength, high },
+// or null when none does (a tunnel's ceiling, a roof, a wall in the way, out of reach): then the bot doesn't throw it.
+// (Thrown anyway, a smoke went into a tunnel's ceiling 30 units off and smoked the bot's own tunnel; flashes hit the CT
+// spawn roof in front of the thrower.) At most `flights` flights in all (about half a millisecond each).
+export function botAim(col, eye, to, kind, { strengths = [1, 0.5, 0], preferHigh = false, vel = [0, 0, 0], flights = 10 } = {}) {
+  const budget = { left: flights };
+  for (const strength of strengths) {
+    for (const high of [preferHigh, !preferHigh]) {
+      if (budget.left <= 0) return null;
+      const a = aimFor(col, eye, to, kind, strength, { preferHigh: high, vel, budget });
+      if (a && a.miss <= AIM_OK) return { ...a, strength, high };
+    }
+  }
+  return null;
 }
 
 export class Grenades {

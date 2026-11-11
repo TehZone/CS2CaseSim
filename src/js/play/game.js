@@ -28,7 +28,8 @@ import { DevConsole } from './console.js';
 import { iconFor, iconPictures } from './icons.js';
 import { Radar } from './radar.js';
 import { buildCS2Model, buildGloveScene } from '../cs2/skin.js';
-import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, throwOrigin, aimThrow as aimThrowPitch } from './grenades.js';
+import { Grenades, NADES, NADE_ORDER, NADE_SOUNDS, throwVelocity, throwOrigin, aimFor, botAim, AIM_OK } from './grenades.js';
+import { jumpThrow, JUMP_THROW, JUMP_IMPULSE } from './flight.js';
 import { Drops, gunSkin, LOCAL } from './drops.js';
 import { Balls } from './props.js';
 import { Doors } from './doors.js';
@@ -665,45 +666,46 @@ export class Game {
       else if (n > 0 && id === select) this.arsenal.select(slot, this.now);
     }
   }
-  // Your grenade leaves your hand.
-  throwMyNade(id, strength) {
-    const { pitch, yaw } = this.input;
-    this.nades.throw(this.me, id, throwOrigin(this.collision, this.player.eye(), pitch, yaw, strength), throwVelocity(pitch, yaw, strength, this.player.velocity));
-  }
-  // After a throw: one fewer; keep holding the same kind if you have more, else back to your gun.
-  usedNade(id, t) {
+  // Your grenade leaves your hand, and is spent there and then (the one place it is: whatever you switch to after, it's
+  // gone once). Returns how many of the kind you have left, or false when you had none (nothing thrown). A jump-throw
+  // (jump: { eye } you jumped from) leaves as CS2's does (flight.js jumpThrow).
+  throwMyNade(id, strength, jump = null) {
     const me = this.me;
-    me.nades[id] = Math.max(0, (me.nades[id] || 0) - 1);
+    if (!(me.nades[id] > 0)) return false;
+    me.nades[id]--;
+    const { pitch, yaw } = this.input, v = this.player.velocity;
+    const { eye, vel } = jump?.eye ? jumpThrow(jump.eye, v, this.collision) : { eye: this.player.eye(), vel: v }; // (a ceiling cuts the jump short)
+    this.nades.throw(me, id, throwOrigin(this.collision, eye, pitch, yaw, strength), throwVelocity(pitch, yaw, strength, vel));
+    return me.nades[id];
+  }
+  // A throw's follow-through over: the next one of the kind drawn if you have more, else back to your gun.
+  usedNade(id, t) {
     const slot = 'g_' + id;
-    if (me.nades[id] > 0) { const g = this.arsenal.guns[slot]; this.arsenal.current = null; this.arsenal.select(slot, t); g.count = me.nades[id]; return; }
+    if (this.me.nades[id] > 0 && this.arsenal.guns[slot]) { this.arsenal.current = null; this.arsenal.select(slot, t); return; }
     this.arsenal.remove(slot, t); // back to your best gun
   }
-  // A bot throws: aim the arc onto the target (full throw, else medium, else a lob). It takes the grenade out and pulls
-  // the pin first (botThrowing finishes the throw).
+  // A bot throws: a throw that goes off on the target, flown on the map from where it stands (it stops with the pin out:
+  // grenades.js botAim, full throw, else medium, else a lob, either arc); none that does (a ceiling, a roof, a wall in
+  // the way), no throw (false). It takes the grenade out and pulls the pin first (botThrowing finishes the throw, and
+  // spends it).
   botThrow(b, id, target, preferHigh = false) {
     const c = b.c;
     if (!(c.nades[id] > 0) || b.pendingThrow) return false;
     const eye = b.eye();
-    const yaw = (Math.atan2(target[1] - eye[1], target[0] - eye[0]) * 180) / Math.PI;
-    for (const strength of preferHigh ? [1] : [1, 0.5, 0]) {
-      const pitch = aimThrowPitch(eye, target, strength, preferHigh);
-      if (pitch == null || pitch < -89 || pitch > 89) continue;
-      c.nades[id]--;
-      b.yaw = yaw; b.pitch = pitch;
-      b.pendingThrow = { id, pitch, yaw, strength, at: this.now + 0.55 };
-      b.equip(id, { draw: false });
-      b.gesture(this.botAssets.clips.pullpin);
-      this.sounds.play(NADES[id].pin, { pos: eye, listener: this, volume: 0.5 });
-      return true;
-    }
-    return false;
+    const a = botAim(this.collision, eye, target, NADES[id].kind, { preferHigh });
+    if (!a) return false;
+    b.yaw = a.yaw; b.pitch = a.pitch;
+    b.pendingThrow = { id, pitch: a.pitch, yaw: a.yaw, strength: a.strength, at: this.now + 0.55, target: target.slice(), high: a.high, from: eye }; // (aimed again as it goes if it's moved: botThrowing)
+    b.equip(id, { draw: false });
+    b.gesture(this.botAssets.clips.pullpin);
+    this.sounds.play(NADES[id].pin, { pos: eye, listener: this, volume: 0.5 });
+    return true;
   }
   // A lineup's throw (utility.js): from where the bot stands, at exactly its aim (plus the bot's error), with its
   // strength, standing or jump-throwing.
   botThrowAim(b, id, { pitch, yaw, strength, jump = false, lineup = null }) {
     const c = b.c;
     if (!(c.nades[id] > 0) || b.pendingThrow) return false;
-    c.nades[id]--;
     b.yaw = yaw; b.pitch = pitch;
     b.pendingThrow = { id, pitch, yaw, strength, jump, lineup, at: this.now + 0.55 };
     b.equip(id, { draw: false });
@@ -715,15 +717,29 @@ export class Game {
     const p = b.pendingThrow;
     if (!p) return;
     b.yaw = p.yaw; b.pitch = p.pitch;
+    // A jump-throw: the bot hops JUMP_THROW before the grenade leaves its hand (CS2's jump-throw: flight.js).
+    if (p.jump && !p.hop && !p.released && this.now >= p.at - JUMP_THROW) { p.hop = b.eye(); b.vel = [0, 0, JUMP_IMPULSE]; b.jumped = true; }
     if (!p.released && this.now >= p.at) {
       p.released = true;
+      // An aimed throw (not a lineup) from somewhere else than it was aimed from (it slid to a stop): aimed again from
+      // where the bot is now, as it will fly, to go off on its target; none that gets there from here, it isn't thrown.
+      let off = false;
+      if (p.target) {
+        const eye = b.eye();
+        if (!p.from || Math.hypot(eye[0] - p.from[0], eye[1] - p.from[1], eye[2] - p.from[2]) > 2 || Math.hypot(b.vel[0], b.vel[1]) > 1) {
+          const a = aimFor(this.collision, eye, p.target, NADES[p.id].kind, p.strength, { preferHigh: p.high, vel: b.vel });
+          if (a && a.miss <= AIM_OK) { p.pitch = b.pitch = a.pitch; p.yaw = b.yaw = a.yaw; } else off = true;
+        }
+      }
+      // Spent as it leaves the hand, and only then (put away before, it's still the bot's): once. None left, none thrown.
+      if (off || !(b.c.nades[p.id] > 0)) { b.pendingThrow = null; this.botSwitch(b, b.brain.bestSlot(), this.now); return; }
+      b.c.nades[p.id]--;
       this.specAnim(b, p.strength >= 0.5 ? 'throw' : 'throwUnder');
       b.gesture(p.strength >= 0.5 ? this.botAssets.clips.throw : this.botAssets.clips.lob);
-      const from = throwOrigin(this.collision, b.eye(), p.pitch, p.yaw, p.strength);
-      // (A jump-throw leaves the hand as the jump starts: the jump's speed up, and the bot hops.)
-      if (p.jump) { b.vel = [0, 0, 301.993]; b.jumped = true; }
-      // (A lineup's standing throw: still, exactly as it was worked out.)
-      const n = this.nades.throw(b.c, p.id, from, throwVelocity(p.pitch, p.yaw, p.strength, p.jump ? [0, 0, 301.993] : p.lineup ? [0, 0, 0] : b.vel));
+      // (A lineup's standing throw: still, exactly as it was worked out; a jump-throw from where it hopped.)
+      const { eye, vel } = p.jump ? jumpThrow(p.hop || b.eye(), [0, 0, 0], this.collision) : { eye: b.eye(), vel: p.lineup ? [0, 0, 0] : b.vel };
+      const from = throwOrigin(this.collision, eye, p.pitch, p.yaw, p.strength);
+      const n = this.nades.throw(b.c, p.id, from, throwVelocity(p.pitch, p.yaw, p.strength, vel));
       if (n && p.lineup) n.lineup = p.lineup;
       this.radio.chatter(b.c, { flash: 'flash', smoke: 'smoke', fire: 'fire', he: 'he' }[NADES[p.id].kind] || 'he');
       p.done = this.now + 0.45;
@@ -1048,6 +1064,7 @@ export class Game {
     this.input.yaw = sp.yaw; this.input.pitch = 0;
     this.prevEye = this.player.eye();
     this.arsenal.aim = [0, 0]; this.arsenal.aimVel = [0, 0]; this.arsenal.view = [0, 0];
+    this.arsenal.throws = []; // (a throw not yet out of your hand: a new round calls it off, as CS2's restart does)
     const jobs = [];
     if (died) {
       this.arsenal.remove('primary', this.now);

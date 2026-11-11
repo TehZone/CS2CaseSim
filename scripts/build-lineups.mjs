@@ -6,6 +6,8 @@
 // to, and aims (pitch, yaw, Mouse1 / both / Mouse2, standing or jump-throw), simulating every throw with the game's own
 // grenade physics (src/js/play/flight.js) on the map's collision mesh, and keeps the throw that lands nearest the spot,
 // if one lands close enough: smokes and molotovs on it, flashbangs bursting in the air over it (a pop flash).
+// A lineup can also be CS2's own (cs2: the spot, aim and throw from CS2's official map guides, annotations/official in
+// the install): tried first, as it is, and kept if it lands.
 // Needs the maps exported into the CS2 cache (play/<map>/: Play mode does that).
 //   node scripts/build-lineups.mjs [map ...]        (CS2SIM_CACHE: the cache, else the app's)
 // CS2SIM_LINEUP_IDS=topcon,heaven finds only those again (the map's others kept as they are); CS2SIM_LINEUP_SPOTS: how
@@ -16,12 +18,12 @@ import { fileURLToPath } from 'node:url';
 import { CollisionWorld, FLAG_BULLET, FLAG_PLAYER } from '../src/js/play/collision.js';
 import { HULL_STAND } from '../src/js/play/movement.js';
 import { NavMesh } from '../src/js/play/nav.js';
-import { throwVelocity, throwOrigin, simulateFlight } from '../src/js/play/flight.js';
+import { throwVelocity, throwOrigin, simulateFlight, jumpThrow } from '../src/js/play/flight.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CACHE = process.env.CS2SIM_CACHE || path.join(process.env.APPDATA || '', 'CS2 Case Simulator', 'cs2cache');
 const OUT = path.join(ROOT, 'src', 'data', 'lineups.json');
-const EYE = 64, JUMP = 301.993;
+const EYE = 64;
 
 // purpose: when the bots use it. T: 'A' / 'B' (executes on a site), 'mid' (taking mid), 'default' (map control, thrown
 // as a default starts); CT: 'holdA' / 'holdB' (a smoke at the start of a round, a molotov as they come), 'retakeA' /
@@ -54,7 +56,8 @@ const SPECS = {
   ],
   de_mirage: [
     ['window', 'Window smoke', 'T', 'smoke', ['mid', 'default', 'B'], ['TSpawn', 'TopofMid', 'TRamp'], { at: [-1160, -690, -164] }],
-    ['topcon', 'Top connector smoke', 'T', 'smoke', ['mid', 'A'], ['TopofMid', 'TSpawn', 'TRamp'], { place: 'Connector', toward: 'Middle' }],
+    // (CS2's own, its map guide's "Connector": from a corner by T spawn's trash can, nowhere the search tries.)
+    ['topcon', 'Top connector smoke', 'T', 'smoke', ['mid', 'A'], ['TopofMid', 'TSpawn', 'TRamp'], { place: 'Connector', at: [-621, -897, -246], cs2: { pos: [1422.8, 36.437, -167.969], pitch: -19.88, yaw: -157.99, strength: 1, jump: true } }],
     ['jungle', 'Jungle smoke', 'T', 'smoke', ['A'], ['TRamp', 'TSpawn', 'PalaceAlley'], { place: 'Jungle' }],
     ['ctA', 'CT smoke (A)', 'T', 'smoke', ['A'], ['TRamp', 'TSpawn', 'PalaceAlley', 'PalaceInterior'], { place: 'CTSpawn', toward: 'BombsiteA' }],
     ['stairs', 'Stairs smoke', 'T', 'smoke', ['A'], ['TRamp', 'TSpawn', 'PalaceAlley'], { at: [-340, -1559, -164] }],
@@ -148,8 +151,10 @@ function target(map, to) {
   return mean(inner.map((a) => a.center));
 }
 
-function landing(col, eye, pitch, yaw, strength, jump, kind, dt) {
-  const vel = throwVelocity(pitch, yaw, strength, jump ? [0, 0, JUMP] : [0, 0, 0]);
+// (eye: standing on the spot; a jump-throw leaves from higher up, going up: CS2's, see flight.js jumpThrow.)
+function landing(col, stand, pitch, yaw, strength, jump, kind, dt) {
+  const { eye, vel: own } = jump ? jumpThrow(stand, [0, 0, 0], col) : { eye: stand, vel: [0, 0, 0] };
+  const vel = throwVelocity(pitch, yaw, strength, own);
   const origin = throwOrigin(col, eye, pitch, yaw, strength);
   return simulateFlight(col, origin, vel, kind, { dt });
 }
@@ -176,6 +181,13 @@ function findLineup(map, spec, side) {
   const spots = from.flatMap((p) => areasIn(map, p)).filter((a) => { const d = d2(a.center, goal); return d >= lo && d <= hi; })
     .sort((a, b) => Math.abs(d2(a.center, goal) - ideal) - Math.abs(d2(b.center, goal) - ideal));
   const found = []; // throws that land close enough, to pick the steadiest of
+  if (to.cs2) { // CS2's own lineup for it, as its guide has it
+    const c = to.cs2, down = map.col.traceBox([c.pos[0], c.pos[1], c.pos[2] + 32], [c.pos[0], c.pos[1], c.pos[2] - 96], HULL_STAND.mins, HULL_STAND.maxs, FLAG_PLAYER);
+    const feet = [c.pos[0], c.pos[1], Math.round(down.endpos[2] * 1000) / 1000];
+    const res = landing(map.col, [feet[0], feet[1], feet[2] + EYE], c.pitch, c.yaw, c.strength, c.jump, kind, 1 / 64), err = miss(map, kind, res, goal);
+    if (!down.startsolid && down.fraction < 1 && err <= TOLERANCE[kind]) found.push({ id, name, side, kind, purpose, from, to: to.place, pos: feet, yaw: c.yaw, pitch: c.pitch, strength: c.strength, jump: c.jump, land: res.pos.map((v) => Math.round(v)), goal: goal.map((v) => Math.round(v)), err: Math.round(err), time: +res.time.toFixed(2), cs2: true });
+    else console.log(`  ${map.info.id} ${id}: CS2's own lineup lands ${Math.round(err)} off here`);
+  }
   let tried = 0;
   for (const a of spots) {
     if (tried >= SPOTS || found.filter((x) => x.err < TOLERANCE[kind] * 0.5).length >= 8) break;

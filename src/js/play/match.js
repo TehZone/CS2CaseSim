@@ -46,11 +46,14 @@ export const CATALOG = [
 ];
 const GRENADE_IDS = new Set(CATALOG[4].items.map(([id]) => id));
 export const isGrenade = (id) => GRENADE_IDS.has(id);
-// CS2: four grenades at most, two flashbangs, one of every other kind.
+// CS2: four grenades at most, two flashbangs, one of every other kind; and four bought in a round at most
+// (ammo_grenade_limit_total, which since CS2's 22 September 2026 update also limits how many a player can buy in a round:
+// before, buying one, throwing it and buying another went on as long as the money lasted).
+export const NADE_BUYS = 4;
 export const nadeRoom = (c, id) => {
   const n = c.nades || {};
   const total = Object.values(n).reduce((s, x) => s + x, 0);
-  return total < 4 && (n[id] || 0) < (id === 'weapon_flashbang' ? 2 : 1);
+  return total < 4 && (n[id] || 0) < (id === 'weapon_flashbang' ? 2 : 1) && (c.nadesBought || 0) < NADE_BUYS;
 };
 export const ITEM_NAMES = Object.fromEntries(CATALOG.flatMap((c) => c.items.map(([id, name]) => [id, name])));
 export const DEFAULT_PISTOL = { T: 'weapon_glock', CT: 'weapon_usp_silencer' };
@@ -69,6 +72,7 @@ export class Combatant {
     this.resetWeapons = true; // starts with the default pistol
     this.roundKills = 0; this.roundDamage = new Map(); // attacker id -> damage this round (assists)
     this.nades = {}; // grenade id -> count
+    this.nadesBought = 0; // grenades bought this round (CS2's limit: see nadeRoom)
   }
 }
 
@@ -113,6 +117,7 @@ export class Match {
       c.roundKills = 0;
       c.roundDamage.clear();
       c.hasC4 = false;
+      c.nadesBought = 0; // (grenades bought this round: see nadeRoom)
     }
     // One terrorist carries the bomb (you, if you're the only one or by chance).
     if (ts.length) { const carrier = ts[Math.floor(Math.random() * ts.length)]; carrier.hasC4 = true; this.bomb.carrier = carrier; }
@@ -315,6 +320,6 @@ export class Match {
     if (id === 'vest') c.armor = 100;
     else if (id === 'vesthelm') { c.armor = 100; c.helmet = true; }
     else if (id === 'defuser') c.defuser = true;
-    else if (GRENADE_IDS.has(id)) c.nades[id] = (c.nades[id] || 0) + 1;
+    else if (GRENADE_IDS.has(id)) { c.nades[id] = (c.nades[id] || 0) + 1; c.nadesBought = (c.nadesBought || 0) + 1; }
   }
 }

@@ -458,6 +458,21 @@ function fakeGame() {
   while (m.phase !== 'over') { m.endRound('T', 'time'); m.tick(SHORT_RULES.endDelay + 0.01); }
   ok(m.winnerSquad() === 'A' && m.score.A >= SHORT_RULES.winsNeeded, 'match ends at ' + SHORT_RULES.winsNeeded + ' wins: ' + JSON.stringify(m.score));
 }
+// CS2's ammo_grenade_limit_total also limits how many grenades you buy in a round (its 22 Sep 2026 update): buy an HE,
+// throw it, buy another... the fifth isn't sold (all seven were, for $300 each); the next round, four more. Carried over
+// from the last round, they don't count.
+{
+  const g = fakeGame(), m = new Match(g, SHORT_RULES), st = { weapon_hegrenade: { price: 300 }, weapon_flashbang: { price: 200 } };
+  m.startRound();
+  const me = g.me;
+  me.money = 16000;
+  const buyThrow = (n) => { let bought = 0; for (let i = 0; i < n; i++) if (m.canBuy(me, 'weapon_hegrenade', st)) { m.pay(me, 'weapon_hegrenade', st); me.nades.weapon_hegrenade--; bought++; } return bought; };
+  const first = buyThrow(7);
+  m.endRound('CT', 'time'); m.tick(SHORT_RULES.endDelay + 0.01);
+  me.nades = { weapon_flashbang: 1 }; me.money = 16000; // (one kept from the last round: room for another, but not a fifth buy)
+  const next = buyThrow(7), flash = m.canBuy(me, 'weapon_flashbang', st);
+  ok(first === 4 && next === 4 && me.money === 16000 - 1200 && !flash, `grenades: four bought a round at most (${first} of 7 bought and thrown, then ${next} the next round with a flashbang kept, and not a second one)`);
+}
 // leaving the match: a technical timeout holds the next freeze time (once), you never carry the bomb while you're gone
 {
   const g = fakeGame(), m = new Match(g, SHORT_RULES);
@@ -851,6 +866,186 @@ function fakeGame() {
   ok(held && quick && away && awp.zoom === 0 && scar.zoom === 0, 'sniper scope: a switch unscopes it, and it stays at 1× when drawn again, even switched from mid-bolt');
   awp.zoom = 1; awp.resumeZoom = 1; refillAmmo(awp);
   ok(awp.zoom === 0 && awp.resumeZoom === 0, 'sniper scope: a new round draws it unscoped');
+}
+
+// ---- a grenade is spent exactly once: thrown, it's gone whatever you switch to and when (CS2: once you've let go, a
+// switch doesn't stop the throw); switched away from with the button still down, it isn't thrown and you keep it ------
+{
+  const { Arsenal, Gun } = await import('../src/js/play/weapons.js');
+  const base = { recoilSeed: 1, recoilAngle: [0, 0], recoilAngleVariance: [0, 0], recoilMagnitude: [0, 0], recoilMagnitudeVariance: [0, 0],
+    recoveryStart: 0, recoveryEnd: 1, recoveryStand: 0.3, recoveryStandFinal: 0.3, cycle: [0.1, 0.1], deploy: 0.5, clip: 30, reserve: 90, maxSpeed: [250, 250] };
+  const vm = () => ({ play: () => 0.5, has: (r) => r === 'pullpin', length: () => 0.3, role: 'idle', rig: {} });
+  const DT = 1 / 64;
+  // A life with an AK and `n` of a grenade, drawn: each tick runs `at(k, input, game)` (k: ticks since the press; it sets
+  // the buttons, keys, how you move) then the weapons, as the game ticks them. Returns how many left your hand (and how:
+  // throws) and how many you have.
+  function life(n, at, ticks = 400, id = 'weapon_flashbang') {
+    const thrown = [];
+    const game = { now: 0, me: { alive: true, nades: { [id]: n } }, cv: {}, input: { pitch: 0, yaw: 0 }, nades: { throw: (c, x, from, vel) => thrown.push({ id: x, from, vel }) },
+      player: { ducked: false, onGround: true, velocity: [0, 0, 0], eye: () => [0, 0, 64], speed2d: () => 0 },
+      collision: { traceBox: (a, b) => ({ endpos: b.slice(), fraction: 1 }) }, emit() {} };
+    const ars = game.arsenal = new Arsenal(game, {});
+    game.canAttack = () => !!ars.current?.nade; // (no gun to fire here)
+    for (const k of ['throwMyNade', 'usedNade']) if (Game.prototype[k]) game[k] = Game.prototype[k];
+    ars.give('primary', new Gun({ slot: 'primary', id: 'weapon_ak47', name: 'AK-47', stats: base, vm: vm() }), 0, false);
+    ars.give('g_' + id, new Gun({ slot: 'g_' + id, id, name: id, stats: { ...base, clip: 0 }, vm: vm() }), 0);
+    const input = { buttons: 0, keys: new Set(), takePressed() { const s = this.keys; this.keys = new Set(); return s; }, takeClicked: () => 0, takeWheel: () => 0 };
+    for (let k = -40; k < ticks; k++) { game.now += DT; at(k, input, game); ars.tick(DT, game.now, input); }
+    return { thrown: thrown.length, throws: thrown, left: game.me.nades[id] || 0, slot: !!ars.guns['g_' + id], ars, game };
+  }
+  // Mouse1 down for 40 ticks (the pin's out), let go, and `slot1` (the AK) `after` ticks after letting go; 300 ticks on,
+  // 4 (the grenades) and the same throw again. (At 200, between: is it still in your slots?)
+  const switchAfter = (after) => (k, inp, g) => {
+    if (k === 200) g.slotBetween = !!g.arsenal.guns.g_weapon_flashbang;
+    inp.buttons = (k >= 0 && k < 40) || (k >= 300 && k < 340) ? 1 : 0;
+    if (k === 40 + after) inp.keys.add('slot1');
+    if (k === 299) inp.keys.add('slot4');
+  };
+  const bad1 = [], bad2 = [];
+  for (let after = 0; after <= 48; after++) {
+    const one = life(1, switchAfter(after), 450), two = life(2, switchAfter(after), 450);
+    if (one.thrown !== 1 || one.left !== 0 || one.slot || one.game.slotBetween) bad1.push(`${after}: ${one.thrown} thrown, ${one.left} left${one.game.slotBetween ? ', still in your slots' : ''}`);
+    if (two.thrown !== 2 || two.left !== 0 || two.slot || !two.game.slotBetween) bad2.push(`${after}: ${two.thrown} thrown, ${two.left} left`);
+  }
+  ok(!bad1.length, 'grenades: your last one, thrown, is gone (from your slots too), whatever tick of the throw you switch weapons at (no endless grenades): ' + bad1.slice(0, 6).join('; '));
+  ok(!bad2.length, 'grenades: two flashbangs, a switch at any tick of the first throw: both thrown once each, none left: ' + bad2.slice(0, 6).join('; '));
+  // Switched away with Mouse1 still down (the pin out, not let go): nothing thrown, it's still yours, and thrown later once.
+  const bad3 = [];
+  for (let at = 1; at < 40; at++) {
+    const mid = life(1, (k, inp) => { inp.buttons = k >= 0 && k < 40 ? 1 : 0; if (k === at) inp.keys.add('slot1'); }, 120);
+    const later = life(1, (k, inp) => { inp.buttons = (k >= 0 && k < 40) || (k >= 300 && k < 340) ? 1 : 0; if (k === at) inp.keys.add('slot1'); if (k === 299) inp.keys.add('slot4'); }, 450);
+    if (mid.thrown !== 0 || mid.left !== 1 || !mid.slot || later.thrown !== 1 || later.left !== 0) bad3.push(`${at}: ${mid.thrown}/${mid.left} then ${later.thrown}/${later.left}`);
+  }
+  ok(!bad3.length, "grenades: switched away before you let go, it isn't thrown or spent, and throws once later: " + bad3.slice(0, 6).join('; '));
+  // Held on to: thrown once, then the next one drawn; the last one thrown, back to the gun.
+  const kept = life(2, (k, inp) => { inp.buttons = (k >= 0 && k < 40) || (k >= 100 && k < 140) ? 1 : 0; }, 300);
+  ok(kept.thrown === 2 && kept.left === 0 && !kept.slot && kept.ars.current?.id === 'weapon_ak47', `grenades: thrown one after the other, each once, then back to the gun (${kept.thrown} thrown, ${kept.left} left)`);
+  // Your last one thrown, another bought during the follow-through (the buy menu's count + 1): it's drawn, and is one more.
+  const bought = life(1, (k, inp, g) => { inp.buttons = (k >= 0 && k < 40) || (k >= 150 && k < 190) ? 1 : 0; if (k === 50) g.me.nades.weapon_flashbang++; }, 300);
+  ok(bought.thrown === 2 && bought.left === 0 && !bought.slot, `grenades: one bought as the last is thrown is yours, thrown once too (${bought.thrown} thrown, ${bought.left} left)`);
+  // Both buttons let go of a moment apart is still the medium throw (CS2); one held on for longer, that one's throw.
+  const strengthOf = (gap) => life(1, (k, inp) => { inp.buttons = k >= 0 && k < 40 ? 5 : k >= 40 && k < 40 + gap ? 1 : 0; }, 120).throws[0]?.vel;
+  const v0 = strengthOf(0), v2 = strengthOf(2), v20 = strengthOf(20);
+  ok(v0 && v2 && v20 && near(Math.hypot(...v2), Math.hypot(...v0), 1e-6) && near(Math.hypot(...v0), 438.75, 0.01) && near(Math.hypot(...v20), 675, 0.01),
+    `grenades: both buttons let go of 2 ticks apart is the medium throw (${Math.round(Math.hypot(...(v2 || [0])))} units/s), Mouse1 let go of 20 ticks later the full one (${Math.round(Math.hypot(...(v20 || [0])))})`);
+  // A jump and a quick throw (let go of on the jump's tick, or 3 ticks into it) is CS2's jump-throw: from 27.3 above where
+  // you jumped, going up at 218 with the throw; let go of later in the air, it's thrown from where you are, as you go.
+  const jumpAt = (late) => life(1, (k, inp, g) => {
+    inp.buttons = k >= 0 && k < 40 + late ? 1 : 0;
+    const air = k >= 40 ? k - 40 + 1 : 0; // (the jump on tick 40: in the air from then on, going up at 301.993 less gravity)
+    g.player.onGround = !air; g.player.velocity = [0, 0, air ? 301.993 - 800 * air * DT : 0];
+    const h = air ? 301.993 * air * DT - 400 * (air * DT) ** 2 : 0;
+    g.player.eye = () => [0, 0, 64 + h];
+  }, 120).throws[0];
+  // A new round a moment after you let go, before it's left your hand: called off (CS2's restart does), still yours, not
+  // thrown at the spawn.
+  const restart = life(1, (k, inp, g) => {
+    inp.buttons = k >= 0 && k < 40 ? 1 : 0;
+    if (k !== 42) return;
+    Object.assign(g, { myBody: { root: {} }, syncMyNades: async () => {}, giveMe: async () => {}, knifeId: () => 'weapon_knife' });
+    g.player.teleport = () => {};
+    Game.prototype.respawnMe.call(g, { origin: [500, 0, 0], yaw: 0 }, false);
+  }, 120);
+  ok(restart.thrown === 0 && restart.left === 1 && restart.slot, `grenades: a new round just after you let go calls the throw off (${restart.thrown} thrown, ${restart.left} left)`);
+  const jt0 = jumpAt(0), jt3 = jumpAt(3), jt20 = jumpAt(20);
+  ok(jt0 && jt3 && jt20 && near(jt0.from[2], 64 + 27.3 + 16 * Math.sin(Math.PI / 18), 0.1) && near(jt0.vel[2], 675 * Math.sin(Math.PI / 18) + 1.25 * 218, 0.5) && near(jt3.vel[2], jt0.vel[2], 1e-6) && jt20.vel[2] < jt0.vel[2] - 100,
+    `grenades: your jump-throw is CS2's (from ${jt0 && jt0.from[2].toFixed(1)} going up at ${jt0 && jt0.vel[2].toFixed(1)}; ${jt3 && jt3.vel[2].toFixed(1)} 3 ticks into the jump, ${jt20 && jt20.vel[2].toFixed(1)} 20 ticks in)`);
+}
+
+// ---- a bot's grenade is spent exactly once too: as it leaves the hand (put away before, a new round, it's still the
+// bot's); the bot stands still with the pin out; aimed, it goes off on its target, not where it first comes down ---------
+{
+  const thrown = [];
+  const flatCol = { traceBox: (a, b) => ({ endpos: b.slice(), fraction: 1 }) };
+  const g = { now: 0, collision: flatCol, nades: { throw: (c, id, from, vel) => (thrown.push({ id, from, vel }), {}) }, sounds: { play() {} }, botAssets: { clips: {} },
+    radio: { chatter() {} }, specAnim() {}, botSwitch(b) { b.pendingThrow = null; } };
+  const bot = { c: { nades: { weapon_smokegrenade: 1 }, alive: true }, eye: () => [0, 0, 64], vel: [0, 0, 0], equip() {}, gesture() {}, brain: { bestSlot: () => 'primary' } };
+  const run = (secs) => { for (let i = 0; i < secs * 64; i++) { g.now += 1 / 64; Game.prototype.botThrowing.call(g, bot); } };
+  Game.prototype.botThrowAim.call(g, bot, 'weapon_smokegrenade', { pitch: 0, yaw: 0, strength: 1 });
+  const pinned = bot.c.nades.weapon_smokegrenade;
+  run(0.3); g.botSwitch(bot); run(1); // (switched away before it left the hand)
+  const putAway = [bot.c.nades.weapon_smokegrenade, thrown.length];
+  Game.prototype.botThrowAim.call(g, bot, 'weapon_smokegrenade', { pitch: 0, yaw: 0, strength: 1 }); run(2);
+  const again = Game.prototype.botThrowAim.call(g, bot, 'weapon_smokegrenade', { pitch: 0, yaw: 0, strength: 1 });
+  ok(pinned === 1 && putAway.join() === '1,0' && thrown.length === 1 && bot.c.nades.weapon_smokegrenade === 0 && !again,
+    `bot grenades: spent as they leave the hand, once (the pin out ${pinned} left; put away ${putAway.join(' left, ')} thrown; then ${thrown.length} thrown, ${bot.c.nades.weapon_smokegrenade} left)`);
+  // A lineup's jump-throw: the hop 0.105 s before it goes, thrown as CS2's jump-throw (218 up with the bot, 27.3 higher).
+  bot.c.nades.weapon_smokegrenade = 1; bot.jumped = false;
+  Game.prototype.botThrowAim.call(g, bot, 'weapon_smokegrenade', { pitch: 0, yaw: 0, strength: 1, jump: true, lineup: {} });
+  run(0.55 - 0.105 + 1 / 64); const hopped = bot.jumped && thrown.length === 1; run(1);
+  const j = thrown[1];
+  ok(hopped && j && near(j.vel[2], 675 * Math.sin(Math.PI / 18) + 1.25 * 218, 0.5) && near(j.from[2], 64 + 27.3 + 16 * Math.sin(Math.PI / 18), 0.1),
+    `bot grenades: a lineup's jump-throw is CS2's (it hops first: ${hopped}; going up at ${j ? j.vel[2].toFixed(1) : '-'} from ${j ? j.from[2].toFixed(1) : '-'})`);
+  // Pin out, the bot stands still (any throw, not only a lineup's), and moves on once it's thrown.
+  const { Brain } = await import('../src/js/play/ai.js');
+  let moved = null;
+  const br = Object.assign(Object.create(Brain.prototype), { game: { match: { phase: 'live' }, liveAt: 0 }, bot: { mode: 'move', index: 0, pendingThrow: { released: false }, c: { alive: true } },
+    nextScan: Infinity, nextThink: Infinity, target: null, task: 'goto', updateGun() {}, move(dt, t, m) { moved = m; }, look() {} });
+  br.tick(1 / 64, 5); const still = moved;
+  br.bot.pendingThrow.released = true; br.tick(1 / 64, 5.02);
+  ok(still === false && moved === true, 'bot grenades: still with the pin out, on its way again once thrown');
+  // Aimed at a spot (not a lineup): it goes off there. Aimed at where it first comes down (the arc alone), a smoke came to
+  // rest 284 units past a spot 800 off, an HE went off 108 past.
+  const { aimFor } = await import('../src/js/play/grenades.js');
+  const ALL = FLAG_PLAYER | FLAG_BULLET | FLAG_GRENADE, G = world([[[-4000, -4000, -64], [4000, 4000, 0], ALL]]);
+  const { simulateFlight, throwOrigin, throwVelocity } = await import('../src/js/play/flight.js');
+  const offs = [['smoke', 800], ['smoke', 1200], ['he', 800], ['fire', 600]].map(([kind, d]) => {
+    const a = aimFor?.(G, [0, 0, 64], [d, 0, 0], kind, 1);
+    const r = a && simulateFlight(G, throwOrigin(G, [0, 0, 64], a.pitch, a.yaw, 1), throwVelocity(a.pitch, a.yaw, 1), kind);
+    return r ? Math.round(r.pos[0] - d) : Infinity;
+  });
+  ok(offs.every((o) => Math.abs(o) <= 20), 'bot grenades: aimed at a spot, a smoke, an HE and a molotov go off on it: ' + offs.join(', '));
+  // Only thrown when it gets there: from a tunnel (its ceiling 130 high, 600 units of it) a smoke at a spot 1400 out goes
+  // into the ceiling (one did, 30 units off, and smoked the bot's own tunnel), so it isn't thrown and stays the bot's; in
+  // the open, the same throw is. A flash to burst over a site 1000 off, lobbed high, bursts on its fuse 500 short: thrown
+  // flat instead. Each look costs 10 flights at most.
+  const T = world([[[-4000, -4000, -64], [4000, 4000, 0], ALL], [[-500, -300, 130], [600, 300, 400], ALL]]);
+  const { botAim, AIM_OK } = await import('../src/js/play/grenades.js');
+  const FLIGHT = await import('../src/js/play/flight.js');
+  const aimAt = (col, eye, to, kind, high = false) => {
+    const r = botAim?.(col, eye, to, kind, { preferHigh: high });
+    const land = r && FLIGHT.simulateFlight(col, throwOrigin(col, eye, r.pitch, r.yaw, r.strength), throwVelocity(r.pitch, r.yaw, r.strength), kind);
+    return { r, off: land ? Math.round(Math.hypot(land.pos[0] - to[0], land.pos[1] - to[1], land.pos[2] - to[2])) : null };
+  };
+  const tunnel = aimAt(T, [0, 0, 64], [1400, 0, 0], 'smoke'), open = aimAt(G, [0, 0, 64], [1400, 0, 0], 'smoke');
+  const flash = aimAt(G, [0, 0, 64], [1000, 0, 120], 'flash', true);
+  const mk = (col) => {
+    const sent = [];
+    const gg = { now: 0, collision: col, nades: { throw: (c, id, from, vel) => (sent.push({ from, vel }), {}) }, sounds: { play() {} }, botAssets: { clips: {} }, radio: { chatter() {} }, specAnim() {}, botSwitch(b) { b.pendingThrow = null; } };
+    const bb = { c: { nades: { weapon_smokegrenade: 1 }, alive: true }, eye: () => [0, 0, 64], vel: [0, 0, 0], equip() {}, gesture() {}, brain: { bestSlot: () => 'primary' } };
+    return { gg, bb, sent, go: (to, at = gg) => Game.prototype.botThrow.call(at, bb, 'weapon_smokegrenade', to), run: (s) => { for (let i = 0; i < s * 64; i++) { gg.now += 1 / 64; Game.prototype.botThrowing.call(gg, bb); } } };
+  };
+  const inT = mk(T), inOpen = mk(G);
+  const tookT = inT.go([1400, 0, 0]); inT.run(1.5);
+  const tookO = inOpen.go([1400, 0, 0]); inOpen.run(1.5);
+  // The pin pulled in the open, then (sliding to a stop) under the tunnel by the time it leaves the hand: looked at again
+  // from there, not thrown, still the bot's.
+  const slid = mk(T);
+  const pinOut = slid.go([1400, 0, 0], { ...slid.gg, collision: G });
+  slid.bb.eye = () => [-40, 0, 64]; slid.run(1.5);
+  ok(tunnel.r === null && open.r && open.off <= AIM_OK && flash.r && !flash.r.high && flash.off <= AIM_OK
+    && !tookT && inT.sent.length === 0 && inT.bb.c.nades.weapon_smokegrenade === 1 && tookO && inOpen.sent.length === 1 && inOpen.bb.c.nades.weapon_smokegrenade === 0
+    && pinOut && slid.sent.length === 0 && slid.bb.c.nades.weapon_smokegrenade === 1 && !slid.bb.pendingThrow,
+    `bot grenades: thrown only where they get to (from a tunnel: ${tunnel.r ? 'thrown, ' + tunnel.off + ' off' : 'not thrown'}; in the open ${open.off} off; a flash over a site ${flash.r ? (flash.r.high ? 'lobbed' : 'flat') + ', ' + flash.off + ' off' : 'not thrown'}; the pin out, then under the tunnel: ${slid.sent.length} thrown, ${slid.bb.c.nades.weapon_smokegrenade} kept)`);
+  // A look at most 10 flights (each about half a millisecond on a map): counted by where each leaves the hand (throwOrigin).
+  let n = 0;
+  const counting = { traceBox: (a, b, mi, ma, f) => { if (mi[0] === -2 && f === FLAG_PLAYER) n++; return T.traceBox(a, b, mi, ma, f); } };
+  botAim?.(counting, [0, 0, 64], [1400, 0, 0], 'smoke');
+  ok(n > 0 && n <= 10, `bot grenades: a look for a throw that doesn't exist flies ${n} throws, 10 at most`);
+  // Near its target up and down too: an HE lobbed from 400 up at a spot 500 out and below bursts on its fuse 1000 units
+  // over it (right above it, it passed): thrown flat instead, it bursts there.
+  const he = aimAt(G, [0, 0, 464], [500, 0, 0], 'he', true);
+  ok(he.r && he.off <= AIM_OK, `bot grenades: an HE from high up at a spot below bursts on it, not 1000 units over it (${he.r ? (he.r.high ? 'lobbed' : 'flat') + ', ' + he.off + ' off' : 'not thrown'})`);
+  // A bot with no throw from where it is (botThrow false) looks again a second later, not every tick (each look flies
+  // up to 10 throws): enemies just seen 800 units off, a molotov then an HE looked for once each in 0.9 s, not 58 times.
+  const looks = [];
+  const nb = Object.assign(Object.create(Brain.prototype), {
+    game: { match: { phase: 'live', bomb: { state: 'carried' } }, nades: { smokedAt: () => false, fireSmokedBy: () => false }, botThrow: (b2, id) => (looks.push(id), false) },
+    bot: { pos: [0, 0, 0], c: { team: 'CT', nades: { weapon_incgrenade: 1, weapon_hegrenade: 1 } } }, plan: {}, thrown: new Set(), nadeAt: 0, nadeTry: {} });
+  for (let i = 0; i < 58; i++) { const t = 10 + i / 64; nb.lastSeen = { t: t - 1, pos: [800, 0, 0] }; nb.useNades(t, () => null); }
+  const later = looks.length;
+  nb.lastSeen = { t: 10, pos: [800, 0, 0] }; nb.useNades(11.01, () => null);
+  ok(later === 2 && looks.length === 4, `bot grenades: no throw from here, looked for again a second later, not every tick (${later} looks in 0.9 s, ${looks.length - later} more a second on)`);
 }
 
 // ---- viewmodel animations blend in from where the viewmodel is (CS2's): an inspect pressed again, a reload during one --
@@ -1556,6 +1751,112 @@ const shotAt = (p, from, elev, dist = 500) => {
   const run = simulateFlight(G, [0, 0, 64], throwVelocity(0, 0, 1), 'smoke', { keepPath: true });
   const first = run.path.find((p) => p[2] < 3);
   ok(first && run.pos[0] - first[0] > 50 && run.pos[0] - first[0] < 400, 'flight: a grenade thrown level comes to rest a short way past where it lands: ' + Math.round(run.pos[0] - first[0]));
+  // CS2's bounce off the ground: a fast steep one up is cut by up to half (straight down at 800 units/s: back up at 181,
+  // not 362), a level throw's landing isn't. Off a wall it goes on for the rest of the tick, and a slow one isn't
+  // stopped dead against it.
+  const { flightStep } = await import('../src/js/play/flight.js');
+  const drop = { pos: [0, 0, 6], vel: [0, 0, -800], still: 0, landed: false };
+  flightStep(G, drop, 1 / 64);
+  ok(drop.landed && near(drop.vel[2], 181.1, 0.5), 'flight: a grenade thrown hard at the floor bounces up at half the speed (CS2): ' + drop.vel[2].toFixed(1));
+  const flat = { pos: [0, 0, 3], vel: [664.7, 0, -233.9], still: 0, landed: false };
+  flightStep(G, flat, 1 / 64);
+  ok(flat.landed && near(flat.vel[0], 664.7 * 0.45, 0.01), 'flight: a level throw landing keeps 0.45 of its speed: ' + flat.vel[0].toFixed(1));
+  const wall = { pos: [1490, 0, 200], vel: [1000, 0, 0], still: 0, landed: false }, slow = { pos: [1497.6, 0, 200], vel: [30, 0, 0], still: 0, landed: false };
+  flightStep(G, wall, 1 / 64); flightStep(G, slow, 1 / 64);
+  ok(wall.pos[0] < 1496 && near(wall.vel[0], -450, 0.01) && slow.vel[0] < 0, `flight: off a wall it goes on back out in the same tick (${wall.pos[0].toFixed(1)}), and a slow one comes off it (${slow.vel[0].toFixed(1)})`);
+  // CS2's jump-throw: 0.105 s into the jump (218 units/s up, 27.3 units higher), not the jump's own 301.993 from the
+  // ground. Level, along the floor: first down 1780 units out and at rest at 2210 (thrown with the jump's own speed from
+  // the ground, it went 2155 and 2726).
+  const FL = await import('../src/js/play/flight.js');
+  const jt = FL.jumpThrow?.([0, 0, 64]);
+  const jf = jt && simulateFlight(G, throwOrigin(G, jt.eye, 0, 90, 1), throwVelocity(0, 90, 1, jt.vel), 'smoke', { keepPath: true });
+  const jFirst = jf?.path.find((p) => p[2] < 3);
+  ok(jt && near(jt.vel[2], 218, 0.01) && near(jt.eye[2], 64 + 27.3, 0.01) && near(jFirst[1], 1780, 15) && near(jf.pos[1], 2210, 15),
+    `flight: a level jump-throw lands ${jFirst ? Math.round(jFirst[1]) : '-'} out and comes to rest at ${jf ? Math.round(jf.pos[1]) : '-'} (CS2's)`);
+}
+
+// ---- a jump-throw under a low ceiling (a tunnel, a vent): the jump the player's box can make there, the grenade from
+// under the ceiling, not inside it (it started 10 units in and came to rest in the slab) ---------------------------------
+{
+  const { Arsenal, Gun } = await import('../src/js/play/weapons.js');
+  const { simulateFlight, jumpThrow } = await import('../src/js/play/flight.js');
+  const ALL = FLAG_PLAYER | FLAG_BULLET | FLAG_GRENADE, DT = 1 / 64;
+  const base = { recoilSeed: 1, recoilAngle: [0, 0], recoilAngleVariance: [0, 0], recoilMagnitude: [0, 0], recoilMagnitudeVariance: [0, 0],
+    recoveryStart: 0, recoveryEnd: 1, recoveryStand: 0.3, recoveryStandFinal: 0.3, cycle: [0.1, 0.1], deploy: 0.5, clip: 0, reserve: 0, maxSpeed: [245, 245] };
+  const vm = () => ({ play: () => 0.5, has: (r) => r === 'pullpin', length: () => 0.3, role: 'idle', rig: {} });
+  // A floor and, over a 2000-unit tunnel, a slab whose underside is at `ceil`: you pull the pin, jump, let go `late` ticks
+  // after (the real movement, weapons and Game.throwMyNade). → { from (where the smoke starts), rest, eyes (each tick's) }.
+  const jumpUnder = (ceil, { duck = false, late = 1 } = {}) => {
+    const col = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[-1000, -300, ceil], [1000, 300, 400], ALL]]);
+    const player = new PlayerMovement(col, [0, 0, 0]), thrown = [], eyes = [];
+    const game = { now: 0, me: { alive: true, nades: { weapon_smokegrenade: 1 } }, cv: {}, input: { pitch: 0, yaw: 0 }, collision: col, player,
+      nades: { throw: (c, id, from, vel) => thrown.push({ from, vel }) }, emit() {} };
+    const ars = game.arsenal = new Arsenal(game, {});
+    game.canAttack = () => !!ars.current?.nade;
+    game.throwMyNade = Game.prototype.throwMyNade; game.usedNade = Game.prototype.usedNade;
+    ars.give('g_weapon_smokegrenade', new Gun({ slot: 'g_weapon_smokegrenade', id: 'weapon_smokegrenade', name: 'smoke', stats: base, vm: vm() }), 0);
+    const input = { buttons: 0, keys: new Set(), takePressed() { const s = this.keys; this.keys = new Set(); return s; }, takeClicked: () => 0, takeWheel: () => 0 };
+    for (let k = -60; k < 120; k++) {
+      game.now += DT;
+      player.tick(DT, { forward: 0, side: 0, yaw: 0, pitch: 0, jump: k === 0, jumpPress: k === 0, duck, walk: false, maxSpeed: 245 });
+      eyes.push(player.eye()[2]);
+      input.buttons = k >= -50 && k < late ? 1 : 0;
+      ars.tick(DT, game.now, input);
+    }
+    const t = thrown[0], r = t && simulateFlight(col, t.from, t.vel, 'smoke');
+    return { from: t?.from, rest: r?.pos, n: thrown.length, eyes: eyes.slice(60) };
+  };
+  const cases = [[84], [100], [66, { duck: true }], [70, { duck: true }]].map(([ceil, o]) => ({ ceil, ...jumpUnder(ceil, o) }));
+  const bad = cases.filter((c) => !(c.n === 1 && c.from[2] + 2 <= c.ceil && c.rest[2] < 10));
+  ok(!bad.length, 'jump-throw: under a ceiling 84 or 100 high (standing) or a vent 66 or 70 (crouched) the smoke starts under it and comes to rest on the floor: '
+    + cases.map((c) => `${c.ceil}: from z ${c.from?.[2].toFixed(1)}, rest z ${c.rest?.[2].toFixed(1)}`).join('; '));
+  // As the movement jumps there: under the 84 ceiling the head hits it 0.04 s in, and 0.105 s in the eye's at 74.4 (73.4
+  // in the movement, between its ticks), coming down at 50.
+  const low = cases[0], j = jumpThrow([0, 0, 64.06], [0, 0, 0], world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[-1000, -300, 84], [1000, 300, 400], ALL]]));
+  const f = 0.105 * 64, real = low.eyes[Math.floor(f)] + (low.eyes[Math.ceil(f)] - low.eyes[Math.floor(f)]) * (f - Math.floor(f)); // (eyes[k]: k + 1 ticks after the jump's)
+  ok(near(j.eye[2], real, 1.5) && j.vel[2] < 0 && j.vel[2] > -80, `jump-throw: under a ceiling, the eye the movement has 0.105 s into the jump (${j.eye[2].toFixed(1)} against ${real.toFixed(1)}), on its way down (${j.vel[2].toFixed(1)})`);
+  // Room enough (a ceiling 130 high) or none above (the open sky): CS2's jump-throw as it was, from 27.3 higher at 218 up.
+  const high = jumpUnder(130), open = jumpUnder(5000);
+  ok(high.from && open.from && near(high.from[2], open.from[2], 1e-6) && near(open.from[2], 64.06 + 27.3 + 16 * Math.sin(Math.PI / 18), 0.1) && near(open.rest[0], 2210, 15),
+    `jump-throw: with room above, CS2's (from z ${open.from?.[2].toFixed(1)}, at rest ${open.rest ? Math.round(open.rest[0]) : '-'} out)`);
+}
+
+// ---- grenade flight against CS2's own lineups: its official map guides (annotations/official in the install: where you
+// stand, the aim, standing or jump-throw, where the smoke ends up), flown on the same maps exported in the cache --------
+{
+  const fs = (await import('node:fs')).default, path = (await import('node:path')).default;
+  const { throwVelocity, throwOrigin, simulateFlight, jumpThrow } = await import('../src/js/play/flight.js');
+  const cache = process.env.CS2SIM_CACHE || path.join(process.env.APPDATA || '', 'CS2 Case Simulator', 'cs2cache');
+  // [name, eye (its aim node less 100 units of its aim), pitch, yaw, jump-throw, where CS2's guide has it end up]: its smokes
+  // with an end, but for three that don't here (Dust II's Mid CT, through the mid doors, a door here; Inferno's Banana, its
+  // end under the map, and Left Top Mid, 780 off: something in the way here).
+  const GUIDES = {
+    de_dust2: [['B Doors', [-1508.21, -107.97, 72.03], -29.41, 83.172, true, [-1207.95, 2279.12]], ['A Cross', [902.77, 1070.94, 64.79], -56.998, 82.724, false, [1097.56, 2177.42]],
+      ['CT', [189.97, 1334.03, 64.1], -15.655, 66.066, false, [666.7, 2180.43]], ['B Tunnel', [-1122.03, 2691.8, 148.18], -15.207, -114.256, true, [-2000.18, 1467.21]],
+      ['Long A Doors', [769.75, 2379.94, 28.45], -52.906, -91.858, true, [707.43, 725.31]]],
+    de_mirage: [['Connector', [1422.8, 36.44, -103.97], -19.879, -157.986, true, [-620.96, -896.54]], ['Cat', [-160.03, 887.95, -71.64], -45.698, -134.569, false, [-1218.99, 230.99]],
+      ['CT', [1104.12, -989.42, -194.09], -28.485, -143.625, true, [-881.15, -2455.67]], ['T Ramp', [-879.94, -2264.02, -109.14], -12.249, 31.866, false, [374.11, -1517.42]],
+      ['Apts', [-2415.97, -115.76, -99.09], -26.268, 43.402, false, [-1747.83, 784.24]]],
+    de_inferno: [['Coffins', [368.88, 1664.04, 196.32], -17.767, 85.584, true, [545.81, 3127.01]], ['A Site Moto', [328.84, 475.06, 155.73], -37.858, 8.766, true, [2283.95, 845.2]],
+      ['Banana Half-Wall', [2538.16, 2468.31, 188.14], -25.661, -167.979, true, [368.5, 1786.78]], ['Mid', [2154.05, 1914.96, 203.21], -40.63, -140.206, true, [334.32, 552.06]]],
+    de_nuke: [['Outside Smoke Wall', [-1351.9, -1049.68, -351.97], -44.795, -19.711, true, [938.9, -1870.38]], ['Outside 2', [-1351.9, -1049.68, -351.97], -30.517, -22.01, true, [1134.54, -2054.82]],
+      ['Garage', [-916.44, -1142.97, -351.97], -6.631, -19.01, true, [1370.6, -1930.92]], ['Unbreakable', [-8.72, -2006.3, -351.97], -26.088, 19.759, false, [1138.6, -1553.95]]],
+    de_overpass: [['Monster', [-2116.49, 993.12, 548.03], -16.21, -49.459, true, [-485.74, -623.59]], ['T Ramp', [-2379.78, 140.79, 503.91], -6.943, -79.66, true, [-1937.69, -2269.09]],
+      ['Heaven', [-1559.97, -729.45, 112.85], -30.862, 98.461, false, [-1772.85, 609.57]], ['Bridge', [-418.03, -2395.46, 220.03], -11.695, 110.339, true, [-1278.41, -231.06]],
+      ['Bank', [-2533.79, -1457.29, 501.67], -33.211, 87.52, true, [-2420.33, 1162.59]], ['Dumpster', [-2351.94, -735.34, 503.4], -42.662, 77.567, false, [-1996.58, 887.08]]],
+  };
+  for (const [map, list] of Object.entries(GUIDES)) {
+    const dir = path.join(cache, 'play', map);
+    if (!fs.existsSync(path.join(dir, 'collision.bin'))) continue;
+    const info = JSON.parse(fs.readFileSync(path.join(dir, 'map.json'), 'utf8')), buf = fs.readFileSync(path.join(dir, 'collision.bin'));
+    const col = new CollisionWorld(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), info.collision);
+    const offs = list.map(([name, eye0, pitch, yaw, jump, dest]) => {
+      const { eye, vel } = jump && jumpThrow ? jumpThrow(eye0) : { eye: eye0, vel: jump ? [0, 0, 301.993] : [0, 0, 0] };
+      const r = simulateFlight(col, throwOrigin(col, eye, pitch, yaw, 1), throwVelocity(pitch, yaw, 1, vel), 'smoke');
+      return [name, r ? Math.round(Math.hypot(r.pos[0] - dest[0], r.pos[1] - dest[1])) : Infinity];
+    });
+    ok(offs.every(([, d]) => d <= 30), `flight: CS2's own ${map} lineups end up where its guides say: ` + offs.map(([n, d]) => `${n} ${d}`).join(', '));
+  }
 }
 
 // ---- bots: skill by rank, CS Ratings, who they are -------------------------------------------------------------------

@@ -7,6 +7,7 @@
 // Angles are in degrees with Source's signs: positive pitch looks down, positive yaw turns left.
 import { UniformRandomStream } from '../cs2/rng.js';
 import { NADES, NADE_ORDER } from './grenades.js';
+import { JUMP_THROW } from './flight.js';
 import { RARE_CHANCE } from '../cs2/firstperson.js';
 import { MOVE } from './movement.js';
 // How often CS2's special inspects (the Deagle's spin, the knives' tricks) and draws come up.
@@ -45,6 +46,11 @@ export function basis(pitch, yaw) {
 // off, in burst mode.
 export const altMode = (g) => (g.zoom > 0 || (g.detachable && !g.silenced) || g.burstMode ? 1 : 0);
 const REVOLVER_COCK = 0.2, TASER_RECHARGE = 30, SHELL_TIME = 0.5;
+// Grenades: a throw leaves the hand THROW_DELAY after you let go (CS2's m_fThrowTime), the follow-through plays on for
+// FOLLOW_THROUGH after; both buttons let go of within BOTH_GRACE of each other is still the medium throw (CS2: "50%
+// throw-strength grenades are now guaranteed if both attack buttons are held long enough then released within a short
+// time from each other"; how short isn't published: a tenth of a second here).
+const THROW_DELAY = 0.1, FOLLOW_THROUGH = 0.45, BOTH_GRACE = 0.1;
 const SLOT_KEYS = ['slot1', 'primary', 'slot2', 'secondary', 'slot5', 'c4']; // (the key, the slot it picks)
 // How long an inspect or a reload takes to blend in from the pose the viewmodel is in (Source's sequence blend).
 const BLEND = 0.2;
@@ -96,6 +102,8 @@ export class Arsenal {
     this.last = null;
     this.aim = [0, 0]; this.aimVel = [0, 0]; this.view = [0, 0];
     this.scheduled = [];
+    this.throws = []; // grenades let go of, about to leave your hand: { gun, id, slot, at, strength, jump }
+    this.jumpedAt = -Infinity; this.jumpEye = null; this.grounded = true; this.groundEye = null; // (your last jump: see tick)
   }
 
   get gun() { return this.current; }
@@ -135,20 +143,28 @@ export class Arsenal {
   select(slot, t) {
     const g = this.guns[slot];
     if (!g || g === this.current) return;
+    let gone = false;
     if (this.current) {
       const c = this.current;
       // Put away, a sniper rifle is unscoped, as in CS2: drawn again, it's at 1×, even when it was switched from between
       // shots (the AWP and the Scout scope back in after the bolt only while you hold them).
       c.zoom = 0; c.resumeZoom = 0; c.reloading = false; c.shellReload = false; c.burstLeft = 0; c.cockAt = null;
       if (c.pendingSilencer != null) { c.pendingSilencer = null; c.vm.setSilencer?.(c.silenced); } // switching away cancels it
+      // A grenade put away with the button still down (the pin out, not let go of): the throw's off, it's still yours.
+      // Let go of, it leaves your hand anyway (this.throws, as CS2 does since a switch stopped it): spent then, once.
+      // Gone from your hand and your last of its kind, it's gone from your slots.
+      if (c.nade) {
+        c.pin = null; c.throwAt = null;
+        if (!(this.game.me?.nades?.[c.id] > 0) && !this.throws.some((x) => x.gun === c)) { c.vm.rig.visible = false; delete this.guns[c.slot]; gone = true; }
+      }
     }
-    this.last = this.current;
+    this.last = !gone ? this.current : this.last === g ? null : this.last;
     this.current = g;
     this.scheduled = [];
     g.deployEnd = t + (g.stats.deploy || 1);
     g.nextAttack = Math.max(g.nextAttack, g.deployEnd);
     g.animEnd = t + g.vm.play(this.rare(g, 'drawRare') ? 'drawRare' : 'draw', { fade: 0 }); // (from below the screen, not the pose it was put away in)
-    if (g.nade) { g.pin = null; g.throwAt = null; g.released = false; this.sound(g.id === 'weapon_molotov' ? 'Molotov.Draw' : 'HEGrenade.Draw', { volume: 0.5 }); }
+    if (g.nade) { g.pin = null; g.throwAt = null; this.sound(g.id === 'weapon_molotov' ? 'Molotov.Draw' : 'HEGrenade.Draw', { volume: 0.5 }); }
     else this.sound(g.melee ? 'Weapon_Knife.Deploy' : g.prefix + 'Draw');
     this.game.emit('weapon', g);
   }
@@ -184,6 +200,13 @@ export class Arsenal {
   tick(dt, t, input) {
     const g = this.current;
     this.decayPunch(dt);
+    // Your jumps, for a jump-throw (see grenade): when you left the ground going up, and your eye just before.
+    const p = this.game.player;
+    if (p?.velocity) {
+      if (this.grounded && !p.onGround && p.velocity[2] > 100) { this.jumpedAt = t - dt; this.jumpEye = this.groundEye; }
+      this.grounded = !!p.onGround;
+      if (this.grounded) this.groundEye = p.eye();
+    }
     for (const slot in this.guns) {
       const z = this.guns[slot];
       if (z.taser && z.clip <= 0 && z.rechargeAt && t >= z.rechargeAt) { z.clip = 1; z.rechargeAt = 0; if (z === g) this.sound('Weapon_Taser.ChargeReady', { volume: 0.5 }); }
@@ -195,6 +218,8 @@ export class Arsenal {
     const wheel = input.takeWheel();
     this.pressed = pressed;
     if (!this.game.me.alive) return;
+    // A grenade let go of this tick is thrown even with a switch this same tick (it's after you let go that counts).
+    if (g.nade && g.pin && g.throwAt == null && !(input.buttons & 5) && this.game.canAttack()) this.letGo(g, t);
     for (let i = 0; i < SLOT_KEYS.length; i += 2) if (pressed.has(SLOT_KEYS[i]) && this.guns[SLOT_KEYS[i + 1]]) this.select(SLOT_KEYS[i + 1], t);
     // 3: the knife, or the Zeus when you already hold the knife (CS2 keeps both in slot 3).
     if (pressed.has('slot3')) this.select(this.current?.slot === 'knife' && this.guns.taser ? 'taser' : this.guns.knife ? 'knife' : 'taser', t);
@@ -208,6 +233,16 @@ export class Arsenal {
     if (pressed.has('slot4')) {
       const nades = this.order().filter((s) => s.startsWith('g_'));
       if (nades.length) this.select(nades[(nades.indexOf(this.current?.slot) + 1) % nades.length], t);
+    }
+    // Grenades let go of leave your hand now, whatever you've switched to since: spent as they go, once (Game.throwMyNade:
+    // none left, none thrown). Your last of its kind, not in your hand now (or drawn again since): gone from your slots.
+    if (this.throws.length) {
+      for (const x of this.throws.filter((x) => t >= x.at)) {
+        this.throws.splice(this.throws.indexOf(x), 1);
+        const left = this.game.throwMyNade(x.id, x.strength, x.jump);
+        if (!(left > 0) && this.guns[x.slot] === x.gun && (x.gun !== this.current || x.gun.throwAt == null)) this.remove(x.slot, t);
+      }
+      if (!this.current) return;
     }
     const cur = this.current;
     this.recover(cur, dt, t);
@@ -313,7 +348,9 @@ export class Arsenal {
     this.game.emit('shot', g);
   }
 
-  // Grenades: pressing pulls the pin; releasing throws (Mouse1 full throw, Mouse2 underhand, both medium).
+  // Grenades: pressing pulls the pin; letting go throws (Mouse1 full throw, Mouse2 underhand, both medium). It leaves the
+  // hand THROW_DELAY later (this.throws: see tick), the follow-through plays, then the next one of its kind comes out
+  // (Game.usedNade) or your gun.
   grenade(g, t, input) {
     const b1 = !!(input.buttons & 1), b2 = !!(input.buttons & 4);
     if (g.throwAt == null) {
@@ -321,25 +358,29 @@ export class Arsenal {
       // Pressing pulls the pin; it stays primed, held up and ready, for as long as you hold the button (the pin pulled
       // pose kept: nothing puts the idle back), and it's thrown when you let go (once the pin is out).
       if (!g.pin && (b1 || b2)) {
-        g.pin = t;
+        g.pin = t; g.both = null;
         g.animEnd = Infinity;
         g.vm.play(g.vm.has('pullpin') ? 'pullpin' : 'idle');
         this.sound(g.nade.pin, { volume: 0.6 });
       }
       if (g.pin) {
+        if (b1 && b2) g.both = t;
         if (b1 || b2) g.strength = b1 && b2 ? 0.5 : b1 ? 1 : 0;
-        else if (t >= g.pin + Math.min(0.6, g.vm.length('pullpin') || 0.3)) {
-          g.throwAt = t + 0.1;
-          g.animEnd = t + 0.1 + (g.vm.play(g.strength >= 0.5 ? 'throw' : g.vm.has('throwUnder') ? 'throwUnder' : 'throw', { fade: 0.03 }) || 0.5);
-        }
+        else this.letGo(g, t);
       }
       return;
     }
-    if (!g.released && t >= g.throwAt) {
-      g.released = true;
-      this.game.throwMyNade(g.id, g.strength ?? 1);
-    }
-    if (g.released && t >= g.throwAt + 0.45) this.game.usedNade(g.id, t);
+    if (t >= g.throwAt + FOLLOW_THROUGH && !this.throws.some((x) => x.gun === g)) this.game.usedNade(g.id, t);
+  }
+  // Let go of with the pin all the way out: thrown (THROW_DELAY on, see tick), whatever you do now.
+  letGo(g, t) {
+    if (t < g.pin + Math.min(0.6, g.vm.length('pullpin') || 0.3)) return;
+    if (g.both != null && t - g.both <= BOTH_GRACE) g.strength = 0.5; // (both let go of, one a moment before the other)
+    g.throwAt = t + THROW_DELAY;
+    // Let go of just after jumping (by CS2's JUMP_THROW: a jump and a quick throw), it's CS2's jump-throw.
+    const jump = t - this.jumpedAt <= JUMP_THROW && this.jumpEye ? { eye: this.jumpEye } : null;
+    this.throws.push({ gun: g, id: g.id, slot: g.slot, at: g.throwAt, strength: g.strength ?? 1, jump });
+    g.animEnd = t + THROW_DELAY + (g.vm.play(g.strength >= 0.5 ? 'throw' : g.vm.has('throwUnder') ? 'throwUnder' : 'throw', { fade: 0.03 }) || 0.5);
   }
 
   recover(g, dt, t) {
