@@ -8,6 +8,13 @@ export const MOVE = {
   gravity: 800, friction: 5.2, stopSpeed: 80, accelerate: 5.5, airAccelerate: 12, airMaxWishSpeed: 30,
   maxSpeed: 320, stepSize: 18, jumpImpulse: 301.993, walkScale: 0.52, duckScale: 0.34, duckTime: 0.125,
   climbSpeed: 200 * 0.78, ladderDistance: 2, ladderJump: 270, // MAX_CLIMB_SPEED x sv_ladder_scale_speed
+  // CS2's speeds past the weapon's own: runSpeed, CS_PLAYER_SPEED_RUN (with no weapon, and what no weapon goes past);
+  // climbScale, CS_PLAYER_SPEED_CLIMB_MODIFIER (walking or crouching on a ladder: the quiet climb); bhopScale, a jump keeps
+  // no more than 1.1× your speed (sv_enablebunnyhopping 0); landing: sv_staminamax, sv_staminalandcost and
+  // sv_staminarecoveryrate (CS2's landing penalty goes by how fast you land, as that stamina did); tagging: wears off at
+  // tagRecovery a second, tagDelay after the hit (sv_predictable_damage_tag_ticks 2).
+  runSpeed: 260, climbScale: 0.34, bhopScale: 1.1, staminaMax: 80, staminaLandCost: 0.05, staminaRecovery: 60,
+  tagRecovery: 0.4, tagDelay: 2 / 64,
 };
 export const HULL_STAND = { mins: [-16, -16, 0], maxs: [16, 16, 72] };
 export const HULL_DUCK = { mins: [-16, -16, 0], maxs: [16, 16, 54] };
@@ -20,6 +27,8 @@ const TUCK = DUCK_DIFF / 2, TUCK_AMOUNT = TUCK / (EYE_STAND - EYE_DUCK);
 const NON_JUMP_VELOCITY = 140;
 const DUCK_SPEED = 8, DUCK_SPEED_MIN = 1.5, DUCK_SPAM = 2, DUCK_RECOVER = 3; // CS2's duck speed (see duck)
 
+// The weapon's speed a move asks for (cmd.maxSpeed), none (or past it): runSpeed.
+const weaponSpeed = (cmd) => Math.min(MOVE.runSpeed, cmd.maxSpeed || MOVE.runSpeed);
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 // Scratch for a tick's working (you and every bot move each tick, with many traces each: arrays made for them were
@@ -38,6 +47,9 @@ export class PlayerMovement {
     this.duckAmount = 0; // 0 standing .. 1 crouched (eye height blend)
     this.jumpHeld = false;
     this.landed = 0; // fall speed of the latest landing (for sounds), consumed by the caller
+    this.stamina = 0; // the landing penalty (0..staminaMax: see landingScale)
+    this.velocityModifier = 1; // tagging: 1 full speed .. 0 stopped (see tag)
+    this.tags = []; // hits whose slowdown is still to come: [large, small, seconds]
     this.categorize();
   }
 
@@ -64,13 +76,44 @@ export class PlayerMovement {
     this.velocity = [0, 0, 0];
     this.ducked = false; this.duckAmount = 0;
     this.onLadder = false;
+    this.stamina = 0; this.velocityModifier = 1; this.tags.length = 0;
     this.categorize();
+  }
+
+  // How fast you can go this tick, as CS2 works it out: your weapon's speed (cmd.maxSpeed; none, or past it:
+  // runSpeed), on the ground slowed by being hit (tagging) and by a landing, then crouched (×0.34) or walking (×0.52).
+  topSpeed(cmd) {
+    let s = weaponSpeed(cmd);
+    if (this.onGround) s *= this.velocityModifier * this.landingScale();
+    if (this.ducked && this.onGround) s *= MOVE.duckScale;
+    else if (cmd.walk) s *= MOVE.walkScale;
+    return s;
+  }
+  // The landing penalty's share of your speed: (1 - stamina / 100)², as CS2's stamina slowdown is.
+  landingScale() { const k = 1 - this.stamina / 100; return k * k; }
+
+  // Hit (CS2's tagging), by a weapon with these flinch velocity modifiers (its data's large and small): the first hit
+  // slows you to the large one, each one after takes you down by the small one's share of what's left (never back up);
+  // it comes after tagDelay and wears off at tagRecovery a second. Only on the ground (see topSpeed).
+  tag(large = 1, small = 1) { if (large < 1 || small < 1) this.tags.push([large, small, MOVE.tagDelay]); }
+
+  // Tagging and the landing penalty wearing off, and hits coming in (each tick, before the move).
+  recover(dt) {
+    if (this.stamina > 0) this.stamina = Math.max(0, this.stamina - MOVE.staminaRecovery * dt);
+    if (this.velocityModifier < 1) this.velocityModifier = Math.min(1, this.velocityModifier + MOVE.tagRecovery * dt);
+    for (let i = 0; i < this.tags.length; i++) {
+      const t = this.tags[i];
+      if ((t[2] -= dt) > 1e-9) continue;
+      this.velocityModifier = Math.max(0, Math.min(this.velocityModifier, t[0], this.velocityModifier * t[1]));
+      this.tags.splice(i--, 1);
+    }
   }
 
   // One movement tick. cmd: { forward, side (-1..1, +side = right), yaw, pitch (degrees), jump, jumpPress, duck, walk, maxSpeed }.
   // jumpPress: a fresh press this tick even though jump was down the tick before (a mouse wheel notch, see Input).
   tick(dt, cmd) {
     this.duck(dt, cmd.duck);
+    this.recover(dt);
     if (this.ladderMove(cmd)) {
       this.jumpHeld = !!cmd.jump;
       this.tryPlayerMove(dt);
@@ -79,9 +122,7 @@ export class PlayerMovement {
       this.fallVelocity = 0;
       return;
     }
-    let maxSpeed = Math.min(MOVE.maxSpeed, cmd.maxSpeed || 250);
-    if (this.ducked && this.onGround) maxSpeed *= MOVE.duckScale;
-    else if (cmd.walk) maxSpeed *= MOVE.walkScale;
+    const maxSpeed = this.topSpeed(cmd);
 
     // Forward (cos, sin) and right (sin, -cos) by the keys.
     const yaw = (cmd.yaw * Math.PI) / 180, cy = Math.cos(yaw), sy = Math.sin(yaw), wish = _wish;
@@ -90,8 +131,11 @@ export class PlayerMovement {
     const wishSpeed = wl > 0 ? maxSpeed * Math.min(1, wl) : 0;
     if (wl > 0) { wish[0] /= wl; wish[1] /= wl; }
 
-    // Jump (needs a fresh press: CS2 has no auto bunny hop, but every mouse wheel notch is one)
+    // Jump (needs a fresh press: CS2 has no auto bunny hop, but every mouse wheel notch is one), at no more than 1.1× your
+    // weapon's speed (sv_enablebunnyhopping 0: a bunny hop keeps what it had, up to that).
     if ((cmd.jumpPress || (cmd.jump && !this.jumpHeld)) && this.onGround) {
+      const cap = MOVE.bhopScale * weaponSpeed(cmd), sp = this.speed2d();
+      if (sp > cap) { this.velocity[0] *= cap / sp; this.velocity[1] *= cap / sp; }
       this.velocity[2] = MOVE.jumpImpulse;
       this.onGround = false;
       this.jumped = true;
@@ -101,7 +145,7 @@ export class PlayerMovement {
     if (this.onGround) {
       this.velocity[2] = 0;
       this.friction(dt);
-      this.accelerate(wish, wishSpeed, MOVE.accelerate, dt);
+      this.accelerate(wish, wishSpeed, MOVE.accelerate, dt, weaponSpeed(cmd));
       // Never faster than the weapon's speed on the ground.
       const sp = this.speed2d();
       if (sp > maxSpeed && sp > 0) { this.velocity[0] *= maxSpeed / sp; this.velocity[1] *= maxSpeed / sp; }
@@ -117,9 +161,13 @@ export class PlayerMovement {
     }
     const wasOnGround = this.onGround, fall = Math.max(-this.velocity[2], this.fallVelocity || 0);
     this.categorize();
-    if (!wasOnGround && this.onGround) { this.landed = fall; this.velocity[2] = 0; }
+    if (!wasOnGround && this.onGround) { this.landed = fall; this.velocity[2] = 0; this.land(fall); }
     if (this.onGround) this.fallVelocity = 0;
   }
+
+  // Landing slows you for a moment, the more the faster you came down: sv_staminalandcost of the fall speed (a jump's
+  // landing: 15, so 72% of your speed, back in a quarter of a second), up to sv_staminamax.
+  land(fall) { this.stamina = Math.min(MOVE.staminaMax, Math.max(this.stamina, MOVE.staminaLandCost * fall)); }
 
   // Source's LadderMove: moving into a ladder surface climbs it. Forward climbs towards where you look (look down and
   // press forward to go down), back goes the other way, strafing slides sideways, jump pushes you off.
@@ -153,7 +201,9 @@ export class PlayerMovement {
       this.onGround = false;
       return true;
     }
-    const fs = cmd.forward * MOVE.climbSpeed, rs = cmd.side * MOVE.climbSpeed;
+    // Walking or crouching, you climb at climbScale of the speed (CS2's slow, quiet climb).
+    const climb = MOVE.climbSpeed * (cmd.walk || cmd.duck ? MOVE.climbScale : 1);
+    const fs = cmd.forward * climb, rs = cmd.side * climb;
     if (!fs && !rs) { this.velocity = [0, 0, 0]; return true; }
     const vel = [0, 1, 2].map((i) => fwd[i] * fs + right[i] * rs);
     const perp = cross([0, 0, 1], n), pl = Math.hypot(...perp) || 1;
@@ -175,10 +225,13 @@ export class PlayerMovement {
     v[0] *= k; v[1] *= k; v[2] *= k;
   }
 
-  accelerate(dir, wishSpeed, accel, dt) {
+  // scale: how hard you speed up, by your weapon's speed (sv_accelerate_use_weapon_speed), not by the walking or crouching
+  // speed you're after: by that, the friction under 80 units/s (sv_stopspeed) outdid it, and crouching with anything
+  // slower than a knife (or walking scoped) crept along at a few units a second.
+  accelerate(dir, wishSpeed, accel, dt, scale = wishSpeed) {
     const add = wishSpeed - dot(this.velocity, dir);
     if (add <= 0) return;
-    const a = Math.min(add, accel * dt * wishSpeed);
+    const a = Math.min(add, accel * dt * Math.max(wishSpeed, scale));
     for (let i = 0; i < 3; i++) this.velocity[i] += a * dir[i];
   }
 

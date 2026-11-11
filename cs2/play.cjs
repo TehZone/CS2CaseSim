@@ -16,8 +16,8 @@ const PLAY_VERSION = 14; // map exports (2: texture layers, sharper textures, no
 // 12: the windows' and glass's own textures, the sky's brightness; 13: props that break by their own prop data, Nuke's
 // vent slats and Cache's vents, and each breakable's health; 14: the map's Wingman version)
 const PROBE_MAX = 8; // probe irradiance is stored as 8-bit sRGB of value / PROBE_MAX
-const DATA_VERSION = 7; // weapon stats + sound events (6: maps' ambience sounds, every surface's bullet impact sound; 7: how CS2
-// plays each event, and its reverb presets)
+const DATA_VERSION = 8; // weapon stats + sound events (6: maps' ambience sounds, every surface's bullet impact sound; 7: how CS2
+// plays each event, and its reverb presets; 8: each weapon's tagging, its flinch velocity modifiers)
 // Collision flags per triangle: what it stops.
 const F_PLAYER = 1, F_BULLET = 2, F_GRENADE = 4;
 // The irradiance lightmap is stored as 8-bit sRGB of value / IRR_MAX.
@@ -715,6 +715,7 @@ function weaponStats(text) {
       bullets: w.m_nNumBullets || 1, melee: !!w.m_bMeleeWeapon, cycle: pair(w.m_flCycleTime, 0.1),
       headshot: w.m_flHeadshotMultiplier ?? 4, armorRatio: w.m_flArmorRatio ?? 1, penetration: w.m_flPenetration ?? 1,
       range: w.m_flRange ?? 8192, rangeModifier: w.m_flRangeModifier ?? 0.98, maxSpeed: pair(w.m_flMaxSpeed, 250),
+      flinch: [w.m_flFlinchVelocityModifierLarge ?? 1, w.m_flFlinchVelocityModifierSmall ?? 1], // (how much its hits slow: tagging)
       spread: pair(w.m_flSpread), inaccCrouch: pair(w.m_flInaccuracyCrouch), inaccStand: pair(w.m_flInaccuracyStand),
       inaccJump: pair(w.m_flInaccuracyJump), inaccJumpInitial: w.m_flInaccuracyJumpInitial || 0, inaccLand: pair(w.m_flInaccuracyLand),
       inaccFire: pair(w.m_flInaccuracyFire), inaccMove: pair(w.m_flInaccuracyMove),

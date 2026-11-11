@@ -1,5 +1,5 @@
 // The Play lobby's settings: your crosshair (with a live preview), the viewmodel's position, key binds, music and
-// radio volume, the fps counter and video (aspect ratio and resolution, render scale, frame rate cap). Saved with the
+// radio volume, the fps counter, the speed bar and video (aspect ratio and resolution, render scale, frame rate cap). Saved with the
 // other Play preferences; a match reads them when it starts (and from the match's menu, at once).
 import { esc } from '../util.js';
 import { S, save, emit } from '../state.js';
@@ -9,9 +9,10 @@ import { tierOf } from '../play/skill.js';
 import { ASPECTS, RESOLUTIONS } from '../play/screen.js';
 
 // keybinds: your binds (CS2 key name -> command), null for the defaults; binds: older saves' per-action keys.
-// leftHanded: CS2's cl_prefer_lefthanded (H switches hands in a match).
+// leftHanded: CS2's cl_prefer_lefthanded (H switches hands in a match). showSpeed: your speed on the HUD (units per
+// second, like CS2's cl_showpos velocity).
 export const SETTINGS_DEFAULTS = { crosshair: { ...CROSSHAIR }, viewmodel: { fov: 68, x: 1, y: 1, z: -1 }, leftHanded: false, keybinds: null, binds: {}, musicVolume: 1, voiceVolume: 1, showFps: true,
-  renderScale: 1, fpsMax: 0, netGraph: false, aspect: 'native', scaling: 'stretched', resolution: 'native' };
+  showSpeed: false, renderScale: 1, fpsMax: 0, netGraph: false, aspect: 'native', scaling: 'stretched', resolution: 'native' };
 // The frame rate caps on offer (0: the monitor's, with vsync; past it needs the unlock below).
 const FPS_CAPS = [[0, 'Monitor refresh rate'], [60, '60'], [120, '120'], [144, '144'], [240, '240'], [300, '300'], [400, '400']];
 let display = null; // the app's display settings (window.native.display): { uncapped, active }
@@ -57,6 +58,7 @@ export function settingsHtml(p, show = {}) {
         <label>Show fps (cl_showfps)<select class="input" data-s="root.showFps">${[['0', 'Off'], ['1', 'Frame rate'], ['2', 'Frame rate and frame-time graph (stutters show as red spikes)']]
           .map(([val, n]) => `<option value="${val}" ${String(p.showFps === false ? 0 : p.showFps === 2 ? 2 : 1) === val ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
         ${check('netGraph', 'Performance graph (frame time, draws: net_graph)', !!p.netGraph, 'root')}
+        ${check('showSpeed', 'Speed bar (how fast you\'re going, in units per second: cl_showpos)', !!p.showSpeed, 'root')}
         <h4>Video</h4>
         ${videoHtml(p)}
         <label>Frame rate cap (fps_max)<select class="input" data-s="root.fpsMax">${FPS_CAPS.map(([v, n]) => `<option value="${v}" ${(p.fpsMax || 0) === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
@@ -161,6 +163,6 @@ export const privateRanks = (p) => { const t = 'tier:' + tierOf(p.difficulty); r
 // What a match gets from the saved preferences.
 export function matchSettings(p) {
   return { crosshair: p.crosshair, viewmodel: p.viewmodel, leftHanded: !!p.leftHanded, keybinds: bindTable(p), musicVolume: p.musicVolume ?? 1, voiceVolume: p.voiceVolume ?? 1, showFps: p.showFps === 2 ? 2 : p.showFps !== false,
-    renderScale: Math.min(1, Math.max(0.5, p.renderScale ?? 1)), fpsMax: p.fpsMax || 0, netGraph: p.netGraph === 2 ? 2 : !!p.netGraph,
+    showSpeed: !!p.showSpeed, renderScale: Math.min(1, Math.max(0.5, p.renderScale ?? 1)), fpsMax: p.fpsMax || 0, netGraph: p.netGraph === 2 ? 2 : !!p.netGraph,
     aspect: ASPECTS[p.aspect] ? p.aspect : 'native', scaling: p.scaling === 'bars' ? 'bars' : 'stretched', resolution: p.resolution || 'native' };
 }

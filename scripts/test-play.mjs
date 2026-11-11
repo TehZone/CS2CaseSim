@@ -191,11 +191,211 @@ ok(!p.ducked, 'stands up again');
   climb({ forward: 1 }, 64, q);
   climb({ jump: true }, 1, q);
   ok(!q.onLadder && q.velocity[1] < -200, 'jumping pushes off the ladder: vy=' + q.velocity[1].toFixed(1));
+  // Walking or crouching on a ladder climbs at 0.34 of the speed (CS2's quiet climb: 156 -> 53 units/s).
+  for (const how of ['walk', 'duck']) {
+    q = new PlayerMovement(L, [0, 900, 0]);
+    climb({ forward: 1 }, 64, q);
+    climb({ forward: 1, [how]: true }, 1, q); // (crouching off the ground pulls the legs up first)
+    const z0 = q.origin[2];
+    climb({ forward: 1, [how]: true }, 16, q);
+    ok(q.onLadder && near((q.origin[2] - z0) * 4, MOVE.climbSpeed * 0.34, 3), `ladder: ${how === 'walk' ? 'walking' : 'crouching'} climbs at 0.34 of the speed: ${((q.origin[2] - z0) * 4).toFixed(1)}/s`);
+  }
+  // ...and quietly: no rung sounds, nothing for the bots to hear (Source: no step under 60 units/s on a ladder). Climbing
+  // at full speed, a rung every 0.4 s, heard.
+  const rungs = (cmd) => {
+    q = new PlayerMovement(L, [0, 900, 0]);
+    climb({ forward: 1, walk: true }, 64, q); // (onto it, slowly)
+    climb({ forward: 1, ...cmd }, 1, q);
+    const heard = [], fg = { player: q, collision: L, me: {}, stepT: 0, sounds: { play: (e) => heard.push(e) }, noise: () => heard.push('noise') };
+    for (let i = 0; i < 64 && q.onLadder; i++) { const was = q.onGround; climb({ forward: 1, ...cmd }, 1, q); Game.prototype.footsteps.call(fg, was); }
+    return heard;
+  };
+  const runUp = rungs({}), walkUp = rungs({ walk: true }), duckUp = rungs({ duck: true });
+  ok(runUp.filter((e) => /Ladder\.StepLeft/.test(e)).length >= 2 && runUp.includes('noise') && walkUp.length === 0 && duckUp.length === 0,
+    `ladder: walking or crouching up it is quiet (${walkUp.length} and ${duckUp.length} sounds or noises), climbing at full speed isn't (${runUp.length})`);
   // fall damage speed: a 300-unit drop lands at about 690 units/s (CS2 hurts above 580)
   q = new PlayerMovement(L, [0, 1200, 500]);
   let landed = 0;
   for (let i = 0; i < 200 && !landed; i++) { q.tick(1 / 64, { forward: 0, side: 0, yaw: 0, maxSpeed: 250 }); landed = q.landed; }
   ok(near(landed, Math.sqrt(2 * MOVE.gravity * 300), 25), 'landing speed after a 300-unit fall: ' + landed.toFixed(0));
+}
+
+// ---- CS2's movement speeds: every weapon's and knife's (weapons.vdata's m_flMaxSpeed: normal, and scoped or the alt
+// mode), nothing in hand, walking, crouching, tagging, landing, a bunny hop, being stopped (freeze time, planting,
+// defusing) -------------------------------------------------------------------------------------------------------------
+{
+  const { Arsenal, Gun } = await import('../src/js/play/weapons.js');
+  const req = (await import('node:module')).createRequire(import.meta.url);
+  const play = req('../cs2/play.cjs');
+  // CS2's speeds (units/s, [normal, alt]) as its weapons.vdata has them; checked against the install below when it's here.
+  // The known ones: a knife 250, most pistols 240, the AWP 200 and 100 scoped, the Negev 150.
+  const KNIVES = ['weapon_knife', 'weapon_knife_t', 'weapon_bayonet', 'weapon_knife_css', 'weapon_knife_flip', 'weapon_knife_gut', 'weapon_knife_karambit',
+    'weapon_knife_m9_bayonet', 'weapon_knife_tactical', 'weapon_knife_falchion', 'weapon_knife_survival_bowie', 'weapon_knife_butterfly', 'weapon_knife_push',
+    'weapon_knife_cord', 'weapon_knife_canis', 'weapon_knife_ursus', 'weapon_knife_gypsy_jackknife', 'weapon_knife_outdoor', 'weapon_knife_stiletto',
+    'weapon_knife_widowmaker', 'weapon_knife_twinblade', 'weapon_knife_skeleton', 'weapon_knife_kukri'];
+  const CS2_SPEED = {
+    ...Object.fromEntries(KNIVES.map((k) => [k, [250, 250]])),
+    weapon_glock: [240, 240], weapon_hkp2000: [240, 240], weapon_usp_silencer: [240, 240], weapon_p250: [240, 240], weapon_elite: [240, 240],
+    weapon_fiveseven: [240, 240], weapon_tec9: [240, 240], weapon_cz75a: [240, 240], weapon_deagle: [230, 230], weapon_revolver: [180, 220],
+    weapon_mac10: [240, 240], weapon_mp9: [240, 240], weapon_mp7: [220, 220], weapon_mp5sd: [235, 220], weapon_ump45: [230, 230], weapon_p90: [230, 230], weapon_bizon: [240, 240],
+    weapon_galilar: [215, 215], weapon_famas: [220, 220], weapon_ak47: [215, 215], weapon_m4a1: [225, 225], weapon_m4a1_silencer: [225, 225],
+    weapon_sg556: [210, 150], weapon_aug: [220, 150], weapon_ssg08: [230, 230], weapon_awp: [200, 100], weapon_scar20: [215, 120], weapon_g3sg1: [215, 120],
+    weapon_nova: [220, 220], weapon_xm1014: [215, 215], weapon_mag7: [225, 225], weapon_sawedoff: [210, 210], weapon_m249: [195, 195], weapon_negev: [150, 150],
+    weapon_hegrenade: [245, 245], weapon_flashbang: [245, 245], weapon_smokegrenade: [245, 245], weapon_molotov: [245, 245], weapon_incgrenade: [245, 245],
+    weapon_decoy: [245, 245], weapon_c4: [250, 250], weapon_taser: [230, 230], weapon_healthshot: [250, 250],
+  };
+  const ZOOMS = { weapon_awp: 2, weapon_ssg08: 2, weapon_scar20: 2, weapon_g3sg1: 2, weapon_aug: 1, weapon_sg556: 1 };
+  const SILENCERS = { weapon_m4a1_silencer: 'WEAPONSILENCER_DETACHABLE', weapon_usp_silencer: 'WEAPONSILENCER_DETACHABLE', weapon_mp5sd: 'WEAPONSILENCER_INTEGRATED' };
+  ok(CS2_SPEED.weapon_knife[0] === 250 && CS2_SPEED.weapon_glock[0] === 240 && CS2_SPEED.weapon_awp.join() === '200,100' && CS2_SPEED.weapon_negev[0] === 150, "speeds: the table has CS2's known ones");
+  // How fast you end up going: 1.5 s running (or walking, crouching) on the floor.
+  const top = (cmd, ticks = 96) => { const q = new PlayerMovement(W, [-1500, -1500, 0]); run(q, ticks, { forward: 1, yaw: 90, ...cmd }); return q.speed2d(); };
+  const base = { recoilSeed: 1, recoilAngle: [0, 0], recoilAngleVariance: [0, 0], recoilMagnitude: [0, 0], recoilMagnitudeVariance: [0, 0],
+    recoveryStart: 0, recoveryEnd: 1, recoveryStand: 0.3, recoveryStandFinal: 0.3, cycle: [0.2, 0.2], deploy: 1, clip: 5, reserve: 30 };
+  const vm = { play: () => 0.5, has: () => false, role: 'idle', rig: {} };
+  const gunOf = (id) => new Gun({ slot: 'primary', id, name: id, vm,
+    stats: { ...base, maxSpeed: CS2_SPEED[id], zoomLevels: ZOOMS[id] || 0, silencer: SILENCERS[id] || 'WEAPONSILENCER_NONE', melee: KNIVES.includes(id), burst: /glock|famas/.test(id) } });
+  const ars = new Arsenal({ player: { ducked: false }, me: { alive: true }, cv: {}, canAttack: () => true, emit() {} }, {});
+  const off = [];
+  for (const id of Object.keys(CS2_SPEED)) {
+    const g = gunOf(id);
+    ars.give('primary', g, 0);
+    const [run0, alt] = CS2_SPEED[id];
+    const held = ars.maxSpeed(), fast = top({ maxSpeed: held });
+    if (held !== run0 || !near(fast, run0, 0.5)) off.push(`${id} ${held} ${fast.toFixed(1)} (CS2 ${run0})`);
+    if (ZOOMS[id]) for (let z = 1; z <= ZOOMS[id]; z++) { g.zoom = z; const s = ars.maxSpeed(); if (s !== alt || !near(top({ maxSpeed: s }), alt, 0.5)) off.push(`${id} zoom ${z}: ${s} (CS2 ${alt})`); }
+    g.zoom = 0;
+    if (g.detachable) { g.silenced = false; if (ars.maxSpeed() !== alt) off.push(`${id} silencer off`); g.silenced = true; }
+    if (g.stats.burst) { g.burstMode = true; if (ars.maxSpeed() !== alt) off.push(`${id} burst`); g.burstMode = false; }
+    if (id === 'weapon_mp5sd' && ars.maxSpeed() !== 235) off.push('mp5sd: its alt is never in use');
+  }
+  ok(!off.length, `speeds: every weapon and knife runs at CS2's speed, and its scoped one scoped (AWP 200 / 100, SG 553 and AUG 150, SCAR-20 and G3SG1 120, the Scout 230 both)${off.length ? ': ' + off.join('; ') : ''}`);
+  ars.remove('primary', 0);
+  ok(ars.current === null && ars.maxSpeed() === 260 && near(top({ maxSpeed: ars.maxSpeed() }), 260, 0.5) && near(top({ maxSpeed: undefined }), 260, 0.5) && near(top({ maxSpeed: 300 }), 260, 0.5),
+    'speeds: nothing in hand you run at 260 (CS_PLAYER_SPEED_RUN), and nothing runs faster');
+  const knife = top({ maxSpeed: 250 }), walk = top({ maxSpeed: 250, walk: true }), crouch = top({ maxSpeed: 250, duck: true }), scopedCrouch = top({ maxSpeed: 100, duck: true });
+  ok(near(knife, 250, 0.5) && near(walk, 130, 0.5) && near(crouch, 85, 0.5) && near(scopedCrouch, 34, 0.5),
+    `speeds: a knife runs at 250, walks at 130 (×0.52), crouches at 85 (×0.34); a scoped AWP crouches at 34: ${[knife, walk, crouch, scopedCrouch].map((v) => v.toFixed(1))}`);
+  // The R8: fanned (Mouse2) it's in its second mode, 220, until it's fired cocked again (180).
+  {
+    const game = { player: { ducked: false, onGround: true, speed2d: () => 0, eye: () => [0, 0, 64] }, me: { alive: true }, cv: {}, input: { pitch: 0, yaw: 0 }, canAttack: () => true, emit() {}, fireBullet() {}, noise() {} };
+    const st = { ...base, maxSpeed: [180, 220], revolver: true, clip: 8, inaccStand: [0.01, 0.1], inaccCrouch: [0.01, 0.1], inaccMove: [0.1, 0.1], inaccJump: [0.1, 0.1], inaccFire: [0.01, 0.01], spread: [0.001, 0.001], cycle: [0.5, 0.4], tracerFrequency: 0 };
+    const r8 = new Gun({ slot: 'secondary', id: 'weapon_revolver', name: 'R8 Revolver', stats: st, vm }), a = new Arsenal(game, {});
+    a.give('secondary', r8, 0);
+    const drawn = a.maxSpeed();
+    a.revolver(r8, 2, false, true);
+    const fanned = a.maxSpeed();
+    a.revolver(r8, 3, true, false); a.revolver(r8, 3.3, true, false);
+    ok(drawn === 180 && fanned === 220 && a.maxSpeed() === 180 && r8.clip === 6, `speeds: the R8 runs at 180, 220 after fanning it, 180 again once fired cocked: ${drawn}, ${fanned}, ${a.maxSpeed()}`);
+  }
+  // Frozen (freeze time, planting, defusing): stopped at once (CS_PLAYER_SPEED_STOPPED), not sliding to a stop.
+  {
+    const G = Object.assign(Object.create(Game.prototype), { arsenal: { maxSpeed: () => 250 } });
+    const q = new PlayerMovement(W, [-1500, -1500, 0]);
+    run(q, 64, { forward: 1, yaw: 90 });
+    run(q, 2, { maxSpeed: G.moveSpeed?.(true) });
+    ok(G.moveSpeed?.(false) === 250 && G.moveSpeed(true) === 1 && q.speed2d() < 0.01, `speeds: frozen (freeze time, planting, defusing) you stop there and then: ${q.speed2d().toFixed(2)} after 2 ticks`);
+  }
+  // Landing slows you for a moment (CS2's landing penalty, by how fast you came down): a jump's lands you at about 72%.
+  {
+    const q = new PlayerMovement(W, [-1500, -1500, 0]);
+    run(q, 64, { forward: 1, yaw: 90 });
+    q.tick(1 / 64, { forward: 1, side: 0, yaw: 90, jump: true, jumpPress: true, maxSpeed: 250 });
+    let n = 0;
+    while (!q.onGround && n++ < 200) q.tick(1 / 64, { forward: 1, side: 0, yaw: 90, maxSpeed: 250 });
+    const air = q.speed2d();
+    let low = 1e9;
+    for (let i = 0; i < 8; i++) { q.tick(1 / 64, { forward: 1, side: 0, yaw: 90, maxSpeed: 250 }); low = Math.min(low, q.speed2d()); }
+    run(q, 24, { forward: 1, yaw: 90 });
+    ok(near(air, 250, 0.5) && low > 175 && low < 195 && near(q.speed2d(), 250, 0.5), `speeds: a jump's landing slows you to ${low.toFixed(1)} for a moment (in the air ${air.toFixed(1)}, ${q.speed2d().toFixed(1)} half a second on)`);
+    const r = new PlayerMovement(W, [-1500, -1500, 300]);
+    while (!r.onGround) r.tick(1 / 64, { forward: 0, side: 0, yaw: 90, maxSpeed: 250 });
+    run(r, 1, { forward: 1, yaw: 90 });
+    ok(r.stamina > 30 && r.topSpeed({ maxSpeed: 250 }) < 120, `speeds: a 300-unit drop slows you more (top speed ${r.topSpeed({ maxSpeed: 250 }).toFixed(0)} just after)`);
+  }
+  // A bunny hop keeps no more than 1.1× your speed (sv_enablebunnyhopping 0).
+  {
+    const q = new PlayerMovement(W, [-1500, -1500, 0]);
+    q.velocity = [0, 400, 0];
+    q.tick(1 / 64, { forward: 0, side: 0, yaw: 90, jump: true, jumpPress: true, maxSpeed: 250 });
+    ok(!q.onGround && near(q.speed2d(), 275, 0.5), 'speeds: a jump at 400 units/s leaves at 275 (1.1× the knife\'s 250): ' + q.speed2d().toFixed(1));
+  }
+  // Tagging: a hit slows you to the weapon's flinch modifier two ticks later, wearing off at 0.4 a second; more hits slow
+  // you more; in the air it waits for the ground; the world (a fall) doesn't tag. Through Game.damage, you and bots.
+  {
+    const me = { alive: true, health: 1000, armor: 0, helmet: false, protectUntil: 0 }, bot = { alive: true, health: 1000, armor: 0, helmet: false, protectUntil: 0, team: 'T' };
+    const pm = new PlayerMovement(W, [-1500, -1500, 0]), bm = new PlayerMovement(W, [1000, -1500, 0]);
+    const G = Object.assign(Object.create(Game.prototype), { me, now: 0, god: false, hostile: () => true, match: { onDamage() {} }, hud: { hurt() {} }, sounds: { play() {} },
+      player: pm, input: { yaw: 0 }, radio: { chatter() {} }, kill() {}, stats: { weapon_hegrenade: { flinch: [0.3, 0.1] } },
+      botOf: (c) => (c === bot ? { brain: { hurt() {}, body: bm }, flinch() {} } : null) });
+    const ak = { id: 'weapon_ak47', stats: { flinch: [0.4, 0.55] } };
+    run(pm, 64, { forward: 1, yaw: 90 });
+    G.damage(me, 27, { weapon: ak });
+    run(pm, 1, { forward: 1, yaw: 90 });
+    const tick1 = pm.speed2d();
+    run(pm, 1, { forward: 1, yaw: 90 });
+    const tick2 = pm.speed2d();
+    run(pm, 30, { forward: 1, yaw: 90 });
+    const half = pm.speed2d();
+    run(pm, 128, { forward: 1, yaw: 90 });
+    ok(near(tick1, 250, 0.5) && near(tick2, 100, 0.5) && near(half, 250 * (0.4 + 0.4 * 30 / 64), 1) && near(pm.speed2d(), 250, 0.5),
+      `tagging: an AK hit slows you to 40% two ticks later, back to full speed at 0.4 a second (${[tick1, tick2, half, pm.speed2d()].map((v) => v.toFixed(1))})`);
+    G.damage(me, 27, { weapon: ak }); run(pm, 2, { forward: 1, yaw: 90 }); G.damage(me, 27, { weapon: ak }); run(pm, 2, { forward: 1, yaw: 90 });
+    ok(near(pm.velocityModifier, (0.4 + (2 * 0.4) / 64) * 0.55, 1e-6), 'tagging: a second hit takes off its small modifier\'s share of what\'s left: ' + pm.velocityModifier.toFixed(3));
+    run(pm, 192, { forward: 1, yaw: 90 });
+    G.damage(me, 10, { weapon: { name: 'World' }, group: 'leg', explosion: true });
+    run(pm, 4, { forward: 1, yaw: 90 });
+    ok(near(pm.speed2d(), 250, 0.5) && pm.velocityModifier === 1, 'tagging: fall damage (the world) doesn\'t tag you: ' + pm.speed2d().toFixed(1));
+    pm.tick(1 / 64, { forward: 1, side: 0, yaw: 90, jump: true, jumpPress: true, maxSpeed: 250 });
+    G.damage(me, 10, { weapon: { id: 'weapon_hegrenade', name: 'HE Grenade' }, explosion: true });
+    run(pm, 4, { forward: 1, yaw: 90 });
+    ok(!pm.onGround && near(pm.speed2d(), 250, 0.5) && near(pm.velocityModifier, 0.1 + (2 * 0.4) / 64, 1e-9), `tagging: an HE (by its id) tags you hard, but in the air not until you land (${pm.speed2d().toFixed(1)} in the air)`);
+    run(bm, 64, { forward: 1, yaw: 90 });
+    G.damage(bot, 20, { weapon: ak });
+    run(bm, 2, { forward: 1, yaw: 90 });
+    ok(near(bm.speed2d(), 100, 0.5), 'tagging: bots are tagged too: ' + bm.speed2d().toFixed(1));
+    ok(G.flinchOf(null).join() === '1,1' && G.flinchOf({ id: 'planted_c4' }).join() === '1,1' && G.flinchOf({ id: 'weapon_hegrenade' }).join() === '0.3,0.1', 'tagging: a weapon\'s modifiers by its stats or id, none for the world or the bomb');
+  }
+  // Reading weapons.vdata: a prefab's speed is its weapons' when they have none of their own, the Zeus's is a single value,
+  // and each weapon's tagging (flinch velocity modifiers).
+  {
+    const vd = `<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->
+{
+  weapon_base = { _class = "weapon_cs_base" m_flMaxSpeed = [ 1.0, 1.0 ] m_flFlinchVelocityModifierLarge = 1.0 m_flFlinchVelocityModifierSmall = 1.0 }
+  melee = { _base = "weapon_base" _class = "weapon_knife" m_flMaxSpeed = [ 250.0, 250.0 ] m_flFlinchVelocityModifierLarge = 0.3 m_flFlinchVelocityModifierSmall = 0.3 }
+  weapon_knife_karambit = { _base = "melee" _class = "weapon_knife_karambit" }
+  weapon_taser = { _base = "weapon_base" _class = "weapon_taser" m_flMaxSpeed = 230.0 }
+  weapon_awp = { _base = "weapon_base" _class = "weapon_awp" m_flMaxSpeed = [ 200.0, 100.0 ] m_flFlinchVelocityModifierLarge = 0.35 m_flFlinchVelocityModifierSmall = 0.4 }
+}`;
+    const s = play.weaponStats(vd);
+    ok(s.weapon_knife_karambit.maxSpeed.join() === '250,250' && s.weapon_taser.maxSpeed.join() === '230,230' && s.weapon_awp.maxSpeed.join() === '200,100'
+      && s.weapon_awp.flinch?.join() === '0.35,0.4' && s.weapon_knife_karambit.flinch?.join() === '0.3,0.3' && s.weapon_taser.flinch?.join() === '1,1',
+      'weapon data: speeds through the prefabs (a knife without its own gets its prefab\'s), the Zeus\'s single value, and each weapon\'s tagging');
+  }
+  // The install's own weapons.vdata (when CS2 and the extractor are here): every weapon and knife read at CS2's speeds.
+  {
+    const fs = (await import('node:fs')).default, os = (await import('node:os')).default, path = (await import('node:path')).default;
+    const { execFileSync } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const { findGameDir } = req('../cs2/pipeline.cjs');
+    const cli = fileURLToPath(new URL('../tools/s2v/Source2Viewer-CLI.exe', import.meta.url));
+    const gameDir = process.platform === 'win32' && fs.existsSync(cli) ? findGameDir() : null;
+    if (!gameDir) console.log('(speeds: no CS2 install or Source2Viewer-CLI here, so the check against the install is skipped)');
+    else {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cs2sim-vdata-'));
+      try {
+        execFileSync(cli, ['-i', path.join(gameDir, 'pak01_dir.vpk'), '-f', 'scripts/weapons.vdata_c', '-d', '-o', tmp], { stdio: 'ignore', timeout: 120000, windowsHide: true });
+        const stats = play.weaponStats(fs.readFileSync(path.join(tmp, 'scripts', 'weapons.vdata'), 'utf8'));
+        const ids = Object.keys(stats).filter((id) => id !== 'weapon_cs_base'); // (the prefabs' own name)
+        const wrong = ids.filter((id) => stats[id].maxSpeed.join() !== CS2_SPEED[id]?.join()).map((id) => `${id} ${stats[id].maxSpeed} (table ${CS2_SPEED[id]})`);
+        const missing = Object.keys(CS2_SPEED).filter((id) => !stats[id]);
+        const knives = ids.filter((id) => stats[id].type === 'WEAPONTYPE_KNIFE');
+        ok(!wrong.length && !missing.length && knives.length >= 20 && knives.every((id) => stats[id].maxSpeed.join() === '250,250'),
+          `speeds: the install's weapons.vdata reads as CS2's table, ${ids.length} weapons and ${knives.length} knives${wrong.length || missing.length ? ': ' + [...wrong, ...missing.map((m) => m + ' missing')].join('; ') : ''}`);
+        ok(ids.every((id) => stats[id].flinch?.length === 2 && stats[id].flinch.every((v) => v >= 0 && v <= 1)) && stats.weapon_ak47.flinch.join() === '0.4,0.55',
+          "tagging: every weapon in the install has its flinch modifiers (the AK's 0.4 and 0.55)");
+      } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+    }
+  }
 }
 
 // ---- match rules (economy, rounds, bomb) with a stand-in game ----
@@ -856,6 +1056,40 @@ function fakeGame() {
   const paid = (cheated) => Game.prototype.payReward.call({ me: { assists: 1 }, match: { score: { A: 0 }, round: 1 }, started: Promise.resolve(null), mode: 'deathmatch', respawnMode: true, enemyKills: 5, cheated }, true, false);
   const [cheatedPay, fairPay] = [await paid(true), await paid(false)];
   ok(cheatedPay.cheats === true && cheatedPay.earned === 0 && fairPay.earned > 0, 'console: a finished match tells the economy about its cheats, and a clean one still pays: ' + [cheatedPay.earned, fairPay.earned]);
+}
+
+// ---- the speed bar (Play's settings, off by default; CS2's cl_showpos velocity): what your movement says, whole units
+// a second, the page touched only when that number changes ---------------------------------------------------------------
+{
+  const { Game } = await import('../src/js/play/game.js');
+  const { Hud } = await import('../src/js/play/hud.js');
+  const { SETTINGS_DEFAULTS, PREFS_DEFAULTS, matchSettings, settingsHtml } = await import('../src/js/pages/play-settings.js');
+  const box = (on) => /data-s="root\.showSpeed" ?(checked)?>/.exec(settingsHtml({ ...PREFS_DEFAULTS, showSpeed: on }));
+  ok(SETTINGS_DEFAULTS.showSpeed === false && matchSettings(PREFS_DEFAULTS).showSpeed === false && matchSettings({ ...PREFS_DEFAULTS, showSpeed: true }).showSpeed === true
+    && box(false) && !box(false)[1] && box(true)?.[1] === 'checked', "speed bar: a checkbox in Play's settings, off by default, saved with them and handed to a match");
+  // A HUD with the page left out: each element counts what's written to it.
+  const els = {};
+  const el = (sel) => (els[sel] ||= { writes: 0, text: '', style: {}, hidden: true, classList: { toggle(c, on) { els[sel].hidden = on; } },
+    get textContent() { return this.text; }, set textContent(t) { this.text = t; this.writes++; } });
+  const hud = Object.assign(Object.create(Hud.prototype), { cache: {}, q: el });
+  const p = new PlayerMovement(W, [-1500, -1500, 0]);
+  const G = Object.assign(Object.create(Game.prototype), { settings: { showSpeed: true }, me: { alive: true }, player: p, spectating: null });
+  const frame = () => hud.speed?.(Game.prototype.speedReadout?.call(G), 250);
+  run(p, 5, { forward: 1, yaw: 90 });
+  frame();
+  const shown = el('[data-speed-n]').text, moving = String(Math.round(p.speed2d()));
+  run(p, 128, { forward: 1, yaw: 90 });
+  frame();
+  const writes = el('[data-speed-n]').writes;
+  for (let i = 0; i < 10; i++) { run(p, 1, { forward: 1, yaw: 90 }); frame(); } // (running on at 250: the same number)
+  ok(shown === moving && !el('[data-speed]').hidden && el('[data-speed-n]').text === '250' && el('[data-speed-n]').writes === writes && writes === 2
+    && el('[data-speed-bar]').style.transform === 'scaleX(1.000)', `speed bar: shows your movement's speed (${shown} accelerating, then 250), written only when the number changes (${el('[data-speed-n]').writes} writes)`);
+  G.me.alive = false; G.spectating = { vel: [30, 40, 0] };
+  frame();
+  const watched = el('[data-speed-n]').text;
+  G.settings.showSpeed = false;
+  frame();
+  ok(watched === '50' && el('[data-speed]').hidden, `speed bar: dead, the speed of the player you watch (${watched}); turned off, hidden`);
 }
 
 // ---- H switches hands (CS2's switchhands, cl_prefer_lefthanded): bound for older saved binds too, saved -------------------

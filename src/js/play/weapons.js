@@ -8,6 +8,7 @@
 import { UniformRandomStream } from '../cs2/rng.js';
 import { NADES, NADE_ORDER } from './grenades.js';
 import { RARE_CHANCE } from '../cs2/firstperson.js';
+import { MOVE } from './movement.js';
 // How often CS2's special inspects (the Deagle's spin, the knives' tricks) and draws come up.
 
 // Source / CS2 convars.
@@ -154,11 +155,14 @@ export class Arsenal {
 
   sound(event, opts) { this.game.sounds?.play(event, { volume: 0.9, ...opts }); }
 
-  // Max speed while holding the current weapon (scoped rifles are slower).
+  // Max speed while holding the current weapon: its data's speed for the mode it's in, as CS2 picks it (the second one
+  // scoped, with the silencer off, in burst mode, and the R8's after fanning it, until it's fired cocked again); with
+  // nothing in hand, CS_PLAYER_SPEED_RUN.
   maxSpeed() {
     const g = this.current;
-    if (!g) return 250;
-    return g.stats.maxSpeed[g.scoped ? 1 : 0] || 250;
+    if (!g) return MOVE.runSpeed;
+    const s = g.stats?.maxSpeed;
+    return s?.[altMode(g) || (g.fanned ? 1 : 0)] || s?.[0] || 250;
   }
 
   // Camera angles: your aim plus view punch and part of the aim punch (CS2's view recoil tracking).
@@ -284,14 +288,14 @@ export class Arsenal {
   revolver(g, t, held, alt) {
     if (g.reloading) { g.cockAt = null; return; }
     if (g.clip <= 0) { if ((held || alt) && t >= g.nextAttack) { g.cockAt = null; this.dryFire(g, t); } return; }
-    if (alt) { g.cockAt = null; if (t >= g.nextAttack) this.shoot(g, t, { mode: 1 }); return; }
+    if (alt) { g.cockAt = null; if (t >= g.nextAttack) { g.fanned = true; this.shoot(g, t, { mode: 1 }); } return; }
     if (!held) { if (g.cockAt != null) { g.cockAt = null; if (g.vm.has('idle')) g.vm.play('idle', { loop: true, fade: 0.1 }); } return; }
     if (t < g.nextAttack) return;
     if (g.cockAt == null) {
       g.cockAt = t + REVOLVER_COCK;
       if (g.vm.has('prepare')) g.animEnd = t + g.vm.play('prepare', { fade: 0.03 });
       this.sound('Weapon_Revolver.Prepare', { volume: 0.7 });
-    } else if (t >= g.cockAt) { g.cockAt = null; this.shoot(g, t, { mode: 0 }); }
+    } else if (t >= g.cockAt) { g.cockAt = null; g.fanned = false; this.shoot(g, t, { mode: 0 }); }
   }
 
   // Zeus x27: one shock at close range that kills; it recharges in 30 seconds.

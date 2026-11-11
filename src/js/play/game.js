@@ -54,6 +54,9 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
 export const TICK = 1 / 64;
 const TECH_TIMEOUT = 120; // seconds a technical timeout (you left the match) holds the freeze time for you to come back
+const STOPPED_SPEED = 1; // CS_PLAYER_SPEED_STOPPED: your top speed while you can't move (see tick)
+const NO_TAG = [1, 1]; // a hit with no weapon data's flinch modifiers (a fall, the world) doesn't slow you (see damage)
+const LADDER_QUIET = 60; // units/s on a ladder under which you climb without a sound (Source's velwalk there: see footsteps)
 // A CS2 field of view (horizontal degrees at 4:3) as three.js's vertical FOV; wider screens see more, like CS2.
 const vfov = (fov43) => (2 * Math.atan(Math.tan((fov43 * Math.PI) / 360) * 0.75) * 180) / Math.PI;
 const FOV = 90;
@@ -1480,12 +1483,12 @@ export class Game {
     const cmd = (this.cmd ||= {}); // (one, filled in each tick)
     if (frozen) {
       cmd.forward = 0; cmd.side = 0; cmd.yaw = inp.yaw; cmd.pitch = inp.pitch; cmd.jump = false; cmd.jumpPress = false; cmd.duck = inp.held('duck') && me.alive; cmd.walk = false;
-      cmd.maxSpeed = this.arsenal.maxSpeed();
+      cmd.maxSpeed = this.moveSpeed(true);
     } else {
       cmd.forward = (inp.held('forward') ? 1 : 0) - (inp.held('back') ? 1 : 0);
       cmd.side = (inp.held('right') ? 1 : 0) - (inp.held('left') ? 1 : 0);
       cmd.yaw = inp.yaw; cmd.pitch = inp.pitch; cmd.jump = inp.held('jump'); cmd.jumpPress = inp.notched('jump'); cmd.duck = inp.held('duck'); cmd.walk = inp.held('walk');
-      cmd.maxSpeed = this.arsenal.maxSpeed();
+      cmd.maxSpeed = this.moveSpeed(false);
     }
     if (me.alive) {
       const wasGround = this.player.onGround;
@@ -1757,8 +1760,10 @@ export class Game {
   footsteps(wasGround) {
     const pl = this.player;
     if (pl.onLadder) {
-      // Climbing: a rung every 0.4 seconds while moving.
-      if (Math.hypot(...pl.velocity) < 30) return;
+      // Climbing: a rung every 0.4 seconds while moving, none climbing slowly (walking or crouching: 53 units/s, CS2's
+      // quiet climb), as Source has it (no step under 60 units/s on a ladder: its GetStepSoundVelocities); nothing for
+      // the bots to hear then either.
+      if (Math.hypot(...pl.velocity) < LADDER_QUIET) { this.stepT = 0; return; }
       this.stepT = (this.stepT || 0) + TICK;
       if (this.stepT < 0.4) return;
       this.stepT = 0;
@@ -2059,6 +2064,14 @@ export class Game {
     return best;
   }
 
+  // Your top speed this tick (movement.js adds walking, crouching, tagging and landing): your weapon's, or none at all
+  // while you can't move (freeze time, planting, defusing: CS2 stops you there and then, no sliding to a stop).
+  moveSpeed(frozen) { return frozen ? STOPPED_SPEED : this.arsenal.maxSpeed(); }
+
+  // How a hit from this weapon slows whoever it hits (CS2's tagging, see PlayerMovement.tag): its data's flinch velocity
+  // modifiers [large, small]; a grenade's or fire's by its id; the world's, none.
+  flinchOf(weapon) { return (weapon?.stats || (weapon?.id && this.stats?.[weapon.id]))?.flinch || NO_TAG; }
+
   // CS2 damage: hit group multiplier, then armor (kevlar for the body, the helmet for the head).
   // how: what the kill feed shows about a bullet that kills ({ wallbang, smoke, noscope }).
   damage(c, dmg, { attacker = null, group = 'chest', armorRatio = 1, headshotMult = 4, point = null, dir = null, weapon = null, explosion = false, how = {} } = {}) {
@@ -2094,10 +2107,11 @@ export class Game {
         ang = -(((a - this.input.yaw + 540) % 360) - 180);
       }
       this.hud.hurt(ang, dmg);
-      this.player.velocity[0] *= 0.45; this.player.velocity[1] *= 0.45;
+      if (dmg > 0) this.player.tag(...this.flinchOf(weapon));
       if (c.health > 0) this.sounds.play(head ? (armored ? 'Player.DamageHeadShotArmor.Victim' : 'Player.DamageHeadShot.Victim') : armored ? 'Player.DamageBodyArmor.Victim' : 'Player.DamageBody.Victim', { volume: 0.7 });
     } else {
       this.botOf(c)?.brain.hurt(attacker, this.now);
+      if (dmg > 0) this.botOf(c)?.brain.body?.tag(...this.flinchOf(weapon)); // (bots are tagged too)
       if (c.health > 0) { this.botOf(c)?.flinch(group); if (attacker && attacker.team !== c.team && Math.random() < 0.3) this.radio.chatter(c, 'hurt'); }
       if (attacker === this.me && c.health > 0) this.sounds.play(head ? (armored ? 'Player.DamageHeadShotArmor.AttackerFeedback' : 'Player.DamageHeadShot.AttackerFeedback') : armored ? 'Player.DamageBodyArmor.AttackerFeedback' : 'Player.DamageBody.AttackerFeedback', { volume: 0.7 });
     }
@@ -2463,6 +2477,8 @@ export class Game {
     hud.top(top);
     const s = this.spectating && !me.alive ? this.spectating.c : me;
     hud.vitals(s.health, s.armor, s.helmet);
+    const speed = this.speedReadout();
+    hud.speed(speed, speed == null ? 0 : me.alive ? this.arsenal.maxSpeed() : this.spectating?.weapons?.[this.spectating.slot]?.stats?.maxSpeed?.[0] || 250);
     const mo = (this.moneyOpts ||= {});
     mo.buyzone = me.alive && m.buyOpen && this.inBuyZone() && !this.armsRace; mo.c4 = me.hasC4; mo.kit = me.defuser;
     hud.money(this.respawnMode ? null : me.money, mo);
@@ -2504,6 +2520,15 @@ export class Game {
       if (this.buyMenu.isOpen) { if (!m.buyOpen || !this.inBuyZone()) this.closeBuyMenu(); else this.buyMenu.render(); }
       if (!this.matchOver) { const tab = this.input.held('scores'); hud.scoreboard(tab, tab ? this.scoreData() : null); }
     }
+  }
+
+  // The speed readout (Play's settings, like CS2's cl_showpos velocity): how fast you're going across the ground, as
+  // your movement has it, or the player you're watching; null when it's off (or there's no one to show).
+  speedReadout() {
+    if (!this.settings.showSpeed) return null;
+    if (this.me.alive) return this.player.speed2d();
+    const v = this.spectating?.vel;
+    return v ? Math.hypot(v[0], v[1]) : null;
   }
 
   scoreData() {

@@ -1,7 +1,7 @@
 // Play mode HUD (DOM over the canvas), laid out like CS2's: round timer and team scores at the top, the callout and money
 // under the radar, health and armor bottom left, ammo bottom right, kill feed top right, crosshair, round messages, plant/defuse
-// progress, damage direction, the scoreboard (Tab), the sniper scope, the radio menu and chat, and the end-of-match
-// screen.
+// progress, damage direction, the scoreboard (Tab), the sniper scope, the radio menu and chat, the end-of-match
+// screen, and your speed (an option in Play's settings).
 import { esc } from '../util.js';
 import { emblemHtml, ratingHtml } from '../rank.js';
 
@@ -27,6 +27,7 @@ export class Hud {
       <div class="money"><span class="buyzone hidden" data-buyzone title="Buy zone (B)">${ICONS.cart}</span><span data-money>$0</span><span class="c4 hidden" data-c4>C4</span><span class="kit hidden" data-kit>KIT</span></div>
       <div class="modeline" data-mode></div>
       <div class="fps"></div>
+      <div class="speedo hidden" data-speed><b data-speed-n>0</b><small>u/s</small><i><em data-speed-bar></em></i></div>
       <div class="ftgraph hidden"><canvas width="240" height="60"></canvas><span data-ft></span></div>
       <div class="netgraph"></div>
       <div class="feed"></div>
@@ -132,6 +133,18 @@ export class Hud {
   mode(text) { this.set('[data-mode]', text || ''); }
   place(name) { this.set('.place', name ? name.replace(/([a-z])([A-Z])/g, '$1 $2') : ''); }
   fps(v) { this.set('.fps', v == null ? '' : `${Math.round(v)} fps`); }
+  // Your speed (Play's settings; CS2's velocity readout, cl_showpos): units per second across the ground, whole, over a
+  // bar of how much of your weapon's top speed (top) that is, marked where moving starts to cost accuracy. null hides it.
+  // (Every frame: the page touched only when the number shown changes; the bar is a transform, no layout.)
+  speed(v, top = 0) {
+    this.toggle('[data-speed]', v != null);
+    if (v == null) return;
+    const n = Math.round(v), c = this.cache;
+    if (c.speedN === n && c.speedTop === top) return;
+    c.speedN = n; c.speedTop = top;
+    this.set('[data-speed-n]', String(n));
+    this.q('[data-speed-bar]').style.transform = `scaleX(${top > 0 ? Math.min(1, n / top).toFixed(3) : 0})`;
+  }
   netGraph(text) {
     this.set('.netgraph', text || '');
     const lines = text ? text.split('\n').length : 1; // (the frame graph sits above however many lines it has: net_graph 2)

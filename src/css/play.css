@@ -62,6 +62,14 @@ body.match-menu #menu-bg { visibility: hidden; }
 .play-hud .xhair { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
 .play-hud .xhair i { position: absolute; background: #4cff4c; box-shadow: 0 0 0 1px rgba(0, 0, 0, .55); }
 .play-hud .fps { position: absolute; right: 10px; top: 6px; font-size: 11px; opacity: .55; font-variant-numeric: tabular-nums; }
+/* Your speed (Play's settings): a fixed box, so a new number lays out nothing else; the bar only scales (34%: where moving
+   starts to cost accuracy). */
+.play-hud .speedo { position: absolute; left: 50%; bottom: 18px; width: 120px; height: 38px; margin-left: -60px; contain: strict; text-align: center; font-family: var(--font-cond); font-variant-numeric: tabular-nums; }
+.play-hud .speedo b { font-size: 24px; font-weight: 700; line-height: 28px; }
+.play-hud .speedo small { margin-left: 4px; font-size: 12px; font-weight: 600; opacity: .7; }
+.play-hud .speedo i { position: absolute; left: 10px; right: 10px; bottom: 2px; height: 4px; background: rgba(255, 255, 255, .18); }
+.play-hud .speedo i::after { content: ''; position: absolute; left: 34%; top: -2px; bottom: -2px; width: 1px; background: rgba(255, 255, 255, .7); }
+.play-hud .speedo em { position: absolute; inset: 0; transform-origin: left; transform: scaleX(0); background: #fff; will-change: transform; }
 .play-hud .ftgraph { position: absolute; right: 10px; bottom: calc(102px + var(--net-lines, 1) * 14.3px); width: 240px; font: 11px/1.3 monospace; opacity: .85; text-align: right; font-variant-numeric: tabular-nums; }
 .play-hud .ftgraph canvas { display: block; width: 240px; height: 60px; background: rgba(0, 0, 0, .35); }
 .play-hud .netgraph { position: absolute; right: 10px; bottom: 96px; font: 11px/1.3 monospace; opacity: .8; font-variant-numeric: tabular-nums; white-space: pre; text-align: right; }
