@@ -1326,7 +1326,7 @@ const ADOPT = {
     size: clampTo(RANGES.crosshair.size), gap: clampTo(RANGES.crosshair.gap), thickness: clampTo(RANGES.crosshair.thickness),
   },
   viewmodel: Object.fromEntries(Object.entries(RANGES.viewmodel).map(([k, r]) => [k, clampTo(r)])),
-  musicVolume: clampTo(RANGES.musicVolume), voiceVolume: clampTo(RANGES.voiceVolume), showFps: oneOf(false, true, 2), netGraph: oneOf(false, true, 2),
+  musicVolume: clampTo(RANGES.musicVolume), voiceVolume: clampTo(RANGES.voiceVolume), showFps: oneOf(false, true, 2), netGraph: oneOf(false, true, 2), showSpeed: isBool,
   renderScale: clampTo(RANGES.renderScale), fpsMax: oneOf(...FPS_CAPS), aspect: oneOf('native', ...Object.keys(ASPECTS)), scaling: oneOf('stretched', 'bars'),
   resolution: (v) => (v === 'native' || RES.has(v) ? v : undefined),
 };

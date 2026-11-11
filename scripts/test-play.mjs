@@ -947,6 +947,11 @@ function fakeGame() {
     Game.prototype.respawnMe.call(g, { origin: [500, 0, 0], yaw: 0 }, false);
   }, 120);
   ok(restart.thrown === 0 && restart.left === 1 && restart.slot, `grenades: a new round just after you let go calls the throw off (${restart.thrown} thrown, ${restart.left} left)`);
+  // (The window's edge: the jump is the tick it left the ground, so 6 ticks on, 94 ms, is still inside JUMP_THROW's
+  // 0.105 s and 7, 109 ms, isn't. It was counted from a tick before the jump, which cut the window to 5.)
+  const jt6 = jumpAt(6), jt7 = jumpAt(7);
+  ok(jt6 && jt7 && Math.abs(jt6.vel[2] - jumpAt(0).vel[2]) < 1e-6 && Math.abs(jt7.vel[2] - jumpAt(0).vel[2]) > 1,
+    `grenades: let go of 6 ticks (94 ms) into the jump is still CS2's jump-throw, 7 ticks (109 ms) isn't (going up at ${jt6 && jt6.vel[2].toFixed(1)} and ${jt7 && jt7.vel[2].toFixed(1)})`);
   const jt0 = jumpAt(0), jt3 = jumpAt(3), jt20 = jumpAt(20);
   ok(jt0 && jt3 && jt20 && near(jt0.from[2], 64 + 27.3 + 16 * Math.sin(Math.PI / 18), 0.1) && near(jt0.vel[2], 675 * Math.sin(Math.PI / 18) + 1.25 * 218, 0.5) && near(jt3.vel[2], jt0.vel[2], 1e-6) && jt20.vel[2] < jt0.vel[2] - 100,
     `grenades: your jump-throw is CS2's (from ${jt0 && jt0.from[2].toFixed(1)} going up at ${jt0 && jt0.vel[2].toFixed(1)}; ${jt3 && jt3.vel[2].toFixed(1)} 3 ticks into the jump, ${jt20 && jt20.vel[2].toFixed(1)} 20 ticks in)`);

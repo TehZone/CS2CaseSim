@@ -203,7 +203,8 @@ export class Arsenal {
     // Your jumps, for a jump-throw (see grenade): when you left the ground going up, and your eye just before.
     const p = this.game.player;
     if (p?.velocity) {
-      if (this.grounded && !p.onGround && p.velocity[2] > 100) { this.jumpedAt = t - dt; this.jumpEye = this.groundEye; }
+      // (This tick's: the game moves you before your weapon, so the jump seen here is the one this tick made.)
+      if (this.grounded && !p.onGround && p.velocity[2] > 100) { this.jumpedAt = t; this.jumpEye = this.groundEye; }
       this.grounded = !!p.onGround;
       if (this.grounded) this.groundEye = p.eye();
     }
