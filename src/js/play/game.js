@@ -354,7 +354,7 @@ export class Game {
     ]);
     if (this.disposed) return;
     this.bombTemplate = buildCS2Model({ t: 'skin', fl: 0, sd: 0 }, { wid: 'weapon_c4', w: 'C4', n: 'C4', cat: 'equipment', v: true }, this.renderer, { quick: true }).catch(() => null);
-    if (map.radar) this.radar = new Radar(this.screen, map.radar);
+    if (map.radar) this.radar = new Radar(this.screen, map.radar, this.renderer); // (drawn into the game's canvas: see frame)
     this.scene.add((this.bombLed = bombLed()));
     this.match = this.respawnMode ? new Deathmatch(this, { minutes: this.minutes, ffa: this.ffa, armsRace: this.armsRace }) : new Match(this, this.rules);
     if (this.respawnMode) await Promise.all((this.armsRace ? ARMS_RACE : [this.dmWeapon('primary'), this.dmWeapon('secondary')]).slice(0, 2).map((id) => this.vmData(id).catch(() => {})));
@@ -2375,6 +2375,7 @@ export class Game {
       o.overlay = (me.alive || this.specVm) && this.cv.r_drawviewmodel ? o.overlayOf : null;
       this.post.render(this.scene, this.camera, o);
     } finally { Bot.drawing = false; }
+    this.radar?.draw(this.radarData()); // (the radar over it, into the same frame: see radarData)
     log?.gpuEnd();
     this.flashCapture = false;
     this.parts.draw += performance.now() - td;
@@ -2502,7 +2503,6 @@ export class Game {
       hud.place(me.alive ? this.place() : null);
       if (this.buyMenu.isOpen) { if (!m.buyOpen || !this.inBuyZone()) this.closeBuyMenu(); else this.buyMenu.render(); }
       if (!this.matchOver) { const tab = this.input.held('scores'); hud.scoreboard(tab, tab ? this.scoreData() : null); }
-      this.radar?.draw(this.radarData());
     }
   }
 
@@ -2518,19 +2518,41 @@ export class Game {
         avatar: c.identity?.avatar || null, org: c.identity?.team || null, country: c.identity?.country || null })),
     };
   }
+  // What the radar shows this frame, where the frame draws it: you as the camera has you (or the teammate you spectate,
+  // and the way they look) and the bots that far between their last two ticks (`a`, as frame() draws them: at their
+  // ticks they'd move 64 times a second, in uneven steps on a 144 Hz screen), turning with your view. Every frame, so
+  // in objects kept from frame to frame.
   radarData() {
-    const m = this.match, me = this.me;
-    const view = !me.alive && this.spectating ? { pos: this.spectating.pos, yaw: this.spectating.yaw } : { pos: this.player.origin, yaw: this.input.yaw };
-    const b = m.bomb;
+    const m = this.match, me = this.me, a = this.paused ? 1 : this.acc / TICK;
+    const d = (this.radarFrame ||= { center: [0, 0], yaw: 0, myTeam: null, bomb: null, pings: null, mates: [], enemies: [], pool: [], bombAt: { pos: [0, 0, 0], planted: false, carried: false } });
+    const s = !me.alive && this.spectating;
+    if (s) { const [eye, , yaw] = s.eyeAt(a); d.center[0] = eye[0]; d.center[1] = eye[1]; d.yaw = yaw; }
+    else { const p = me.alive && this.camEye ? this.camEye : this.player.origin; d.center[0] = p[0]; d.center[1] = p[1]; d.yaw = this.input.yaw; }
+    d.myTeam = me.team; d.pings = this.pings;
+    let n = 0, nm = 0, ne = 0;
+    for (const c of this.combatants) {
+      if (c === me) continue;
+      const foe = this.hostile(me, c);
+      if (foe && !(c.alive && c.spottedBy === me.squad && this.now - (c.spottedAt ?? -9) < 1.5)) continue; // (enemies your team has seen)
+      const o = (d.pool[n++] ||= { pos: [0, 0, 0], alive: false });
+      o.alive = c.alive; this.drawnAt(c, a, o.pos);
+      if (foe) d.enemies[ne++] = o; else d.mates[nm++] = o;
+    }
+    d.mates.length = nm; d.enemies.length = ne;
     // The bomb: planted (everyone), dropped (the terrorists), or on a teammate who carries it (the terrorists, as in CS2).
-    const carried = b?.state === 'carried' && me.team === 'T' && b.carrier?.alive && b.carrier !== me;
-    const bomb = !b ? null : b.state === 'planted' || (b.state === 'dropped' && me.team === 'T') ? { pos: b.pos, planted: b.state === 'planted' }
-      : carried ? { pos: this.positionOf(b.carrier), carried: true } : null;
-    return {
-      center: view.pos, yaw: view.yaw, myTeam: me.team, bomb, pings: this.pings,
-      mates: this.combatants.filter((c) => c !== me && !this.hostile(me, c)).map((c) => ({ pos: this.positionOf(c), alive: c.alive })),
-      enemies: this.combatants.filter((c) => this.hostile(me, c) && c.alive && c.spottedBy === me.squad && this.now - (c.spottedAt ?? -9) < 1.5).map((c) => ({ pos: this.positionOf(c) })),
-    };
+    const b = m.bomb, carried = b?.state === 'carried' && me.team === 'T' && b.carrier?.alive && b.carrier !== me;
+    if (b && (b.state === 'planted' || (b.state === 'dropped' && me.team === 'T') || carried)) {
+      const o = (d.bomb = d.bombAt);
+      o.planted = b.state === 'planted'; o.carried = !!carried;
+      if (carried) this.drawnAt(b.carrier, a, o.pos); else { o.pos[0] = b.pos[0]; o.pos[1] = b.pos[1]; o.pos[2] = b.pos[2]; }
+    } else d.bomb = null;
+    return d;
+  }
+  // Where a combatant is drawn this frame (a bot `a` of the way from its last tick to this one), into out.
+  drawnAt(c, a, out) {
+    const p = c === this.me ? this.player.origin : this.botOf(c).lerped(a);
+    out[0] = p[0]; out[1] = p[1]; out[2] = p[2];
+    return out;
   }
 
   // The callout area the player is in (env_cs_place boxes).

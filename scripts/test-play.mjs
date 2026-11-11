@@ -2069,6 +2069,79 @@ const shotAt = (p, from, elev, dist = 500) => {
   ok(!mm.mapsFor('wingman').length && mm.mapsFor('competitive').length === 3, "wingman: no maps till CS2's list has been read");
 }
 
+// ---- the radar (radar.js, game.js radarData): every frame, where the frame draws things, so it moves evenly -------------
+// (Its drawing, in WebGL into the game's canvas, needs a browser: what it draws and what it costs a frame were checked in
+// a match. These are the numbers it's given and works out.)
+{
+  const { mapMatrix, radarPoint, radarMarks, RADAR_SCALE } = await import('../src/js/play/radar.js');
+  const { Game, TICK } = await import('../src/js/play/game.js');
+  const { Bot } = await import('../src/js/play/bots.js');
+  const info = { x: -2476, y: 3239, scale: 4.4, image: '' }; // (Dust II's overview placement)
+  // You in the middle and the way you face up, at any yaw; the overview's matrix puts a spot where radarPoint does.
+  let worst = 0;
+  for (const yaw of [0, 37, 90, 181.5, 270, -45]) {
+    const c = [500, -300, 0], r = (yaw * Math.PI) / 180, px = (400 / info.scale) * RADAR_SCALE;
+    const mid = radarPoint(info, c, yaw, c), ahead = radarPoint(info, c, yaw, [c[0] + Math.cos(r) * 400, c[1] + Math.sin(r) * 400, 0]);
+    const right = radarPoint(info, c, yaw, [c[0] + Math.sin(r) * 400, c[1] - Math.cos(r) * 400, 0]);
+    worst = Math.max(worst, Math.hypot(mid[0] - 115, mid[1] - 115), Math.hypot(ahead[0] - 115, ahead[1] - (115 - px)), Math.hypot(right[0] - (115 + px), right[1] - 115));
+    const v = mapMatrix(info, c, yaw), p = [1234, -567, 0], ox = (p[0] - info.x) / info.scale, oy = (info.y - p[1]) / info.scale, q = radarPoint(info, c, yaw, p);
+    worst = Math.max(worst, Math.hypot(v[0] * ox + v[2] * oy + v[4] - q[0], v[1] * ox + v[3] * oy + v[5] - q[1]));
+  }
+  ok(worst < 1e-9, `radar: you in the middle, the way you face straight up, the overview and the marks placed alike at any yaw (${worst.toExponential(1)} px off)`);
+  // The marks: teammates alive, the enemies given, pings, the bomb last (on top), held on the edge the way to it.
+  const view = { center: [0, 0, 0], yaw: 90, myTeam: 'CT', mates: [{ pos: [100, 0, 0], alive: true }, { pos: [0, 100, 0], alive: false }], enemies: [{ pos: [-100, 0, 0] }], pings: [{ pos: [0, -100, 0] }], bomb: { pos: [0, 5000, 0], planted: true } };
+  const marks = radarMarks(info, view), bm = marks[3];
+  ok(marks.map((m) => m.kind).join() === 'dot ct,dot enemy,ping,c4 planted' && bm.edge && Math.abs(Math.hypot(bm.x - 115, bm.y - 115) - 98) < 1e-9 && Math.abs(bm.x - 115) < 1e-9 && bm.y < 115,
+    'radar: teammates alive, enemies, pings, then the bomb, a far one on the edge straight towards it');
+  const first = marks[0], near = radarMarks(info, { ...view, mates: [], pings: [], bomb: { pos: [0, 200, 0], carried: true } }, marks);
+  ok(near === marks && near[0] === first && near.length === 2 && near[1].kind === 'c4 carried' && !near[1].edge && Math.abs(near[1].y - (115 - (200 / info.scale) * RADAR_SCALE)) < 1e-9,
+    "radar: a near bomb where it is, and a frame's marks in the last frame's objects");
+
+  // A frame as game.js has it: you at the camera's eye, the bots `a` of the way between their last two ticks.
+  const me = { team: 'CT', squad: 1, alive: true }, mate = { team: 'CT', squad: 1, alive: true }, seen = { team: 'T', squad: 2, alive: true, spottedBy: 1, spottedAt: 0 }, unseen = { team: 'T', squad: 2, alive: true };
+  const bot = (c, p) => Object.assign(Object.create(Bot.prototype), { c, pos: p.slice(), prev: p.slice(), hasPrev: true, ducked: false, pitch: 0, yaw: 90, prevAim: [0, 90], mode: 'alive' });
+  const bots = [bot(mate, [0, 0, 0]), bot(seen, [800, 0, 0]), bot(unseen, [900, 0, 0])];
+  const g = Object.assign(Object.create(Game.prototype), { me, combatants: [me, mate, seen, unseen], bots, botByC: new Map(bots.map((b) => [b.c, b])), match: { bomb: null }, pings: [],
+    paused: false, acc: 0, now: 0, ffa: false, player: { origin: [30, 40, 0] }, input: { yaw: 120 }, camEye: [10, 20, 64], spectating: null });
+  let d = g.radarData();
+  ok(d.center[0] === 10 && d.center[1] === 20 && d.yaw === 120 && d.mates.length === 1 && d.enemies.length === 1 && d.enemies[0].pos[0] === 800 && g.radarData() === d,
+    "radar: centred on the camera's eye (not the tick's origin), turned with your view, enemies only once your team has seen them, the same objects each frame");
+  g.now = 2;
+  ok(g.radarData().enemies.length === 0, 'radar: an enemy seen 2 s ago is off it again');
+  // A teammate running at 250 u/s, ticks 64 a second, frames 144: on the radar it moves the same each frame (at its ticks
+  // it stood still on some frames and jumped 3.9 units on others).
+  const steps = [], raw = [], radarSteps = [];
+  let acc = 0, lastX = null, lastRaw = null, lastPx = null;
+  for (let f = 0; f < 288; f++) {
+    acc += 1 / 144;
+    while (acc >= TICK) { for (const b of bots) { b.prev[0] = b.pos[0]; b.prev[1] = b.pos[1]; } bots[0].pos[0] += 250 * TICK; acc -= TICK; }
+    g.acc = acc;
+    d = g.radarData();
+    const x = d.mates[0].pos[0], px = radarMarks(info, d)[0];
+    if (lastX != null && f > 2) { steps.push(x - lastX); raw.push(bots[0].pos[0] - lastRaw); radarSteps.push(Math.hypot(px.x - lastPx[0], px.y - lastPx[1])); }
+    lastX = x; lastRaw = bots[0].pos[0]; lastPx = [px.x, px.y];
+  }
+  const even = (l, v) => Math.max(...l.map((s) => Math.abs(s - v)));
+  const perFrame = 250 / 144, perFramePx = (perFrame / info.scale) * RADAR_SCALE;
+  ok(even(steps, perFrame) < 1e-6 && even(radarSteps, perFramePx) < 1e-6 && raw.some((s) => s === 0) && raw.some((s) => s > 3.9),
+    `radar: a teammate running moves ${perFrame.toFixed(3)} units (${perFramePx.toFixed(3)} px) every frame, as the 3D view draws them (at their ticks: ${Math.min(...raw).toFixed(1)}-${Math.max(...raw).toFixed(1)} units)`);
+  g.paused = true;
+  ok(g.radarData().mates[0].pos[0] === bots[0].pos[0], 'radar: paused, everyone where their last tick put them');
+  g.paused = false;
+  // Dead: from the teammate you spectate, as the frame shows them (their eye and aim between ticks); the bomb a
+  // teammate carries (a terrorist's radar) where they're drawn.
+  bots[0].prev[0] = 0; bots[0].pos[0] = 60; bots[0].prevAim[1] = 80; bots[0].yaw = 100;
+  g.acc = TICK / 2; me.alive = false; g.spectating = bots[0];
+  d = g.radarData();
+  ok(d.center[0] === 30 && d.yaw === 90 && d.mates.length === 1, `radar: spectating, centred on the teammate as drawn (${d.center[0]}) and turned with their aim (${d.yaw})`);
+  me.alive = true; g.spectating = null; me.team = mate.team = 'T'; seen.team = unseen.team = 'CT';
+  g.match.bomb = { state: 'carried', carrier: mate, pos: null };
+  d = g.radarData();
+  ok(d.bomb?.carried && !d.bomb.planted && d.bomb.pos[0] === 30, "radar: a terrorist sees the bomb on the teammate who carries it, where they're drawn");
+  g.match.bomb = { state: 'dropped', pos: [5, 6, 7] }; me.team = mate.team = 'CT'; seen.team = unseen.team = 'T';
+  ok(g.radarData().bomb === null, "radar: a CT doesn't see a dropped bomb");
+}
+
 // ---- round MVP (match.js roundMvp): kills, then damage dealt, then a level tie at random, not whoever's first (you) ----
 {
   const { roundMvp } = await import('../src/js/play/match.js');
