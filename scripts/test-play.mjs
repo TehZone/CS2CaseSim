@@ -1647,9 +1647,9 @@ const shotAt = (p, from, elev, dist = 500) => {
   const at_ = (f) => { let re = 0, im = 0; eqd.forEach((v, i) => { re += v * Math.cos((2 * Math.PI * f * i) / 48000); im -= v * Math.sin((2 * Math.PI * f * i) / 48000); }); return 20 * Math.log10(Math.hypot(re, im)); };
   ok(at_(60) < -25 && Math.abs(at_(700)) < 1.5 && at_(1374) < -1 && at_(1374) > -4 && at_(14000) < -18, `reverb: CS2's EQ on the room (60 Hz ${at_(60).toFixed(1)}, 700 Hz ${at_(700).toFixed(1)}, 1.4 kHz ${at_(1374).toFixed(1)}, 14 kHz ${at_(14000).toFixed(1)} dB)`);
   // CS2's reverb compressor: the room down while the sounds are loud, back once they stop; nothing for quiet ones.
-  let Ducker = null;
-  Object.assign(globalThis, { AudioWorkletProcessor: class {}, sampleRate: 48000, registerProcessor: (n, C) => { Ducker = C; } });
-  const { duckBy } = await import('../src/js/play/ducker.worklet.js');
+  const procs = {};
+  Object.assign(globalThis, { AudioWorkletProcessor: class {}, sampleRate: 48000, registerProcessor: (n, C) => { procs[n] = C; } });
+  const worklet = await import('../src/js/play/ducker.worklet.js'), { duckBy } = worklet, Ducker = procs['cs2-room-ducker'];
   const block = (v) => [new Float32Array(128).fill(v), new Float32Array(128).fill(v)];
   const run = (d, key, secs) => { let out; for (let i = 0; i < (secs * 48000) / 128; i++) { out = block(0); d.process([block(1), key], [out]); } return out[0][127]; };
   const loud = new Ducker(), quiet = new Ducker();
@@ -1666,14 +1666,148 @@ const shotAt = (p, from, elev, dist = 500) => {
     { o: [100, 0, 0], r: 500, e: 'map.Street' }, { o: [1000, 0, 0], r: 5000, e: 'Other' }, { o: [0, 600, 0], r: 300, e: 'Far' }, { o: [0, 0, 0], r: 0, e: 'Off', off: true },
   ]);
   ss.update(0.6);
-  ok(ss.active?.e === 'map.Street' && rooms[0] === 'reverb_21_outsidestreet' && played.length === 1 && played[0][0] === 'map.wind' && played[0][1].loop && played[0][1].volume === 0.15,
-    'soundscape: the one you are in sets the reverb and starts its loops (the wind)');
+  ok(ss.active?.e === 'map.Street' && rooms[0] === 'reverb_21_outsidestreet' && played.length === 1 && played[0][0] === 'map.wind' && played[0][1].loop && near(played[0][1].volume, 0.15 * 0.45 / 0.6, 1e-9),
+    "soundscape: the one you are in sets the reverb and starts its loops (the wind, at its volume in CS2's Ambient group, 0.45 next to the gunshots' 0.6): " + played[0]?.[1]?.volume);
+  // CS2's final limiter (FinalMixGlue): a gunshot's peak over the threshold held at it, a footstep untouched, and it lets go.
+  {
+    const Limiter = procs['cs2-final-limiter'], L = worklet.LIMIT;
+    const sine = (amp, i) => amp * Math.sin((2 * Math.PI * 440 * i) / 48000);
+    const runL = (lim, amp, secs) => { let pk = 0; for (let b = 0; b < (secs * 48000) / 128; b++) { const x = new Float32Array(128).map((_, i) => sine(amp, b * 128 + i)), out = [new Float32Array(128), new Float32Array(128)]; lim.process([[x, x]], [out]); if (b * 128 > 0.05 * 48000) pk = Math.max(pk, ...out[0].map(Math.abs)); } return pk; };
+    const lim = Limiter && new Limiter(), loud = lim ? runL(lim, Math.pow(10, 3.7 / 20), 0.3) : 9, after = lim ? runL(lim, 0.1, 1.5) : 9, steps = Limiter ? runL(new Limiter(), 0.3, 0.3) : 9;
+    // (a crack: from nothing to 3.5 dB over full scale in one sample, held under the threshold from its very first sample)
+    let crack = 9;
+    if (Limiter) { const lim2 = new Limiter(); crack = 0; for (let b = 0; b < 20; b++) { const x = new Float32Array(128).fill(b < 5 ? 0 : 1.5), out = [new Float32Array(128), new Float32Array(128)]; lim2.process([[x, x]], [out]); crack = Math.max(crack, ...out[0]); } }
+    ok(Limiter && 20 * Math.log10(crack) < L.threshold + 0.3, `final limiter: a crack 3.5 dB over full scale out at ${(20 * Math.log10(crack)).toFixed(2)} dB, not over it`);
+    ok(Limiter && L.threshold === -1 && 20 * Math.log10(loud) < L.threshold + 0.5 && 20 * Math.log10(loud) > L.threshold - 1 && near(steps, 0.3, 1e-3) && near(after, 0.1, 0.005) && worklet.limitBy(-10) === 0,
+      `final limiter: a peak 3.7 dB over full scale out at ${(20 * Math.log10(loud)).toFixed(2)} dB (threshold ${L?.threshold.toFixed(2)}), a quiet one ${steps.toFixed(3)} of 0.3, back to ${after.toFixed(3)} of 0.1`);
+  }
   ear = [3000, 3000, 0];
   ss.update(0.6);
   ok(ss.active?.e === 'map.Street', 'soundscape: out of every one, you keep the last');
   bank.ctx.currentTime = 40;
   ss.update(0.1);
   ok(played.some(([e, o]) => e === 'map.car' && JSON.stringify(o.pos) === '[10,20,30]'), 'soundscape: its one-shots play now and then, where they are');
+}
+
+// ---- the mix and where sounds are heard from (no audio hardware: the levels and directions the voices are given) ------
+{
+  const S_ = await import('../src/js/play/sound.js');
+  const dB = (g) => 20 * Math.log10(g);
+  // CS2's mixgroups against its gunshots: footsteps 4/3, the music down, each map's ambience its own (Dust II's 0.4 of
+  // Ambient's 0.45, Nuke's 0.15).
+  const mix = S_.mixLevel || (() => NaN), amb = S_.ambientLevel || (() => NaN);
+  ok(near(mix('CT_Concrete.StepLeft'), 4 / 3, 1e-9) && near(mix('Land_Wood.StepLeft'), 4 / 3, 1e-9) && mix('Weapon_AK47.Single') === 1 && mix('Weapon_AK47.SingleDistant') === 1 && mix('Music.StartRound.valve_cs2_01') === 0.5
+    && near(amb('dust2.outdoors.wind'), 0.3, 1e-9) && near(amb('Nuke.Something'), 0.1125, 1e-9) && near(amb('somewhere.else'), 0.75, 1e-9),
+    `mix: footsteps ${mix('CT_Concrete.StepLeft')}, gunshots ${mix('Weapon_AK47.Single')}, music ${mix('Music.StartRound.x')}, Dust II's ambience ${amb('dust2.x')}, Nuke's ${amb('nuke.x')}`);
+  // The game's own footsteps: a bot's (teammate or enemy) at CS2's own volume in the Footsteps group, yours as CS2 has yours.
+  const stepCalls = [];
+  const fakeG = { noise() {}, player: { origin: [0, 0, 0] }, collision: { raycast: () => ({ surface: 'concrete' }) }, sounds: { play: (e, o) => stepCalls.push([e, o]) } };
+  Game.prototype.botFootsteps.call(fakeG, { vel: [250, 0, 0], ducked: false, stepT: 1, pos: [300, 0, 0], c: {} });
+  const me = { ...fakeG, stepT: 1, player: { onLadder: false, groundTri: null, landed: 0, onGround: true, ducked: false, speed2d: () => 250, origin: [0, 0, 0] }, collision: { surfaces: [], surface: [] }, me: {} };
+  Game.prototype.footsteps.call(me, true);
+  const [bot, mine] = stepCalls;
+  ok(bot && mine && bot[1].pos && near(bot[1].volume * mix(bot[0]), 4 / 3, 1e-9) && !mine[1].pos && near(mine[1].volume * mix(mine[0]), 0.45 * 0.9 * 4 / 3, 1e-9),
+    `mix: a bot's footstep at ${(bot?.[1].volume * mix(bot?.[0])).toFixed(3)} of its CS2 volume next to a gunshot's 1 (was 0.75), yours at ${(mine?.[1].volume * mix(mine?.[0])).toFixed(3)}`);
+  // Your ears' frame: facing +y a sound at +x is on your right; looking 45 degrees down, one level ahead is above your view.
+  const basis = S_.listenerBasis, dirOf = S_.direction;
+  const b90 = basis?.([0, 1, 0]), down = basis?.([Math.SQRT1_2, 0, -Math.SQRT1_2]);
+  const d1 = b90 && dirOf([300, 0, 64], [0, 0, 64], b90), d2 = down && dirOf([1000, 0, 64], [0, 0, 64], down);
+  ok(d1 && near(d1[0], 1, 1e-9) && near(d1[2], 0, 1e-9) && near(d2[1], Math.SQRT1_2, 1e-9) && near(d2[2], Math.SQRT1_2, 1e-9) && near(Math.hypot(...down.u), 1, 1e-9),
+    "listener: your ears' frame from where you look (facing +y, a sound at +x on your right; looking down, one ahead above your view)");
+  // How a sound is heard from each direction (a step 300 units away, CS2's: plain stereo only within 60 units).
+  const stepInfo = { v: 0.9, o: 0.375, r: 1, bl: 0.15, d: [[49.59, 0.45], [116.56, 1], [402.29, 0.489], [1095, 0.03], [1100, 0]], s: [[50, 1], [60, 0]] };
+  const gunInfo = { v: 1.1, d: [[25, 0.8], [30, 1], [175.71, 1], [440, 0.735], [1288, 0.331], [2500, 0.015]], s: [[35.11, 1], [300, 0], [300, 0]] };
+  const sp = S_.spatial || (() => null);
+  const at = (info, d, dir) => sp(info, d, dir);
+  const L = at(stepInfo, 300, [-1, 0, 0]), R = at(stepInfo, 300, [1, 0, 0]), F = at(stepInfo, 300, [0, 0, 1]), Bk = at(stepInfo, 300, [0, 0, -1]), Up = at(stepInfo, 300, [0, 1, 0]), Dn = at(stepInfo, 300, [0, -1, 0]);
+  ok(L && L.far === 1 && L.near === 0 && near(dB(L.right / L.left), -8, 1e-9) && near(dB(R.left / R.right), -8, 1e-9) && L.pan[0] < -0.99 && R.pan[0] > 0.99 && F.left === 1 && F.right === 1 && F.pan[2] < -0.99,
+    `direction: a step on your left with its right ear ${L ? dB(L.right / L.left).toFixed(1) : '?'} dB (on top of the HRTF's own), all positioned at 300 units`);
+  ok(L && near(F.treble, 0, 1e-9) && near(Bk.treble, -7, 1e-9) && Bk.pan[2] > 0.99 && near(Up.treble, 3, 1e-9) && near(Up.bass, -2, 1e-9) && near(Up.pan[1], Math.SQRT1_2, 1e-9) && near(Dn.treble, -4, 1e-9) && near(Dn.bass, 3, 1e-9) && near(Dn.pan[1], -Math.SQRT1_2, 1e-9),
+    `direction: behind muffled (${Bk?.treble} dB treble), above thinner (${Up?.treble} / ${Up?.bass}), below through the floor (${Dn?.treble} / ${Dn?.bass}), the HRTF's elevation within 45 degrees`);
+  // CS2's positioned share (a gunshot plain stereo up close, all positioned from 300) and its distance EQ (from 300 to 1800).
+  const g150 = at(gunInfo, 150, [-1, 0, 0]), g300 = at(gunInfo, 300, [-1, 0, 0]), g1500 = at(gunInfo, 1500, [-1, 0, 0]), city = at({ s: [[0, 1], [300, 1]] }, 800, [-1, 0, 0]);
+  ok(g150 && near(g150.near, 0.566, 0.002) && g300.far === 1 && g1500.far === 1 && near(g300.bass, 0, 1e-9) && near(g1500.bass, -7.59, 0.02) && near(g1500.treble, -5.18, 0.02) && city.left === 1 && city.right === 1 && city.near === 1,
+    `direction: a gunshot ${g150 ? Math.round(g150.far * 100) : '?'}% positioned at 150 units, all of it from 300; 1500 units away its bass ${g1500?.bass.toFixed(1)} dB, treble ${g1500?.treble.toFixed(1)} dB; a soundscape's distant city stays plain stereo`);
+  // The voices: a step on your left doesn't get the voice a step on your right just used (the browser's HRTF would
+  // fade it in from the right), one there again does; and a playing sound turns with you.
+  const pv = S_.pickVoice || (() => NaN);
+  ok(pv([{ dir: [1, 0, 0] }], [-1, 0, 0], 1) === -1 && pv([{ dir: [1, 0, 0] }, { dir: [0.98, 0.199, 0] }], [0.99, 0.141, 0], 2) === 1 && pv([{ dir: [1, 0, 0] }], [-1, 0, 0], 96) === 0,
+    'voices: a free one used again only if it last pointed within 15 degrees (any once there are 96)');
+  const param = (v = 0) => ({ value: v, setTargetAtTime(x) { this.value = x; }, cancelScheduledValues() {}, setValueAtTime(x) { this.value = x; }, linearRampToValueAtTime(x) { this.value = x; } });
+  const node = (x = {}) => ({ connect() {}, disconnect() {}, ...x });
+  const listenerSet = [];
+  class FakeCtx {
+    constructor() {
+      this.currentTime = 0; this.state = 'running'; this.sampleRate = 48000; this.destination = node();
+      const watched = () => ({ set value(v) { listenerSet.push(v); }, get value() { return 0; } });
+      this.listener = Object.fromEntries(['positionX', 'positionY', 'positionZ', 'forwardX', 'forwardY', 'forwardZ', 'upX', 'upY', 'upZ'].map((k) => [k, watched()]));
+    }
+    createGain() { return node({ gain: param(1) }); }
+    createBiquadFilter() { return node({ type: '', frequency: param(350), gain: param(0), Q: param(1) }); }
+    createPanner() { return node({ positionX: param(), positionY: param(), positionZ: param() }); }
+    createChannelSplitter() { return node(); }
+    createChannelMerger() { return node(); }
+    createBufferSource() { const ls = []; return node({ playbackRate: param(1), start() {}, stop() {}, addEventListener: (t, f) => { if (t === 'ended') ls.push(f); }, end: () => ls.forEach((f) => f()) }); }
+    resume() { return Promise.resolve(); }
+  }
+  const RealAC = globalThis.AudioContext;
+  globalThis.AudioContext = FakeCtx;
+  const bank = new S_.SoundBank();
+  globalThis.AudioContext = RealAC;
+  bank.events = { Step: ['s'] }; bank.info = { Step: stepInfo };
+  bank.buffers.set('s', Promise.resolve({ duration: 0.3 }));
+  const ear = [0, 0, 64], lis = { earPos: () => ear, soundBlocked: () => false };
+  bank.setListener(ear, [1, 0, 0]);
+  const playing = () => [...(bank.active || [])];
+  const r1 = await bank.play('Step', { pos: [0, -300, 64], listener: lis, source: 'a' }), vRight = playing()[0];
+  r1?.end();
+  const l1 = await bank.play('Step', { pos: [0, 300, 64], listener: lis, source: 'b' }), vLeft = playing()[0];
+  l1?.end();
+  await bank.play('Step', { pos: [20, -300, 64], listener: lis, source: 'c' });
+  const again = playing()[0];
+  ok(vRight && vLeft !== vRight && vLeft.pan.positionX.value < -0.99 && vLeft.right.gain.value < vLeft.left.gain.value && again === vRight && bank.voiceCount === 2,
+    'voices: a step on your left gets a voice of its own, not the one a step on your right just used; one on the right again gets that one');
+  bank.setListener(ear, [0, 1, 0]); // (turned to face +y: the step at -y now behind you)
+  ok(again && again.pan.positionZ.value > 0.99 && near(again.treble.gain.value, -7, 0.2) && near(again.left.gain.value, again.right.gain.value, 0.1) && listenerSet.length === 0,
+    `listener: a sound playing turns with you (to your right, then behind you as you turn left: HRTF z ${again?.pan.positionZ.value.toFixed(2)}, treble ${again?.treble.gain.value.toFixed(1)} dB)`);
+  // All MAX_VOICES made (a 5v5 gets there in under a minute): a free voice pointed the wrong way still gets used, with a
+  // new HRTF panner (the browser's fades its first 43 ms in from where it last pointed: a step on your right was heard on
+  // your left); one pointed this way keeps its own.
+  bank.setListener(ear, [1, 0, 0]); // (facing +x again: -y on your right)
+  bank.voiceCount = S_.MAX_VOICES;
+  const capStep = async (y, source) => { const src = await bank.play('Step', { pos: [0, y, 64], listener: lis, source }), v = playing().find((x) => x.at[1] === y); const pan = v?.pan; src?.end(); return { v, pan }; };
+  const r1c = await capStep(-333, 'd'), r2c = await capStep(-355, 'e'), l1c = await capStep(333, 'f');
+  ok(bank.voiceCount === S_.MAX_VOICES && r1c.v && r2c.v === r1c.v && r2c.pan === r1c.pan && l1c.v === r1c.v && l1c.pan !== r1c.pan
+    && l1c.pan?.positionX.value < -0.99 && l1c.v.right.gain.value < l1c.v.left.gain.value,
+    `voices: at the ${S_.MAX_VOICES} cap, a step on your left on the voice a step on your right used gets a new panner, pointed left (${l1c.pan !== r1c.pan}); one on the right again keeps it (${r2c.pan === r1c.pan})`);
+  bank.offVolume?.();
+  // Every step is heard: both feet play StepLeft (CS2 has no StepRight event, and every other step, yours and the bots',
+  // played nothing), each bot's steps its own (one bot's doesn't block another's for the step's 0.15 s).
+  const steps = [];
+  const sg = { noise() {}, player: { onLadder: false, groundTri: null, landed: 0, onGround: true, ducked: false, speed2d: () => 250, origin: [0, 0, 0] },
+    collision: { surfaces: [], surface: [], raycast: () => ({ surface: 'concrete' }) }, sounds: { play: (e, o) => steps.push([e, o]) }, me: {} };
+  for (let i = 0; i < 6; i++) { sg.stepT = 1; Game.prototype.footsteps.call(sg, true); }
+  const bots = [{ index: 1, c: {} }, { index: 2, c: {} }].map((b) => ({ ...b, vel: [250, 0, 0], ducked: false, pos: [300, b.index * 100, 0] }));
+  for (let i = 0; i < 3; i++) for (const b of bots) { b.stepT = 1; Game.prototype.botFootsteps.call(sg, b); }
+  const fs = (await import('node:fs')).default, path = (await import('node:path')).default;
+  const dataFile = path.join(process.env.CS2SIM_CACHE || path.join(process.env.APPDATA || '', 'CS2 Case Simulator', 'cs2cache'), 'play', 'data.json');
+  const data = fs.existsSync(dataFile) ? JSON.parse(fs.readFileSync(dataFile, 'utf8')) : null;
+  const rights = data ? Object.keys(data.sounds).filter((e) => /\.StepRight$/.test(e)).length : 0;
+  ok(steps.length === 12 && steps.every(([e]) => /\.StepLeft$/.test(e) && (!data || data.sounds[e]?.length)) && rights === 0
+    && steps.slice(6).every(([, o], i) => o.source === bots[i % 2]) && !Game.prototype.commonSounds.call({ map: { info: { collision: { surfaces: ['concrete'] } } }, stats: {}, doors: { sounds: () => [] }, impactSound: () => 'x' }).some((e) => /StepRight/.test(e)),
+    `footsteps: every step, yours and the bots', plays an event CS2 has (${steps.filter(([e]) => /StepRight/.test(e)).length} of ${steps.length} asked for StepRight; the export has ${rights} StepRight events), each bot's its own`);
+  // Two bots' steps at the same moment both play (the step's 0.15 s block is each one's own).
+  globalThis.AudioContext = FakeCtx;
+  const bank2 = new S_.SoundBank();
+  globalThis.AudioContext = RealAC;
+  bank2.events = { 'CT_Concrete.StepLeft': ['s'] }; bank2.info = { 'CT_Concrete.StepLeft': stepInfo };
+  bank2.buffers.set('s', Promise.resolve({ duration: 0.3 }));
+  const heard2 = [];
+  const g2 = { ...sg, player: { origin: [0, 0, 0] }, listener: null, sounds: { play: (e, o) => heard2.push(bank2.play(e, { ...o, listener: lis })) } };
+  for (const b of bots) { b.stepT = 1; Game.prototype.botFootsteps.call(g2, b); }
+  const started = (await Promise.all(heard2)).filter(Boolean).length;
+  ok(started === 2, `footsteps: two bots stepping at once are both heard (${started} of 2)`);
+  bank2.offVolume?.();
 }
 
 // ---- the lineups (src/data/lineups.json) still land on today's maps (those exported in the cache) ---------------------

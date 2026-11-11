@@ -3,12 +3,125 @@
 // close and dies away by 2500 units while its distant layer, a child event, takes over from 800), random pitch and
 // volume, how much a wall in between muffles it, how much of the room it gets (the reverb of the soundscape you're in:
 // see soundscape.js and reverb.js), and how many of it one source plays at once (a spray doesn't pile up its shots'
-// tails). Sounds from the world are positioned in 3D (up close, plain stereo, as CS2's); yours play straight. Music and
-// radio voices play on channels that hold one sound at a time: a new track fades out the last (CS2 cuts the round's
-// music when the next part starts).
+// tails). Sounds from the world are positioned in 3D (up close, plain stereo, as CS2's; see spatial); yours play
+// straight. Music and radio voices play on channels that hold one sound at a time: a new track fades out the last (CS2
+// cuts the round's music when the next part starts). Everything goes out at the volume setting through CS2's final
+// limiter (FinalMixGlue in its __main__.vmix: see ducker.worklet.js).
 import { cs2Play } from '../cs2/api.js';
 import { S, on } from '../state.js';
 import { renderReverb, ROOM_EQ } from './reverb.js';
+
+// ---- the mix ----------------------------------------------------------------------------------------------------------
+// CS2's mix (scripts/soundmixers.txt, its Default_Mix): each mixgroup's volume. The game plays its gunshots at their
+// own volume (CS2 at 0.6 of it, its Weapons group), so every group here is against that: footsteps 4/3 as loud as
+// they'd be next to a gunshot without it (a bot's step 300 units ahead was 13 dB under a gunshot there, now 8 dB).
+const CS2_MIX = { Weapons: 0.6, Footsteps: 0.8, Ambient: 0.45 };
+const FOOTSTEP = /^(CT_|T_|Land_)|\.Step(Left|Right)$/i; // (CS2's Footsteps group: every step, ladder rung and landing)
+// The maps' ambience is in a group of its own under Ambient, by map (Dust II's at 0.4 of Ambient's 0.45, Nuke's 0.15):
+// the whole of it, by the first part of its soundscapes' event names (de_eldorado's are aztec.*). Others: Ambient's.
+const MAP_AMBIENCE = { dust2: 0.4, inferno: 0.402, nuke: 0.15, overpass: 0.728, de_overpass: 0.728, vertigo: 0.272, aztec: 0.22, ancient: 0.22,
+  mirage: 1, train: 0.5, office: 0.35, italy: 0.686, cache: 1, cbble: 0.918, militia: 0.53, bank: 1, canals: 0.554 };
+const ANUBIS = 0.522; // (Anubis's group isn't under Ambient)
+// The round's music, quieter than it was (CS2 sets it by its own volume settings, not a mixgroup): the round-start
+// track was 5 dB over a bot's footstep 300 units ahead, now 6 dB under it.
+const MUSIC_LEVEL = 0.5;
+
+// How loud an event is in the mix, against a gunshot (1).
+export function mixLevel(event) {
+  if (FOOTSTEP.test(event)) return CS2_MIX.Footsteps / CS2_MIX.Weapons;
+  if (/^Music\./i.test(event)) return MUSIC_LEVEL;
+  return 1;
+}
+// How loud a map's ambience (its soundscapes' sounds) is in the mix, against a gunshot.
+export function ambientLevel(event) {
+  const map = String(event).split('.')[0].toLowerCase();
+  return (map === 'anubis' ? ANUBIS : CS2_MIX.Ambient * (MAP_AMBIENCE[map] ?? 1)) / CS2_MIX.Weapons;
+}
+
+// ---- where a sound is heard from --------------------------------------------------------------------------------------
+// A sound in the world plays through CS2's two halves (csgo_voice_main.vmix): plain stereo up close (its own curve, a
+// gunshot until 300 units, a step until 60) and the rest through an HRTF (CS2's is Steam Audio's; here the browser's,
+// which fades a panner in from where it last pointed over its first 43 ms: see pickVoice). On top of the
+// HRTF, so a direction is easy to tell: the ear away from it quieter (the HRTF alone gave a footstep at 90 degrees 3 dB
+// between the ears, most of its sound being low, where heads don't shadow), the treble down behind you (muffled) and
+// below (with more bass: through the floor), up above (thinner), and CS2's distance EQ (its EQ82, mixed in from 300 to
+// 1800 units: bass 16 dB and treble 9 dB down, far away). The HRTF's own elevation is kept within 45 degrees: the
+// browser's has nothing under -45 and gets duller all the way up (overhead sounded like behind).
+const FAR_EAR_DB = 8; // the far ear, a sound straight to your side (less as it's more ahead or behind)
+const BEHIND_DB = -7; // treble straight behind (above 4.2 kHz, CS2's distance EQ's shelf)
+const ABOVE_DB = 3, ABOVE_BASS_DB = -2; // straight above
+const BELOW_DB = -4, BELOW_BASS_DB = 3; // straight below
+const MAX_ELEVATION = Math.PI / 4;
+export const SHELVES = { bass: 145.54, treble: 4203.16 }; // Hz (CS2's EQ82)
+const DISTANCE_EQ = [[300.54, 0], [1334.53, 0.53], [1806.8, 1]], DISTANCE_BASS = -15.85, DISTANCE_TREBLE = -9.03;
+const dbGain = (db) => Math.pow(10, db / 20);
+const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+
+// Your ears' frame (game units: x/y horizontal, z up) from where you look: { f ahead, r right, u up }, into out.
+export function listenerBasis(forward, up = null, out = { f: [1, 0, 0], r: [0, -1, 0], u: [0, 0, 1] }) {
+  const fl = Math.hypot(forward[0], forward[1], forward[2]) || 1, f = out.f, r = out.r, u = out.u;
+  f[0] = forward[0] / fl; f[1] = forward[1] / fl; f[2] = forward[2] / fl;
+  const w = up || [0, 0, 1];
+  // right = ahead x up (Source's: yaw 0 looks along +x, its right is -y), then up again square to both
+  r[0] = f[1] * w[2] - f[2] * w[1]; r[1] = f[2] * w[0] - f[0] * w[2]; r[2] = f[0] * w[1] - f[1] * w[0];
+  const rl = Math.hypot(r[0], r[1], r[2]);
+  if (rl < 1e-6) { r[0] = 0; r[1] = -1; r[2] = 0; } else { r[0] /= rl; r[1] /= rl; r[2] /= rl; }
+  u[0] = r[1] * f[2] - r[2] * f[1]; u[1] = r[2] * f[0] - r[0] * f[2]; u[2] = r[0] * f[1] - r[1] * f[0];
+  return out;
+}
+// Where pos is from your ear, in your frame: [right, up, ahead], a unit vector (ahead when it's right at your ear).
+export function direction(pos, ear, b, out = [0, 0, 1]) {
+  const x = pos[0] - ear[0], y = pos[1] - ear[1], z = pos[2] - ear[2], d = Math.hypot(x, y, z);
+  if (d < 1e-3) { out[0] = 0; out[1] = 0; out[2] = 1; return out; }
+  out[0] = (x * b.r[0] + y * b.r[1] + z * b.r[2]) / d;
+  out[1] = (x * b.u[0] + y * b.u[1] + z * b.u[2]) / d;
+  out[2] = (x * b.f[0] + y * b.f[1] + z * b.f[2]) / d;
+  return out;
+}
+// How a sound d units away in a direction (direction's) is heard: { near (its plain stereo share), far (its HRTF
+// share), pan (where the HRTF puts it: Web Audio's frame, the listener at the origin looking down -z), left, right
+// (each ear's volume), bass, treble (dB, the two shelves) }. A sound CS2 never positions (a soundscape's distant city,
+// plain stereo at every distance) keeps both ears and its tone.
+export function spatial(info, d, dir) {
+  const near = info?.s ? clamp(curveAt(info.s, d), 0, 1) : 0;
+  const flat = !!info?.s && info.s.every((p) => p[1] >= 1);
+  const [x, y, z] = dir;
+  // the HRTF's direction, its elevation within MAX_ELEVATION
+  let px = x, py = y, pz = z;
+  const el = Math.asin(clamp(y, -1, 1));
+  if (Math.abs(el) > MAX_ELEVATION) {
+    const h = Math.hypot(x, z), c = Math.cos(MAX_ELEVATION);
+    py = Math.sign(y) * Math.sin(MAX_ELEVATION);
+    if (h > 1e-6) { px = (x / h) * c; pz = (z / h) * c; } else { px = 0; pz = c; }
+  }
+  const m = curveAt(DISTANCE_EQ, d);
+  let bass = 20 * Math.log10(1 - m + m * dbGain(DISTANCE_BASS)), treble = 20 * Math.log10(1 - m + m * dbGain(DISTANCE_TREBLE));
+  let left = 1, right = 1;
+  if (!flat) {
+    const far = dbGain(-FAR_EAR_DB * Math.abs(x));
+    if (x > 0) left = far; else right = far;
+    treble += BEHIND_DB * Math.max(0, -z) + (y > 0 ? ABOVE_DB * y : -BELOW_DB * y);
+    bass += y > 0 ? ABOVE_BASS_DB * y : -BELOW_BASS_DB * y;
+  }
+  return { near, far: 1 - near, pan: [px, py, -pz], left, right, bass, treble };
+}
+// Which free voice a sound in a direction gets (index into free, each { dir }), or -1 for a new one: the one last
+// pointed nearest it, if that's within MATCH (the browser's HRTF fades from where a voice last pointed to where it's
+// told over its first 43 ms: a step on your left on the voice of one on your right was heard on the right), or once
+// there are max voices, the nearest anyway (a new HRTF panner for it if that's further off: see SoundBank.voice).
+const MATCH = Math.cos((15 * Math.PI) / 180);
+export const MAX_VOICES = 96;
+// A playing sound is pointed again once you've turned (or it's moved) this far from it: the browser's HRTF has a
+// direction every 1.5 degrees, and fades over 43 ms (two HRTFs at once) every time it's moved.
+const REAIM = Math.cos((1.5 * Math.PI) / 180);
+export function pickVoice(free, dir, count, max = MAX_VOICES) {
+  let k = -1, best = -2;
+  for (let i = 0; i < free.length; i++) {
+    const v = free[i].dir, c = v[0] * dir[0] + v[1] * dir[1] + v[2] * dir[2];
+    if (c > best) { best = c; k = i; }
+  }
+  return k >= 0 && (best >= MATCH || count >= max) ? k : -1;
+}
 
 // How far the events CS2 has no distance curve for carry (game units), like CS2's sound levels: past that a sound
 // isn't played at all; it fades out towards the edge.
@@ -67,11 +180,14 @@ export function layerVolumes(info, infos, vol) {
 export class SoundBank {
   constructor() {
     this.ctx = new AudioContext();
-    this.out = this.ctx.createGain();
+    this.out = this.ctx.createGain(); // everything, at the volume setting, then the final limiter (see roomOut)
     this.out.connect(this.ctx.destination);
     // Every sound but the music and the radio (CS2's AllVoices): what the room is ducked under (see roomOut).
     this.dry = this.ctx.createGain();
     this.dry.connect(this.out);
+    // (The browser loads its HRTF the first time a panner asks for it, and pans to silence until then: now.)
+    this.warm = this.ctx.createPanner();
+    this.warm.panningModel = 'HRTF';
     this.events = {}; // event -> [urls]
     this.info = {}; // event -> how CS2 plays it
     this.buffers = new Map(); // url -> Promise<AudioBuffer>
@@ -80,6 +196,10 @@ export class SoundBank {
     this.playing = new Map(); // event|source -> [{ src, gain, fo }] (instance limits)
     this.lastStart = new Map(); // event|source -> when it last started (blocks)
     this.voices = new Map(); // where a sound in the world goes -> its free voices (see voice)
+    this.voiceCount = 0;
+    this.active = new Set(); // the voices playing (turned with you: see setListener)
+    this.ear = [0, 0, 0]; // where you hear from and which way you face (setListener)
+    this.basis = listenerBasis([1, 0, 0]);
     // The room: every sound sends some of itself here, and the reverb of the soundscape you're in plays it back.
     this.verbIn = this.ctx.createGain();
     this.verbOut = this.ctx.createGain(); // the room's reverb, on its way out
@@ -92,12 +212,18 @@ export class SoundBank {
   }
 
   // The room comes out through CS2's reverb compressor (ducker.worklet.js), turned down while the sounds themselves are
-  // loud, as CS2's main mix has it; straight out until it has loaded (or without one).
+  // loud, as CS2's main mix has it, and everything through its final limiter (loud moments held under clipping);
+  // straight out until they have loaded (or without them).
   roomOut() {
     const ctx = this.ctx;
     this.verbOut.connect(this.out);
     ctx.audioWorklet?.addModule(new URL('./ducker.worklet.js', import.meta.url)).then(() => {
       if (ctx.state === 'closed') return;
+      const limit = new AudioWorkletNode(ctx, 'cs2-final-limiter', { numberOfInputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit' });
+      this.out.disconnect();
+      this.out.connect(limit);
+      limit.connect(ctx.destination);
+      this.limiter = limit;
       const duck = new AudioWorkletNode(ctx, 'cs2-room-ducker', { numberOfInputs: 2, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit' });
       this.verbOut.disconnect();
       this.verbOut.connect(duck, 0, 0);
@@ -159,8 +285,8 @@ export class SoundBank {
       }
     }
     if (!urls?.length) return;
-    // In the world, its own volume by distance (yours keep the volume they're played at).
-    let volume = self * (1 + (pos ? 0 : rnd(info?.vr)));
+    // In the world, its own volume by distance (yours keep the volume they're played at); and its place in the mix.
+    let volume = self * (1 + (pos ? 0 : rnd(info?.vr))) * mixLevel(event);
     if (ear) volume *= Math.max(0, (info?.v ?? 1) + rnd(info?.vr)) * distanceGain(event, info, d);
     if (volume < 0.003) return;
     const who = source && typeof source === 'object' ? 'bot' + source.index : source; // (a bot: by its number, not "[object Object]" for all of them)
@@ -195,17 +321,17 @@ export class SoundBank {
     // Some of it to the room.
     const wet = info ? info.r ?? 0 : pos ? 0.3 : 0;
     if (ear) {
-      // In the world: through a voice, muffled by the walls in between, some to the room, and up close plain stereo,
-      // further away positioned (the panner only gives the direction, distance is in the volume above).
-      const v = this.voice(dest, pos), stereo = info?.s ? Math.max(0, Math.min(1, curveAt(info.s, d))) : 0;
+      // In the world: through a voice, muffled by the walls in between, some to the room, and heard from where it is
+      // (see spatial: the panner only gives the direction, distance is in the volume above), turned with you as it plays.
+      const dir = direction(pos, ear, this.basis), v = this.voice(dest, dir);
+      v.at[0] = pos[0]; v.at[1] = pos[1]; v.at[2] = pos[2];
+      v.info = info;
       v.lp.frequency.value = muffled ? 700 + 4000 * (1 - muffled) : ctx.sampleRate / 2; // (at half the rate it passes everything)
       v.wet.gain.value = wet;
-      v.near.gain.value = stereo;
-      v.far.gain.value = 1 - stereo;
-      // game units straight in: x/y horizontal, z up -> Web Audio's y up
-      v.pan.positionX.value = pos[0]; v.pan.positionY.value = pos[2]; v.pan.positionZ.value = -pos[1];
+      this.aim(v, dir, d);
       g.connect(v.lp);
-      src.addEventListener('ended', () => { g.disconnect(); this.voices.get(dest).push(v); });
+      this.active.add(v);
+      src.addEventListener('ended', () => { g.disconnect(); this.active.delete(v); this.voices.get(dest).push(v); });
     } else {
       if (wet > 0) { const s = ctx.createGain(); s.gain.value = wet; g.connect(s); s.connect(this.verbIn); }
       g.connect(dest);
@@ -220,36 +346,72 @@ export class SoundBank {
     return src;
   }
 
-  // A free voice for a sound in the world at pos going to dest (the room ducks under it, or not): its muffling (a
-  // lowpass), its share to the room, and its stereo and positioned (HRTF panner) halves, wired together once and used
-  // again by the next sound when its sound ends. (Each sound had its own: Chromium deletes the insides of the nodes a
-  // garbage collection frees on the main thread, all at once after a full one: 32 ms between two frames in one round.)
-  // The free one last used nearest pos: a panner moved far crossfades from where it was over its first 40 ms.
-  voice(dest, pos) {
+  // A free voice for a sound in the world in a direction from you (direction's) going to dest (the room ducks under it,
+  // or not): its muffling (a lowpass), its share to the room, its tone (CS2's two shelves), its stereo and positioned
+  // (HRTF panner) halves and each ear's volume, wired together once and used again by the next sound when its sound
+  // ends. (Each sound had its own: Chromium deletes the insides of the nodes a garbage collection frees on the main
+  // thread, all at once after a full one: 32 ms between two frames in one round.) The free one last pointed that way, or
+  // a new one (see pickVoice).
+  voice(dest, dir) {
     if (!this.voices.has(dest)) this.voices.set(dest, []);
-    const free = this.voices.get(dest);
-    let k = -1, best = Infinity;
-    for (let i = 0; i < free.length; i++) {
-      const a = free[i].at, dd = (a[0] - pos[0]) ** 2 + (a[1] - pos[1]) ** 2 + (a[2] - pos[2]) ** 2;
-      if (dd < best) { best = dd; k = i; }
-    }
+    const free = this.voices.get(dest), k = pickVoice(free, dir, this.voiceCount);
     if (k >= 0) {
       const v = free[k];
       free[k] = free[free.length - 1];
       free.pop();
-      v.at[0] = pos[0]; v.at[1] = pos[1]; v.at[2] = pos[2];
+      // All MAX_VOICES made and none free pointed near this way (a 5v5 got there in under a minute, then 43% of sounds
+      // were): a new panner for it, the rest of the voice kept (the browser's HRTF would fade its first 43 ms in from
+      // where the old one last pointed: a step on your right was heard on your left).
+      if (v.dir[0] * dir[0] + v.dir[1] * dir[1] + v.dir[2] * dir[2] < MATCH) {
+        v.far.disconnect(); v.pan.disconnect();
+        v.pan = this.panner();
+        v.far.connect(v.pan); v.pan.connect(v.split);
+      }
       return v;
     }
-    const ctx = this.ctx, v = { lp: ctx.createBiquadFilter(), wet: ctx.createGain(), near: ctx.createGain(), far: ctx.createGain(), pan: ctx.createPanner(), at: [pos[0], pos[1], pos[2]] };
+    this.voiceCount++;
+    const ctx = this.ctx;
+    const v = { lp: ctx.createBiquadFilter(), bass: ctx.createBiquadFilter(), treble: ctx.createBiquadFilter(), wet: ctx.createGain(), near: ctx.createGain(), far: ctx.createGain(),
+      pan: this.panner(), split: ctx.createChannelSplitter(2), left: ctx.createGain(), right: ctx.createGain(), merge: ctx.createChannelMerger(2), at: [0, 0, 0], dir: [dir[0], dir[1], dir[2]], d: 0, info: null };
     v.lp.type = 'lowpass';
+    v.bass.type = 'lowshelf'; v.bass.frequency.value = SHELVES.bass;
+    v.treble.type = 'highshelf'; v.treble.frequency.value = SHELVES.treble;
+    v.near.channelCount = 2; v.near.channelCountMode = 'explicit'; v.near.channelInterpretation = 'speakers'; // (a mono sound to both ears)
     const p = v.pan;
+    // (Moved once a block, not sample by sample: Chromium works out the panner's direction and the shelves' filters
+    // again for every sample of a block while they're moving: a firefight you turn in took 40% longer to render.)
+    for (const a of [v.bass.gain, v.treble.gain]) try { a.automationRate = 'k-rate'; } catch {}
+    v.lp.connect(v.wet); v.wet.connect(this.verbIn);
+    v.lp.connect(v.bass); v.bass.connect(v.treble);
+    v.treble.connect(v.near); v.near.connect(v.split);
+    v.treble.connect(v.far); v.far.connect(p); p.connect(v.split);
+    v.split.connect(v.left, 0); v.split.connect(v.right, 1);
+    v.left.connect(v.merge, 0, 0); v.right.connect(v.merge, 0, 1);
+    v.merge.connect(dest);
+    return v;
+  }
+  // A voice's positioned half: the browser's HRTF, told only the direction (distance is in the volume: see play).
+  panner() {
+    const p = this.ctx.createPanner();
     p.panningModel = 'HRTF';
     p.distanceModel = 'linear';
     p.refDistance = 1; p.maxDistance = 100000; p.rolloffFactor = 0;
-    v.lp.connect(v.wet); v.wet.connect(this.verbIn);
-    v.lp.connect(v.near); v.near.connect(dest);
-    v.lp.connect(v.far); v.far.connect(p); p.connect(dest);
-    return v;
+    for (const a of [p.positionX, p.positionY, p.positionZ]) try { a.automationRate = 'k-rate'; } catch {} // (see voice)
+    return p;
+  }
+  // Points a voice d units away in a direction (direction's, kept as where it last pointed): its HRTF, ears and tone
+  // (see spatial), straight away for a sound starting (now null), else easing there (it's playing, you turned).
+  aim(v, dir, d, now = null) {
+    const s = spatial(v.info, d, dir);
+    v.dir[0] = dir[0]; v.dir[1] = dir[1]; v.dir[2] = dir[2];
+    v.d = d;
+    v.pan.positionX.value = s.pan[0]; v.pan.positionY.value = s.pan[1]; v.pan.positionZ.value = s.pan[2];
+    this.param(v.near.gain, s.near, now); this.param(v.far.gain, s.far, now);
+    this.param(v.left.gain, s.left, now); this.param(v.right.gain, s.right, now);
+    this.param(v.bass.gain, s.bass, now); this.param(v.treble.gain, s.treble, now);
+  }
+  param(p, x, now) {
+    if (now == null) { p.cancelScheduledValues(0); p.value = x; } else p.setTargetAtTime(x, now, 0.015);
   }
 
   // Fades a playing sound out ({ src, gain }) and stops it.
@@ -331,14 +493,20 @@ export class SoundBank {
     return this.verbs.get(name);
   }
 
-  // Ears at the player's eye, facing their view (game units).
-  setListener(eye, forward) {
-    const l = this.ctx.listener;
-    if (l.positionX) {
-      l.positionX.value = eye[0]; l.positionY.value = eye[2]; l.positionZ.value = -eye[1];
-      l.forwardX.value = forward[0]; l.forwardY.value = forward[2]; l.forwardZ.value = -forward[1];
-      l.upX.value = 0; l.upY.value = 1; l.upZ.value = 0;
-    }
+  // Ears at the player's eye, facing their view (game units; up: the view's, else square to it from straight up), and
+  // the sounds playing in the world turned to match (Web Audio's own listener stays put: each voice is told where its
+  // sound is from you, see spatial). Every tick.
+  setListener(eye, forward, up = null) {
+    this.ear[0] = eye[0]; this.ear[1] = eye[1]; this.ear[2] = eye[2];
+    listenerBasis(forward, up, this.basis);
+    if (!this.active.size) return;
+    const now = this.ctx.currentTime, dir = (this.dirTmp ||= [0, 0, 1]);
+    this.active.forEach((v) => {
+      direction(v.at, this.ear, this.basis, dir);
+      const d = Math.hypot(v.at[0] - this.ear[0], v.at[1] - this.ear[1], v.at[2] - this.ear[2]);
+      if (dir[0] * v.dir[0] + dir[1] * v.dir[1] + dir[2] * v.dir[2] > REAIM && Math.abs(d - v.d) < 1 + 0.02 * d) return;
+      this.aim(v, dir, d, now);
+    });
   }
 
   dispose() { this.offVolume(); this.ctx.close().catch(() => {}); }

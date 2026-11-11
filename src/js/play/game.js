@@ -511,7 +511,7 @@ export class Game {
 
   commonSounds() {
     const surfaces = this.map.info.collision.surfaces;
-    const steps = [...new Set(surfaces.map(stepName))].flatMap((s) => [`CT_${s}.StepLeft`, `CT_${s}.StepRight`, `Land_${s}.StepLeft`]);
+    const steps = [...new Set(surfaces.map(stepName))].flatMap((s) => [`CT_${s}.StepLeft`, `Land_${s}.StepLeft`]); // (CS2 has no StepRight)
     const impacts = [...new Set(surfaces.flatMap((s) => [this.impactSound(s), `${impactName(s)}.BulletImpact`]))];
     const guns = BOT_GUNS.map((id) => this.stats[id]?.shootSound).filter(Boolean);
     return [...steps, ...impacts, ...guns, ...this.doors.sounds(), 'Weapon_M4A1.Silenced', 'Weapon_USP.SilencedShot', 'Default.BulletImpact', 'Flesh.BulletImpact',
@@ -1545,7 +1545,7 @@ export class Game {
     }
     this.sunVis += ((this.sunTarget ?? 1) - this.sunVis) * 0.2;
     const ear = basis(inp.pitch, inp.yaw);
-    this.sounds.setListener(this.camEye || this.player.eye(), ear.fwd);
+    this.sounds.setListener(this.camEye || this.player.eye(), ear.fwd, ear.up);
     this.soundscapes.update(TICK);
   }
 
@@ -1769,12 +1769,12 @@ export class Game {
       this.stepT = 0;
       const tr = this.collision.traceBox(pl.origin, pl.origin.map((o, i) => o - pl.ladderNormal[i] * 4), pl.hull.mins, pl.hull.maxs, FLAG_PLAYER);
       const surf = tr.tri >= 0 ? this.collision.surfaces[this.collision.surface[tr.tri]] : 'ladder';
-      this.sounds.play(`CT_${/wood/i.test(surf) ? 'Wood_Ladder' : 'Ladder'}.StepLeft`, { volume: 0.6 });
+      this.sounds.play(`CT_${/wood/i.test(surf) ? 'Wood_Ladder' : 'Ladder'}.StepLeft`, { volume: 0.45 }); // (x 4/3, CS2's Footsteps group: sound.js mixLevel)
       this.noise(pl.origin, 700, this.me);
       return;
     }
     const surface = pl.groundTri != null ? this.collision.surfaces[this.collision.surface[pl.groundTri]] : 'default';
-    if (pl.landed > 200) this.sounds.play(`Land_${stepName(surface)}.StepLeft`, { volume: 0.7 });
+    if (pl.landed > 200) this.sounds.play(`Land_${stepName(surface)}.StepLeft`, { volume: 0.5 });
     pl.landed = 0;
     if (!pl.onGround || !wasGround) return;
     const speed = pl.speed2d();
@@ -1783,7 +1783,9 @@ export class Game {
     if (this.stepT >= 0.32) {
       this.stepT = 0;
       this.stepLeft = !this.stepLeft;
-      this.sounds.play(`CT_${stepName(surface)}.${this.stepLeft ? 'StepLeft' : 'StepRight'}`, { volume: 0.55 });
+      // (as CS2 plays yours: its step's curve at your ear, 0.45, of its 0.9; then the Footsteps group, 4/3 of it. Both
+      // feet play StepLeft: CS2 has no StepRight events, and every other step was silent.)
+      this.sounds.play(`CT_${stepName(surface)}.StepLeft`, { volume: 0.45 * 0.9 });
       this.noise(pl.origin, 900, this.me);
     }
   }
@@ -1797,7 +1799,9 @@ export class Game {
     this.noise(b.pos, 900, b.c);
     if (Math.hypot(b.pos[0] - this.player.origin[0], b.pos[1] - this.player.origin[1]) > 2200) return;
     const hit = this.collision.raycast([b.pos[0], b.pos[1], b.pos[2] + 8], [0, 0, -1], 40, FLAG_PLAYER);
-    this.sounds.play(`CT_${stepName(hit?.surface || 'concrete')}.${b.stepLeft ? 'StepLeft' : 'StepRight'}`, { pos: b.pos, listener: this, volume: 0.75 });
+    // (CS2's own volume and curve, its Footsteps group: sound.js. Both feet StepLeft, CS2's only step events; each bot's
+    // own, so one bot's step doesn't block another's for the event's 0.15 s.)
+    this.sounds.play(`CT_${stepName(hit?.surface || 'concrete')}.StepLeft`, { pos: b.pos, listener: this, volume: 1, source: b });
   }
 
   // ---- combat ---------------------------------------------------------------------------------------------------------

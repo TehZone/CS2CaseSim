@@ -3,9 +3,10 @@
 // one until another takes over). It sets the room's reverb (its dsp_preset: Dust II's tunnels ring, its long A echoes
 // off the walls) and plays the map's ambience: loops (the wind; a distant city, a buzzing light, where they are in the
 // world) and one-shots now and then (sand blowing over a car, rocks falling somewhere near you), each by its own
-// settings, fading in as you get there and out as you leave (a sound in both soundscapes carries on).
+// settings, fading in as you get there and out as you leave (a sound in both soundscapes carries on). All of it as
+// quiet against the gunshots and footsteps as CS2 mixes it (each map's ambience group: see sound.js ambientLevel).
 import { cs2Play } from '../cs2/api.js';
-import { distanceGain } from './sound.js';
+import { distanceGain, ambientLevel } from './sound.js';
 
 const CHECK = 0.5; // seconds between looks for the soundscape you're in
 const DEPTH = 3; // soundscapes in soundscapes, this deep
@@ -95,14 +96,14 @@ export class Soundscapes {
   start(event, v, opts) {
     v.pending = true;
     const info = v.info;
-    this.bank.play(event, { volume: opts.pos ? 1 : info.v ?? 1, loop: true, offset: info.rs ? Math.random() : 0, fadeIn: info.fi ?? 0.4, occlude: false, alone: true, ...opts })
+    this.bank.play(event, { volume: (opts.pos ? 1 : info.v ?? 1) * ambientLevel(event), loop: true, offset: info.rs ? Math.random() : 0, fadeIn: info.fi ?? 0.4, occlude: false, alone: true, ...opts })
       .then((src) => { v.pending = false; if (!src) return; if (this.voices.get(event) === v) v.src = src; else src.stop(); });
   }
 
   // A loop somewhere in the world: louder as you get near (its distance curve), started once it's in earshot.
   follow(event, v, ear, now) {
     const p = v.info.wp, d = Math.hypot(p[0] - ear[0], p[1] - ear[1], p[2] - ear[2]);
-    const level = (v.info.v ?? 1) * distanceGain(event, v.info, d);
+    const level = (v.info.v ?? 1) * distanceGain(event, v.info, d) * ambientLevel(event);
     if (!v.src) { if (!v.pending && level > 0.003) this.start(event, v, { pos: p, listener: this.game }); return; }
     if (now > (v.since ??= now) + (v.info.fi ?? 0.4)) v.src.gainNode.gain.setTargetAtTime(level, now, 0.25);
   }
@@ -114,7 +115,8 @@ export class Soundscapes {
       const a = Math.random() * 2 * Math.PI, r = rand(info.rr);
       pos = [ear[0] + Math.cos(a) * r, ear[1] + Math.sin(a) * r, ear[2] + (Math.random() - 0.3) * r * 0.3];
     }
-    this.bank.play(event, pos ? { pos, listener: this.game, occlude: false, alone: true } : { volume: info.v ?? 1, alone: true });
+    const level = ambientLevel(event);
+    this.bank.play(event, pos ? { pos, listener: this.game, occlude: false, alone: true, volume: level } : { volume: (info.v ?? 1) * level, alone: true });
   }
 
   dispose() {
