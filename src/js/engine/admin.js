@@ -50,7 +50,7 @@ export function revOf(st) {
 }
 // What a raw edit shows and answers: the state without those.
 export function rawView(st) {
-  const { inv: _inv, stored: _stored, index: _index, social: _social, settings: _settings, ...rest } = st;
+  const { inv: _inv, stored: _stored, listed: _listed, index: _index, social: _social, settings: _settings, ...rest } = st;
   return rest;
 }
 
@@ -165,6 +165,12 @@ export function rawEdit(cur, state, base) {
   if (typeof base !== 'string' || base !== revOf(cur)) fail('The account changed since you opened it. Reload it and try again.', 'stale');
   const fresh = freshState();
   for (const [k, v] of Object.entries(src)) {
+    // (listed: what's on the Market, which its own tools take down. An admin panel from before the Market (1.1.3) sends it back
+    // as it loaded it, so that is kept as it is now; a change to it is refused.)
+    if (k === 'listed') {
+      if (JSON.stringify(canon(v)) !== JSON.stringify(canon(cur.listed ?? []))) fail("listed can't be edited here (it's what the player has on the Market: take a listing down in the Market tab)");
+      continue;
+    }
     if (k === 'inv' || k === 'stored' || k === 'social') fail(`${k} can't be edited here (use the inventory tools)`);
     // (the record is what rewards are earned by, and bigger than a raw edit's limit: nobody writes it by hand)
     if (k === 'index') fail("index can't be edited here (it's the record of what the player has unboxed)");
@@ -179,7 +185,7 @@ export function rawEdit(cur, state, base) {
     if (NAMED_FIELDS.has(k) && isObj(v)) for (const f of Object.keys(v)) if (!IDENT.test(f)) fail(`${k} has a field with an invalid name: ${JSON.stringify(f.slice(0, 40))}`);
   }
   if (src.money != null && src.money > 1e12) fail('Money must be a number from 0 to 1000000000000');
-  const st = upgradeState({ ...src, inv: cur.inv, stored: cur.stored, index: cur.index, social: cur.social });
+  const st = upgradeState({ ...src, inv: cur.inv, stored: cur.stored, index: cur.index, social: cur.social, ...('listed' in cur ? { listed: cur.listed } : {}) });
   // Never from the JSON: the rewards waiting (their items' uids are handed out as they are), and what keepLive keeps.
   st.prof = { ...st.prof, drops: cur.prof?.drops ?? [] };
   keepLive(st, cur);
@@ -188,7 +194,7 @@ export function rawEdit(cur, state, base) {
   const paid = Number(cur.passive?.earned) || 0, then = Number(src.passive?.earned);
   const since = Number.isFinite(then) ? Math.min(paid, Math.max(0, paid - then)) : 0;
   if (typeof st.money === 'number') st.money = round2(st.money + since);
-  const changed = [...new Set([...Object.keys(cur), ...Object.keys(st)])].filter((k) => k !== 'inv' && k !== 'stored' && k !== 'index' && k !== 'social' && JSON.stringify(cur[k]) !== JSON.stringify(st[k]));
+  const changed = [...new Set([...Object.keys(cur), ...Object.keys(st)])].filter((k) => k !== 'inv' && k !== 'stored' && k !== 'listed' && k !== 'index' && k !== 'social' && JSON.stringify(cur[k]) !== JSON.stringify(st[k]));
   return { next: st, changed, before: pick(cur, changed), after: pick(st, changed) };
 }
 
@@ -254,6 +260,7 @@ export function saveFile(file, now = Date.now()) {
   if (!isObj(st) || !Number.isFinite(st.money) || st.money < 0 || !Array.isArray(st.inv)) bad();
   tagNames(st.inv, raw.inv);
   tagNames(st.stored, raw.stored);
+  tagNames(st.listed, raw.listed);
   if (Array.isArray(st.prof?.drops)) st.prof.drops.forEach((d, i) => tagNames(d?.offers, raw.prof.drops[i]?.offers));
   if (isObj(st.social?.npcs)) for (const [id, s] of Object.entries(st.social.npcs)) tagNames(s?.inv, raw.social.npcs[id]?.inv);
   // The fields a new save has, and their objects' fields (stats, prof, rank...), of the same types (not the settings:
@@ -274,6 +281,15 @@ export function saveFile(file, now = Date.now()) {
   st.inv.forEach((it, i) => item(it, `inv[${i}]`));
   // (what's stored in a unit the save doesn't have goes back to the inventory as it loads: storage.repairStorage)
   (st.stored || []).forEach((it, i) => { item(it, `stored[${i}]`); if (!isToken(it.su)) bad(`stored[${i}]`); });
+  // What it has on the Market (engine/p2p.js): items as the inventory's, none of them also in the inventory, a unit or listed
+  // twice, each with its listing's id, a price the Market takes ($0.03 to $1,000,000) and when it was listed.
+  if (st.listed != null && !Array.isArray(st.listed)) bad('listed');
+  const owned = new Set([...st.inv, ...(Array.isArray(st.stored) ? st.stored : [])].map((it) => it?.uid));
+  (st.listed || []).forEach((it, i) => {
+    item(it, `listed[${i}]`);
+    if (!isToken(it.lid) || !Number.isFinite(it.lp) || it.lp < 0.03 || it.lp > 1e6 || !optNum(it.lat) || I.isUnit(it) || owned.has(it.uid)) bad(`listed[${i}]`);
+    owned.add(it.uid);
+  });
   (st.prof?.drops || []).forEach((d, i) => {
     if (!isObj(d) || !isToken(d.id) || !optNum(d.level) || !Array.isArray(d.offers)) bad(`prof.drops[${i}]`);
     d.offers.forEach((it, j) => item(it, `prof.drops[${i}].offers[${j}]`));

@@ -23,6 +23,7 @@ import * as community from './pages/community.js';
 import { initFriends } from './pages/community-online.js';
 import * as admin from './pages/admin.js';
 import * as changelog from './pages/changelog.js';
+import * as p2p from './pages/p2pmarket.js';
 import { npcOf, crowd, inventoryOf } from './engine/npcs.js';
 import { initMatchmaking } from './matchmaking.js';
 import { initProfile } from './profile.js';
@@ -31,7 +32,8 @@ import { initUpdates } from './update.js';
 import { initPassive } from './passive.js';
 import { PAY, PASSIVE } from './engine/levels.js';
 
-const PAGES = { play, cases, inventory, tradeup, armory, market, index: itemindex, database, gamble, trade, stats, community, admin, changelog };
+// (market: the Store, the game's own stock; p2p: the Market, players' listings)
+const PAGES = { play, cases, inventory, tradeup, armory, market, p2p, index: itemindex, database, gamble, trade, stats, community, admin, changelog };
 let current = null, currentName = 'cases';
 
 function go(name) {
@@ -203,6 +205,7 @@ async function boot() {
   initUpdates();
   initFriends();
   itemindex.initIndex();
+  p2p.initMarket(); // (offline, the traders buy from your Market listings as time passes)
   startNpcLoop();
   go('cases');
   setInterval(() => save(), 15000);

@@ -24,12 +24,12 @@ export function storedTotals() {
   for (const u of SU.unitsOf(S)) { n += unitCount(u.uid); value += unitValue(u.uid); }
   return { n, value: round2(value) };
 }
-// Your inventory and Storage Units together: what net worth and the stats count.
-export const ownedWorth = () => (storedPart() ? round2(S.inv.reduce((s, it) => s + itemValue(it), 0) + storedTotals().value) : SU.ownedValue(S));
-// Your most valuable item, in the inventory or a unit (null: none).
+// Your inventory, Storage Units and Market listings together: what net worth and the stats count.
+export const ownedWorth = () => (storedPart() ? round2([...S.inv, ...SU.listedOf(S)].reduce((s, it) => s + itemValue(it), 0) + storedTotals().value) : SU.ownedValue(S));
+// Your most valuable item, in the inventory, a unit or on the Market (null: none).
 export function bestOwned() {
   const p = storedPart();
-  const pool = p ? [...S.inv, ...SU.storedOf(S), ...SU.unitsOf(S).filter((u) => !p.loaded.has(u.uid)).map((u) => sumOf(u.uid)?.best).filter(Boolean)] : SU.ownedItems(S);
+  const pool = p ? [...S.inv, ...SU.storedOf(S), ...SU.listedOf(S), ...SU.unitsOf(S).filter((u) => !p.loaded.has(u.uid)).map((u) => sumOf(u.uid)?.best).filter(Boolean)] : SU.ownedItems(S);
   return pool.reduce((b, it) => (!b || itemValue(it) > itemValue(b) ? it : b), null);
 }
 

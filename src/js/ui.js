@@ -149,12 +149,12 @@ export function openModal({ title = '', body = '', foot = '', cls = '', onClose 
 }
 export const topModal = () => modalStack[modalStack.length - 1];
 
-export function confirmDialog(text, { title = 'Confirm', ok = 'Confirm', danger = false } = {}) {
+export function confirmDialog(text, { title = 'Confirm', ok = 'Confirm', no = 'Cancel', danger = false } = {}) {
   return new Promise((resolve) => {
     let answered = false;
     const m = openModal({
       title, body: `<p style="margin:0;line-height:1.5">${text}</p>`,
-      foot: `<button class="btn ghost" data-close>Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" data-ok>${ok}</button>`,
+      foot: `<button class="btn ghost" data-close>${no}</button><button class="btn ${danger ? 'danger' : 'primary'}" data-ok>${ok}</button>`,
       onClose: () => { if (!answered) resolve(false); },
     });
     m.el.querySelector('[data-ok]').addEventListener('click', () => { answered = true; m.close(); resolve(true); });
@@ -263,6 +263,7 @@ export async function sellItems(items, { ask = true } = {}) {
 export const canInspect = (item) => item.t !== 'crate' && item.t !== 'key' && item.t !== 'unit' && item.t !== 'tool';
 const storage = () => import('./pages/storage.js');
 const tools = () => import('./pages/tools.js');
+const p2pMarket = () => import('./pages/p2pmarket.js'); // (the Market, where players sell to players: sellOnMarket)
 async function openCrateItem(item) {
   const { openCrate } = await import('./pages/cases.js');
   return openCrate(item);
@@ -327,6 +328,7 @@ export function itemContextMenu(e, item, { onChange } = {}) {
   items.push({ label: 'Move To Storage Unit', icon: 'crate', action: async () => done(await (await storage()).moveToUnit([item])) });
   items.push({ label: item.lk ? 'Unlock' : 'Lock', icon: item.lk ? 'unlocked' : 'locked', action: async () => done(await tryAct('item.lock', { uid: item.uid, lk: !item.lk })) });
   items.push('-', { label: 'Sell', icon: 'dollar_sign', hint: money(I.itemValue(item)), disabled: !!item.lk, action: async () => done(await sellItems([item])) });
+  items.push({ label: 'Sell on Market', icon: 'market', hint: 'set your price', disabled: !!item.lk, action: async () => done(await (await p2pMarket()).sellOnMarket(item)) });
   contextMenu(e.clientX, e.clientY, items);
 }
 
@@ -512,6 +514,7 @@ function detailBody(item) {
         <button class="btn" data-a="store">Move To Storage Unit</button>
         <button class="btn" data-a="lock">${item.lk ? 'Unlock' : 'Lock'}</button>
         <button class="btn primary" data-a="sell" ${item.lk ? 'disabled' : ''}>Sell ${money(vb.total)}</button>
+        <button class="btn" data-a="p2p" ${item.lk ? 'disabled' : ''} title="List it on the Market at a price you set: another player buys it">Sell on Market</button>
       </div>
     </div>
   </div>`;
@@ -563,6 +566,7 @@ export function showItemDetail(item, { onChange } = {}) {
       if (a === 'equip' && await equipItem(item)) refresh();
       if (a === 'unequip' && await tryAct('loadout.unequip', { uid: item.uid })) refresh();
       if (a === 'sell') { if (await sellItems([item])) m.close(); }
+      if (a === 'p2p') { if (await (await p2pMarket()).sellOnMarket(item)) m.close(); }
       if (a === 'store') { if (await (await storage()).moveToUnit([item])) m.close(); }
       if (a === 'stickers') openStickerEditor(item, { onDone: () => { emit('inv'); refresh(); } });
       if (a === 'charm-on' && await attachCharmTo(item)) refresh();

@@ -7,9 +7,9 @@
 import crypto from 'node:crypto';
 import { makeCtx, delta, takeForStaff, clearNameForStaff, give, GameError } from '../src/js/engine/actions.js';
 import { upgradeState } from '../src/js/engine/economy.js';
-import { customName } from '../src/js/engine/items.js';
+import { customName, itemName } from '../src/js/engine/items.js';
 import { cooldownLeft, forgive, formatWait } from '../src/js/engine/matchmaking.js';
-import { ownedItems } from '../src/js/engine/storage.js';
+import { listedOf, ownedItems } from '../src/js/engine/storage.js';
 import { round2 } from '../src/js/engine/util.js';
 // (the checks and rules the offline panel shares)
 import {
@@ -21,7 +21,8 @@ import * as A from './accounts.mjs';
 const MIN = 60000;
 const LINK_MS = 10 * MIN, RESET_MS = 15 * MIN, LEVEL_MS = 60000, UNKNOWN_MS = 10000, LINK_TRIES = 5, BEST_EFFORT_MS = 4000;
 const MAX_STAFF_SCAN = 200;
-const DEFAULTS = { motd: '', maintenance: false, maintenanceMsg: '', registration: true, trading: true, gambling: true };
+// (market: the Market, players' listings (server/p2pmarket.mjs); with trading off it's closed too)
+const DEFAULTS = { motd: '', maintenance: false, maintenanceMsg: '', registration: true, trading: true, gambling: true, market: true };
 const ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // (no 0/O or 1/I to mix up)
 const DURATIONS = { '1h': 60, '1d': 1440, '7d': 10080, '30d': 43200, perm: null };
 const FILTERS = ['all', 'online', 'banned', 'linked', 'staff'];
@@ -32,6 +33,7 @@ const TITLES = {
   rename: 'Player renamed', reset: 'Account reset', 'settings.set': 'Server settings changed', broadcast: 'Broadcast sent',
   link: 'Discord account linked', unlink: 'Discord account unlinked', resetpassword: 'Password reset through Discord',
   report: 'Player reported', 'report.close': 'Report closed', 'bio.clear': 'Summary cleared', 'cooldown.clear': 'Matchmaking cooldown removed',
+  'market.cancel': 'Market listing taken down',
 };
 const RED = 0xeb4b4b, GOLD = 0xe4ae39, BLUE = 0x4b69ff, GREEN = 0x4ade80;
 const COLORS = { ban: RED, kick: RED, signout: RED, reset: RED, warn: GOLD, unban: GREEN, link: GREEN, broadcast: BLUE, 'settings.set': BLUE };
@@ -323,7 +325,7 @@ export class Admin {
     if (!want.size) return out;
     await this.srv.store.flush().catch(() => {});
     const { rows } = await this.db.query(`SELECT DISTINCT uid FROM (
-        SELECT it->>'uid' AS uid FROM users u, jsonb_array_elements(COALESCE(u.state->'inv', '[]'::jsonb) || COALESCE(u.state->'stored', '[]'::jsonb)) AS it WHERE u.id <> $1
+        SELECT it->>'uid' AS uid FROM users u, jsonb_array_elements(COALESCE(u.state->'inv', '[]'::jsonb) || COALESCE(u.state->'stored', '[]'::jsonb) || COALESCE(u.state->'listed', '[]'::jsonb)) AS it WHERE u.id <> $1
         UNION ALL
         SELECT it->>'uid' AS uid FROM rounds r, jsonb_each(COALESCE(r.data->'escrow', '{}'::jsonb)) AS x(k, v),
           jsonb_array_elements(COALESCE(x.v->'items', '[]'::jsonb)) AS it WHERE r.status = 'open'
@@ -343,6 +345,8 @@ export class Admin {
     return this.srv.store.withUser(t.id, async (e) => {
       await this.refuseIfGambling(t);
       await this.cancelOffers(t.id);
+      // (their Market listings end too, and the new state's are inventory items in it: server/p2pmarket.mjs beforeReplace)
+      await this.srv.p2p?.beforeReplace(e, next);
       // (its items and its rewards' items owned elsewhere now are left out: see restoreMerge)
       const elsewhere = await this.ownedElsewhere(t.id, restoreUids(next));
       const { dropped, rewards } = restoreMerge(e.st, next, { elsewhere, startOver: what === 'reset' });
@@ -382,14 +386,32 @@ export class Admin {
       ban: this.ban, unban: this.unban, bans: this.bans, kick: this.kick, warn: this.warn, signout: this.signout, 'note.add': this.noteAdd,
       rename: this.rename, reset: this.reset, audit: this.auditList, 'settings.get': this.settingsGet, 'settings.set': this.settingsSet,
       broadcast: this.broadcast, reports: this.reports, 'report.close': this.reportClose, 'bio.clear': this.bioClear, 'cooldown.clear': this.cooldownClear,
+      'market.player': this.marketPlayer, 'market.cancel': this.marketCancel,
     };
+  }
+
+  // ---- the Market (server/p2pmarket.mjs) -----------------------------------------------------------------------------
+  // A player's open listings and the latest that ended, as seller or buyer.
+  async marketPlayer(actor, a) {
+    const t = await this.target(a.id);
+    return this.srv.p2p.staffView(t.id);
+  }
+  // One of a player's listings taken down (moderators too: it's what they put up): the item goes back to their inventory.
+  async marketCancel(actor, a) {
+    const t = await this.target(a.id);
+    await this.canTidy(actor, t);
+    const lid = text(a.lid, 'Listing', 80);
+    const reason = text(a.reason, 'Reason', 300, { min: 0 });
+    const out = await this.srv.p2p.staffCancel(t.id, lid);
+    await this.audit(actor, 'market.cancel', t, { lid, item: itemName(out.item), price: out.price, ...(reason ? { reason } : {}) });
+    return { item: out.item, price: out.price };
   }
 
   async overview(actor) {
     await this.srv.store.flush().catch(() => {}); // (what's only in memory, so the totals are current)
     const { rows: [u] } = await this.db.query(`SELECT count(*)::int AS accounts, count(discord_id)::int AS linked,
       COALESCE(sum((state->>'money')::float8), 0)::float8 AS money,
-      COALESCE(sum(jsonb_array_length(COALESCE(state->'inv', '[]'::jsonb) || COALESCE(state->'stored', '[]'::jsonb))), 0)::float8 AS items FROM users`);
+      COALESCE(sum(jsonb_array_length(COALESCE(state->'inv', '[]'::jsonb) || COALESCE(state->'stored', '[]'::jsonb) || COALESCE(state->'listed', '[]'::jsonb))), 0)::float8 AS items FROM users`);
     const { rows: [b] } = await this.db.query('SELECT count(*)::int AS n FROM bans WHERE lifted IS NULL AND (expires IS NULL OR expires > $1)', [Date.now()]);
     const { rows: recent } = await this.db.query('SELECT * FROM audit ORDER BY at DESC, id DESC LIMIT 15');
     return {
@@ -435,12 +457,12 @@ export class Admin {
     const online = [...this.srv.sockets.keys()].map(Number).filter(Number.isInteger).join(',') || 'NULL';
     const { rows: [c] } = await this.db.query(`SELECT count(*)::int AS n FROM users u ${W}`, params);
     const { rows } = await this.db.query(`SELECT u.id, u.name, u.created, u.last_seen, u.discord_id, u.discord_name, ${banned} AS banned,
-      (u.state->>'money')::float8 AS money, (u.state->'prof'->>'level')::int AS level, u.state->'inv' AS inv, u.state->'stored' AS stored
+      (u.state->>'money')::float8 AS money, (u.state->'prof'->>'level')::int AS level, u.state->'inv' AS inv, u.state->'stored' AS stored, u.state->'listed' AS listed
       FROM users u ${W} ORDER BY u.id IN (${online}) DESC, u.last_seen DESC, u.id DESC LIMIT ${PAGE} OFFSET ${page * PAGE}`, params);
     return {
       rows: rows.map((r) => {
         const e = this.srv.store.cache.get(r.id); // (fresher than the saved row)
-        const inv = ownedItems(e ? e.st : { inv: parse(r.inv) || [], stored: parse(r.stored) || [] });
+        const inv = ownedItems(e ? e.st : { inv: parse(r.inv) || [], stored: parse(r.stored) || [], listed: parse(r.listed) || [] });
         return {
           id: r.id, name: r.name, online: this.srv.isOnline(r.id), money: round2(e ? e.st.money : Number(r.money) || 0),
           level: (e ? e.st.prof?.level : r.level) || 1, worth: worthOf(inv), items: inv.length,
@@ -547,6 +569,8 @@ export class Admin {
     await this.canChange(actor, t);
     const uids = removeUids(a.uids);
     const out = await this.srv.store.withUser(t.id, async (e) => {
+      // (Listed ones come off the Market first, back in the inventory: server/p2pmarket.mjs releaseHeld.)
+      for (const d of (await this.srv.p2p?.releaseHeld(e, uids))?.ds || []) this.srv.deltaTo(t.id, d);
       const snapJson = JSON.stringify(e.st);
       // Locked items go too, and items in Storage Units; items in an open trade offer don't (take() refuses them before
       // changing anything).
@@ -567,6 +591,10 @@ export class Admin {
     await this.canTidy(actor, t);
     const [uid] = removeUids([a.uid]);
     const out = await this.srv.store.withUser(t.id, async (e) => {
+      // (A listed item comes off the Market first, its listing showing the name to everyone: server/p2pmarket.mjs releaseHeld.)
+      if (customName(listedOf(e.st).find((x) => x.uid === uid) || {})) {
+        for (const d of (await this.srv.p2p?.releaseHeld(e, [uid]))?.ds || []) this.srv.deltaTo(t.id, d, 'A moderator took one of your items off the Market because of its name: it\'s back in your inventory');
+      }
       const ctx = makeCtx(e.st, { online: true });
       const r = clearNameForStaff(ctx, uid);
       this.srv.store.markDirty(e);
@@ -664,9 +692,10 @@ export class Admin {
       [t.id, ipHash, reason, actor.name, actor.level, created, expires]);
     const ban = { id: rows[0].id, reason, expires, by: actor.name, network: !!ipHash };
     this.srv.kick(t.id, { code: 'banned', error: banText(ban), ban: publicBan(ban) });
+    const thrown = []; // (the other accounts on that network it threw off)
     if (ipHash) {
       for (const [id, set] of [...this.srv.sockets]) {
-        if (id !== t.id && [...set].some((ws) => ws.ipHash === ipHash) && await this.levelOf(id, { fast: true }) < 1) this.srv.kick(id, { code: 'banned', error: networkBanText(ban), ban: publicBan(ban) });
+        if (id !== t.id && [...set].some((ws) => ws.ipHash === ipHash) && await this.levelOf(id, { fast: true }) < 1) { this.srv.kick(id, { code: 'banned', error: networkBanText(ban), ban: publicBan(ban) }); thrown.push(id); }
       }
     }
     // The ban is in force: telling them on Discord (and the Discord ban) gets a few seconds before the answer goes.
@@ -674,7 +703,11 @@ export class Admin {
       t.discord_id ? soon(this.discord.dm(t.discord_id, { content: `You were banned from the game server: ${reason}\n${expires ? `The ban ends <t:${Math.floor(expires / 1000)}:f>.` : 'The ban is permanent.'}` }).then(Boolean, () => false)) : false,
       discordBan ? soon(this.discord.ban(t.discord_id, `${reason} (game ban by ${actor.name})`).catch((e) => ({ ok: false, error: e?.message || 'failed' }))) : null,
     ]);
-    await this.audit(actor, 'ban', t, { reason, minutes, expires, network: !!ipHash, networkAsked: network, discordBan, discord, dm });
+    // A banned player sells nothing: their Market listings come down, the items back in their inventory.
+    const listings = await Promise.resolve(this.srv.p2p?.takeDown(t.id, 'removed') ?? 0).catch((e) => { this.log('[p2p] take down failed', e?.message || e); return 0; });
+    // (A network ban: the accounts it blocks sell nothing either, those it threw off and those whose last network it is.)
+    const networkListings = ipHash ? await Promise.resolve(this.srv.p2p?.takeDownNetwork(ipHash, { except: t.id, kicked: thrown }) ?? 0).catch((e) => { this.log('[p2p] take down failed', e?.message || e); return 0; }) : 0;
+    await this.audit(actor, 'ban', t, { reason, minutes, expires, network: !!ipHash, networkAsked: network, discordBan, discord, dm, ...(listings ? { listings } : {}), ...(networkListings ? { networkListings } : {}) });
     return { ban: { ...ban, created, dm, discord } };
   }
 
@@ -785,6 +818,7 @@ export class Admin {
     // (After the audit: it is done whatever happens to these.)
     if (this.srv.isOnline(t.id)) this.srv.broadcastPlayers(); // (who's online is by name)
     await this.srv.social.renamed(t.id);
+    await this.srv.p2p?.renamed(t.id, name); // (their Market listings show it)
     return { name };
   }
 
@@ -817,7 +851,7 @@ export class Admin {
       for (const [k, v] of Object.entries(a.settings)) {
         if (k === 'motd') next.motd = text(v, 'Message of the day', 300, { min: 0 });
         else if (k === 'maintenanceMsg') next.maintenanceMsg = text(v, 'Maintenance message', 300, { min: 0 });
-        else if (['maintenance', 'registration', 'trading', 'gambling'].includes(k)) next[k] = bool(v, k);
+        else if (['maintenance', 'registration', 'trading', 'gambling', 'market'].includes(k)) next[k] = bool(v, k);
         else fail(`Unknown setting: ${k}`);
       }
       await this.db.query("INSERT INTO kv (k, v) VALUES ('admin', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(next)]);
@@ -827,6 +861,7 @@ export class Admin {
     });
     this.settingsQ = run.catch(() => {});
     const { before, next } = await run;
+    this.srv.p2p?.openChanged(); // (the games watching the Market are told whether it's open now)
     let kicked = 0;
     if (next.maintenance && !before.maintenance) {
       for (const id of [...this.srv.sockets.keys()]) {

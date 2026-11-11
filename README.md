@@ -421,7 +421,7 @@ What's in a match:
   trade-up until it comes out, but still counts toward your net worth and in the Item Database. An empty unit can be
   deleted, for no refund
 - NPC players (offline): 2,000 made-up CS2 players with their own inventories and money; 66 of them are active traders.
-  Normal players buy on the Market (its stock goes for you too) and trade at about market price. 20 are collectors,
+  Normal players buy from the Store (its stock goes for you too) and trade at about market price. 20 are collectors,
   each chasing one kind of item (Dopplers, blue gems, fades, low floats, serial numbers, Katowice-era stickers,
   Souvenirs, StatTrak™ knives, AWPs, gloves, charms, knives; the most traded kinds have two, who bid against each other)
   and paying well over market for it (a #1 blue gem might fetch 1.5-2x). Beginner traders (10 active, about 400 in all)
@@ -446,11 +446,29 @@ What's in a match:
 - The Armory: Armory Stars (Armory Pass, or earned by buying cases and keys) spent on drops from featured collections that
   rotate every 10-15 minutes, and on the four charm collections (always available)
 - Charms: all 78 of CS2's charms (Missing Link, Missing Link Community, Small Arms and Dr Boom), from the Armory or the
-  Market, one per gun (Souvenirs too), hung anywhere on it. Each has a pattern from 1 to 100,000 that sets its colours and how it hangs; low and special ones (#1, the top 10, the
+  Store, one per gun (Souvenirs too), hung anywhere on it. Each has a pattern from 1 to 100,000 that sets its colours and how it hangs; low and special ones (#1, the top 10, the
   top 100, #77777...) are worth more. A gun is worth its charm too; taking one off uses a Charm Detachment (a pack of 3
   for $0.99). Sticker Slabs turn any sticker into a charm (the sticker plus $0.44, the cheapest slabs' going rate)
 - Gambling (virtual money, no house edge, provably fair with a verify button): case battles (1v1 to 2v2, normal or
   crazy), coinflip and jackpot, against bots or, online, other players
+- The Store and the Market (the top bar): the Store is the game's own limited stock, restocked every 10 minutes. The Market
+  is what players list, laid out like Skinport's market: a search box over every item in the game (each with how many are
+  listed and the cheapest, or none), the category bar (Knife, Gloves, Pistol, Rifle, SMG, Heavy, Agent, Charm, Sticker,
+  Container, More), filters for price, exterior, StatTrak™, Souvenir, rarity and rare patterns, and the listings newest first
+  (or by price, discount or float) as cards or a list: the price, how far it is from the reference price (the game's own
+  value of that copy, what the Store pays for it), the float on a wear bar, the pattern, stickers and charm, and the seller.
+  An item's page has all its listings. Sell one of yours from the Market's Sell tab or the inventory (Sell on Market): it
+  leaves your inventory until it sells (paid at once, even while you're away) or you cancel it, and still counts as yours
+  (net worth, the Item Database). My listings changes a price or takes one down. There's no fee (one constant,
+  `MARKET_FEE` in `src/js/engine/p2p.js`), at most 50 listings each, prices from $0.03 to $1,000,000 and at most 20 times
+  the reference. A price typed with a comma for the cents ("12,50") is $12.50. Online it's between players on the server
+  (staff see and take down a player's listings in the admin panel; trading or the Market switched off stops listing and
+  buying, and the page says it's closed; a ban takes a player's listings down, and a network ban those of the accounts it
+  blocks too). A listed item asked for in a trade offer can't be traded until its listing comes down, and the offer stays
+  open for then; sold, the offer closes. Listings that ended without a sale are kept a week (each player's latest 40 always),
+  sales for good. Offline
+  the NPC traders list part of what they own at their own kind of price (now and then a beginner's bargain) and buy what
+  you list over time, as they'd value it, unless the admin panel's "Market buyers" rule is off
 - Online play (optional): accounts on your own server, trading between players, live lobbies; see DEPLOY.md
 - Friends & Chat online: the same page as the NPC players' offline, with real players. Friend requests, private messages
   (live, or waiting for them if they're offline), a profile with a showcase, inventory, Storage Units to look through and
@@ -460,7 +478,7 @@ What's in a match:
 - Item Database (like CSFloat's): search every skin, knife, glove, sticker, charm and agent in the game; open one to
   see every copy that exists with its owner, float, seed, pattern and stickers (online: everyone on the server;
   offline: you and the NPC players; each owner is a link to their profile), its float rank (#1-#3 lowest and highest, StatTrak™ and Souvenir copies ranked apart), the
-  guns a sticker is applied to, and a skin's current Market listings. Your own top floats carry the same #1-#3 badge
+  guns a sticker is applied to, and a skin's current Store listings. Your own top floats carry the same #1-#3 badge
   in your inventory and the item details (a lone copy has no rank). A skin's copies sort by pattern too, each with how
   many copies of the skin share its pattern (×N, in the category picked; click it, or type a number in the pattern box,
   to see only that pattern's copies). Float records (Lowest floats / Highest floats): the top 50 or 100 floats of any
@@ -471,7 +489,7 @@ What's in a match:
   owner and pattern counts over every copy
 - Rare Special Items (knives and gloves) show CS:GO's classic gold "?" medallion in case contents and the roulette
 - Serial numbers on everything you unbox (cases, packages, capsules, the Armory, case battles), counted per item in
-  unboxing order (offline in your save, online across the whole server). Market buys and trade-ups have none; unboxed
+  unboxing order (offline in your save, online across the whole server). Store buys and trade-ups have none; unboxed
   items are worth 3% more, with bigger premiums for #1, the top 10 and top 100, and special numbers (#69, #420, #777,
   #1337, #111, #1000...)
 - The Index: a lasting record of everything you've unboxed (when you first got it, how many, your lowest float and best

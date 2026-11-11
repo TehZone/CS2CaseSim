@@ -16,8 +16,10 @@ export const UNIT_NAME_MAX = 20; // (CS2 labels units with its Name Tag window: 
 export const MAX_UNITS = 20; // CS2 stops you at some number too ("You already own too many Storage Units"); it doesn't say which
 
 export const storedOf = (st) => st.stored || [];
-// Everything a player owns: the inventory and what's in their units.
-export const ownedItems = (st) => [...(st.inv || []), ...storedOf(st)];
+// What's listed on the Market (engine/p2p.js): out of the inventory until it sells or the listing is cancelled, but still yours.
+export const listedOf = (st) => (Array.isArray(st.listed) ? st.listed : []);
+// Everything a player owns: the inventory, what's in their units and what they have listed on the Market.
+export const ownedItems = (st) => [...(st.inv || []), ...storedOf(st), ...listedOf(st)];
 export const ownedValue = (st) => round2(ownedItems(st).reduce((s, it) => s + I.itemValue(it), 0));
 export const unitsOf = (st) => (st.inv || []).filter(I.isUnit);
 export const contents = (st, unit) => storedOf(st).filter((it) => it.su === unit);

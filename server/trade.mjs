@@ -3,7 +3,7 @@
 import crypto from 'node:crypto';
 import { makeCtx, delta, take, give, spend, credit, GameError } from '../src/js/engine/actions.js';
 import { isUnit, itemName, tradable } from '../src/js/engine/items.js';
-import { storedItem } from '../src/js/engine/storage.js';
+import { listedOf, storedItem } from '../src/js/engine/storage.js';
 import { textProblem } from '../src/js/engine/tools.js';
 import { round2 } from '../src/js/engine/util.js';
 
@@ -216,6 +216,10 @@ export class Trades {
     const result = await this.srv.store.lock([t.from_id, t.to_id], async (entries) => {
       if (!this.open.has(t.id)) fail('That offer is no longer open');
       const from = entries.find((e) => e.id === t.from_id), to = entries.find((e) => e.id === t.to_id);
+      // (One of yours it asks for is on the Market (server/p2pmarket.mjs): still yours, so the offer stays open for when the
+      // listing comes down. Sold, it's gone: closeRelying closes the offer then.)
+      const listed = listedOf(to.st).find((x) => t.offer.get.uids.includes(x.uid));
+      if (listed) throw new GameError(`${itemName(listed)} is listed on the Market. Cancel its listing in My listings to trade it.`);
       // Re-check everything against the current inventories before changing anything.
       const problem = (() => {
         const has = (st, uids) => uids.every((u) => st.inv.some((i) => i.uid === u && !i.lk));
@@ -258,6 +262,17 @@ export class Trades {
     }
     await this.pushClosed(t.id);
     return { ok: true, d: result.dt };
+  }
+  // Items of a player's just went to someone else outside a trade (sold on the Market, server/p2pmarket.mjs): the open offers
+  // that gave or asked for them can no longer go through, so they close as failed, as after an accept above.
+  async closeRelying(ownerId, uids) {
+    const gone = new Set(uids);
+    for (const o of [...this.open.values()]) {
+      if ((o.from_id === ownerId && o.offer.give.uids.some((u) => gone.has(u))) || (o.to_id === ownerId && o.offer.get.uids.some((u) => gone.has(u)))) {
+        await this.close(o, 'failed');
+        await this.pushClosed(o.id);
+      }
+    }
   }
 }
 

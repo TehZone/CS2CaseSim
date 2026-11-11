@@ -65,6 +65,17 @@ const MIGRATIONS = [
      reason TEXT NOT NULL, text TEXT NOT NULL, messages JSONB NOT NULL, at BIGINT NOT NULL, closed_at BIGINT, closed_by TEXT)`,
   `CREATE INDEX IF NOT EXISTS reports_open ON reports (closed_at, at)`,
   `ALTER TABLE reports ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT ''`, // (the summary of the player reported, at that moment)
+  // The Market (server/p2pmarket.mjs): a listing per row, the whole item in it; status 'open', 'sold', 'cancelled' (by its
+  // seller) or 'removed' (staff, a ban, or its item gone from the seller). New tables only: an older server running at the same
+  // time never reads them. At most one open listing per item.
+  `CREATE TABLE IF NOT EXISTS p2p_listings (
+     id TEXT PRIMARY KEY, seller_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, seller_name TEXT NOT NULL, uid TEXT NOT NULL,
+     item JSONB NOT NULL, price DOUBLE PRECISION NOT NULL, status TEXT NOT NULL, buyer_id INT, buyer_name TEXT, fee DOUBLE PRECISION NOT NULL DEFAULT 0,
+     created BIGINT NOT NULL, updated BIGINT NOT NULL, sold_at BIGINT, seen BOOLEAN NOT NULL DEFAULT TRUE)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS p2p_open_uid ON p2p_listings (uid) WHERE status = 'open'`,
+  `CREATE INDEX IF NOT EXISTS p2p_status ON p2p_listings (status)`,
+  `CREATE INDEX IF NOT EXISTS p2p_seller ON p2p_listings (seller_id, status, updated)`,
+  `CREATE INDEX IF NOT EXISTS p2p_buyer ON p2p_listings (buyer_id, updated)`,
 ];
 
 export async function openDb({ url = process.env.DATABASE_URL, dataDir = process.env.PGLITE_DIR } = {}) {

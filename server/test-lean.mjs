@@ -145,7 +145,8 @@ const prices = (ae) => new Promise((resolve, reject) => {
 });
 
 try {
-  check('lean1 is the one capability, and its name', LEAN === 'lean1' && CAPS.size === 1 && CAPS.has('lean1'));
+  // (p2p1, the Market's, is the other: server/test-market.mjs)
+  check('lean1 is a capability, and its name; p2p1 the only other', LEAN === 'lean1' && CAPS.size === 2 && CAPS.has('lean1') && CAPS.has('p2p1'));
   const tok = {};
   for (const n of ['olga', 'leo', 'erik', 'pia', 'quin', 'gabe', 'boss']) tok[n] = await register(n);
 

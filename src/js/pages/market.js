@@ -1,4 +1,5 @@
-// Market: limited stock that restocks every 10 minutes (rules in engine/market.js). Cheap items are almost always
+// The Store (the top bar's name for it; the page is still 'market'): limited stock that restocks every 10 minutes (rules in
+// engine/market.js). Players' own listings are the Market: pages/p2pmarket.js. Cheap items are almost always
 // listed; rare and expensive ones only now and then, one copy at a time. Online, everyone shares the same stock.
 import { esc, money, imgUrl, debounce } from '../util.js';
 import { D, rarityColor } from '../data.js';
@@ -48,7 +49,7 @@ export function destroy() { offs.forEach((o) => o()); offs = []; clearInterval(t
 function tick() {
   if (!root) return;
   const w = marketWindow(now());
-  if (w !== shownWindow) { draw(); chooserRedraw?.(); toast('The market has restocked.', 'gold'); return; }
+  if (w !== shownWindow) { draw(); chooserRedraw?.(); toast('The Store has restocked.', 'gold'); return; }
   const el = root.querySelector('[data-restock]');
   if (el) el.textContent = fmt(windowEnd(w) - now());
 }
@@ -117,7 +118,7 @@ function draw() {
   view.page = Math.min(view.page, pages - 1);
   const shown = list.slice(view.page * PAGE, view.page * PAGE + PAGE);
   root.innerHTML = `<div class="page">
-    <div class="page-head"><h1>Market</h1><span class="sub">Limited stock${online() ? ', shared with everyone on the server' : ''}. Rare items are listed rarely and one at a time. Each listing can only be bought once.</span>
+    <div class="page-head"><h1>Store</h1><span class="sub">The game's own limited stock${online() ? ', shared with everyone on the server' : ''}. Rare items are listed rarely and one at a time. Each listing can only be bought once.</span>
       <span class="spacer"></span><span class="chip gold">Restocks in <b data-restock style="margin-left:4px">${fmt(windowEnd(w) - now())}</b></span></div>
     <div class="toolbar">
       <div class="seg" data-tabs>${[['skins', 'Skins'], ['stickers', 'Stickers'], ['charms', 'Charms'], ['agents', 'Agents']].map(([k, n]) => `<button data-v="${k}" class="${view.tab === k ? 'active' : ''}">${n}</button>`).join('')}</div>

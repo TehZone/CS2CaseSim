@@ -296,7 +296,8 @@ Good to know:
   `connections` means compression is getting through.
 - Tests: `node scripts/test-engine.mjs` (game rules), `node scripts/test-update.mjs` (the updater), `node server/test.mjs`
   (server, trading, gambling), `node server/test-admin.mjs` (the admin panel and the Discord bot, against a stand-in
-  Discord) and `node server/test-release.mjs` (the version lock); `npm test` in `server/` runs the server tests.
+  Discord), `node server/test-release.mjs` (the version lock) and `node server/test-market.mjs` (the players' Market: its
+  table, `p2p_listings`, is made by the server's start like the rest); `npm test` in `server/` runs the server tests.
 
 ## Previous setup (Render + Neon)
 

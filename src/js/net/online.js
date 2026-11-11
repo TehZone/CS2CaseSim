@@ -57,7 +57,12 @@ const LS = 'cs2sim-online';
 const PROTOCOL = 1;
 // The capabilities this game reads (see the protocol above), and the ones the server took for this connection.
 const LEAN = 'lean1';
-const CAPS = [LEAN];
+// p2p1: the Market (server/p2pmarket.mjs): its requests (rpc ns 'p2p', net.p2p) and, while the Market page watches
+// (net.watch('p2p') sends { t: 'sub', p2p }), its listings' changes: { t: 'p2p.d', add?: [listing], del?: [lid], upd?: [{ lid,
+// price }], open? (the admin panel opened or closed it) } (net.on('p2p')). A server whose welcome doesn't name it has no Market
+// (net.hasMarket()).
+const P2P = 'p2p1';
+const CAPS = [LEAN, P2P];
 let caps = new Set();
 const TRADES_SHOWN = 30; // (the server's MAX_LIST: a trades.d keeps the list to the 30 latest)
 // The one server the game plays on, and the only place its address is written: changing it is this one line, and only
@@ -82,7 +87,9 @@ let account = null, motd = '';
 let clockOffset = 0;
 const marketSold = new Map(); // window -> Set of listing ids
 // What pages want pushed (lean1: { t: 'sub' }): how many watch each topic, and what this connection's server was last told.
-const watching = { lobbies: 0 };
+const watching = { lobbies: 0, p2p: 0 };
+// (Each topic is the server's to push only with its capability: the lobbies with lean1, the Market's listings with p2p1.)
+const TOPIC_CAP = { lobbies: LEAN, p2p: P2P };
 let subSent = {}, subTimer = null;
 
 const saved = () => { try { return JSON.parse(localStorage.getItem(LS) || '{}'); } catch { return {}; } };
@@ -123,6 +130,9 @@ export const net = {
   gamble: (m, args) => rpc('gamble', m, args),
   trade: (m, args) => rpc('trade', m, args),
   social: (m, args) => rpc('social', m, args),
+  // The Market (p2p1). (Its answers as they came: listings are other players' items, not your inventory's.)
+  p2p: (m, args) => rpc('p2p', m, args, { relink: false }),
+  hasMarket: () => caps.has(P2P),
   account: () => account,
   motd: () => motd,
   // Whether this connection's server sends the lean1 shapes (see the protocol above).
@@ -340,6 +350,7 @@ function handle(msg) {
     case 'update': emit('update', { version: msg.version || '' }); return;
     case 'chat': emit('chat', { msg: msg.msg, who: msg.who }); return;
     case 'friends': emit('friends'); return;
+    case 'p2p.d': emit('p2p', { add: msg.add || [], del: msg.del || [], upd: msg.upd || [], ...(typeof msg.open === 'boolean' ? { open: msg.open } : {}) }); return;
   }
 }
 
@@ -392,14 +403,15 @@ function askTrades() {
     .finally(() => { tradesAsk = null; });
 }
 
-// Tells the server what the pages watch now (lean1 only), once the page changes of this moment are done: a page drawn again
-// stops and starts watching at once, which says nothing.
+// Tells the server what the pages watch now (each topic only to a server whose welcome named its capability: TOPIC_CAP), once
+// the page changes of this moment are done: a page drawn again stops and starts watching at once, which says nothing.
 function syncSubs() {
   if (subTimer) return;
   subTimer = setTimeout(() => {
     subTimer = null;
-    if (!net.lean() || status !== 'online' || !ws || ws.readyState !== 1) return;
+    if (status !== 'online' || !ws || ws.readyState !== 1) return;
     for (const topic of Object.keys(watching)) {
+      if (!caps.has(TOPIC_CAP[topic])) continue;
       const want = watching[topic] > 0;
       if (!!subSent[topic] === want) continue;
       subSent[topic] = want;

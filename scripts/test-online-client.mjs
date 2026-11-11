@@ -132,7 +132,7 @@ try {
   let sock = sockets.at(-1);
   sock.open();
   const hello = sock.sent[0];
-  check('the hello announces lean1', hello?.t === 'hello' && same(hello.caps, ['lean1']) && hello.v === 1 && hello.token === 'tok', JSON.stringify(hello));
+  check('the hello announces lean1 (and the Market\'s p2p1)', hello?.t === 'hello' && same(hello.caps, ['lean1', 'p2p1']) && hello.v === 1 && hello.token === 'tok', JSON.stringify(hello));
   gamblePage.open();
   sock.deliver(welcome({ lobbies: { battles: [], flips: [{ id: 'f' }], jackpot: null } }));
   await settle();

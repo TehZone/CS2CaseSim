@@ -23,6 +23,7 @@ import { playPrefs, savePlayPrefs } from './play-settings.js';
 import { BINDS_VERSION } from '../play/input.js';
 import { ASPECTS, RESOLUTIONS } from '../play/screen.js';
 import { formatWait } from '../engine/matchmaking.js';
+import { drawMarketTab, marketCount } from './p2p-admin.js';
 
 const TABS = [['dash', 'Dashboard'], ['players', 'Players'], ['bans', 'Bans'], ['reports', 'Reports'], ['audit', 'Audit log'], ['server', 'Server']];
 // (Offline the bans are the NPC traders you've blocked, and the server is your save and its NPC world.)
@@ -31,9 +32,9 @@ const TAB_DATA = { dash: 'overview', players: 'players', bans: 'bans', reports: 
 const FILTERS = [['all', 'All'], ['online', 'Online'], ['banned', 'Banned'], ['linked', 'Linked'], ['staff', 'Staff']];
 const OFF_FILTERS = [['all', 'All'], ['online', 'Online'], ['banned', 'Blocked'], ['friends', 'Friends']];
 const filters = () => (online() ? FILTERS : OFF_FILTERS);
-const SUBS = [['overview', 'Overview'], ['inventory', 'Inventory'], ['index', 'Index'], ['configs', 'Configs'], ['snapshots', 'Snapshots'], ['history', 'History']];
-// (An NPC trader has no configs or Index, and snapshots are of your own save only.)
-const NPC_SUBS = SUBS.filter(([k]) => k !== 'configs' && k !== 'index' && k !== 'snapshots');
+const SUBS = [['overview', 'Overview'], ['inventory', 'Inventory'], ['market', 'Market'], ['index', 'Index'], ['configs', 'Configs'], ['snapshots', 'Snapshots'], ['history', 'History']];
+// (An NPC trader has no configs, Index or Market listings of their own here, and snapshots are of your own save only.)
+const NPC_SUBS = SUBS.filter(([k]) => k !== 'configs' && k !== 'index' && k !== 'snapshots' && k !== 'market');
 const KINDS = [['all', 'All items'], ['skin', 'Skins'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['charm', 'Charms'], ['crate', 'Cases'], ['key', 'Keys'], ['unit', 'Storage Units'], ['tool', 'Tools']];
 const GIVE_KINDS = [['skin', 'Skin'], ['crate', 'Case'], ['key', 'Key'], ['sticker', 'Sticker'], ['agent', 'Agent'], ['charm', 'Charm'], ['unit', 'Storage Unit'], ['tool', 'Tool']];
 const DURATIONS = [['60', '1 hour'], ['1440', '1 day'], ['10080', '7 days'], ['43200', '30 days'], ['perm', 'Permanent'], ['custom', 'Custom (minutes)']];
@@ -408,7 +409,7 @@ function accessHtml(me) {
 const swHtml = (label, on, normal) => `<div class="adm-switch"><span>${label}</span><span class="chip ${on === normal ? 'green' : 'red'}">${on ? 'On' : 'Off'}</span></div>`;
 function switchesHtml(s) {
   const sw = swHtml;
-  return `${sw('Maintenance', !!s.maintenance, false)}${sw('New accounts', s.registration !== false, true)}${sw('Trading', s.trading !== false, true)}${sw('Gambling', s.gambling !== false, true)}
+  return `${sw('Maintenance', !!s.maintenance, false)}${sw('New accounts', s.registration !== false, true)}${sw('Trading', s.trading !== false, true)}${sw('Market', s.market !== false, true)}${sw('Gambling', s.gambling !== false, true)}
     <div class="adm-motd"><span>Message of the day</span>${s.motd ? `<div>${esc(s.motd)}</div>` : '<div class="dim">None</div>'}</div>`;
 }
 
@@ -562,7 +563,7 @@ function drawPlayer(el) {
   // (Offline an NPC trader's block, while it lasts.)
   const ban = online() ? (p.bans || []).map(normBan).find(banActive) || (p.user.ban ? normBan(p.user.ban) : null)
     : p.user.npc?.blocked && banActive(normBan(p.user.npc.blocked)) ? normBan(p.user.npc.blocked) : null;
-  const counts = { inventory: ownedItems(p.state || {}).length, index: recordSize(p.state), snapshots: (p.snapshots || []).length };
+  const counts = { inventory: ownedItems(p.state || {}).length, market: marketCount(p), index: recordSize(p.state), snapshots: (p.snapshots || []).length };
   const subs = p.user.npc ? NPC_SUBS : SUBS, acts = online() ? PLAYER_ACTIONS : LOCAL_ACTIONS;
   if (!subs.some(([k]) => k === view.sub)) view.sub = 'overview';
   pv.innerHTML = `${online() ? playerHeadHtml(p, ban) : localHeadHtml(p, ban)}
@@ -802,7 +803,8 @@ async function resetSave(btn) {
   return !!(await run(btn, 'reset', { id: 'me' }, 'Your save is a fresh one'));
 }
 
-const SUB_DRAW = { overview: drawOverview, inventory: drawInventory, index: (el, p) => drawAdminIndex(el, p.state), configs: drawConfigs, snapshots: drawSnapshots, history: drawHistory };
+const SUB_DRAW = { overview: drawOverview, inventory: drawInventory, index: (el, p) => drawAdminIndex(el, p.state), configs: drawConfigs, snapshots: drawSnapshots, history: drawHistory,
+  market: (el, p) => drawMarketTab(el, p, { canTidy: canTidy(p.user), done: afterChange }) }; // (pages/p2p-admin.js)
 
 // ---- a player: Overview (their numbers, editable by admins) ------------------------------------------
 const getPath = (o, path) => path.split('.').reduce((v, k) => v?.[k], o);
@@ -1031,21 +1033,23 @@ function drawInvList(el, p) {
   updateSel();
   if (!shown.length) { box.innerHTML = `<div class="empty adm-empty">${all.length ? 'No item matches that.' : 'Their inventory is empty.'}</div>`; return; }
   const row = (i, n) => {
-    const res = reserved.has(i.uid), wk = i.t === 'skin' && i.fl != null ? wearOf(i.fl) : null;
+    // (A listed item, i.lid, is on the Market: it comes back to the inventory when its listing comes down, in the Market tab.)
+    const res = reserved.has(i.uid) || !!i.lid, wk = i.t === 'skin' && i.fl != null ? wearOf(i.fl) : null;
     const tags = [i.stt && '<span class="tag st">ST™</span>', i.sv && '<span class="tag sv">Souvenir</span>', i.lk && '<span class="tag lock" title="Locked">🔒</span>',
       i.sn && `<span class="tag sn" title="Serial number">#${+i.sn}</span>`, i.kc && '<span class="tag" title="A charm is attached">Charm</span>',
-      i.stk?.length && `<span class="tag" title="Stickers">${+i.stk.length} stk</span>`, res && '<span class="tag pat" title="In an open trade offer">In trade</span>',
+      i.stk?.length && `<span class="tag" title="Stickers">${+i.stk.length} stk</span>`, reserved.has(i.uid) && '<span class="tag pat" title="In an open trade offer">In trade</span>',
+      i.lid && `<span class="tag pat" title="Listed on the Market for ${money(+i.lp || 0)}: take it down in the Market tab to change it">Listed</span>`,
       i.su && `<span class="tag" title="In this Storage Unit">In ${esc(unitLabel(p, i.su))}</span>`,
       i.t === 'unit' && `<span class="tag" title="Items in it">${unitCount(p.state, i.uid).toLocaleString()} items</span>`].filter(Boolean).join('');
     return `<tr style="--rc:${esc(itemColor(i))}" class="${v.sel.has(i.uid) ? 'sel' : ''}">
-      ${edit ? `<td class="cb"><input type="checkbox" data-uid="${esc(i.uid)}" ${v.sel.has(i.uid) ? 'checked' : ''} ${res ? 'disabled title="In an open trade offer"' : ''}></td>` : ''}
+      ${edit ? `<td class="cb"><input type="checkbox" data-uid="${esc(i.uid)}" ${v.sel.has(i.uid) ? 'checked' : ''} ${res ? `disabled title="${i.lid ? 'Listed on the Market' : 'In an open trade offer'}"` : ''}></td>` : ''}
       <td class="adm-thumb"><img loading="lazy" src="${esc(itemImg(i))}" alt=""></td>
       <td><div class="adm-iname ${i.stt ? 'stt' : i.sv ? 'sv' : ''}">${esc(itemName(i))}</div><div class="adm-uid">${esc(i.uid)}</div></td>
       <td class="nw">${wk ? `<b class="wk" style="--wc:${WEAR_BY_KEY[wk].c}">${wk}</b>${(+i.fl).toFixed(6)}` : '<span class="dim">—</span>'}</td>
       <td class="nw">${i.sd != null ? +i.sd : i.pat != null ? '#' + (+i.pat) : '<span class="dim">—</span>'}</td>
       <td class="num green">${money(itemValue(i))}</td><td class="adm-tags">${tags}</td>
       <td class="adm-src" title="${esc(i.src || '')}">${esc(clip(i.src || '—', 32))}</td><td class="nw">${when(i.at)}</td>
-      <td class="adm-rowbtns">${INSPECTABLE.has(i.t) ? `<button class="btn ghost sm" data-insp="${n}">Inspect</button>` : ''}${I.customName(i) && canTidy(p.user) ? ` <button class="btn ghost sm" data-unname="${n}" title="Take this item's name off">Clear name</button>` : ''}</td></tr>`;
+      <td class="adm-rowbtns">${INSPECTABLE.has(i.t) ? `<button class="btn ghost sm" data-insp="${n}">Inspect</button>` : ''}${I.customName(i) && canTidy(p.user) && !i.lid ? ` <button class="btn ghost sm" data-unname="${n}" title="Take this item's name off">Clear name</button>` : ''}</td></tr>`;
   };
   box.innerHTML = `<div class="db-table-wrap"><table class="price-table adm-table adm-inv"><thead><tr>
       ${edit ? '<th class="cb"><input type="checkbox" data-iall title="Select this page"></th>' : ''}<th></th><th>Item</th><th>Float</th><th>Seed</th><th class="num">Value</th><th>Tags</th><th>From</th><th>Got</th><th></th></tr></thead>
@@ -1596,6 +1600,7 @@ const SERVER_ROWS = [
   ['maintenanceMsg', 'text', 'Maintenance message', 'What players see while it\'s on.', 'The server is under maintenance. Try again later.'],
   ['registration', 'bool', 'New accounts', 'Let new players create accounts.'],
   ['trading', 'bool', 'Trading', 'Trade offers between players.'],
+  ['market', 'bool', 'Market', 'Listing and buying on the players\' Market (players can still take their own listings down). Off when Trading is off too.'],
   ['gambling', 'bool', 'Gambling', 'Coinflips, jackpots and case battles (players can still cancel their own rounds).'],
 ];
 function drawServer(el) {

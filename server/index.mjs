@@ -32,6 +32,7 @@ import * as A from './accounts.mjs';
 import { Admin, banText, networkBanText } from './admin.mjs';
 import { Release, releaseFromEnv } from './release.mjs';
 import { Passive, PASSIVE_TICK_MS } from './passive.mjs';
+import { P2PMarket, P2P } from './p2pmarket.mjs';
 import { D, initData } from '../src/js/engine/data.js';
 import { lockBase, dataLock, hasCustom, customPriceHash, stableJson } from '../src/js/engine/custom.js';
 import { makeCtx, runAction, delta, GameError } from '../src/js/engine/actions.js';
@@ -57,8 +58,11 @@ const PROTOCOL = 1;
 //          and server/lean.mjs.
 //   (Not a shape, so not a capability: case.open's buy, which a server has from the deploy that brought it. A game uses it
 //   only on a server whose welcome names lean1, which came with it.)
+//   p2p1:  the Market (server/p2pmarket.mjs): its listings' changes ({ t: 'p2p.d' }), only while the game says its Market page
+//          is open ({ t: 'sub', p2p }). Its requests (ns 'p2p') are new ones: a game uses them on a server whose welcome names
+//          p2p1.
 export const LEAN = 'lean1';
-export const CAPS = new Set([LEAN]);
+export const CAPS = new Set([LEAN, P2P]);
 // WebSocket compression (permessage-deflate, RFC 7692). Each connection keeps its zlib streams between messages (context
 // takeover, ws's default, kept on purpose): a message is compressed against the ones before it, which is what makes a small
 // one, a reply or a lobbies push, shrink to a few dozen bytes. ws's 1 KB threshold only applies without context takeover.
@@ -346,6 +350,9 @@ export async function startServer({
   srv.now = clock; // (passive income's time, and the clock a new or reset account's starts from)
   const passive = new Passive(srv, { clock, tick: passiveTick });
   srv.passive = passive;
+  const p2p = new P2PMarket(srv); // (the Market: players' listings, server/p2pmarket.mjs)
+  srv.p2p = p2p;
+  await p2p.init();
 
   // ---- market prices: same data build as the client, refreshed daily from the marketplaces ----------------
   // (Compressed once per price change, both ways: brotli at its best is a fifth smaller than gzip here, ~105 KB against
@@ -563,8 +570,9 @@ export async function startServer({
   let dbIndex = null, dbFlushed = 0;
   const dbFresh = async () => { if (Date.now() - dbFlushed > 4000) { dbFlushed = Date.now(); await store.flush().catch(() => {}); } };
   const DB_IN = DB_TYPES.map((t) => `'${t}'`).join(', ');
-  // Everything a player owns, for a FROM clause: what's in their Storage Units counts as much as their inventory.
-  const OWNED = (u) => `jsonb_array_elements(COALESCE(${u}.state->'inv', '[]'::jsonb) || COALESCE(${u}.state->'stored', '[]'::jsonb))`;
+  // Everything a player owns, for a FROM clause: what's in their Storage Units, and what they have listed on the Market, counts
+  // as much as their inventory.
+  const OWNED = (u) => `jsonb_array_elements(COALESCE(${u}.state->'inv', '[]'::jsonb) || COALESCE(${u}.state->'stored', '[]'::jsonb) || COALESCE(${u}.state->'listed', '[]'::jsonb))`;
   // The lowest and highest floats on the server (db.floats): server/dbfloats.mjs, which says what they cost.
   const { FloatRecords, ItemCopies } = await import('./dbfloats.mjs');
   const floats = srv.floats = new FloatRecords({ db, fresh: dbFresh, owned: OWNED });
@@ -728,7 +736,10 @@ export async function startServer({
           store.online.add(u.id);
           // Passive income for the time since they were last paid (server/passive.mjs), by the server's clock: in the state
           // the welcome brings, `away` says what it paid, and their other windows are sent the change.
-          const { state, away } = await store.withUser(u.id, async (e) => ({ away: await passive.connected(e), state: e.st }));
+          // Their Market listings and state agreed, and what sold while they were away: a notice after the welcome.
+          const { state, away, sold } = await store.withUser(u.id, async (e) => ({
+            away: await passive.connected(e), sold: await p2p.connected(e).catch((err) => { log('[p2p] connect failed', err?.message || err); return null; }), state: e.st,
+          }));
           if (away) passive.push(u.id, { t: 'delta', d: away.d }, ws);
           const offers = await trades.list(u.id), account = await admin.account(u.id);
           // (From here to broadcastPlayers nothing waits: the players list a lean1 game is sent here is the one the changes
@@ -746,6 +757,8 @@ export async function startServer({
             ...(asked ? { caps: [...caps] } : {}),
           });
           ws.welcomed = true; // (passive income's pushes wait for this: a change sent before it is in the welcome's state already)
+          if (sold) send({ t: 'notice', msg: sold, type: 'gold' });
+          p2p.welcome(u.id); // (a sale while this one was connecting: told now)
           broadcastPlayers(ws); // (not to this one if it's lean1: the list in its welcome, read just now, has these changes)
           if (ws.tradesStale) trades.pushFull(u.id, ws).catch((e) => log('[trade] list failed', e?.message || e)); // (see Trades.pushChanged)
         } catch (e) {
@@ -756,9 +769,11 @@ export async function startServer({
         }
         return;
       }
-      // A lean1 game says which pushes it wants: { t: 'sub', lobbies: true | false } as its Gamble page opens and closes.
+      // A lean1 game says which pushes it wants: { t: 'sub', lobbies: true | false } as its Gamble page opens and closes; a p2p1
+      // game { t: 'sub', p2p: true | false } as its Market page does.
       if (user && msg.t === 'sub') {
         if (srv.lean(ws) && typeof msg.lobbies === 'boolean') live.subscribe(ws, msg.lobbies);
+        if (ws.caps?.has(P2P) && typeof msg.p2p === 'boolean') p2p.subscribe(ws, msg.p2p);
         return;
       }
       if (!user || msg.t !== 'rpc') return;
@@ -825,6 +840,8 @@ export async function startServer({
         }
         if (msg.ns === 'account') return reply(true, { r: await admin.accountRpc(user, String(msg.m), msg.args || {}) });
         if (msg.ns === 'admin') return reply(true, { r: await admin.rpc(user, String(msg.m), msg.args || {}) });
+        // The Market (server/p2pmarket.mjs): { r, d? }, d the changes to you (your other connections get them as a delta).
+        if (msg.ns === 'p2p') return reply(true, await p2p.rpc(user, String(msg.m), msg.args || {}, ws));
         reply(false, { err: 'Unknown request' });
       } catch (e) {
         if (e instanceof GameError) return reply(false, { err: e.message, code: e.code });
@@ -838,6 +855,7 @@ export async function startServer({
     ws.on('close', () => {
       clearTimeout(hello);
       if (!user) return;
+      p2p.subscribe(ws, false);
       const set = sockets.get(user.id);
       set?.delete(ws);
       if (set && !set.size) {
@@ -872,6 +890,7 @@ export async function startServer({
     admin.close();
     release.close();
     socials.close();
+    p2p.close();
     try { discord.close(); } catch (e) { log('[discord] close failed', e?.message || e); }
     await saveSerials();
     if (marketDirty) await db.query("INSERT INTO kv (k, v) VALUES ('market', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(marketSnapshot())]).catch(() => {});
