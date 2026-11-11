@@ -121,6 +121,29 @@ try {
       none.cheats === true && none.earned === 0 && after.money === before.money && JSON.stringify(after.prof) === JSON.stringify(before.prof) && again?.code === 'match' && (await serverState(A.user.id)).money === before.money);
   }
 
+  // Round MVPs online: $250 each, never more than the rounds your team won, none in Deathmatch (a player of its own).
+  {
+    const reg = await post('/api/register', { name: 'mvp_player', password: 'secret123' });
+    const M = await client(reg.body.token);
+    const aged = () => server.store.withUser(M.user.id, async (e) => { e.st.play = { ...e.st.play, at: Date.now() - 30 * 60 * 1000 }; server.store.markDirty(e); });
+    const res = { mode: 'competitive', result: 'win', kills: 20, assists: 3, roundsWon: 13, rounds: 22 };
+    const { run } = await M.act('play.start', { mode: 'competitive' });
+    await aged();
+    const m0 = (await serverState(M.user.id)).money;
+    let tooMany = null; try { await M.act('play.reward', { ...res, run, mvps: 14 }); } catch (e) { tooMany = e; }
+    const m1 = (await serverState(M.user.id)).money;
+    const paid = await M.act('play.reward', { ...res, run, mvps: 5 });
+    const m2 = (await serverState(M.user.id)).money;
+    check('online MVPs: more than the rounds your team won is refused (nothing paid, the match still open)', tooMany?.code === 'match' && m1 === m0, tooMany?.message);
+    check('online MVPs: a fair reward pays $250 each on top ($3,400 + 5 MVPs)', paid.earned === 3400 + 1250 && paid.pay.mvps === 1250 && Math.abs(m2 - m0 - 4650) < 0.011
+      && Math.abs(M.st.money - m2) < 0.011, `${m0} -> ${m2}`);
+    const { run: dm } = await M.act('play.start', { mode: 'deathmatch' });
+    await aged();
+    let dmMvp = null; try { await M.act('play.reward', { run: dm, mode: 'competitive', result: 'win', kills: 30, mvps: 1, roundsWon: 1, rounds: 1 }); } catch (e) { dmMvp = e; }
+    check('online MVPs: none in a Deathmatch, whatever mode the reward claims', dmMvp?.code === 'match' && (await serverState(M.user.id)).money === m2, dmMvp?.message);
+    M.close();
+  }
+
   // ---- market: one shared stock ------------------------------------------------------------------------
   {
     const MK = await import('../src/js/engine/market.js');

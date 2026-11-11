@@ -605,15 +605,19 @@ export const ACTIONS = {
     ctx.dirty.add('play');
     return { run: ctx.st.play.run };
   },
-  // A finished Play match pays and gives XP (see levels.js): its result, your kills and assists, and the rounds your team
-  // won. Online the server can't see the match, so it only pays one it saw start (play.start), once, and only what that
-  // match could have earned: long enough for its rounds, and no more kills than there were enemies to kill. cheats: the
-  // match had cheats in it (see play/console.js), so it pays nothing, gives no XP and isn't on your record.
-  'play.reward'(ctx, { run = null, mode = null, result = null, won = false, kills = 0, assists = 0, roundsWon = null, rounds = 0, cheats = false }) {
+  // A finished Play match pays and gives XP (see levels.js): its result, your kills, assists and round MVPs, and the rounds
+  // your team won. Online the server can't see the match, so it only pays one it saw start (play.start), once, and only
+  // what that match could have earned: long enough for its rounds, and no more kills than there were enemies to kill.
+  // mvps (none when a caller doesn't send them): one a round at most, in a round your team won, so never more than
+  // roundsWon, and none in Deathmatch or Arms Race (no rounds there: the mode is the one the match started in, when there
+  // is one). cheats: the match had cheats in it (see play/console.js), so it pays nothing, gives no XP and isn't on your
+  // record.
+  'play.reward'(ctx, { run = null, mode = null, result = null, won = false, kills = 0, assists = 0, mvps = 0, roundsWon = null, rounds = 0, cheats = false }) {
     result ??= won ? 'win' : 'loss'; // (callers from before draws were paid)
     if (!L.RESULTS.includes(result)) fail('Invalid result');
     kills = int(kills, 0, 400, 'kills'); assists = int(assists, 0, 400, 'assists'); rounds = int(rounds, 0, 60, 'rounds');
     roundsWon = roundsWon == null ? rounds : int(roundsWon, 0, 60, 'rounds'); // (older callers sent the rounds won as rounds)
+    mvps = int(mvps, 0, 60, 'MVPs');
     const cur = ctx.st.play?.run && ctx.st.play.run === run ? ctx.st.play : null;
     if (cheats) {
       if (cur) { ctx.st.play = null; ctx.dirty.add('play'); }
@@ -621,6 +625,7 @@ export const ACTIONS = {
     }
     if (ctx.online && !cur) fail("The server didn't see that match start, so it can't pay for it", 'match');
     const ffa = FFA_MODES.has(cur?.mode || mode);
+    if (mvps > (ffa ? 0 : roundsWon)) fail("Those match results don't add up", 'match');
     if (cur) {
       const secs = (ctx.now - cur.at) / 1000;
       const played = Math.max(rounds, roundsWon), enemies = cur.mode === 'wingman' ? 2 : 5;
@@ -630,7 +635,7 @@ export const ACTIONS = {
       ctx.st.play = null;
       ctx.dirty.add('play');
     }
-    const pay = L.matchPay({ result, kills, assists });
+    const pay = L.matchPay({ result, kills, assists, mvps });
     const xp = L.matchXp({ result, kills, assists, roundsWon: ffa ? 0 : roundsWon });
     credit(ctx, pay.total);
     const lv = L.addXp(ctx.st.prof, xp.total, { r: ctx.rng, now: ctx.now });

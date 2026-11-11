@@ -43,7 +43,7 @@ export function matchRewardHtml(r) {
   if (!r) return '';
   if (r.cheats) return '<span class="muted">Cheats were used, so this match pays nothing</span>';
   const p = r.pay, x = r.xp;
-  const parts = [p.result && `${{ win: 'Win', draw: 'Draw', loss: 'Loss' }[r.result] || 'Result'} ${usd(p.result)}`, p.kills && `kills ${usd(p.kills)}`, p.assists && `assists ${usd(p.assists)}`].filter(Boolean).join(' · ');
+  const parts = [p.result && `${{ win: 'Win', draw: 'Draw', loss: 'Loss' }[r.result] || 'Result'} ${usd(p.result)}`, p.kills && `kills ${usd(p.kills)}`, p.assists && `assists ${usd(p.assists)}`, p.mvps && `MVPs ${usd(p.mvps)}`].filter(Boolean).join(' · ');
   const prof = { ...S.prof, ...r.after };
   const medal = r.medals?.length ? MEDALS[r.medals.at(-1)] : null;
   const ups = r.levelUps ? `<div class="lvl-up">${medal ? `${medalHtml(medal, 40)}<b>${esc(medalName(medal))}</b> earned! Back to level 1`
@@ -100,7 +100,7 @@ export function openProfile() {
       </div>
       <div class="section-title">Earning XP and money</div>
       <div class="muted" style="font-size:13px;line-height:1.6">Every finished match in Play: a win or draw <b>${usd(PAY.win)}</b> and ${XP.win} XP, a loss <b>${usd(PAY.loss)}</b> and ${XP.loss} XP;
-        each kill <b>${usd(PAY.kill)}</b> and ${XP.kill} XP, each assist <b>${usd(PAY.assist)}</b> and ${XP.assist} XP, and ${XP.round} XP for each round your team wins.
+        each kill <b>${usd(PAY.kill)}</b> and ${XP.kill} XP, each assist <b>${usd(PAY.assist)}</b> and ${XP.assist} XP, each round MVP <b>${usd(PAY.mvp)}</b>, and ${XP.round} XP for each round your team wins.
         ${XP_PER_LEVEL.toLocaleString()} XP is a level, and every level up brings a reward: ${CARE_OFFERS} items to keep ${CARE_PICKS} of.
         You also get <b>${usd(PASSIVE.perMinute)}</b> every minute, even while the game is closed (up to ${PASSIVE.capHours} hours).</div>
       <div class="section-title">Service Medals <span class="muted" style="font-size:12px;text-transform:none;letter-spacing:0">${prof.medals} of ${MEDALS.length}</span></div>

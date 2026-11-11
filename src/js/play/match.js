@@ -13,6 +13,16 @@ export const SHORT_RULES = { ...RULES, maxRounds: 16, winsNeeded: 9, halftime: 8
 export const OVERTIME = { rounds: 6, money: 12500 };
 const WIN_REWARD = { elimination: 3250, bomb: 3500, defuse: 3500, time: 3250 };
 const LOSS_BONUS = [1400, 1900, 2400, 2900, 3400];
+
+// The round's MVP among the winners (when nobody planted or defused): the most kills, then the most damage dealt this round
+// (each victim's roundDamage, by attacker), then one of those still level at random. → a combatant, or null.
+export function roundMvp(winners, everyone, random = Math.random) {
+  const dealt = (c) => everyone.reduce((s, v) => s + (v.roundDamage?.get(c.id) || 0), 0);
+  const ranked = winners.map((c) => ({ c, k: c.roundKills, d: dealt(c) })).sort((a, b) => b.k - a.k || b.d - a.d);
+  if (!ranked.length) return null;
+  const top = ranked.filter((x) => x.k === ranked[0].k && x.d === ranked[0].d);
+  return top[Math.floor(random() * top.length)].c;
+}
 const PLANT_BONUS_TEAM = 800, PLANT_BONUS = 300, DEFUSE_BONUS = 300;
 
 // What you can buy, per team (CS2's defaults; the CT gets the M4A4 or the M4A1-S and USP-S or P2000 by loadout).
@@ -261,10 +271,11 @@ export class Match {
     for (const c of this.game.combatants) if (c.roundKills >= 3) { c.multi ||= {}; const k = Math.min(5, c.roundKills); c.multi[k] = (c.multi[k] || 0) + 1; }
     this.lossStreak[loser] = Math.min(this.lossStreak[loser] + 1, LOSS_BONUS.length);
     this.lossStreak[winner] = Math.max(0, this.lossStreak[winner] - 1);
-    // MVP: most kills on the winning side (the defuser or bomb planter on objective wins).
+    // MVP: most kills on the winning side (the defuser or bomb planter on objective wins), then the most damage dealt this
+    // round, then any of those still level. (Ties went to whoever came first, and you come first: it pays $250.)
     const winners = this.game.combatants.filter((c) => c.team === winner);
     let mvp = reason === 'defuse' ? this.bomb.defuser : reason === 'bomb' ? this.bomb.planter : null;
-    if (!mvp) mvp = winners.slice().sort((a, b) => b.roundKills - a.roundKills)[0] || null;
+    if (!mvp) mvp = roundMvp(winners, this.game.combatants);
     if (mvp) { mvp.mvps++; mvp.score += 1; }
     this.game.onRoundEnd(winner, reason, mvp);
   }

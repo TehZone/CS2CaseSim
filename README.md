@@ -260,8 +260,8 @@ What's in a match:
   accept, Esc's menu, leave, reconnect, abandon and the cooldown); `CS2SIM_SMOKE=sound` goes through a map's
   soundscapes (`CS2SIM_SMOKE_MAP`, Dust II by default: the reverb and ambience in each), walks you into a bot and lists
   what a match sounds like.
-- Finished matches pay into your wallet when you play offline: kills, assists, MVPs, rounds won and the win, more
-  against harder bots. The lobby shows your record.
+- Finished matches pay into your wallet, offline and online: the result, your kills, assists and round MVPs (see
+  "Features" for how much). The lobby shows your record.
 - The lobby shows CS2's own screenshot of each map.
 - Kills with your StatTrak™ guns and knives count on them (enemies only), like CS2: the counter on the weapon goes up
   and the item keeps the count (online too).
@@ -399,12 +399,14 @@ What's in a match:
   feels the same.
 
 ## Features
-- Money comes from playing matches in Play: a win or a draw pays $1,250, a loss $500, and every kill $100 and assist $50
-  (online too, for a match the server saw start, once, and only what it could have earned). And from passive income:
-  $100 every minute, while the game is open and while it's closed, up to 12 hours of it at a time (back after longer, the
-  game pays 12 hours, $72,000, and says so). Offline the save collects it by the PC's clock as the game loads and every
-  minute; online the server pays it by its own clock, when you connect and every minute you're connected. Saves and
-  accounts from before it start counting the first time they're opened (no back pay); a reset starts the count again
+- Money comes from playing matches in Play: a win or a draw pays $1,250, a loss $500, every kill $100, every assist $50
+  and every round MVP $250 (the scoreboard's stars: Deathmatch and Arms Race have no rounds, so no MVPs). Online too, for
+  a match the server saw start, once, and only what it could have earned (no more MVPs than rounds your team won). And
+  from passive income: $100 every minute, while the game is open and while it's closed, up to 12 hours of it at a time
+  (back after longer, the game pays 12 hours, $72,000, and says so). Offline the save collects it by the PC's clock as
+  the game loads and every minute; online the server pays it by its own clock, when you connect and every minute you're
+  connected. Saves and accounts from before it start counting the first time they're opened (no back pay); a reset
+  starts the count again
 - Profile levels like CS2's: 5,000 XP a level, from 1 to 40 (a win or draw is 250 XP, a loss 100, each kill 20, each assist
   10 and each round your team wins 50). Past level 40 you earn the next Service Medal and start again at level 1: every
   colour of the 2026 medal first, then 2025's, back to the first ever (2015's), 69 in all. Your level, XP bar and medal

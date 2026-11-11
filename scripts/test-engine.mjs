@@ -959,7 +959,7 @@ function tierFreq(box, n) {
   const pay = run('play.reward', { mode: 'competitive', result: 'win', kills: 25, assists: 4, roundsWon: 13, rounds: 24 });
   check('a finished match pays and gives XP', pay.r.earned === 3950 && near(st.money, 10 + 3950, 1e-9) && pay.r.xp.total === 250 + 500 + 40 + 650 && st.prof.xp === pay.r.xp.total && 'prof' in pay.d.set);
   const old = run('play.reward', { won: true, kills: 2, assists: 0, mvps: 1, rounds: 9, difficulty: 'hard' });
-  check('the game’s older reward call (won, rounds won) still pays', old.r.earned === 1450);
+  check('the game’s older reward call (won, rounds won) still pays (and the MVP it sent: $250)', old.r.earned === 1250 + 200 + 250 && old.r.pay.mvps === 250);
   for (let i = 0; i < 4; i++) run('play.reward', { mode: 'competitive', result: 'loss', kills: 20, assists: 5, roundsWon: 10, rounds: 23 });
   check('levelling up leaves rewards to claim', st.prof.level >= 2 && st.prof.drops.length === st.prof.level - 1);
   const drop = st.prof.drops[0];
@@ -1023,6 +1023,45 @@ function tierFreq(box, n) {
   }
   const crate = drop.offers.find((o) => o.t === 'crate');
   check('reward cases are inventory cases that take their own key', !!keyFor(D.caseById[crate.id]) && I.itemName(crate) === D.caseById[crate.id].n && I.itemValue(crate) === D.caseById[crate.id].price);
+}
+
+// ---- round MVPs: $250 each, no more than the rounds your team won, none without rounds -----------------------------------
+{
+  const L = await E('levels');
+  const both = L.matchPay({ result: 'win', kills: 3, assists: 2, mvps: 2 }), none = L.matchPay({ result: 'win', kills: 3, assists: 2 });
+  check('match money: $250 a round MVP, its own part of the pay, none when not given', L.PAY.mvp === 250 && both.mvps === 500 && both.total === 1650 + 500
+    && none.mvps === 0 && none.total === 1650, JSON.stringify(both));
+  check('match XP: MVPs give none', L.matchXp({ result: 'win', kills: 3, assists: 2, roundsWon: 13, mvps: 5 }).total === L.matchXp({ result: 'win', kills: 3, assists: 2, roundsWon: 13 }).total);
+
+  const st = freshState();
+  const run = (name, args, opts = {}) => { const ctx = ACT.makeCtx(st, { rng, ...opts }); return ACT.runAction(ctx, name, args); };
+  const err = (args, opts) => { try { run('play.reward', args, opts); return null; } catch (e) { return e; } };
+  const comp = { mode: 'competitive', result: 'win', kills: 20, assists: 3, roundsWon: 13, rounds: 22 };
+  const m0 = st.money, paid = run('play.reward', { ...comp, mvps: 5 }), plain = run('play.reward', comp);
+  check('play.reward: each MVP pays $250 (offline), on top of the rest, with the same XP', paid.earned === 1250 + 2000 + 150 + 1250 && paid.pay.mvps === 1250
+    && plain.earned === paid.earned - 1250 && plain.pay.mvps === 0 && paid.xp.total === plain.xp.total && near(st.money, m0 + paid.earned + plain.earned, 1e-9), `${paid.earned} / ${plain.earned}`);
+  const all = run('play.reward', { ...comp, mvps: 13 });
+  check('play.reward: an MVP every round your team won is fine', all.pay.mvps === 13 * 250);
+  const before = st.money;
+  const bad = [-1, 1.5, 61, 'two', {}].map((mvps) => err({ ...comp, mvps }));
+  const over = err({ ...comp, mvps: 14 }), dm = err({ mode: 'deathmatch', result: 'win', kills: 30, mvps: 1 }), ar = err({ mode: 'armsrace', result: 'win', kills: 30, mvps: 1, roundsWon: 5, rounds: 5 });
+  check('play.reward: MVPs that aren\'t a whole number from 0 to 60 fail like kills do', bad.every((e) => e instanceof ACT.GameError && /MVPs/.test(e.message)), bad.map((e) => e?.message).join(' / '));
+  check('play.reward: more MVPs than rounds your team won, or any in Deathmatch or Arms Race, fail and pay nothing', over?.code === 'match' && dm?.code === 'match' && ar?.code === 'match' && st.money === before);
+  check('play.reward: none sent is none (older callers), null too', run('play.reward', { ...comp }).pay.mvps === 0 && run('play.reward', { ...comp, mvps: null }).pay.mvps === 0);
+
+  // Online: against the match the server saw start, its mode, not the one the reward claims.
+  const t0 = 2e12;
+  const id = run('play.start', { mode: 'competitive' }, { online: true, now: t0 }).run;
+  const at = { online: true, now: t0 + 20 * 60e3 }, cash = st.money;
+  const tooMany = err({ ...comp, run: id, mvps: 14 }, at);
+  check('online: a reward with more MVPs than rounds won fails, pays nothing and leaves the match open', tooMany?.code === 'match' && st.money === cash && st.play?.run === id);
+  const fair = run('play.reward', { ...comp, run: id, mvps: 6 }, at);
+  check('online: a fair one pays its MVPs, once', fair.pay.mvps === 1500 && fair.earned === 1250 + 2000 + 150 + 1500 && near(st.money, cash + fair.earned, 1e-9) && !st.play
+    && err({ ...comp, run: id, mvps: 6 }, at)?.code === 'match');
+  const dmRun = run('play.start', { mode: 'deathmatch' }, { online: true, now: t0 }).run;
+  const claimed = err({ ...comp, run: dmRun, mvps: 1 }, at);
+  const dmPaid = run('play.reward', { run: dmRun, mode: 'deathmatch', result: 'win', kills: 30, assists: 2 }, at);
+  check('online: a Deathmatch claiming to be Competitive gets no MVPs (the mode is the started match\'s); without them it pays', claimed?.code === 'match' && dmPaid.pay.mvps === 0 && dmPaid.earned === 1250 + 3000 + 100);
 }
 
 // ---- passive income: $100 a whole minute, open or closed, up to 12 hours of it at a time --------------------------------

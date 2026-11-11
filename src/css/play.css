@@ -269,6 +269,9 @@ body.match-menu #menu-bg { visibility: hidden; }
 .play-hud .endscreen .final { font-size: 36px; font-weight: 700; font-family: var(--font-cond); }
 .play-hud .endscreen .sub { opacity: .85; font-size: 15px; letter-spacing: .03em; }
 .play-hud .endscreen .reward { margin-top: 8px; font-size: 16px; }
+/* (On the panel the rank result has: grey on the bare 3D view was unreadable over a bright wall.) */
+.play-hud .endscreen .reward .match-pay { display: inline-grid; padding: 8px 16px; background: rgba(0, 0, 0, .55); border: 1px solid rgba(255, 255, 255, .12); }
+.play-hud .endscreen .reward .match-pay .muted { color: rgba(255, 255, 255, .78); }
 .play-hud .endscreen .reward .match-pay > div > b { color: #8ee06e; } /* (the money: see profile.js matchRewardHtml) */
 /* (the scoreboard goes under the result: Hud.fitEnd) */
 @media (max-height: 920px) {

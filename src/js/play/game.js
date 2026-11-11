@@ -1213,15 +1213,16 @@ export class Game {
   }
 
   // What a finished match pays, online too (the money that comes in by the minute is passive.js's): the result (a draw
-  // pays as a win), your kills of enemies (a teamkill isn't one) and assists, and XP for those and the rounds your team
-  // won (see engine/levels.js). Paid against the match's run (see load); an abandoned match never gets here. { error }
-  // when it wasn't paid. With cheats in the match it pays nothing, and the run is closed.
+  // pays as a win), your kills of enemies (a teamkill isn't one), assists and round MVPs (the scoreboard's: match.js
+  // endRound, one a round your team won, none in Deathmatch or Arms Race), and XP for the kills, assists and the rounds
+  // your team won (see engine/levels.js). Paid against the match's run (see load); an abandoned match never gets here.
+  // { error } when it wasn't paid. With cheats in the match it pays nothing, and the run is closed.
   async payReward(won, draw) {
-    const me = this.me, m = this.match;
+    const me = this.me, m = this.match, roundsWon = this.respawnMode ? 0 : Math.min(60, m.score.A);
     try {
       return await act('play.reward', { run: await this.started, mode: this.mode, result: draw ? 'draw' : won ? 'win' : 'loss', cheats: this.cheated,
         kills: Math.min(400, this.enemyKills || 0), assists: Math.min(400, Math.max(0, me.assists)),
-        roundsWon: this.respawnMode ? 0 : Math.min(60, m.score.A), rounds: this.respawnMode ? 0 : Math.min(60, m.round) });
+        mvps: Math.min(roundsWon, Math.max(0, me.mvps || 0)), roundsWon, rounds: this.respawnMode ? 0 : Math.min(60, m.round) });
     } catch (e) { console.warn('match reward', e); return { error: e.message || 'No reward for this match' }; }
   }
 

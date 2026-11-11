@@ -2069,5 +2069,18 @@ const shotAt = (p, from, elev, dist = 500) => {
   ok(!mm.mapsFor('wingman').length && mm.mapsFor('competitive').length === 3, "wingman: no maps till CS2's list has been read");
 }
 
+// ---- round MVP (match.js roundMvp): kills, then damage dealt, then a level tie at random, not whoever's first (you) ----
+{
+  const { roundMvp } = await import('../src/js/play/match.js');
+  const c = (id, kills) => ({ id, roundKills: kills, roundDamage: new Map() });
+  const you = c('you', 1), mate = c('mate', 1), foe = c('foe', 0), foe2 = c('foe2', 0);
+  foe.roundDamage.set('you', 100); foe2.roundDamage.set('mate', 100); foe2.roundDamage.set('you', 20);
+  ok(roundMvp([you, mate], [you, mate, foe, foe2]) === you, 'round MVP: level on kills, the one who dealt more damage (120 against 100)');
+  foe2.roundDamage.set('you', 0);
+  const picks = new Set([0, 0.99].map((r) => roundMvp([you, mate], [you, mate, foe, foe2], () => r)));
+  ok(picks.has(you) && picks.has(mate), "round MVP: level on kills and damage, either can be it (you aren't always first)");
+  ok(roundMvp([you, c('ace', 3)], [you, foe])?.id === 'ace' && roundMvp([], [you]) === null, 'round MVP: most kills first; nobody on the side, no MVP');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

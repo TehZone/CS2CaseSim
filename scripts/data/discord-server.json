@@ -893,7 +893,7 @@
         },
         {
           "title": "🎯 Play mode",
-          "description": "Offline CS2 matches against bots on real maps from your CS2 install (Dust II, Mirage, Inferno, Nuke, Ancient, Anubis, Overpass, Train, Vertigo, Cache and more), with your equipped skins. Queue **Premier, Competitive, Wingman, Deathmatch or Arms Race** and climb ranks and CS Rating against bots, or set up a **private match**.\n\n**What matches pay:** $1,250 for a win or draw, $500 for a loss, $100 per kill and $50 per assist, on top of the $100 every minute you get anyway (even while the game is closed, up to 12 hours). Matches also give XP toward profile levels 1 to 40, Service Medals, and a care package every level up.",
+          "description": "Offline CS2 matches against bots on real maps from your CS2 install (Dust II, Mirage, Inferno, Nuke, Ancient, Anubis, Overpass, Train, Vertigo, Cache and more), with your equipped skins. Queue **Premier, Competitive, Wingman, Deathmatch or Arms Race** and climb ranks and CS Rating against bots, or set up a **private match**.\n\n**What matches pay:** $1,250 for a win or draw, $500 for a loss, $100 per kill, $50 per assist and $250 per round MVP, on top of the $100 every minute you get anyway (even while the game is closed, up to 12 hours). Matches also give XP toward profile levels 1 to 40, Service Medals, and a care package every level up.",
           "color": "#eb4b4b",
           "thumbnail": "",
           "fields": [],
@@ -940,7 +940,7 @@
             },
             {
               "name": "How do I earn money?",
-              "value": "Play matches in Play mode (needs CS2 installed): $1,250 for a win or draw, $500 for a loss, $100 per kill and $50 per assist. You also get $100 every minute, even while the game is closed (up to 12 hours at a time). Each level up brings a care package, and selling on the Market or trading with NPCs helps too.",
+              "value": "Play matches in Play mode (needs CS2 installed): $1,250 for a win or draw, $500 for a loss, $100 per kill, $50 per assist and $250 per round MVP. You also get $100 every minute, even while the game is closed (up to 12 hours at a time). Each level up brings a care package, and selling on the Market or trading with NPCs helps too.",
               "inline": false
             },
             {
@@ -1059,7 +1059,7 @@
             },
             {
               "name": "Earnings",
-              "value": "$1,250 per win or draw, $500 per loss, $100 per kill, $50 per assist (virtual)",
+              "value": "$1,250 per win or draw, $500 per loss, $100 per kill, $50 per assist, $250 per round MVP (virtual)",
               "inline": true
             },
             {

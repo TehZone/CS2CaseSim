@@ -194,7 +194,7 @@ function premierCard() {
 // Your Play record (offline matches): played, won, kills and what they paid.
 function record() {
   const st = S.stats || {};
-  if (!st.playMatches) return '<div class="muted play-record">Finished matches pay into your wallet (offline): kills, MVPs, rounds and wins, more against better bots.</div>';
+  if (!st.playMatches) return '<div class="muted play-record">Finished matches pay into your wallet: the result, and your kills, assists and round MVPs.</div>';
   const n = (v) => (v || 0).toLocaleString('en-US');
   return `<div class="play-record"><span><b>${n(st.playMatches)}</b> matches</span><span><b>${n(st.playWins)}</b> wins</span><span><b>${n(st.playKills)}</b> kills</span><span><b>${money(st.playEarned || 0)}</b> earned</span></div>`;
 }

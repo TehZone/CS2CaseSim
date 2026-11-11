@@ -3,8 +3,9 @@
 // Medal, then every colour of 2025's, and so on back to the first one ever made, 2015's. Each level up comes with a
 // reward like CS2's care package: four items to choose two from.
 //
-// Money comes from matches (a win or a draw pays $1,250, a loss $500, and every kill $100 and assist $50) and from passive
-// income: $100 every minute, while the game is open and while it's closed, up to 12 hours of it at a time (PASSIVE below).
+// Money comes from matches (a win or a draw pays $1,250, a loss $500, and every kill $100, assist $50 and round MVP $250)
+// and from passive income: $100 every minute, while the game is open and while it's closed, up to 12 hours of it at a time
+// (PASSIVE below).
 import { D, COLLECTION_ODDS } from './data.js';
 import { makeSkinItem, makeCrateItem } from './items.js';
 import { pick, pickWeighted, rand, uid } from './util.js';
@@ -18,13 +19,14 @@ export const MEDALS = MEDAL_YEARS.flatMap(([y, n]) => Array.from({ length: n }, 
 export const medalName = (m) => `${m.y} Service Medal`;
 
 // What a finished match pays, and the XP it's worth (the same for every mode; rounds count where there are rounds).
-export const PAY = { win: 1250, draw: 1250, loss: 500, kill: 100, assist: 50 };
+// mvp: each round MVP you earn (only in modes with rounds: Deathmatch and Arms Race have none). XP doesn't count them.
+export const PAY = { win: 1250, draw: 1250, loss: 500, kill: 100, assist: 50, mvp: 250 };
 export const XP = { win: 250, draw: 250, loss: 100, kill: 20, assist: 10, round: 50 };
 export const RESULTS = ['win', 'draw', 'loss'];
 
-export function matchPay({ result, kills = 0, assists = 0 }) {
-  const parts = { result: PAY[result] || 0, kills: kills * PAY.kill, assists: assists * PAY.assist };
-  return { ...parts, total: parts.result + parts.kills + parts.assists };
+export function matchPay({ result, kills = 0, assists = 0, mvps = 0 }) {
+  const parts = { result: PAY[result] || 0, kills: kills * PAY.kill, assists: assists * PAY.assist, mvps: mvps * PAY.mvp };
+  return { ...parts, total: parts.result + parts.kills + parts.assists + parts.mvps };
 }
 export function matchXp({ result, kills = 0, assists = 0, roundsWon = 0 }) {
   const parts = { result: XP[result] || 0, kills: kills * XP.kill, assists: assists * XP.assist, rounds: roundsWon * XP.round };
