@@ -3080,5 +3080,25 @@ const shotAt = (p, from, elev, dist = 500) => {
   ok(roundMvp([you, c('ace', 3)], [you, foe])?.id === 'ace' && roundMvp([], [you]) === null, 'round MVP: most kills first; nobody on the side, no MVP');
 }
 
+// ---- spectating when you're dead: first person only (your own eyes, or a teammate's), never a camera behind anyone ----
+{
+  const mate = (name, eye) => ({ c: { alive: true, team: 'CT', name }, eyeAt: () => [eye, 5, 90] });
+  const b1 = mate('a', [100, 0, 64]), b2 = mate('b', [300, 0, 64]);
+  let clicks = 0;
+  const g = Object.assign(Object.create(Game.prototype), { now: 10, me: { alive: false, team: 'CT' }, bots: [b1, b2], spectating: null,
+    deathCam: { until: 12.5, killer: { alive: true }, from: [0, 0, 64] }, player: { eye: () => [0, 0, 64] }, input: { takeClicked: () => clicks } });
+  let v = g.deadView(0.5);
+  ok(v.own && v.eye.join() === '0,0,64' && !v.bot && v.killer, 'spectating: the death cam is your own eyes where you fell, turned to your killer (not pulled up and back behind your body)');
+  g.now = 13; v = g.deadView(0.5);
+  ok(!v.own && v.bot === b1 && v.eye.join() === '100,0,64' && v.yaw === 90, "spectating: then a teammate, through its own eyes and aim");
+  g.spectateInput(new Set(['jump', 'duck', 'use', 'reload']));
+  v = g.deadView(0.5);
+  ok(v.bot === b1 && v.eye.join() === '100,0,64' && g.specThird === undefined, "spectating: Jump (or any other key) doesn't put the camera behind them: still their eyes");
+  clicks = 1; g.spectateInput(); clicks = 0;
+  ok(g.deadView(0.5).bot === b2, 'spectating: Mouse1 moves on to the next teammate, in first person');
+  b1.c.alive = b2.c.alive = false; v = g.deadView(0.5);
+  ok(v.own && v.eye.join() === '0,0,64' && !v.bot, 'spectating: with no teammate left, your own eyes where you fell');
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1527,7 +1527,7 @@ export class Game {
       if (b?.state === 'dropped' && me.team === 'T' && Math.hypot(this.player.origin[0] - b.pos[0], this.player.origin[1] - b.pos[1], this.player.origin[2] - b.pos[2]) < 60) m.pickupBomb(me);
     } else {
       const pressed = inp.takePressed(); inp.takeWheel();
-      this.spectateInput(pressed);
+      this.spectateInput();
     }
     // Bots
     for (const b of this.bots) {
@@ -2170,16 +2170,13 @@ export class Game {
       this.planting = null; this.defusing = false;
       this.closeBuyMenu();
       this.sounds.play(headshot ? 'Player.DeathHeadShot.Victim' : 'Player.DeathBody.Victim', { volume: 0.8 });
-      // Your body falls where you stood (your gun on the floor by it); the death cam pulls up and back from it to watch
-      // your killer.
+      // Your body falls where you stood (your gun on the floor by it); the death cam watches your killer from your own
+      // eyes there (first person: it no longer pulls up and back behind your body).
       const body = this.myBody;
       body.spawn(this.player.origin, this.input.yaw);
       body.setMode('dead', { headshot });
       body.deadAt = this.now;
-      const eye = this.player.eye(), { fwd } = basis(0, this.input.yaw), back = [-fwd[0] * 0.8, -fwd[1] * 0.8, 0.6], bl = Math.hypot(...back);
-      const hit = this.collision.raycast(eye, back.map((v) => v / bl), 48, FLAG_BULLET);
-      const from = [0, 1, 2].map((k) => eye[k] + (back[k] / bl) * (hit ? Math.max(0, hit.t - 6) : 48));
-      this.deathCam = { until: this.now + (this.respawnMode ? 60 : 2.5), killer: attacker, from };
+      this.deathCam = { until: this.now + (this.respawnMode ? 60 : 2.5), killer: attacker, from: this.player.eye().slice() };
     } else {
       const b = this.botOf(c);
       b.setMode('dead', { headshot });
@@ -2215,14 +2212,14 @@ export class Game {
   placeOf(c) { return this.placeAt(this.positionOf(c)); }
 
   // ---- spectating ---------------------------------------------------------------------------------------------------
-  spectateInput(pressed) {
+  // Mouse1 the next teammate. First person only: no key or button puts the camera behind anyone.
+  spectateInput() {
     if (this.input.takeClicked() & 1 || !this.spectating?.c.alive) this.nextSpectate();
-    if (pressed?.has('jump')) this.specThird = !this.specThird;
   }
   // First-person spectating: the bot's own body is hidden and its gun shows as a viewmodel (the default look, or the skin
   // of a gun it picked up), drawing, shooting, reloading and throwing with it.
   updateSpecView(dt) {
-    const s = !this.me.alive && !this.specThird && !(this.deathCam && this.now < this.deathCam.until) && this.spectating?.c.alive ? this.spectating : null;
+    const s = !this.me.alive && !(this.deathCam && this.now < this.deathCam.until) && this.spectating?.c.alive ? this.spectating : null;
     const show = (b, on) => { b.model.visible = on; if (b.weaponModel) b.weaponModel.visible = on; };
     if (this.specHidden && this.specHidden !== s) { show(this.specHidden, true); this.specHidden = null; }
     if (s) { show(s, false); this.specHidden = s; }
@@ -2255,6 +2252,16 @@ export class Game {
     if (!v || v.bot !== b || !v.vm.has(role)) return;
     v.animEnd = this.now + v.vm.play(role, { fade: 0.03, speed: secs ? v.vm.length(role) / secs : 1 });
   }
+  // Where the camera is while you're dead, first person only (no camera behind anyone, yours or a teammate's): your own
+  // eyes as you fell (the death cam, turned to your killer; and with no teammate left to watch), or the teammate you
+  // spectate, through theirs. → { eye, own (your eyes), killer (to turn to), bot, pitch, yaw (a teammate's aim) }
+  deadView(a) {
+    if (this.deathCam && this.now < this.deathCam.until) return { eye: this.deathCam.from, own: true, killer: this.deathCam.killer };
+    if (!this.spectating?.c.alive) this.nextSpectate();
+    const s = this.spectating;
+    if (s) { const [eye, pitch, yaw] = s.eyeAt(a); return { eye, own: false, bot: s, pitch, yaw }; }
+    return { eye: this.deathCam?.from || this.player.eye(), own: true };
+  }
   nextSpectate() {
     if (this.deathCam && this.now < this.deathCam.until) return;
     const mates = this.bots.filter((b) => b.c.alive && b.c.team === this.me.team);
@@ -2282,36 +2289,26 @@ export class Game {
     // How far the frame is between the last tick and the next: what moves at the tick rate is drawn that far along.
     const a = this.paused ? 1 : this.acc / TICK;
     // Camera: your eyes (interpolated, with recoil punch), the death cam, or a teammate you spectate.
-    let camEye;
+    let camEye, ownEye = false; // (ownEye: the camera's in your own eyes, dead: see deadView)
     if (me.alive) {
       const eye = this.player.eye();
       const p = this.prevEye;
       camEye = [p[0] + (eye[0] - p[0]) * a, p[1] + (eye[1] - p[1]) * a, p[2] + (eye[2] - p[2]) * a];
       const [pitch, yaw] = this.arsenal.viewAngles(this.input.pitch, this.input.yaw);
       this.camera.rotation.set((-pitch * Math.PI) / 180, (yaw * Math.PI) / 180 + Math.PI, 0);
-    } else if (this.deathCam && this.now < this.deathCam.until) {
-      camEye = this.deathCam.from;
-      const k = this.deathCam.killer;
-      if (k?.alive) this.lookAt(camEye, this.bodyOf(k).head, 4 * dt);
     } else {
-      if (!this.spectating?.c.alive) this.nextSpectate();
-      const s = this.spectating;
-      if (s && !this.specThird) {
-        // First person (CS2's default): from the bot's eyes, turning with its aim (smoothed a little).
-        const [eye, pitch, yaw] = s.eyeAt(a);
-        camEye = eye;
-        const q = _q.setFromEuler(_euler.set((-pitch * Math.PI) / 180, (yaw * Math.PI) / 180 + Math.PI, 0, 'YXZ'));
+      const v = this.deadView(a);
+      camEye = v.eye;
+      if (v.bot) {
+        // A teammate's eyes (CS2's first person), turning with its aim (smoothed a little).
+        const q = _q.setFromEuler(_euler.set((-v.pitch * Math.PI) / 180, (v.yaw * Math.PI) / 180 + Math.PI, 0, 'YXZ'));
         this.camera.quaternion.slerp(q, Math.min(1, 20 * dt));
-      } else if (s) {
-        const [eye] = s.eyeAt(a), { fwd } = basis(Math.max(-20, Math.min(40, s.pitch)), s.yaw);
-        const back = [-fwd[0], -fwd[1], -fwd[2] * 0.3 + 0.35];
-        const bl = Math.hypot(...back);
-        const hit = this.collision.raycast(eye, back.map((v) => v / bl), 110, FLAG_BULLET);
-        const dist = hit ? Math.max(10, hit.t - 8) : 110;
-        camEye = [eye[0] + (back[0] / bl) * dist, eye[1] + (back[1] / bl) * dist, eye[2] + (back[2] / bl) * dist];
-        this.lookAt(camEye, [eye[0] + fwd[0] * 200, eye[1] + fwd[1] * 200, eye[2] + fwd[2] * 200], 1);
-      } else camEye = this.deathCam?.from || this.player.eye();
+      } else if (v.killer?.alive) this.lookAt(camEye, this.bodyOf(v.killer).head, 4 * dt);
+      ownEye = v.own;
     }
+    // Your fallen body isn't drawn while the camera is in its eyes (it is to a teammate you watch).
+    const mb = this.myBody;
+    if (mb?.model && mb.model.visible === ownEye) { mb.model.visible = !ownEye; if (mb.weaponModel) mb.weaponModel.visible = !ownEye; }
     this.camEye = camEye;
     toGl(camEye, this.camera.position);
     if (this.shake > 0) { this.shake = Math.max(0, this.shake - dt); this.camera.rotation.x += (Math.random() - 0.5) * 0.03 * this.shake; this.camera.rotation.y += (Math.random() - 0.5) * 0.03 * this.shake; }
@@ -2503,7 +2500,7 @@ export class Game {
     const mo = (this.moneyOpts ||= {});
     mo.buyzone = me.alive && m.buyOpen && this.inBuyZone() && !this.armsRace; mo.c4 = me.hasC4; mo.kit = me.defuser;
     hud.money(this.respawnMode ? null : me.money, mo);
-    hud.spectate(!me.alive && this.spectating && !(this.deathCam && this.now < this.deathCam.until) ? this.spectating.c.name : null, !this.specThird);
+    hud.spectate(!me.alive && this.spectating && !(this.deathCam && this.now < this.deathCam.until) ? this.spectating.c.name : null);
     hud.crosshair(me.alive ? !this.buyMenu.isOpen : !!this.specVm);
     const left = (this.flashUntil || 0) - this.now;
     hud.flashed(left > 0 ? Math.min(1, left / Math.max(0.5, this.flashSecs * 0.6)) : 0);
