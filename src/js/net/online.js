@@ -67,7 +67,16 @@ const P2P = 'p2p1';
 // picture through POST /api/pic (net.uploadPic), staff's admin 'pic.clear' and 'pic.get', and { t: 'faces.d', ids }: the
 // players whose faces changed (net.on('faces')). faces.js draws them (net.hasFaces()).
 const FACE = 'face1';
-const CAPS = [LEAN, P2P, FACE];
+// pvp1: online matches between players (Play's Online tab: src/js/pvp.js; the server's server/matchmaking.mjs and relay.mjs;
+// the rules in engine/pvp.js). Requests: rpc ns 'pvp' (net.pvp): queue { mode, maps: [{ id, c, x }], fixed? }, leave, accept
+// { id }, decline { id }, state, abandon { id }. Pushes (net.on('pvp'), only to a connection whose welcome names pvp1):
+// { t: 'pvp.q' } your search (to the connection that queued), 'pvp.found', 'pvp.accepts', 'pvp.go', 'pvp.cancel', 'pvp.paid',
+// 'pvp.over'; after a welcome the game asks for its 'state' (emitted as { t: 'pvp.state', ... }). The match itself is on its
+// own socket, <server>/match (net.openMatch): a hello { t: 'hello', v: 1, token, match, app } first (never the token in the
+// address), then the server's JSON and the game's binary frames (play/net-codec.js). A server whose welcome doesn't name pvp1
+// has no online matches (net.hasPvp()).
+const PVP = 'pvp1';
+const CAPS = [LEAN, P2P, FACE, PVP];
 let caps = new Set();
 const TRADES_SHOWN = 30; // (the server's MAX_LIST: a trades.d keeps the list to the 30 latest)
 // The one server the game plays on, and the only place its address is written: changing it is this one line, and only
@@ -141,6 +150,10 @@ export const net = {
   // Players' faces (face1): whether this connection's server has them; a profile picture's address (its hash); and a new
   // picture of your own, its bytes in base64 (→ { pic: hash }; a refusal is an Error with the server's words and code).
   hasFaces: () => caps.has(FACE),
+  // Online matches (pvp1): requests (answers as they came), whether this connection's server has them, and a match's socket.
+  pvp: (m, args) => rpc('pvp', m, args, { relink: false }),
+  hasPvp: () => caps.has(PVP),
+  openMatch: (id, handlers) => openMatch(id, handlers),
   picUrl: (hash) => (/^[0-9a-f]{64}$/.test(String(hash)) ? `${net.serverUrl()}/pic/${hash}` : ''),
   uploadPic: (data) => http('/api/pic', { token: saved().token, data }),
   account: () => account,
@@ -304,6 +317,8 @@ async function onWelcome(msg) {
   emit('account', account);
   // Passive income for your time away, paid as you connected (it's in the state already): passive.js says so.
   if (msg.away && typeof msg.away === 'object') emit('away', msg.away);
+  // (pvp1: a search, a match found or one in progress from before this connection: pvp.js picks it up.)
+  if (net.hasPvp()) net.pvp('state').then((r) => emit('pvp', { t: 'pvp.state', ...(r || {}) })).catch(() => {});
 }
 
 // Use the server's market prices so item values match what the server pays. The last patch downloaded is kept (PRICES_KEY,
@@ -363,7 +378,55 @@ function handle(msg) {
     case 'friends': emit('friends'); return;
     case 'faces.d': emit('faces', { ids: Array.isArray(msg.ids) ? msg.ids : [] }); return; // (face1: faces.js)
     case 'p2p.d': emit('p2p', { add: msg.add || [], del: msg.del || [], upd: msg.upd || [], ...(typeof msg.open === 'boolean' ? { open: msg.open } : {}) }); return;
+    case 'pvp.q': case 'pvp.found': case 'pvp.accepts': case 'pvp.go': case 'pvp.cancel': case 'pvp.paid': case 'pvp.over':
+      if (caps.has(PVP)) emit('pvp', msg);
+      return;
   }
+}
+
+// An online match's own socket (pvp1: see the protocol above): { send(text | object | Uint8Array), close(), state() }.
+// handlers: joined(msg) once the server's let us in (each time: it reconnects by itself after a lost connection or a
+// server restart, for as long as the match waits for a player: RECONNECT), text(msg), binary(Uint8Array), closed({ code,
+// reason, retrying }). Frames sent before `joined` are the server's to drop, so they aren't sent.
+const MATCH_CLOSE = { reconnect: new Set([1006, 1012]), backoff: [500, 1000, 2000, 4000], window: 300000 };
+function openMatch(id, { joined, text, binary, closed } = {}) {
+  let sock = null, done = false, tries = 0, timer = null, lostAt = null, inside = false;
+  const url = net.serverUrl().replace(/^http/, 'ws') + '/match';
+  const connect = () => {
+    if (done) return;
+    inside = false;
+    let s;
+    try { s = new WebSocket(url); } catch { retry({ code: 1006, reason: '' }); return; }
+    sock = s;
+    s.binaryType = 'arraybuffer';
+    s.onopen = () => s.send(JSON.stringify({ t: 'hello', v: 1, token: saved().token, match: id, app: build.version }));
+    s.onmessage = (e) => {
+      if (sock !== s) return;
+      if (typeof e.data !== 'string') { if (inside) binary?.(new Uint8Array(e.data)); return; }
+      let m;
+      try { m = JSON.parse(e.data); } catch { return; }
+      if (m.t === 'joined') { inside = true; tries = 0; lostAt = null; joined?.(m); } else text?.(m);
+    };
+    s.onclose = (e) => {
+      if (sock !== s || done) return;
+      sock = null; inside = false;
+      retry({ code: e.code, reason: e.reason || '' });
+    };
+  };
+  const retry = (why) => {
+    lostAt ??= Date.now();
+    if (!done && MATCH_CLOSE.reconnect.has(why.code) && Date.now() - lostAt < MATCH_CLOSE.window) {
+      closed?.({ ...why, retrying: true });
+      timer = setTimeout(connect, MATCH_CLOSE.backoff[Math.min(tries++, MATCH_CLOSE.backoff.length - 1)]);
+    } else { done = true; closed?.({ ...why, retrying: false }); }
+  };
+  connect();
+  return {
+    send(x) { if (!sock || sock.readyState !== 1 || !inside) return false; sock.send(typeof x === 'string' || x instanceof Uint8Array || x instanceof ArrayBuffer ? x : JSON.stringify(x)); return true; },
+    close(code = 1000) { done = true; clearTimeout(timer); try { sock?.close(code); } catch {} sock = null; },
+    state: () => (inside ? 'in' : done ? 'closed' : 'connecting'),
+    buffered: () => sock?.bufferedAmount || 0,
+  };
 }
 
 // lean1's players.d on the list: who left goes, a changed row (an upd, or a join already there) takes its place, and a new

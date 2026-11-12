@@ -22,8 +22,9 @@ import * as A from './accounts.mjs';
 const MIN = 60000;
 const LINK_MS = 10 * MIN, RESET_MS = 15 * MIN, LEVEL_MS = 60000, UNKNOWN_MS = 10000, LINK_TRIES = 5, BEST_EFFORT_MS = 4000;
 const MAX_STAFF_SCAN = 200;
-// (market: the Market, players' listings (server/p2pmarket.mjs); with trading off it's closed too)
-const DEFAULTS = { motd: '', maintenance: false, maintenanceMsg: '', registration: true, trading: true, gambling: true, market: true };
+// (market: the Market, players' listings (server/p2pmarket.mjs); with trading off it's closed too. pvp: online PvP matches
+// (server/matchmaking.mjs): off, nobody can search for one, and the matches being played finish.)
+const DEFAULTS = { motd: '', maintenance: false, maintenanceMsg: '', registration: true, trading: true, gambling: true, market: true, pvp: true };
 const ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // (no 0/O or 1/I to mix up)
 const DURATIONS = { '1h': 60, '1d': 1440, '7d': 10080, '30d': 43200, perm: null };
 const FILTERS = ['all', 'online', 'banned', 'linked', 'staff'];
@@ -35,6 +36,9 @@ const TITLES = {
   link: 'Discord account linked', unlink: 'Discord account unlinked', resetpassword: 'Password reset through Discord',
   report: 'Player reported', 'report.close': 'Report closed', 'bio.clear': 'Summary cleared', 'cooldown.clear': 'Matchmaking cooldown removed',
   'market.cancel': 'Market listing taken down', 'pic.clear': 'Profile picture removed',
+  'pvp.end': 'Online match ended by staff', 'pvp.void': 'Online match void (no reward)', 'pvp.dispute': 'Online match: a player\'s numbers disputed',
+  'pvp.network': 'Online match: opponents on one network', 'pvp.fault': 'Online match: the host\'s game broke its rules',
+  'pvp.contested': 'Online match: the players\' games disagreed with the host\'s result',
 };
 const RED = 0xeb4b4b, GOLD = 0xe4ae39, BLUE = 0x4b69ff, GREEN = 0x4ade80;
 const COLORS = { ban: RED, kick: RED, signout: RED, reset: RED, warn: GOLD, unban: GREEN, link: GREEN, broadcast: BLUE, 'settings.set': BLUE };
@@ -394,7 +398,23 @@ export class Admin {
       rename: this.rename, reset: this.reset, audit: this.auditList, 'settings.get': this.settingsGet, 'settings.set': this.settingsSet,
       broadcast: this.broadcast, reports: this.reports, 'report.close': this.reportClose, 'bio.clear': this.bioClear, 'cooldown.clear': this.cooldownClear,
       'market.player': this.marketPlayer, 'market.cancel': this.marketCancel, 'pic.clear': this.picClear, 'pic.get': this.picGet,
+      'pvp.live': this.pvpLive, 'pvp.end': this.pvpEnd,
     };
+  }
+
+  // ---- online PvP matches (server/matchmaking.mjs) -------------------------------------------------------------------
+  // The matches being played: { matches: [{ id, mode, map, status, score, round, members, ... }] }.
+  async pvpLive(actor) {
+    this.need(actor, 1);
+    return { matches: this.srv.pvp?.live() || [] };
+  }
+  // A match ended by staff: as cut short, its finished rounds paid ({ pay: true }), or void (nothing paid).
+  async pvpEnd(actor, a) {
+    this.need(actor, 2);
+    const pay = bool(a.pay ?? false, 'pay');
+    const info = await this.srv.pvp.staffEnd(actor, text(a.id, 'Match', 40), pay);
+    await this.audit(actor, 'pvp.end', null, { match: info.id, mode: info.mode, map: info.map, score: info.score, rounds: info.rounds, players: info.players, pay });
+    return { id: info.id, pay };
   }
 
   // ---- the Market (server/p2pmarket.mjs) -----------------------------------------------------------------------------
@@ -495,7 +515,14 @@ export class Admin {
       FROM user_ips a JOIN user_ips o ON o.ip_hash = a.ip_hash AND o.user_id <> a.user_id JOIN users u ON u.id = o.user_id
       WHERE a.user_id = $1 ORDER BY u.id LIMIT 50`, [t.id, now]);
     const ban = await this.activeBan({ userId: t.id });
+    // (Online PvP: how many matches in the last day, and the latest with how it went for them.)
+    const { rows: [pv] } = await this.db.query(`SELECT count(*) FILTER (WHERE p.at >= $2)::int AS n,
+      (SELECT row_to_json(x) FROM (SELECT q.match_id AS id, m.mode, m.map, m.status, q.outcome, q.earned, q.at FROM pvp_players q
+        JOIN pvp_matches m ON m.id = q.match_id WHERE q.user_id = $1 ORDER BY q.at DESC LIMIT 1) x) AS last
+      FROM pvp_players p WHERE p.user_id = $1`, [t.id, now - 24 * 3600000]);
+    const lastPvp = parse(pv?.last) || null;
     return {
+      pvp: { last24h: pv?.n || 0, lastMatch: lastPvp && { ...lastPvp, earned: Number(lastPvp.earned) || 0, at: num(lastPvp.at) } },
       user: {
         id: t.id, name: t.name, created: num(t.created), lastSeen: num(t.last_seen), online: this.srv.isOnline(t.id),
         discord: t.discord_id ? { id: t.discord_id, name: t.discord_name || '', linkedAt: num(t.linked_at) } : null,
@@ -865,7 +892,7 @@ export class Admin {
       for (const [k, v] of Object.entries(a.settings)) {
         if (k === 'motd') next.motd = text(v, 'Message of the day', 300, { min: 0 });
         else if (k === 'maintenanceMsg') next.maintenanceMsg = text(v, 'Maintenance message', 300, { min: 0 });
-        else if (['maintenance', 'registration', 'trading', 'gambling', 'market'].includes(k)) next[k] = bool(v, k);
+        else if (['maintenance', 'registration', 'trading', 'gambling', 'market', 'pvp'].includes(k)) next[k] = bool(v, k);
         else fail(`Unknown setting: ${k}`);
       }
       await this.db.query("INSERT INTO kv (k, v) VALUES ('admin', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(next)]);
@@ -876,8 +903,11 @@ export class Admin {
     this.settingsQ = run.catch(() => {});
     const { before, next } = await run;
     this.srv.p2p?.openChanged(); // (the games watching the Market are told whether it's open now)
+    this.srv.pvp?.settingsChanged(before, next); // (online PvP off: the queue's emptied)
     let kicked = 0;
     if (next.maintenance && !before.maintenance) {
+      // (Online PvP matches end first, paid for their finished rounds to whoever's playing them now: then the kicks.)
+      await Promise.resolve(this.srv.pvp?.maintenance()).catch((e) => this.log('[pvp] maintenance failed', e?.message || e));
       for (const id of [...this.srv.sockets.keys()]) {
         if (await this.levelOf(id, { fast: true }) >= 1) continue; // (as a hello checks it)
         this.srv.kick(id, { code: 'maintenance', error: this.maintenanceMsg() });

@@ -7,13 +7,16 @@ import { esc, money } from '../util.js';
 import { cs2Play } from '../cs2/api.js';
 import { MODES } from '../play/modes.js';
 import { S } from '../state.js';
-import { settingsHtml, bindSettings, playPrefs, savePlayPrefs, privateRanks } from './play-settings.js';
+import { settingsHtml, bindSettings, playPrefs, savePlayPrefs, privateRanks, matchSettings } from './play-settings.js';
 import { rankInfo, PLACEMENT_WINS } from '../engine/ranks.js';
 import { loadRankArt, emblemHtml, rankKey, ratingHtml } from '../rank.js';
 import { premierInfo, ACTIVE_DUTY } from '../engine/premier.js';
 import { isRanked, cooldownLeft, formatWait, RECONNECT_S } from '../engine/matchmaking.js';
 import { PRIVATE_RANKS } from '../play/skill.js';
 import * as mm from '../matchmaking.js';
+import * as pvp from '../pvp.js';
+import { net } from '../net/online.js';
+import { MODES as PVP_MODES } from '../engine/pvp.js';
 
 // Map art colours for the lobby cards (any other installed map gets a neutral card).
 const MAP_TINT = { de_dust2: '#c9a46a, #7b5a33', de_mirage: '#d8b98a, #8a6a45', de_inferno: '#c98a5a, #6b3f22', de_nuke: '#8fa5b5, #3e4b57',
@@ -28,7 +31,7 @@ const KEYS = 'WASD move · Space jump · Ctrl crouch · Shift walk · W into a l
 let mapList = null, mapImages = null; // the installed maps, and CS2's screenshot of each ({ id: url })
 let wingmanMaps = null; // CS2's Wingman maps among them (matchmaking.js mapsFor)
 let rankAsked = false;
-let root = null, unsub = null, ticker = null;
+let root = null, unsub = null, unsubPvp = null, ticker = null;
 const nameOf = (id) => mapList?.find((m) => m.id === id)?.name || id;
 const shareMaps = () => mm.setMaps({ maps: mapList, images: mapImages, nameOf, wingman: wingmanMaps });
 
@@ -49,14 +52,18 @@ export function render(r) {
   }
   shareMaps();
   unsub ||= mm.onMatchmaking(() => { if (root) render(root); });
+  unsubPvp ||= pvp.onPvp(() => { if (root) render(root); });
   clearInterval(ticker);
   ticker = setInterval(tick, 500);
-  const live = mm.liveMatch();
-  if (live && !live.loading) liveHtml(r, live); else lobbyHtml(r);
+  const live = mm.liveMatch(), online = pvp.liveMatch();
+  if (online) onlineLiveHtml(r, online);
+  else if (live && !live.loading) liveHtml(r, live); else if (playPrefs().lobby === 'online' && onlineOk()) onlineHtml(r); else lobbyHtml(r);
   tick();
 }
 
-export function destroy() { root = null; unsub?.(); unsub = null; clearInterval(ticker); }
+export function destroy() { root = null; unsub?.(); unsub = null; unsubPvp?.(); unsubPvp = null; clearInterval(ticker); }
+// The Online tab: only on a server that has online matches (pvp1).
+const onlineOk = () => net.status() === 'online' && net.hasPvp();
 
 // The times that count down on the page: the search, the cooldown, the time left to reconnect.
 function tick() {
@@ -73,6 +80,16 @@ function tick() {
   if (rc && live?.away) rc.textContent = clock(RECONNECT_S * 1000 - (Date.now() - live.away.since));
   const sc = root.querySelector('[data-live-score]');
   if (sc && live?.game.match) sc.textContent = mm.scoreLine(live.game);
+  // Online: the search, and the time left to reconnect.
+  const ps = pvp.pvpState(), og = root.querySelector('[data-pvp-go]');
+  if (og && ps.q) {
+    const q = ps.q, waited = q.waited * 1000 + (Date.now() - q.at), fill = Math.max(0, q.split * 1000 - (Date.now() - q.at));
+    og.innerHTML = `Searching ${clock(waited)}<small>${q.found} of ${q.need} players · ${q.alone ? 'nobody else is searching' : `bots fill in ${clock(fill)}`} · Cancel</small>`;
+  }
+  const pr = root.querySelector('[data-pvp-left]');
+  if (pr && ps.away) pr.textContent = clock(ps.away.until - Date.now());
+  const os = root.querySelector('[data-online-score]');
+  if (os) os.textContent = pvp.scoreLine(pvp.liveMatch());
 }
 
 // A map tile's background: the map's screenshot (an absolute URL: relative ones in a custom property resolve against
@@ -102,6 +119,7 @@ function lobbyHtml(r) {
     <div class="play-tabs">
       <button class="${priv ? '' : 'active'}" data-lobby="mm"><b>Matchmaking</b><small>Bots of your rank, on the maps you pick</small></button>
       <button class="${priv ? 'active' : ''}" data-lobby="private"><b>Private match</b><small>Your rules and the bots' ranks; no rank</small></button>
+      ${onlineTab(false)}
     </div>
     <div class="play-lobby">
       <div class="play-maps ${premier ? 'veto-pool' : ''}">${tiles || (mode === 'wingman' ? `<div class="muted">${wingmanMaps ? 'None of CS2\'s Wingman maps are installed.' : 'Reading CS2\'s Wingman maps…'}</div>` : '')}</div>
@@ -228,4 +246,78 @@ function liveHtml(r, live) {
   r.querySelector('[data-reconnect]')?.addEventListener('click', () => mm.reconnect());
   r.querySelector('[data-abandon]')?.addEventListener('click', () => mm.abandon());
   r.querySelectorAll('[data-page-go]').forEach((b) => b.addEventListener('click', () => window.dispatchEvent(new CustomEvent('app:go', { detail: b.dataset.pageGo }))));
+}
+
+// ---- online: matches against other players (pvp.js) ---------------------------------------------------------------------
+const ONLINE_MODES = ['competitive', 'wingman'];
+const ONLINE_RULES = { competitive: '5v5 · MR12, a draw on 12:12 · friendly fire', wingman: '2v2 on one bomb site · first to 9 · friendly fire' };
+function onlineTab(active) {
+  if (!onlineOk()) return '';
+  return `<button class="${active ? 'active' : ''}" data-lobby="online"><b>Online</b><small>Real players, bots filling the teams; the server pays</small></button>`;
+}
+function onlineHtml(r) {
+  const p = playPrefs(), mode = ONLINE_MODES.includes(p.pvpMode) ? p.pvpMode : 'competitive';
+  const ps = pvp.pvpState(), q = ps.q, away = ps.away, busy = !!(mm.searching() || mm.liveMatch()) || (pvp.busy() && !q);
+  const maps = pvp.knownMaps(mode);
+  if (!maps) pvp.mapsFor(mode).then(() => { if (root === r) render(r); }).catch(() => {});
+  const cooldown = cooldownLeft(S.mm);
+  const tiles = (maps || []).map(({ id, x }) => `<div class="play-map pvp-map" style="${tileStyle(id)}"><span>${esc(nameOf(id))}</span><small>${x ? 'Ready' : 'Prepared the first time (a few minutes)'}</small></div>`).join('');
+  const go = q ? '<button class="btn primary big searching" data-pvp-go></button>'
+    : `<button class="btn primary big" data-pvp-go ${busy || cooldown || away || !maps?.length ? 'disabled' : ''}>Play online</button>`;
+  const why = q ? '' : away ? 'You\'re in an online match: reconnect to it or abandon it first.' : cooldown ? '' : mm.searching() ? 'Cancel your search to play online.'
+    : mm.liveMatch() ? 'Leave your match to play online.' : maps && !maps.length ? `None of your CS2 maps can be played online in ${PVP_MODES[mode].name}.` : !maps ? 'Reading your CS2 maps…' : '';
+  r.innerHTML = `<div class="page play-page">
+    <div class="page-head"><h1>Play</h1><span class="sub">CS2 against other players online, on real CS2 maps from your install: bots fill the teams when the lobby isn't full.</span></div>
+    <div class="play-tabs">
+      <button data-lobby="mm"><b>Matchmaking</b><small>Bots of your rank, on the maps you pick</small></button>
+      <button data-lobby="private"><b>Private match</b><small>Your rules and the bots' ranks; no rank</small></button>
+      ${onlineTab(true)}
+    </div>
+    <div class="play-lobby">
+      <div class="play-maps pvp-maps"><div class="pvp-maps-head"><b>Maps you can play online</b><span class="muted">The server picks one every player in the match has</span></div>${tiles || `<div class="muted">${maps ? 'None of your CS2 maps are in this mode\'s pool.' : 'Reading your CS2 maps…'}</div>`}</div>
+      <div class="play-setup panel">
+        <div class="play-modes">${ONLINE_MODES.map((id) => `<button class="${id === mode ? 'active' : ''}" data-pvp-mode="${id}" ${q || busy ? 'disabled' : ''}><b>${esc(PVP_MODES[id].name)}</b><small>${esc(ONLINE_RULES[id])}</small></button>`).join('')}</div>
+        ${away ? `<div class="play-cooldown pvp-away"><b>Online match in progress</b><span>${esc(nameOf(away.map))} · reconnect within <b data-pvp-left></b>, or it's abandoned: a loss, and a cooldown from ranked matchmaking.</span>
+          <span class="play-live-actions"><button class="btn primary" data-pvp-reconnect>Reconnect</button><button class="btn danger" data-pvp-abandon>Abandon</button></span></div>` : ''}
+        ${cooldown ? `<div class="play-cooldown"><b>Ranked cooldown</b><span>You abandoned a match: no Premier, Competitive or Wingman for <b data-cooldown>${formatWait(cooldown)}</b>.</span></div>` : ''}
+        ${go}
+        ${why ? `<div class="muted">${esc(why)}</div>` : ''}
+        ${q?.alone ? `<div class="play-cooldown pvp-alone"><b>Nobody else is searching</b><span>Nobody else is searching for ${esc(PVP_MODES[q.mode].name)} right now. Keep searching, or play against bots instead.</span>
+          <span><button class="btn" data-pvp-bots>Play against bots</button></span></div>` : ''}
+        ${rankCard(mode)}
+        <div class="muted play-private-note">Rewards: as a match against bots (the result, kills, assists, MVPs), paid by the server from its own record of the rounds. Playing the same opponents again and again pays less.</div>
+        <div class="muted play-keys">${KEYS}</div>
+      </div>
+    </div>
+    ${settingsHtml(p)}
+  </div>`;
+  bindSettings(r, playPrefs, savePlayPrefs, () => render(r));
+  const set = (fn) => { const x = playPrefs(); fn(x); savePlayPrefs(x); render(r); };
+  r.querySelectorAll('[data-lobby]').forEach((b) => b.addEventListener('click', () => set((x) => { x.lobby = b.dataset.lobby; })));
+  r.querySelectorAll('[data-pvp-mode]').forEach((b) => b.addEventListener('click', () => set((x) => { x.pvpMode = b.dataset.pvpMode; })));
+  r.querySelector('[data-pvp-go]')?.addEventListener('click', () => (pvp.pvpState().q ? pvp.cancelSearch() : pvp.search(mode)));
+  r.querySelector('[data-pvp-bots]')?.addEventListener('click', () => pvp.playBotsInstead());
+  r.querySelector('[data-pvp-reconnect]')?.addEventListener('click', () => pvp.reconnect());
+  r.querySelector('[data-pvp-abandon]')?.addEventListener('click', () => pvp.abandon());
+}
+// In an online match: its menu (Esc), as a match against bots has.
+function onlineLiveHtml(r, m) {
+  const p = playPrefs(), name = PVP_MODES[m.mode]?.name || m.mode, over = !!m.game?.matchOver;
+  r.innerHTML = `<div class="page play-page">
+    <div class="page-head"><h1>In an online match</h1><span class="sub">${esc(name)} · ${esc(nameOf(m.map))}${m.role === 'host' ? ' · you\'re hosting' : ''}</span></div>
+    <div class="play-live panel">
+      <div class="play-live-score"><small>${esc(name)} · ${esc(nameOf(m.map))}</small><b data-online-score></b></div>
+      <p>${over ? 'The match is over.' : 'The match goes on while you\'re in the menu.'}${m.role === 'host' && !over ? ' You\'re hosting it: everyone plays on your game, so keep it open.' : ''}</p>
+      <div class="play-live-actions">${over ? '' : '<button class="btn primary big" data-resume>Resume</button>'}<button class="btn ${over ? '' : 'danger'}" data-leave>${over ? 'Back to the lobby' : 'Leave match'}</button>
+        ${over ? '' : '<button class="btn ghost" data-abandon>Abandon</button>'}</div>
+    </div>
+    <div class="play-setup panel play-live-opts"><label>Sensitivity (CS2)<input class="input" type="number" min="0.05" max="20" step="0.05" data-k="sensitivity" value="${p.sensitivity}"></label></div>
+    ${settingsHtml(p, { open: true })}
+  </div>`;
+  const save = (q) => { savePlayPrefs(q); const x = playPrefs(); m.game?.applySettings(matchSettings(x), x.sensitivity); };
+  bindSettings(r, playPrefs, save, () => render(r));
+  r.querySelector('[data-k=sensitivity]').addEventListener('change', (e) => { const q = playPrefs(); q.sensitivity = Math.max(0.05, Math.min(20, Number(e.target.value) || 1)); save(q); });
+  r.querySelector('[data-resume]')?.addEventListener('click', () => pvp.resume());
+  r.querySelector('[data-leave]')?.addEventListener('click', () => pvp.leave());
+  r.querySelector('[data-abandon]')?.addEventListener('click', () => pvp.abandon());
 }

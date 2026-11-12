@@ -54,11 +54,16 @@ const ACCESS = [
   [1, 'Write notes and save snapshots'],
   [1, 'Read and close player reports; clear a reported summary or remove a profile picture'],
   [1, 'Remove matchmaking cooldowns'],
+  [1, 'See the online matches being played'],
   [2, 'Edit money, stats and items; restore and delete snapshots; rename and reset accounts'],
   [2, 'Network bans and Discord bans'],
   [2, 'Server settings and broadcasts'],
+  [2, 'End an online match'],
   [3, 'All of it over admins too'],
 ];
+// (Online PvP matches: only on a server whose welcome named pvp1, server/matchmaking.mjs. An older server has none.)
+const pvpHere = () => online() && !!net.hasPvp?.();
+const MODE_LABEL = { competitive: 'Competitive', wingman: 'Wingman' };
 
 const view = {
   tab: 'dash', q: '', filter: 'all', page: 0, player: null, sub: 'overview', bansActive: true, reportsOpen: true, reportPage: 0, auditQ: '', auditPage: 0,
@@ -354,12 +359,47 @@ function drawDash(el) {
       <div class="panel"><h3>Server switches</h3>${switchesHtml(obj(o.settings))}
         <div class="adm-panel-foot"><button class="btn ghost sm" data-go="server">Server settings</button></div></div>
     </div>
+    ${pvpHere() ? '<div class="section-title">Online matches</div><div data-pvp></div>' : ''}
     <div class="section-title">Latest staff actions</div>
     ${auditTableHtml(Array.isArray(o.recent) ? o.recent : [])}
     <div class="adm-panel-foot"><button class="btn ghost sm" data-go="audit">Full audit log</button></div>`;
-  el.querySelector('[data-refresh]').addEventListener('click', () => refresh('overview', drawBody));
+  el.querySelector('[data-refresh]').addEventListener('click', () => { refresh('overview', drawBody); if (pvpHere()) refresh('pvplive', drawBody); });
   el.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => { view.tab = b.dataset.go; invalidate(TAB_DATA[view.tab]); draw(); }));
   wireOpen(el);
+  const box = el.querySelector('[data-pvp]');
+  if (box) drawPvpLive(box); // (after: it wires its own links)
+}
+// The online PvP matches being played (server/matchmaking.mjs): mode, map, score, who's in them, and (admins) End: with the
+// finished rounds paid, or void (nothing paid).
+const PVP_STATE = { in: ['green', 'in'], ready: ['green', 'ready'], loading: ['gold', 'loading'], dropped: ['gold', 'dropped'], bot: ['red', 'a bot plays'], abandoned: ['red', 'abandoned'] };
+function drawPvpLive(box) {
+  const d = need('pvplive', 'pvp.live', {}, box, drawBody);
+  if (!d) return;
+  const list = Array.isArray(d.matches) ? d.matches : [];
+  if (!list.length) { box.innerHTML = '<div class="empty adm-empty">No online matches right now.</div>'; return; }
+  const status = (m) => (m.paused ? `<span class="chip gold">paused: ${esc(m.paused.why)}</span>` : m.ending ? '<span class="chip">ending</span>'
+    : `<span class="chip ${m.status === 'live' ? 'green' : ''}">${esc(m.status)}</span>`) + (m.void ? ' <span class="chip red" title="' + esc(m.void) + '">void</span>' : '');
+  const who = (m) => (Array.isArray(m.members) ? m.members : []).map((x) => {
+    const [tone, label] = PVP_STATE[x.state] || ['', x.state];
+    return `<span class="nw">${playerLink({ id: x.id, name: x.name })}${x.host ? ' <span class="chip">host</span>' : ''} <span class="chip ${tone}" title="${esc(x.state)}">${esc(label)}</span></span>`;
+  }).join(' ');
+  box.innerHTML = `<div class="db-table-wrap"><table class="price-table adm-table"><thead><tr><th>Started</th><th>Mode</th><th>Map</th><th>Status</th><th>Score</th><th>Players</th>${isAdmin() ? '<th></th>' : ''}</tr></thead><tbody>
+    ${list.map((m) => `<tr><td class="nw">${when(m.liveAt || m.created)}</td><td class="nw">${esc(MODE_LABEL[m.mode] || m.mode)}</td><td class="nw">${esc(m.map)}</td><td class="nw">${status(m)}</td>
+      <td class="nw">${num(m.score?.A)} : ${num(m.score?.B)} <small class="dim">round ${num((m.round || 0) + (m.liveAt ? 1 : 0))}</small></td>
+      <td>${who(m)} ${m.bots ? `<small class="dim">+ ${plural(m.bots, 'bot')}</small>` : ''}</td>
+      ${isAdmin() ? `<td class="nw"><button class="btn sm" data-end="${esc(m.id)}" data-pay="1" title="Ends it as cut short: everyone still in it is paid for the finished rounds">End, paid</button>
+        <button class="btn danger sm" data-end="${esc(m.id)}" data-pay="0" title="Ends it void: nobody is paid">End, void</button></td>` : ''}</tr>`).join('')}</tbody></table></div>`;
+  box.querySelectorAll('[data-end]').forEach((b) => b.addEventListener('click', async () => {
+    const pay = b.dataset.pay === '1', m = list.find((x) => x.id === b.dataset.end);
+    const what = `${esc(MODE_LABEL[m?.mode] || 'online')} match on ${esc(m?.map || '?')}`;
+    if (!(await confirmDialog(pay ? `End this ${what}? Everyone still in it is paid for the rounds already played (no result pay, no rank change).`
+      : `End this ${what} void? Nobody in it is paid anything.`, { ok: pay ? 'End, paid' : 'End, void', danger: !pay }))) return;
+    if (await run([...box.querySelectorAll('[data-end]')], 'pvp.end', { id: b.dataset.end, pay }, pay ? 'Match ended: the finished rounds are paid' : 'Match ended void')) {
+      invalidate('audit', 'overview');
+      refresh('pvplive', drawBody);
+    }
+  }));
+  wireOpen(box);
 }
 
 // Offline: this PC's save, its NPC world and the latest changes made here.
@@ -411,7 +451,7 @@ function accessHtml(me) {
 const swHtml = (label, on, normal) => `<div class="adm-switch"><span>${label}</span><span class="chip ${on === normal ? 'green' : 'red'}">${on ? 'On' : 'Off'}</span></div>`;
 function switchesHtml(s) {
   const sw = swHtml;
-  return `${sw('Maintenance', !!s.maintenance, false)}${sw('New accounts', s.registration !== false, true)}${sw('Trading', s.trading !== false, true)}${sw('Market', s.market !== false, true)}${sw('Gambling', s.gambling !== false, true)}
+  return `${sw('Maintenance', !!s.maintenance, false)}${sw('New accounts', s.registration !== false, true)}${sw('Trading', s.trading !== false, true)}${sw('Market', s.market !== false, true)}${sw('Gambling', s.gambling !== false, true)}${pvpHere() ? sw('Online matches', s.pvp !== false, true) : ''}
     <div class="adm-motd"><span>Message of the day</span>${s.motd ? `<div>${esc(s.motd)}</div>` : '<div class="dim">None</div>'}</div>`;
 }
 
@@ -849,6 +889,8 @@ function drawOverview(el, p) {
     ['Balance', money(+st.money || 0)], ['Inventory', `${num(inv.length)} · ${money(invValue)}`], ['Net worth', money((+st.money || 0) + invValue)],
     ['Level', profLevel(st.prof?.level)], ['Cases opened', num(s.opened)], ['Matches won', `${num(s.playWins || 0)} of ${num(s.playMatches || 0)}`],
     ['Premier', st.premier ? num(st.premier.rating) : '—'],
+    // (online PvP: the matches in the last day, and how the latest went: server/admin.mjs player's pvp)
+    ...(p.pvp ? [['Online matches (24 h)', `${num(p.pvp.last24h)}${p.pvp.lastMatch ? ` <small class="dim" title="${esc(`${MODE_LABEL[p.pvp.lastMatch.mode] || p.pvp.lastMatch.mode} on ${p.pvp.lastMatch.map}: ${p.pvp.lastMatch.status}, ${p.pvp.lastMatch.outcome || 'not settled'}`)}">last: ${esc(p.pvp.lastMatch.outcome || p.pvp.lastMatch.status)}</small>` : ''}`]] : []),
   ];
   const field = ([path, label, kind]) => {
     const v = getPath(st, path), shown = typeof v === 'number' ? String(kind === 'money' ? Math.round(v * 100) / 100 : v) : '';
@@ -1652,6 +1694,8 @@ const SERVER_ROWS = [
   ['trading', 'bool', 'Trading', 'Trade offers between players.'],
   ['market', 'bool', 'Market', 'Listing and buying on the players\' Market (players can still take their own listings down). Off when Trading is off too.'],
   ['gambling', 'bool', 'Gambling', 'Coinflips, jackpots and case battles (players can still cancel their own rounds).'],
+  // (only on a server with online matches: pvpHere)
+  ['pvp', 'bool', 'Online matches', 'Searching for an online Competitive or Wingman match (the matches being played finish).'],
 ];
 function drawServer(el) {
   const s = need('settings', 'settings.get', {}, el, drawBody);
@@ -1664,7 +1708,7 @@ function drawServer(el) {
   el.innerHTML = `<div class="adm-server">
     <div>
       <div class="section-title" style="margin-top:0">Server settings</div>
-      <div class="settings adm-settings">${SERVER_ROWS.map((row) => `<div class="setting"><div>${row[2]}<p>${row[3]}</p></div>${control(row)}</div>`).join('')}</div>
+      <div class="settings adm-settings">${SERVER_ROWS.filter(([k]) => k !== 'pvp' || pvpHere()).map((row) => `<div class="setting"><div>${row[2]}<p>${row[3]}</p></div>${control(row)}</div>`).join('')}</div>
       <div class="actions">${ro ? '<span class="muted">Moderators can see these; only admins can change them.</span>'
         : '<button class="btn primary" data-save disabled>Save settings</button><button class="btn ghost" data-undo disabled>Undo changes</button>'}</div>
     </div>

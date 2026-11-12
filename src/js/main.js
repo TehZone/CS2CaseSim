@@ -26,6 +26,7 @@ import * as changelog from './pages/changelog.js';
 import * as p2p from './pages/p2pmarket.js';
 import { npcOf, crowd, inventoryOf } from './engine/npcs.js';
 import { initMatchmaking } from './matchmaking.js';
+import { initPvp } from './pvp.js';
 import { initProfile } from './profile.js';
 import { initAccount, discordSection, bindDiscordSection, openResetModal } from './account.js';
 import { initUpdates } from './update.js';
@@ -201,6 +202,7 @@ async function boot() {
   window.addEventListener('app:go', (e) => go(e.detail));
   window.addEventListener('app:refresh', () => go(currentName));
   initMatchmaking();
+  initPvp(); // (online matches between players: pvp.js)
   initProfile();
   initAccount();
   initUpdates();

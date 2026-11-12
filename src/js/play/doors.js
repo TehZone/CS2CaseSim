@@ -164,9 +164,10 @@ export class Doors {
     for (const d of this.list) {
       if (now >= d.closeAt) { d.closeAt = Infinity; if (d.target !== 0) this.toggle(d, null); }
       // A bot walking into a closed door opens it (away from itself).
-      if (d.target === 0 && d.angle === 0) {
+      // (Online: only on the host, and not for a real player, who opens it with E like you.)
+      if (d.target === 0 && d.angle === 0 && !g.remote) {
         for (const b of g.bots) {
-          if (!b.c.alive || Math.hypot(b.vel[0], b.vel[1]) < 40) continue;
+          if (!b.c.alive || (b.human && !b.pawn?.bot) || Math.hypot(b.vel[0], b.vel[1]) < 40) continue;
           if (Math.hypot(b.pos[0] - d.center[0], b.pos[1] - d.center[1]) < 48 && Math.abs(b.pos[2] + 36 - d.center[2]) < 60) { this.toggle(d, b.pos); break; }
         }
       }

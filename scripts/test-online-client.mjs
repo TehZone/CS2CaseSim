@@ -164,7 +164,7 @@ try {
   let sock = sockets.at(-1);
   sock.open();
   const hello = sock.sent[0];
-  check('the hello announces lean1 (and the Market\'s p2p1, and players\' faces, face1)', hello?.t === 'hello' && same(hello.caps, ['lean1', 'p2p1', 'face1']) && hello.v === 1 && hello.token === 'tok', JSON.stringify(hello));
+  check('the hello announces lean1 (and the Market\'s p2p1, and players\' faces, face1, and online matches, pvp1)', hello?.t === 'hello' && same(hello.caps, ['lean1', 'p2p1', 'face1', 'pvp1']) && hello.v === 1 && hello.token === 'tok', JSON.stringify(hello));
   gamblePage.open();
   sock.deliver(welcome({ lobbies: { battles: [], flips: [{ id: 'f' }], jackpot: null } }));
   await settle();
@@ -560,6 +560,67 @@ try {
     check('faces: a server without face1 is asked nothing (initials or the agent are drawn)', !net.hasFaces() && !sock.sent.slice(sent1).some((m) => m.m === 'faces') && /<b>OL<\/b>/.test(plain));
     delete D.badges['test-pin'];
     globalThis.document = page;
+  }
+
+  // ---- pvp1: online matches (pvp.js): its requests, its pushes, and a match's own socket ------------------------------------
+  {
+    const statesAsked = () => sock.sent.filter((m) => m.ns === 'pvp' && m.m === 'state').length;
+    sock.deliver(welcome({ caps: ['lean1'] }));
+    await settle();
+    const pushes = [];
+    const off = net.on('pvp', (m) => pushes.push(m));
+    sock.deliver({ t: 'pvp.q', mode: 'competitive', waited: 3, found: 1, need: 10, split: 117, alone: false });
+    check('pvp: a server without pvp1 has no online matches: nothing asked, and its pushes go nowhere', !net.hasPvp() && statesAsked() === 0 && pushes.length === 0);
+    sock.deliver(welcome({ caps: ['lean1', 'pvp1'] }));
+    await settle();
+    const ask = sock.sent.filter((m) => m.ns === 'pvp' && m.m === 'state').at(-1);
+    check('pvp: with pvp1, the game asks for its online state after the welcome', net.hasPvp() && statesAsked() === 1 && !!ask);
+    sock.deliver({ t: 'res', id: ask.id, ok: true, r: { queue: null, found: null, match: { id: 'm1', mode: 'wingman', map: 'de_x', status: 'live', slot: 2, away: { left: 120000 } }, dodge: 0 } });
+    await settle();
+    check('pvp: and passes its answer on (pvp.state)', pushes.some((m) => m.t === 'pvp.state' && m.match?.id === 'm1' && m.match.away.left === 120000));
+    const kinds = ['pvp.q', 'pvp.found', 'pvp.accepts', 'pvp.go', 'pvp.cancel', 'pvp.paid', 'pvp.over'];
+    for (const t of kinds) sock.deliver({ t, id: 'x' });
+    check('pvp: every online push is passed on', kinds.every((t) => pushes.some((m) => m.t === t)));
+    const queued = net.pvp('queue', { mode: 'wingman', maps: [] });
+    const qreq = sock.sent.at(-1);
+    sock.deliver({ t: 'res', id: qreq.id, ok: false, err: 'Update the game to play online matches', code: 'outdated' });
+    let qerr = null;
+    try { await queued; } catch (e) { qerr = e; }
+    check('pvp: requests go as ns pvp, and a refusal comes back with its code', qreq.ns === 'pvp' && qreq.m === 'queue' && qerr?.code === 'outdated');
+    // A match's own socket.
+    const n0 = sockets.length, got = { joined: 0, texts: [], closes: [] };
+    const link = net.openMatch('m1', { joined: () => got.joined++, text: (m) => got.texts.push(m), closed: (c) => got.closes.push(c) });
+    const ms = sockets.at(-1);
+    check('pvp: a match\'s socket is <server>/match, with no token in its address', sockets.length === n0 + 1 && /\/match$/.test(ms.url) && !/tok/.test(ms.url), ms.url);
+    ms.open();
+    const mh = ms.sent[0];
+    check('pvp: its first frame is the hello with the login\'s token, the match and the game\'s version', mh?.t === 'hello' && mh.v === 1 && mh.token === 'tok' && mh.match === 'm1' && (mh.app === undefined || typeof mh.app === 'string')); // (no app version in Node)
+    check('pvp: nothing else is sent before the server lets it in', link.send({ t: 'load', p: 5 }) === false && ms.sent.length === 1);
+    ms.deliver({ t: 'joined', id: 'm1' });
+    ms.deliver({ t: 'member', slot: 1, state: 'ready' });
+    check('pvp: once it\'s in: joined, then the match\'s messages, and it sends', got.joined === 1 && got.texts[0]?.t === 'member' && link.send({ t: 'ready' }) && ms.sent.at(-1).t === 'ready');
+    const retried = async (code) => {
+      const s0 = sockets.at(-1), before = sockets.length;
+      s0.readyState = 3; s0.onclose({ code });
+      await new Promise((r) => setTimeout(r, 650));
+      const again = sockets.length === before + 1;
+      if (again) { sockets.at(-1).open(); sockets.at(-1).deliver({ t: 'joined', id: 'm1' }); }
+      return again && got.closes.at(-1)?.retrying === true;
+    };
+    check('pvp: a lost connection (1006) is tried again, and it\'s back in', await retried(1006) && got.joined === 2);
+    check('pvp: so is a server restart (1012)', await retried(1012) && got.joined === 3);
+    let none = true;
+    for (const code of [1000, 1008, 4000, 4001, 4002, 4003, 4004, 4005, 4006]) {
+      const l = net.openMatch('m1', { closed: (c) => got.closes.push(c) }), s0 = sockets.at(-1), before = sockets.length;
+      s0.open(); s0.deliver({ t: 'joined', id: 'm1' });
+      s0.readyState = 3; s0.onclose({ code });
+      await new Promise((r) => setTimeout(r, 650));
+      if (sockets.length !== before || got.closes.at(-1)?.retrying !== false) none = false;
+      l.close();
+    }
+    check('pvp: none of 1000, 1008 or 4000-4006 is tried again (the match is over for us, or we\'re not let in)', none);
+    link.close();
+    off();
   }
 
   // ---- no keep-alive -------------------------------------------------------------------------------------------------------

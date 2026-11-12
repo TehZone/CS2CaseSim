@@ -1332,6 +1332,34 @@ class CS2Service {
     return next;
   }
 
+  // Each installed bomb map's content, for online matches (a map counts for a player only when their CS2 has the same files
+  // in it as everyone else's): [{ id, c (the files' signature: cs2.vpkContent), x (exported already) }]. An exported map's is
+  // its export's; any other is the VPK's listing, kept in play/content.json by the VPK's stamp (the listing takes seconds a
+  // map: it runs again only once CS2 has rewritten the map).
+  async playMapContent() {
+    const cs2 = this.ensureCS2();
+    const file = path.join(this.cacheDir, 'play', 'content.json');
+    let kept = {};
+    try { kept = JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch {}
+    const out = [];
+    let changed = false;
+    for (const { id } of this.playMaps()) {
+      if (!/^de_[a-z0-9_]+$/.test(id)) continue;
+      const stamp = this.mapStamp(id);
+      let meta = null;
+      try { meta = JSON.parse(fs.readFileSync(path.join(this.cacheDir, 'play', id, 'map.json'), 'utf8')); } catch {}
+      const x = !!(meta && meta.stamp === stamp && meta.content && meta.version >= 2);
+      let c = x ? meta.content : kept[id]?.stamp === stamp ? kept[id].c : null;
+      if (!c) {
+        c = await cs2.vpkContent(path.join(this.gameDir, 'maps', id + '.vpk')).catch((e) => { this.log('map content: ' + e.message); return null; });
+        if (c) { kept[id] = { stamp, c }; changed = true; }
+      }
+      if (c) out.push({ id, c, x });
+    }
+    if (changed) { try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(kept)); } catch (e) { this.log('map content: ' + e.message); } }
+    return out;
+  }
+
   // CS2's Wingman maps in this install, for the play menu: { pool: their ids, fixed: those whose bomb site is the map's
   // own (it has just the one, or a graph that sets Wingman up) }. Kept until CS2 or one of the maps changes, once it's all
   // been read: what couldn't be is read again next time.

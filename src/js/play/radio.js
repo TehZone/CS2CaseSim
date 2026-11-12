@@ -66,6 +66,7 @@ export class Radio {
 
   // Chatter by the bots about what they see and do.
   chatter(c, event, extra = {}) {
+    if (c?.bot === false) return; // (a real player online says their own: bots' chatter isn't theirs)
     const t = c.team === 'T' ? 't' : 'ct';
     const lines = {
       spotted: ['enemyspotted', extra.where ? `Enemy spotted ${extra.where}` : 'Enemy spotted'],

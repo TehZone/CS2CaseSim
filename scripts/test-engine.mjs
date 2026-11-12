@@ -2733,5 +2733,206 @@ function tierFreq(box, n) {
   initData(game, { keys });
 }
 
+// ---- online PvP (engine/pvp.js): the queue, the teams, the host, the round log and the pay --------------------------------
+{
+  const V = await E('pvp');
+  const R = await E('ranks');
+  const L = await E('levels');
+  const MMx = await E('matchmaking');
+  const K = await import(new URL('../src/js/play/skill.js', import.meta.url));
+  const code = (fn) => { try { fn(); return null; } catch (e) { return e.code || e.message; } };
+  // (the bots' skill: the same numbers as play/skill.js, which the server doesn't import)
+  {
+    const same = [0, 0.13, 0.5, 0.77, 1].every((s) => V.mmrOfSkill(s) === K.mmrOfSkill(s)) && [600, 1000, 1333, 1700].every((m) => V.skillOfMmr(m) === K.skillOfMmr(m));
+    const a = mulberry32(5), b = mulberry32(5);
+    check('pvp: the bots\' skill is play/skill.js\'s (matchedSkill, mmrOfSkill, skillOfMmr)', same && Array.from({ length: 50 }, () => V.matchedSkill({ mmr: 1234 }, a) === K.matchedSkill({ mmr: 1234 }, b)).every(Boolean));
+  }
+  check('pvp: Competitive MR12 (13 wins, 24 rounds, 12-12 a draw), Wingman first to 9 (8-8); round gaps freeze + 5 s, half pay under freeze + 17 s',
+    V.MODES.competitive.winsNeeded === 13 && V.MODES.competitive.maxRounds === 24 && V.MODES.competitive.minGap === 20 && V.MODES.competitive.softGap === 32
+    && V.MODES.wingman.winsNeeded === 9 && V.MODES.wingman.maxRounds === 16 && V.MODES.wingman.minGap === 15 && V.MODES.wingman.softGap === 27 && V.MODES.wingman.lobby === 4);
+  // Maps: the pool, the shapes.
+  const C1 = 'a'.repeat(40), C2 = 'b'.repeat(40);
+  const cm = V.cleanMaps('competitive', [{ id: 'de_dust2', c: C1, x: true }, { id: 'de_poseidon', c: C1 }, { id: 'DE_X', c: C1 }, { id: 'de_nuke', c: 'zz' }, { id: 'de_dust2', c: C2 }], ['de_dust2']);
+  check('pvp: a queue\'s maps: the mode\'s pool only, well formed, once each; fixed sites only in Wingman', cm.maps.size === 1 && cm.maps.get('de_dust2').x === true && cm.fixed.size === 0);
+  const cw = V.cleanMaps('wingman', [{ id: 'de_poseidon', c: C1 }, { id: 'de_inferno', c: C2, x: true }], ['de_inferno', 'de_other']);
+  check('pvp: Wingman takes CS2\'s own pool as each game reads it', cw.maps.size === 2 && cw.fixed.size === 1 && cw.fixed.has('de_inferno'));
+  // pickLobby.
+  const E2 = (userId, since, maps, extra = {}) => ({ userId, since, maps: new Map(maps.map(([id, c, x = true]) => [id, { c, x }])), ...extra });
+  const t0 = 1e6;
+  const ten = Array.from({ length: 10 }, (_, i) => E2(i + 1, t0 + i, [['de_dust2', C1]]));
+  const full = V.pickLobby(ten, t0 + 20, { lobby: 10 });
+  check('pickLobby: a full lobby at once', full?.members.length === 10 && full.fill === false);
+  const nine = ten.slice(0, 9), early = V.pickLobby(nine, t0 + 1000, { lobby: 10 });
+  check('pickLobby: 9 of 10 before the fill time: nothing, nobody alone', early === null && nine.every((e) => !e.alone));
+  const late = V.pickLobby(nine, t0 + V.QUEUE.FILL_AFTER, { lobby: 10 });
+  check('pickLobby: after it, those it has (a fill)', late?.members.length === 9 && late.fill === true);
+  const lone = [E2(1, t0, [['de_dust2', C1]]), E2(2, t0 + 5, [['de_dust2', C2]]), E2(3, t0 + 9, [['de_nuke', C1]])];
+  check('pickLobby: nobody shares a map: each who waited long enough is alone', V.pickLobby(lone, t0 + V.QUEUE.FILL_AFTER + 10, { lobby: 4 }) === null && lone.every((e) => e.alone));
+  const mix = [E2(1, t0, [['de_dust2', C1], ['de_nuke', C1]]), E2(2, t0 + 1, [['de_nuke', C1]]), E2(3, t0 + 2, [['de_nuke', C1]]), E2(4, t0 + 3, [['de_dust2', C1]])];
+  const big = V.pickLobby(mix, t0 + V.QUEUE.FILL_AFTER, { lobby: 10 });
+  check('pickLobby: the fill takes the oldest\'s biggest map group', big?.members.map((e) => e.userId).join() === '1,2,3');
+  const off = [E2(1, t0, [['de_dust2', C1]], { off: true }), E2(2, t0, [['de_dust2', C1]])];
+  check('pickLobby: an entry whose socket is gone isn\'t matched', V.pickLobby(off, t0 + V.QUEUE.FILL_AFTER, { lobby: 4 }) === null && off[1].alone);
+  const starved = [E2(1, t0, [['de_dust2', C1]]), E2(2, t0 + 1, [['de_nuke', C1]]), E2(3, t0 + 2, [['de_nuke', C1]])];
+  check('pickLobby: one alone doesn\'t hold up the next who can be matched', V.pickLobby(starved, t0 + V.QUEUE.FILL_AFTER + 5, { lobby: 4 })?.members.map((e) => e.userId).join() === '2,3' && starved[0].alone);
+  // pickMap.
+  const pm = V.pickMap([E2(1, 0, [['de_dust2', C1, false], ['de_nuke', C1, true]]), E2(2, 0, [['de_dust2', C1, true], ['de_nuke', C1, true], ['de_train', C1]])], 'competitive', mulberry32(1));
+  check('pickMap: one both have, exported by both first; no site in Competitive', pm.id === 'de_nuke' && pm.x === true && pm.site === null);
+  const fixed = V.pickMap([E2(1, 0, [['de_inferno', C1]], { fixed: new Set(['de_inferno']) }), E2(2, 0, [['de_inferno', C1]], { fixed: new Set() })], 'wingman');
+  check('pickMap: Wingman on a map with its own site: no site', fixed.site === null);
+  // splitTeams.
+  const three = [{ userId: 1, mmr: 1500, since: 0 }, { userId: 2, mmr: 1700, since: 1 }, { userId: 3, mmr: 1100, since: 2 }];
+  const sp = V.splitTeams(three, 'competitive', mulberry32(3));
+  const sq = (u) => sp.slots.find((s) => s.userId === u)?.squad;
+  check('splitTeams: 3 players: the best alone in A with 4 bots, the other two in B with 3', sq(2) === 'A' && sq(1) === 'B' && sq(3) === 'B' && sp.slots.length === 10
+    && sp.slots.filter((s) => s.kind === 'bot').length === 7 && sp.slots[0].kind === 'human' && sp.slots[1].kind === 'bot' && sp.slots[5].kind === 'human' && sp.slots[6].kind === 'human');
+  check('splitTeams: bots around the humans\' average rating', sp.slots.filter((s) => s.kind === 'bot').every((s) => Math.abs(V.mmrOfSkill(s.skill) - 1433) < 200));
+  const ten2 = Array.from({ length: 10 }, (_, i) => ({ userId: i + 1, mmr: 2000 - i * 10, since: i }));
+  check('splitTeams: a full lobby snakes A B B A A B B A A B', V.splitTeams(ten2, 'competitive').slots.filter((s) => s.kind === 'human').sort((a, b) => a.userId - b.userId).map((s) => s.squad).join('') === 'ABBAABBAAB');
+  check('opponentOf: the other squad\'s average rating, bots by their skill', V.opponentOf([{ squad: 'A', kind: 'human', mmr: 1000 }, { squad: 'B', kind: 'human', mmr: 1200 }, { squad: 'B', kind: 'bot', skill: 0.5 }], 'A') === Math.round((1200 + V.mmrOfSkill(0.5)) / 2));
+  // checkRound and endOf.
+  const log = { rounds: [], score: { A: 0, B: 0 } };
+  const r1 = V.cleanRound({ n: 1, w: 'A', why: 'elim', score: { A: 1, B: 0 }, kills: [[0, 2, 255, 7, 0], [1, 3, 0, 7, 1]], mvp: 1, mvpWhy: 'kills' }, 'wingman');
+  check('checkRound: a round that follows', V.checkRound(log, r1, { mode: 'wingman', gap: 16000 }) === '');
+  const bad = (r, gap = 16000, l = log) => V.checkRound(l, V.cleanRound(r, 'wingman'), { mode: 'wingman', gap });
+  const base = { n: 1, w: 'A', why: 'elim', score: { A: 1, B: 0 }, kills: [[0, 2, 255, 7, 0], [0, 3, 255, 7, 0]], mvp: 0 };
+  check('checkRound: too quick', /at least 15 s/.test(bad(base, 14000)));
+  check('checkRound: a score that skips', /doesn't follow/.test(bad({ ...base, score: { A: 2, B: 0 } })) && /doesn't follow/.test(bad({ ...base, score: { A: 1, B: 1 } })));
+  check('checkRound: out of order', /came after/.test(bad({ ...base, n: 2 })));
+  check('checkRound: a death twice', /died twice/.test(bad({ ...base, kills: [[0, 2, 255, 7, 0], [0, 2, 255, 7, 0], [0, 3, 255, 7, 0]] })));
+  check('checkRound: a dead player\'s shot (a headshot, a wallbang or a no-scope)', /dead player shot/.test(bad({ ...base, kills: [[2, 0, 255, 7, 0], [0, 2, 255, 7, 0], [0, 3, 255, 7, 4]] })));
+  check('checkRound: a dead player\'s grenade is fine', bad({ ...base, kills: [[2, 0, 255, 7, 0], [0, 2, 255, 44, 0], [0, 3, 255, 44, 0]] }) === '');
+  check('checkRound: the MVP on the losing squad', /MVP/.test(bad({ ...base, mvp: 2 })));
+  check('checkRound: an elimination with someone alive; a bomb or time win needs nobody dead', /left alive/.test(bad({ ...base, kills: [[0, 2, 255, 7, 0]] })) && bad({ ...base, why: 'time', kills: [] }) === '');
+  check('cleanRound: a round it can\'t read is refused', V.cleanRound({ ...base, kills: [[0, 9, 255]] }, 'wingman') === null && V.cleanRound({ ...base, w: 'C' }, 'wingman') === null && /couldn't read/.test(V.checkRound(log, null, { mode: 'wingman', gap: 1e6 })));
+  check('endOf: 13 wins; 12-12 at 24 rounds a draw; 9 in Wingman', V.endOf({ A: 13, B: 4 }, 17, 'competitive')?.winner === 'A' && V.endOf({ A: 12, B: 12 }, 24, 'competitive')?.winner === null
+    && V.endOf({ A: 12, B: 11 }, 23, 'competitive') === null && V.endOf({ A: 3, B: 9 }, 12, 'wingman')?.winner === 'B');
+  const done = { rounds: [], score: { A: 9, B: 0 } };
+  for (let i = 0; i < 9; i++) done.rounds.push({});
+  check('checkRound: nothing after the end', /after the match was over/.test(V.checkRound(done, V.cleanRound({ ...base, n: 10, score: { A: 10, B: 0 } }, 'wingman'), { mode: 'wingman', gap: 1e6 })));
+  // boardOf, hadControl and crossCheck.
+  const rounds = [{ kills: [[0, 2, 1, 7, 0], [1, 3, 255, 7, 0], [2, 0, 255, 7, 0]], mvp: 0 }, { kills: [[0, 1, 255, 7, 0], [3, 0, 255, 7, 0]], mvp: 3 }];
+  const b0 = V.boardOf(rounds, 'wingman');
+  check('boardOf: enemy kills and assists, deaths and MVPs (a team kill counts for nothing)', b0[0].k === 1 && b0[0].a === 0 && b0[0].d === 2 && b0[0].m === 1 && b0[1].k === 1 && b0[1].a === 1 && b0[1].d === 1 && b0[3].k === 1 && b0[3].m === 1);
+  const b1 = V.boardOf(rounds, 'wingman', (s, i) => !(s === 0 && i === 1));
+  check('boardOf: rounds a bot played for a slot don\'t count for it', b1[0].k === 1 && b1[0].d === 1);
+  check('hadControl: a bot from `from` until the first round start at or after `back`', V.hadControl([{ from: 100, back: 300 }], 50) && !V.hadControl([{ from: 100, back: 300 }], 100) && !V.hadControl([{ from: 100, back: 300 }], 299)
+    && V.hadControl([{ from: 100, back: 300 }], 300) && !V.hadControl([{ from: 100, back: null }], 9999));
+  const rep = (k, a, m, score = { A: 9, B: 3 }) => ({ score, me: { k, a, d: 0, m }, stt: [] });
+  const cc = V.crossCheck({ k: 10, a: 2, m: 3 }, { k: 10 }, rep(8, 5, 3), { A: 9, B: 3 });
+  check('crossCheck: the lower of the log and the report; more than a kill apart is disputed', cc.k === 8 && cc.a === 2 && cc.m === 3 && cc.disputed);
+  check('crossCheck: a kill apart isn\'t; another score is; no report pays the log', !V.crossCheck({ k: 10, a: 0, m: 0 }, { k: 10 }, rep(9, 0, 0), { A: 9, B: 3 }).disputed
+    && V.crossCheck({ k: 10, a: 0, m: 0 }, { k: 10 }, rep(10, 0, 0, { A: 9, B: 4 }), { A: 9, B: 3 }).disputed && V.crossCheck({ k: 7, a: 1, m: 2 }, null, null, {}).k === 7);
+  // farmMultiplier and paceMultiplier.
+  const now = 5e9, H = 3600e3;
+  const hist = (n, opp, sameSquad = false, at = now - H) => Array.from({ length: n }, (_, i) => [{ match: `${opp}-${i}-${at}`, user: 1, squad: 'A', at }, { match: `${opp}-${i}-${at}`, user: opp, squad: sameSquad ? 'A' : 'B', at }]).flat();
+  check('farmMultiplier: 0-2 earlier matches against them today: full; 3 half; 5 a quarter; 8 nothing', [[2, 1], [3, 0.5], [4, 0.5], [5, 0.25], [7, 0.25], [8, 0]].every(([n, x]) => V.farmMultiplier(hist(n, 2), 1, [2], now).mult === x));
+  check('farmMultiplier: teammates don\'t count, nor yesterday, nor players who aren\'t opponents now', V.farmMultiplier(hist(9, 2, true), 1, [2], now).mult === 1
+    && V.farmMultiplier(hist(9, 2, false, now - 25 * H), 1, [2], now).mult === 1 && V.farmMultiplier(hist(9, 3), 1, [2], now).mult === 1);
+  check('farmMultiplier: the most met of several opponents', V.farmMultiplier([...hist(3, 2), ...hist(5, 3)], 1, [2, 3], now).mult === 0.25);
+  check('paceMultiplier: an average under the soft limit pays half', V.paceMultiplier([20000, 20000], 'competitive').mult === 0.5 && V.paceMultiplier([32000, 32000], 'competitive').mult === 1 && V.paceMultiplier([], 'wingman').mult === 1);
+  // payPlan.
+  const slots = [0, 1, 2, 3].map((s) => (s === 0 || s === 2 ? { slot: s, squad: s < 2 ? 'A' : 'B', kind: 'human', userId: s === 0 ? 10 : 20, mmr: 1200 } : { slot: s, squad: s < 2 ? 'A' : 'B', kind: 'bot', skill: 0.5 }));
+  const mk = (winners, extra = {}) => {
+    const rs = [];
+    let t = 1000, sc = { A: 0, B: 0 };
+    for (const w of winners) {
+      const start = t;
+      t += 35000;
+      sc = { ...sc, [w]: sc[w] + 1 };
+      const k = w === 'A' ? 0 : 2;
+      rs.push({ n: rs.length + 1, w, why: 'elim', score: sc, kills: (w === 'A' ? [2, 3] : [0, 1]).map((v) => [k, v, 255, 7, 0]), mvp: k, start, at: t });
+    }
+    return { mode: 'wingman', slots, rounds: rs, score: sc, liveAt: 1000, created: 900, endWhy: 'over', voidWhy: null, hostId: 10,
+      members: [{ userId: 10, slot: 0, squad: 'A', eligible: true, abandoned: false, control: [] }, { userId: 20, slot: 2, squad: 'B', eligible: true, abandoned: false, control: [] }], ...extra };
+  };
+  const win9 = [...Array(3).fill('B'), ...Array(9).fill('A')];
+  const plan = V.payPlan(mk(win9));
+  const pa = plan.users.find((u) => u.userId === 10), pb = plan.users.find((u) => u.userId === 20);
+  check('payPlan: a win and a loss from the log (kills, MVPs, rounds), the rank moved, full pay', !plan.void && pa.result === 'win' && pa.kills === 18 && pa.mvps === 9 && pa.roundsWon === 9 && pa.roundsAgainst === 3
+    && pb.result === 'loss' && pb.kills === 6 && pb.mvps === 3 && pa.mult === 1 && pa.rank && pa.opponent === Math.round((1200 + V.mmrOfSkill(0.5)) / 2), JSON.stringify(pa));
+  check('payPlan: not over by its score: void', !!V.payPlan(mk(win9.slice(0, 8))).void);
+  check('payPlan: a void match pays nobody', V.payPlan(mk(win9, { voidWhy: 'x' })).users.length === 0);
+  const cut = V.payPlan(mk(win9.slice(0, 5), { endWhy: 'host-left', hostId: 20 }));
+  check('payPlan: the host left: the others paid their finished rounds (no result, no rank), the host not', cut.users.length === 1 && cut.users[0].userId === 10 && cut.users[0].result === null && !cut.users[0].rank && cut.users[0].kills === 4);
+  const away = V.payPlan(mk(win9, { members: [{ userId: 10, slot: 0, squad: 'A', eligible: true, abandoned: false, control: [{ from: 70000, back: 140000 }] }, { userId: 20, slot: 2, squad: 'B', eligible: false, abandoned: false, control: [] }] }));
+  check('payPlan: rounds a bot played for you aren\'t yours; a player gone at the end isn\'t paid', away.users.length === 1 && away.users[0].kills === 16 && away.left.join() === '20', JSON.stringify(away.users[0]));
+  const fast = V.payPlan(mk(win9, { rounds: mk(win9).rounds.map((r, i) => ({ ...r, start: 1000 + i * 20000, at: 1000 + (i + 1) * 20000 })) }));
+  check('payPlan: rounds 20 s apart in Wingman: half', fast.users.every((u) => u.mult === 0.5));
+  const netd = V.payPlan(mk(win9), new Map(), [], new Set(['10:20']));
+  check('payPlan: opponents on one network: no kills, assists or MVPs paid, the result is', netd.users.every((u) => u.kills === 0 && u.mvps === 0 && u.result));
+  const repd = V.payPlan(mk(win9), new Map([[10, { score: { A: 9, B: 3 }, me: { k: 5, a: 0, d: 0, m: 9 }, stt: [{ uid: 'g', k: 9 }, { uid: 'h', k: 9 }] }]]));
+  const r10 = repd.users.find((u) => u.userId === 10);
+  check('payPlan: the report\'s lower numbers, and StatTrak kills up to those paid', r10.kills === 5 && r10.disputed && r10.stt.length === 1 && r10.stt[0].k === 5);
+  // The other players' own games against the host's log: contested when most of them saw another result.
+  const word = (score, extra = {}) => ({ score, me: { k: 0, a: 0, d: 0, m: 0 }, stt: [], from: 1, w: null, ...extra });
+  const con = V.payPlan(mk(win9), new Map([[20, word({ A: 3, B: 9 })]]));
+  check('payPlan: the other player\'s game saw another score: contested, nobody paid the result or ranked, the kills still paid', con.contested && con.against.join() === '20'
+    && con.users.every((u) => u.result === null && !u.rank && u.notes.some((t) => /didn't agree/.test(t))) && con.users.find((u) => u.userId === 10).kills === 18);
+  const conW = V.payPlan(mk(win9), new Map([[20, word(null, { w: 'BBBBAAAAAAAA' })]]));
+  check('payPlan: a round\'s winner seen otherwise contests it too; the same seen agrees', conW.contested && !V.payPlan(mk(win9), new Map([[20, word(null, { w: 'BBB..AAAAAAA' })]])).contested
+    && V.reportAgrees(mk(win9).rounds, { A: 9, B: 3 }, word({ A: 9, B: 3 })) === true && V.reportAgrees([], { A: 0, B: 0 }, null) === null);
+  const all4 = [0, 1, 2, 3].map((s) => ({ slot: s, squad: s < 2 ? 'A' : 'B', kind: 'human', userId: 10 + s, mmr: 1200 }));
+  const four = (extra) => mk(win9, { slots: all4, hostId: 10, members: all4.map((s) => ({ userId: s.userId, slot: s.slot, squad: s.squad, eligible: true, abandoned: false, control: [] })), ...extra });
+  const oneOff = V.payPlan(four(), new Map([[11, word({ A: 9, B: 3 })], [12, word({ A: 9, B: 3 })], [13, word({ A: 3, B: 9 })]]));
+  check('payPlan: one of three other games disagreeing: not contested (paid as the log says)', !oneOff.contested && oneOff.against.join() === '13' && oneOff.users.find((u) => u.userId === 10).result === 'win');
+  const afkd = V.payPlan(mk(win9, { members: [{ userId: 10, slot: 0, squad: 'A', eligible: true, abandoned: false, control: [{ from: 0, back: null }] }, { userId: 20, slot: 2, squad: 'B', eligible: true, abandoned: false, control: [] }] }));
+  const af = afkd.users.find((u) => u.userId === 10);
+  check('payPlan: a bot played most of a player\'s rounds: no result, no rank (not contested), the other as usual', af.result === null && !af.rank && af.outcome === 'away' && af.kills === 0
+    && af.notes.some((t) => /most of your rounds/.test(t)) && afkd.users.find((u) => u.userId === 20).result === 'loss');
+  const from6 = V.payPlan(mk(win9), new Map([[10, word({ A: 9, B: 3 }, { from: 6, me: { k: 14, a: 0, d: 0, m: 7 } })]]));
+  const f10 = from6.users.find((u) => u.userId === 10);
+  check('payPlan: a game that reloaded and counted from round 6: the log\'s for rounds 1-5, the lower of both after', f10.kills === 18 && f10.mvps === 9 && !f10.disputed, JSON.stringify(f10));
+  const low6 = V.payPlan(mk(win9), new Map([[10, word({ A: 9, B: 3 }, { from: 6, me: { k: 10, a: 0, d: 0, m: 5 } })]])).users.find((u) => u.userId === 10);
+  check('payPlan: counting from round 6, fewer than the log after it: those paid, and disputed', low6.kills === 4 + 10 && low6.mvps === 2 + 5 && low6.disputed, JSON.stringify(low6));
+  const cut2 = V.payPlan(mk(win9.slice(0, 5), { endWhy: 'host-fault', hostId: 20 }));
+  check('payPlan: the host\'s fault: as the host leaving (the others paid the finished rounds, the host not)', cut2.users.length === 1 && cut2.users[0].userId === 10 && cut2.users[0].result === null
+    && cut2.users[0].notes.some((t) => /broke the match's rules/.test(t)));
+  const goneHost = (extra) => mk(win9.slice(0, 5), { endWhy: 'host-left', hostId: 20, members: [{ userId: 10, slot: 0, squad: 'A', eligible: true, abandoned: false, control: [] }, { userId: 20, slot: 2, squad: 'B', eligible: false, abandoned: true, control: [] }], ...extra });
+  const farmRows = Array.from({ length: 8 }, (_, i) => [{ match: 'x' + i, user: 10, squad: 'A', at: 800 }, { match: 'x' + i, user: 20, squad: 'B', at: 800 }]).flat();
+  const gnet = V.payPlan(goneHost(), new Map(), [], new Set(['10:20'])).users[0], gfarm = V.payPlan(goneHost(), new Map(), farmRows).users[0];
+  check('payPlan: a host who abandoned is still the opponent for the network and repeat rules (no farming a host who then leaves)', gnet.kills === 0 && gnet.notes.some((t) => /network/.test(t)) && gfarm.mult === 0, JSON.stringify([gnet.kills, gfarm.mult]));
+  const crash = mk(win9);
+  crash.rounds[4] = { ...crash.rounds[4], gap: 30000, start: crash.rounds[4].at - 9000 };
+  check('payPlan: a round\'s own gap (a crash\'s, from the host\'s ticks) counts for its time', !V.payPlan(crash).void && V.payPlan(crash).users[0].mult === 1);
+  // The actions: the server's only.
+  const pst = freshState(1e12);
+  check('pvp.reward and pvp.abandon: refused unless the server runs them, offline or online',
+    code(() => ACT.runAction(ACT.makeCtx(pst), 'pvp.reward', { mode: 'wingman', result: 'win', kills: 3 })) === 'server' && code(() => ACT.runAction(ACT.makeCtx(pst, { online: true }), 'pvp.reward', { mode: 'wingman', result: 'win' })) === 'server'
+    && code(() => ACT.runAction(ACT.makeCtx(pst, { online: true }), 'pvp.abandon', { mode: 'wingman' })) === 'server' && pst.money === freshState(1e12).money);
+  const sys = (st, name, args) => ACT.runAction(ACT.makeCtx(st, { online: true, system: true, now: 1e12, rng: mulberry32(9) }), name, args);
+  const pa1 = freshState(1e12), pa2 = freshState(1e12);
+  const viaPvp = sys(pa1, 'pvp.reward', { mode: 'competitive', result: 'win', kills: 20, assists: 3, mvps: 4, roundsWon: 13, roundsFor: 13, roundsAgainst: 9, opponent: 1000, rank: true });
+  const viaBot = ACT.runAction(ACT.makeCtx(pa2, { now: 1e12, rng: mulberry32(9) }), 'play.reward', { result: 'win', kills: 20, assists: 3, mvps: 4, roundsWon: 13, rounds: 22 });
+  check('pvp.reward pays what play.reward does for the same numbers (money, XP, stats)', viaPvp.earned === viaBot.earned && viaPvp.xp.total === viaBot.xp.total && pa1.money === pa2.money
+    && JSON.stringify(pa1.prof) === JSON.stringify(pa2.prof) && pa1.stats.playKills === pa2.stats.playKills && viaPvp.earned === L.matchPay({ result: 'win', kills: 20, assists: 3, mvps: 4 }).total);
+  check('pvp.reward: the rank moved by the result against the opponent', viaPvp.rank && pa1.rank.mmr > R.freshRank().mmr && pa1.rank.wins === 1);
+  const half = freshState(1e12), h = sys(half, 'pvp.reward', { mode: 'wingman', result: 'loss', kills: 3, assists: 1, mvps: 0, roundsWon: 5, mult: 0.5 });
+  const full2 = L.matchPay({ result: 'loss', kills: 3, assists: 1, mvps: 0 }), fx = L.matchXp({ result: 'loss', kills: 3, assists: 1, roundsWon: 5 });
+  check('pvp.reward: a multiplier scales the money (to the cent) and the XP (to the point)', h.earned === round2(full2.total / 2) && h.xp.total === Math.round(fx.result / 2) + Math.round(fx.kills / 2) + Math.round(fx.assists / 2) + Math.round(fx.rounds / 2));
+  const zero = freshState(1e12), z = sys(zero, 'pvp.reward', { mode: 'wingman', result: 'win', kills: 9, roundsWon: 9, mult: 0, rank: true });
+  check('pvp.reward: a multiplier of 0: no money, no XP, no rank change', z.earned === 0 && z.xp.total === 0 && z.rank === null && zero.money === freshState(1e12).money && JSON.stringify(zero.wingman ?? null) === JSON.stringify(freshState(1e12).wingman ?? null));
+  const cutSt = freshState(1e12), cr = sys(cutSt, 'pvp.reward', { mode: 'wingman', result: null, kills: 4, mvps: 2, roundsWon: 2, rank: true });
+  check('pvp.reward: a match cut short (result null): no result pay, no rank change', cr.pay.result === 0 && cr.earned === 400 + 500 && cr.rank === null);
+  check('pvp.reward: a bad multiplier or mode is refused', code(() => sys(freshState(1e12), 'pvp.reward', { mode: 'wingman', result: 'win', mult: 2 })) === 'bad' && code(() => sys(freshState(1e12), 'pvp.reward', { mode: 'premier', result: 'win' })) === 'bad');
+  const sttSt = freshState(1e12);
+  const skin = Object.values(D.skins).find((s) => s.stt && s.cat === 'rifle');
+  const g1 = I.makeSkinItem(skin, { stt: true }), g2 = I.makeSkinItem(skin, { stt: false });
+  sttSt.inv.push(g1, g2);
+  const sr = sys(sttSt, 'pvp.reward', { mode: 'wingman', result: 'win', kills: 6, roundsWon: 9, stt: [{ uid: g2.uid, k: 3 }, { uid: g1.uid, k: 4 }, { uid: 'nope', k: 1 }, { uid: g1.uid, k: 5 }] });
+  check('pvp.reward: StatTrak kills on owned StatTrak items, no more in all than the kills paid', g1.kills === 6 && !g2.kills && sr.stt.length === 2, JSON.stringify(sr.stt));
+  // pvp.abandon: the penalty, and the bot match you're in stays.
+  const ab = freshState(1e12);
+  ab.mm = { ...MMx.freshMM(), match: { mode: 'competitive', opponent: 1000, at: 1 } };
+  const ar = sys(ab, 'pvp.abandon', { mode: 'wingman', opponent: 1100, roundsFor: 2, roundsAgainst: 5 });
+  check('pvp.abandon: a loss for the mode\'s rank and the cooldown; the bot match you\'re in untouched', ar.cooldown === MMx.COOLDOWNS[0] && ab.mm.until === 1e12 + ar.cooldown && ab.mm.offenses === 1
+    && ab.mm.match?.mode === 'competitive' && ab.wingman.losses === 1);
+  // (play.abandon still ends the bot match, as before the helper was taken out of it)
+  const pb2 = freshState(1e12);
+  pb2.mm = { ...MMx.freshMM(), match: { mode: 'wingman', opponent: 1000, at: 1 } };
+  const pr = ACT.runAction(ACT.makeCtx(pb2, { now: 1e12 }), 'play.abandon', {});
+  check('play.abandon: unchanged (the match over, the cooldown, the loss)', pb2.mm.match === null && pr.mode === 'wingman' && pr.cooldown === MMx.COOLDOWNS[0] && pb2.wingman.losses === 1);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

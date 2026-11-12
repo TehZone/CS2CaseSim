@@ -575,3 +575,48 @@ body.match-menu #menu-bg { visibility: hidden; }
 .play-live-actions .btn.big { min-width: 220px; height: 50px; font-size: 22px; letter-spacing: .2em; font-family: var(--font-cond); }
 .play-live-links { display: flex; gap: 6px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .07); }
 .play-live-opts { max-width: 360px; margin-bottom: 14px; }
+
+/* Online matches (pvp.js): the loading screen with everyone's progress, the pause banner, the Online tab's maps. */
+.pvp-load { position: absolute; inset: 0; z-index: 4; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse 70% 60% at 50% 42%, #2b343f, #0a0d10 75%); }
+.pvp-load-box { width: min(980px, 94vw); display: flex; flex-direction: column; align-items: center; gap: 14px; color: var(--text); }
+.pvp-load-box > small { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.pvp-load-box h2 { margin: 0; font-family: var(--font-cond); font-size: 34px; letter-spacing: .1em; text-transform: uppercase; color: #fff; }
+.pvp-load-box .spinner { width: 46px; height: 46px; border-radius: 50%; border: 3px solid rgba(255, 255, 255, .12); border-top-color: #fff; animation: spin 1s linear infinite; }
+.pvp-teams { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; width: 100%; }
+.pvp-team { padding: 10px 12px; background: rgba(0, 0, 0, .3); border: 1px solid rgba(255, 255, 255, .08); border-top: 2px solid; }
+.pvp-team.ct { border-top-color: #5d9cdb; }
+.pvp-team.t { border-top-color: #e0a84b; }
+.pvp-team h3 { margin: 0 0 8px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.pvp-row { display: grid; grid-template-columns: 28px 1fr auto 120px 92px; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid rgba(255, 255, 255, .05); font-size: 13px; }
+.pvp-row.bot { grid-template-columns: 28px 1fr auto; opacity: .6; }
+.pvp-rank-em { display: flex; min-width: 18px; }
+.pvp-row.me .pvp-name { color: #fff; font-weight: 700; }
+.pvp-pic { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, .06); font-size: 9px; color: var(--muted); overflow: hidden; }
+.pvp-pic img { width: 100%; height: 100%; object-fit: cover; }
+.pvp-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pvp-host { font-size: 10px; letter-spacing: .1em; color: #8ee06e; }
+.pvp-row .pvp-bar { height: 5px; background: rgba(255, 255, 255, .1); }
+.pvp-row .pvp-bar i { display: block; height: 100%; background: #8ee06e; transition: width .3s; }
+.pvp-row small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pvp-load-foot { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+/* (Low on the screen: the round's win panel and the MVP strip take the top third.) */
+.pvp-banner { position: absolute; left: 50%; bottom: 24%; transform: translateX(-50%); z-index: 9; padding: 10px 22px; background: rgba(10, 12, 15, .85); border: 1px solid rgba(232, 163, 60, .6);
+  color: #ffd38a; font-size: 15px; letter-spacing: .06em; pointer-events: none; }
+/* The end screen's result under the score line and its mode label, not over them. */
+.pvp-match .play-hud .endscreen { top: max(6%, 86px); }
+@media (max-height: 920px) { .pvp-match .play-hud .endscreen { top: 86px; } }
+.pvp-maps { align-content: start; }
+.pvp-maps-head { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
+.pvp-maps-head b { font-size: 13px; letter-spacing: .1em; text-transform: uppercase; }
+.pvp-map { cursor: default; }
+.pvp-away, .pvp-alone { border-color: rgba(232, 163, 60, .5); background: rgba(232, 163, 60, .1); gap: 6px; }
+.pvp-away > b, .pvp-alone > b { color: #ffcf7a; }
+.pvp-accept-sub { margin-top: 8px; font-size: 12px; }
+.pvp-note { font-size: 12px; }
+.pvp-rank { font-size: 13px; color: #ffd38a; }
+/* Teammates' names over their heads (play/nametags.js). */
+.pvp-tags { position: absolute; inset: 0; z-index: 5; pointer-events: none; overflow: hidden; }
+.pvp-tag { position: absolute; transform: translate(-50%, -100%); font-size: 12px; font-weight: 700; color: #cfe6ff; text-shadow: 0 1px 2px #000, 0 0 4px #000; white-space: nowrap; }
+.pvp-tag.t { color: #ffe0a8; }
+.play-setup [data-pvp-go].searching { flex-direction: column; gap: 2px; height: auto; min-height: 58px; padding: 8px 12px; }
+.play-setup [data-pvp-go].searching small { font-size: 11px; letter-spacing: .06em; opacity: .85; white-space: normal; text-align: center; }

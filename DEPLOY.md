@@ -153,6 +153,30 @@ choose it (only the admin panel shows it). If yours is at another address, chang
 3. Online accounts start fresh with $10 and are saved on the server. Your offline save stays on your PC and you
    can switch back any time (click your name → Log out).
 
+### Online matches (PvP)
+
+Competitive and Wingman against other players (`server/matchmaking.mjs`, `server/relay.mjs`, `src/js/engine/pvp.js`):
+one player's game hosts each match, and the others' traffic goes through the server's `/match` WebSocket. Nothing to set
+up on the VPS:
+
+- **Caddy** passes `/match` through as it does `/ws` (its one `reverse_proxy`). `/match` is never compressed, on purpose.
+- **Only games that announce `pvp1`** (from the release that brings online matches) can search; 1.1.7 never sees any of
+  it. The admin panel's **Online matches** switch (Server settings) turns searching off; matches being played finish.
+  Staff see the matches being played on the Dashboard, and admins can end one (paid for its finished rounds, or void).
+- **A push restarts the server, and that pauses every online match** for everyone (`The server is restarting`) until its
+  players are back, usually seconds; a host not back within 2 minutes ends it. Matches are rows (`pvp_matches`,
+  `pvp_players`), so nothing is lost and nobody is paid twice. Pushing during busy hours costs players that pause.
+  Optional, not set up: Caddy's `stream_close_delay` in the Caddyfile (a Caddy reload then doesn't cut `/match`), and a
+  drain in `deploy.sh` that holds a deploy, up to a limit, while `/health`'s `pvp.matches` isn't 0 (both need `setup.sh`
+  run again on the VPS).
+- **Watch `/health`'s `pvp`**: `queued`, `matches`, `members` (players on `/match`) and `loopP99`, the server's event-loop
+  delay over the last minute in ms (the delay itself: about 0 on an idle Linux server, about 12 on Windows, whose timers
+  are coarser). Every match's traffic waits behind it: past about 25 ms the relay should move to a process of its own.
+- **Online matches are matched on the released version only** (the one the release feed names): a game on any other
+  version is told to update before it can search. A local server without a release seen yet matches any version.
+- Playtests against a local server: `PVP_FILL_AFTER_S=20` (outside production only) makes the queue split its players
+  after 20 s instead of 2 minutes.
+
 ## Discord: account linking and the admin panel
 
 The server can run the game's Discord bot. With it, players link their game account to their Discord account, the
@@ -306,8 +330,9 @@ Good to know:
   `connections` means compression is getting through.
 - Tests: `node scripts/test-engine.mjs` (game rules), `node scripts/test-update.mjs` (the updater), `node server/test.mjs`
   (server, trading, gambling), `node server/test-admin.mjs` (the admin panel and the Discord bot, against a stand-in
-  Discord), `node server/test-release.mjs` (the version lock) and `node server/test-market.mjs` (the players' Market: its
-  table, `p2p_listings`, is made by the server's start like the rest); `npm test` in `server/` runs the server tests.
+  Discord), `node server/test-release.mjs` (the version lock), `node server/test-market.mjs` (the players' Market: its
+  table, `p2p_listings`, is made by the server's start like the rest) and `node server/test-pvp.mjs` (online matches: the
+  queue, `/match`, the round log, restarts and the pay); `npm test` in `server/` runs the server tests.
 
 ## Previous setup (Render + Neon)
 

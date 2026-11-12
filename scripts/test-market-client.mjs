@@ -100,7 +100,7 @@ try {
   await settle();
   let sock = sockets.at(-1);
   sock.open();
-  check('the hello announces p2p1 (with lean1, and face1)', JSON.stringify(sock.sent[0].caps) === '["lean1","p2p1","face1"]');
+  check('the hello announces p2p1 (with lean1, face1 and pvp1)', JSON.stringify(sock.sent[0].caps) === '["lean1","p2p1","face1","pvp1"]');
   sock.deliver(welcome({ caps: ['lean1'] }));
   await settle();
   check('a server whose welcome doesn\'t name p2p1: no Market', online() && !net.hasMarket() && !M.available());

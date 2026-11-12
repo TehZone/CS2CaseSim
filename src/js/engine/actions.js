@@ -36,24 +36,56 @@ function finishMatch(ctx) {
   ctx.st.mm = { ...ctx.st.mm, match: null };
   ctx.dirty.add('mm');
 }
-// A ranked match abandoned: a loss for its mode's rank (or CS Rating) and the cooldown.
-function abandonMatch(ctx, { roundsFor = 0, roundsAgainst = 0 } = {}) {
-  const m = ctx.st.mm.match, result = 'loss';
+// An abandon's penalty: a loss for that mode's rank (or CS Rating) and the cooldown. The ranked match you're in (st.mm.match)
+// stays as it is: abandonMatch ends it; an online PvP match isn't one ('pvp.abandon').
+function penalize(ctx, { mode, opponent = null, roundsFor = 0, roundsAgainst = 0 }) {
+  const result = 'loss';
   let rated;
-  if (m.mode === 'premier') {
-    rated = P.ratePremier(ctx.st.premier, { result, roundsFor, roundsAgainst, opponent: m.opponent ?? P.START_RATING });
+  if (mode === 'premier') {
+    rated = P.ratePremier(ctx.st.premier, { result, roundsFor, roundsAgainst, opponent: opponent ?? P.START_RATING });
     ctx.st.premier = rated.premier;
     ctx.dirty.add('premier');
   } else {
-    const key = RANK_KEY[m.mode] || 'rank';
-    rated = R.rateMatch(ctx.st[key], { result, roundsFor, roundsAgainst, opponent: m.opponent ?? null, now: ctx.now });
+    const key = RANK_KEY[mode] || 'rank';
+    rated = R.rateMatch(ctx.st[key], { result, roundsFor, roundsAgainst, opponent: opponent ?? null, now: ctx.now });
     ctx.st[key] = rated.rank;
     ctx.dirty.add(key);
   }
+  const keep = ctx.st.mm?.match ?? null;
   const { mm, ms } = MM.abandon(ctx.st.mm, ctx.now);
-  ctx.st.mm = mm;
+  ctx.st.mm = { ...mm, match: keep };
   ctx.dirty.add('mm');
-  return { mode: m.mode, cooldown: ms, until: mm.until, rated };
+  return { mode, cooldown: ms, until: mm.until, rated };
+}
+// A ranked match abandoned: a loss for its mode's rank (or CS Rating) and the cooldown, and the match is over.
+function abandonMatch(ctx, { roundsFor = 0, roundsAgainst = 0 } = {}) {
+  const m = ctx.st.mm.match;
+  const out = penalize(ctx, { mode: m.mode, opponent: m.opponent ?? null, roundsFor, roundsAgainst });
+  ctx.st.mm = { ...ctx.st.mm, match: null };
+  return out;
+}
+// A match's pay and XP (see levels.js): its result, kills, assists and round MVPs, and the rounds your team won, credited
+// with the profile's XP, a prestige's medal and the match stats. mult (online PvP's anti-farm rules, 'pvp.reward'): both
+// scaled, money to the cent and XP to the point; 1 is play.reward's own. result null: no result pay (a match cut short).
+export function payMatch(ctx, { result, kills = 0, assists = 0, mvps = 0, roundsWon = 0, ffa = false, mult = 1 }) {
+  let pay = L.matchPay({ result, kills, assists, mvps });
+  let xp = L.matchXp({ result, kills, assists, roundsWon: ffa ? 0 : roundsWon });
+  if (mult !== 1) {
+    const m = (o, f) => { const s = Object.fromEntries(Object.entries(o).filter(([k]) => k !== 'total').map(([k, v]) => [k, f(v * mult)])); return { ...s, total: f(Object.values(s).reduce((a, b) => a + b, 0)) }; };
+    pay = m(pay, round2);
+    xp = m(xp, Math.round);
+  }
+  credit(ctx, pay.total);
+  const lv = L.addXp(ctx.st.prof, xp.total, { r: ctx.rng, now: ctx.now });
+  ctx.st.prof = lv.prof;
+  ctx.dirty.add('prof');
+  const badges = giveMedals(ctx); // (a prestige: its Service Medal's badge)
+  const s = stats(ctx);
+  s.playMatches = (s.playMatches || 0) + 1;
+  s.playWins = (s.playWins || 0) + (result === 'win' ? 1 : 0);
+  s.playKills = (s.playKills || 0) + kills;
+  s.playEarned = round2((s.playEarned || 0) + pay.total);
+  return { result, earned: pay.total, pay, xp, before: lv.before, after: lv.after, levelUps: lv.levelUps, medals: lv.medals, waiting: lv.prof.drops.length, ...(badges.length ? { badges } : {}) };
 }
 
 // (system: the server running an action itself, not for a client's request: see 'passive.collect'. maxUnits and prestige: the
@@ -650,19 +682,7 @@ export const ACTIONS = {
       ctx.st.play = null;
       ctx.dirty.add('play');
     }
-    const pay = L.matchPay({ result, kills, assists, mvps });
-    const xp = L.matchXp({ result, kills, assists, roundsWon: ffa ? 0 : roundsWon });
-    credit(ctx, pay.total);
-    const lv = L.addXp(ctx.st.prof, xp.total, { r: ctx.rng, now: ctx.now });
-    ctx.st.prof = lv.prof;
-    ctx.dirty.add('prof');
-    const badges = giveMedals(ctx); // (a prestige: its Service Medal's badge)
-    const s = stats(ctx);
-    s.playMatches = (s.playMatches || 0) + 1;
-    s.playWins = (s.playWins || 0) + (result === 'win' ? 1 : 0);
-    s.playKills = (s.playKills || 0) + kills;
-    s.playEarned = round2((s.playEarned || 0) + pay.total);
-    return { result, earned: pay.total, pay, xp, before: lv.before, after: lv.after, levelUps: lv.levelUps, medals: lv.medals, waiting: lv.prof.drops.length, ...(badges.length ? { badges } : {}) };
+    return payMatch(ctx, { result, kills, assists, mvps, roundsWon, ffa });
   },
   // Passive income (see levels.js): what's due since the time it was counted up to, by the clock's time (ctx.now), at the
   // rate for the prestiges the profile has now, and the clock moved on in the same change as the money. Offline the game
@@ -774,6 +794,50 @@ export const ACTIONS = {
     it.kills = Math.min(T.MAX_KILLS, (it.kills || 0) + 1);
     touch(ctx, it);
     return { kills: it.kills };
+  },
+  // An online PvP match's pay (server/matchmaking.mjs, engine/pvp.js payPlan): never a client's request. The server works
+  // out every number from its own log of the match and the players' own reports, and runs this once per player:
+  // play.reward's pay and XP (payMatch) scaled by mult (its anti-farm rules: 1, 0.5, 0.25 or 0), the mode's rank moved by
+  // the result against the other team's rating (not for a match cut short, nor at a mult of 0), and the kills counted on the
+  // StatTrak™ items the player's game named ([{ uid, k }], at most the kills paid; one not theirs, or not StatTrak™, is left
+  // out). result: 'win' | 'draw' | 'loss', or null (cut short: no result pay).
+  'pvp.reward'(ctx, { mode, result = null, kills = 0, assists = 0, mvps = 0, roundsWon = 0, roundsFor = 0, roundsAgainst = 0, opponent = null, mult = 1, rank = false, stt = [] }) {
+    if (!ctx.system) fail('PvP matches are paid by the server', 'server');
+    if (!RANK_KEY[mode]) fail('Invalid mode');
+    if (result !== null && !L.RESULTS.includes(result)) fail('Invalid result');
+    kills = int(kills, 0, 400, 'kills'); assists = int(assists, 0, 400, 'assists'); mvps = int(mvps, 0, 60, 'MVPs');
+    roundsWon = int(roundsWon, 0, 60, 'rounds'); roundsFor = int(roundsFor, 0, 60, 'rounds'); roundsAgainst = int(roundsAgainst, 0, 60, 'rounds');
+    if (![1, 0.5, 0.25, 0].includes(mult)) fail('Invalid multiplier');
+    const out = payMatch(ctx, { result, kills, assists, mvps, roundsWon, mult });
+    let rated = null;
+    if (rank && result && mult > 0) {
+      const key = RANK_KEY[mode];
+      const r = R.rateMatch(ctx.st[key], { result: result === 'draw' ? 'tie' : result, roundsFor, roundsAgainst,
+        opponent: opponent == null ? null : int(opponent, 0, 5000, 'rating'), now: ctx.now });
+      ctx.st[key] = r.rank;
+      ctx.dirty.add(key);
+      rated = { change: r.change, before: r.before, after: r.after, delta: r.delta };
+    }
+    const counted = [];
+    let left = kills;
+    for (const x of Array.isArray(stt) ? stt : []) {
+      const it = ctx.st.inv.find((i) => i.uid === String(x?.uid));
+      const k = Math.min(left, Number.isInteger(x?.k) && x.k > 0 ? x.k : 0);
+      if (!it || it.t !== 'skin' || !it.stt || !k) continue;
+      it.kills = Math.min(T.MAX_KILLS, (it.kills || 0) + k);
+      touch(ctx, it);
+      left -= k;
+      counted.push({ uid: it.uid, kills: it.kills });
+    }
+    return { ...out, mult, rank: rated, stt: counted };
+  },
+  // An online PvP match abandoned (not back in time, or given up): a loss for that mode's rank and the cooldown, as a bot
+  // match's abandon (play.abandon), run by the server. The bot match you may be in (st.mm.match) isn't touched.
+  'pvp.abandon'(ctx, { mode, opponent = null, roundsFor = 0, roundsAgainst = 0 }) {
+    if (!ctx.system) fail('PvP matches are settled by the server', 'server');
+    if (!RANK_KEY[mode]) fail('Invalid mode');
+    return penalize(ctx, { mode, opponent: opponent == null ? null : int(opponent, 0, 5000, 'rating'),
+      roundsFor: int(roundsFor, 0, 60, 'rounds'), roundsAgainst: int(roundsAgainst, 0, 60, 'rounds') });
   },
   'stickers.apply'(ctx, { uid, stickers }) {
     const item = findOwned(ctx, uid);

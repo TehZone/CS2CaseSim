@@ -47,6 +47,7 @@ const PLAY_CALLS = {
   soundInfo: (events) => cs2.playSoundInfo(events), reverbs: () => cs2.playReverbs(),
   agentModel: (id) => cs2.agentModel(id), agentVoice: (id) => agentVoice(cs2, id), stats: () => cs2.playStats(), impacts: () => cs2.playImpacts(), voices: () => cs2.playVoices(), icons: () => cs2.playIcons(),
   ranks: () => cs2.playRanks(), menuIcons: () => cs2.menuIcons(), menuBackdrop: (id) => cs2.menuBackdrop(id), profileArt: () => cs2.profileArt(),
+  mapContent: () => cs2.playMapContent(), // (online matches: which maps a player can play, see pvp.js)
 };
 function playCall(fn, arg) {
   if (!Object.hasOwn(PLAY_CALLS, fn)) throw new Error('Unknown play call ' + fn);
@@ -260,6 +261,16 @@ function registerIpc() {
   ipcMain.handle('app:display', () => ({ ...readDisplay(), active: !!displayNow.uncapped }));
   ipcMain.handle('app:setDisplay', (_e, d) => { fs.writeFileSync(displayFile, JSON.stringify({ ...readDisplay(), uncapped: !!d?.uncapped })); return true; });
   ipcMain.handle('app:relaunch', () => { app.relaunch(); app.exit(0); });
+  // Hosting an online match (play/net-host.js): the match runs on in the window however hidden or minimised it is (no
+  // throttled timers, no sleeping app), for everyone else in it; back to normal when it's over.
+  let hostBlock = null;
+  ipcMain.handle('play:hosting', (e, on) => {
+    const { powerSaveBlocker } = require('electron');
+    try { e.sender.setBackgroundThrottling(!on); } catch {}
+    if (on && hostBlock == null) hostBlock = powerSaveBlocker.start('prevent-app-suspension');
+    else if (!on && hostBlock != null) { powerSaveBlocker.stop(hostBlock); hostBlock = null; }
+    return true;
+  });
   ipcMain.handle('app:clearImageCache', () => {
     fs.rmSync(imgDir, { recursive: true, force: true });
     fs.mkdirSync(imgDir, { recursive: true });
@@ -2932,6 +2943,124 @@ async function runPlaySmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=pvp`: an online match against other games on a local server (CS2SIM_SMOKE_SERVER, localhost only; each game
+// with its own CS2SIM_SMOKE_USERDATA): an account on that server (CS2SIM_SMOKE_PVP_USER and _PASS, test accounts made for the
+// run), the Online tab, a search in CS2SIM_SMOKE_PVP_MODE (competitive | wingman), the match accepted, loaded and played to its
+// end. CS2SIM_SMOKE_PVP_PILOT=1 plays it: runs about the map and shoots the enemies it sees (through the game's own input).
+// Each second the connection's numbers go to userData/pvp-net.log; screenshots to userData/pvp-<moment>.png.
+// CS2SIM_SMOKE_PVP_QUIT_AT: quit that many seconds into the match (a player whose game closes); CS2SIM_SMOKE_PVP_MAX_MIN: give up.
+async function runPvpSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const dir = app.getPath('userData'), logFile = path.join(dir, 'pvp-net.log');
+  const shot = async (name) => { try { win.webContents.invalidate(); await wait(300); fs.writeFileSync(path.join(dir, `pvp-${name}.png`), (await win.webContents.capturePage()).toPNG()); } catch (e) { console.log('SMOKE pvp shot failed', name, e.message); } };
+  const say = (...a) => console.log('SMOKE pvp', ...a);
+  const mode = process.env.CS2SIM_SMOKE_PVP_MODE === 'wingman' ? 'wingman' : 'competitive';
+  // Looking into a run as it goes: userData/shot-now takes a screenshot (pvp-now.png), userData/eval.js runs its expression in
+  // the page and logs the answer.
+  const poke = async () => {
+    if (fs.existsSync(path.join(dir, 'shot-now'))) { fs.rmSync(path.join(dir, 'shot-now'), { force: true }); await shot('now'); }
+    const ev = path.join(dir, 'eval.js');
+    if (fs.existsSync(ev)) { const code = fs.readFileSync(ev, 'utf8'); fs.rmSync(ev, { force: true }); say('eval', await js(`(async () => { try { return JSON.stringify(await (${code})); } catch (e) { return 'threw ' + e.message; } })()`).catch((e) => 'failed ' + e.message)); }
+  };
+  const user = process.env.CS2SIM_SMOKE_PVP_USER || 'pvp' + Math.floor(Math.random() * 1e6), pass = process.env.CS2SIM_SMOKE_PVP_PASS || 'pvp-pass-' + Math.random().toString(36).slice(2, 10);
+  await wait(3500);
+  // CS2SIM_SMOKE_PVP_TEXMAX: every image decoded at most this big (two or more games on one GPU: a map's textures at full
+  // size are about 10 GB of video memory each).
+  if (+process.env.CS2SIM_SMOKE_PVP_TEXMAX > 0) await js(`(() => { const max = ${+process.env.CS2SIM_SMOKE_PVP_TEXMAX}, real = window.createImageBitmap.bind(window);
+    window.createImageBitmap = async (src, ...a) => { const opts = typeof a[0] === 'object' ? a[0] : a.length >= 5 && typeof a[4] === 'object' ? a[4] : {};
+      if (a.length >= 4 || opts.resizeWidth) return real(src, ...a);
+      const bmp = await real(src, opts), k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+      if (k >= 1) return bmp;
+      const out = await real(bmp, { ...opts, resizeWidth: Math.max(1, Math.round(bmp.width * k)), resizeHeight: Math.max(1, Math.round(bmp.height * k)), resizeQuality: 'medium' });
+      bmp.close(); return out; }; return 1; })()`);
+  const login = await js(`(async () => { const { net } = await import('./js/net/online.js');
+    try { await net.login(${JSON.stringify(user)}, ${JSON.stringify(pass)}, { register: true }); } catch (e) { try { await net.login(${JSON.stringify(user)}, ${JSON.stringify(pass)}); } catch (e2) { return 'login failed: ' + e2.message; } }
+    for (let i = 0; i < 100 && net.status() !== 'online'; i++) await new Promise((r) => setTimeout(r, 100));
+    return net.status() + ' as ' + net.me()?.name + ' · pvp1 ' + net.hasPvp(); })()`);
+  say('login', login);
+  await js(`import('./js/pvp.js').then((p) => { window.__pvpQ = () => { const s = p.pvpState(); return s.q ? { found: s.q.found, waited: s.q.waited, split: s.q.split, alone: s.q.alone } : s.found ? 'found' : s.match ? 'match' : s.away ? 'away' : null; }; }); 1`);
+  await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, lobby: 'online', pvpMode: '${mode}', quality: 'performance', netGraph: 1, ...${process.env.CS2SIM_SMOKE_PREFS || '{}'} }));
+    window.__cs2Debug = true; window.__pvpLoadDelay = ${+process.env.CS2SIM_SMOKE_PVP_LOAD_DELAY || 0}; document.querySelector('#topbar [data-page=play]').click(); })(); 1`);
+  await wait(2500);
+  // The search: the Online tab's button (once the maps are read).
+  let searching = '';
+  for (let i = 0; i < 120 && !searching; i++) {
+    await wait(1000);
+    searching = await js(`(async () => { const pvp = await import('./js/pvp.js'); const s = pvp.pvpState();
+      if (s.q || s.found || s.match) return 'searching';
+      if (s.away && ${process.env.CS2SIM_SMOKE_PVP_RECONNECT === '1'}) { pvp.reconnect(); return 'reconnecting'; } // (CS2SIM_SMOKE_PVP_RECONNECT=1: back into the match it left)
+      const b = document.querySelector('[data-pvp-go]'); if (b && !b.disabled) { b.click(); return ''; }
+      if (!b && !document.querySelector('[data-lobby=online]')) document.querySelector('#topbar [data-page=play]')?.click();
+      window.__pvpWhy = b ? 'button disabled: ' + ([...document.querySelectorAll('.play-setup .muted')].map((x) => x.textContent).join(' | ').slice(0, 200)) : 'no button';
+      return ''; })()`);
+    if (i % 10 === 9) say('not searching yet:', await js('window.__pvpWhy || ""'));
+    if (i === 15) await shot('nosearch');
+    await poke();
+  }
+  say('search', searching || 'never started');
+  await wait(1500);
+  await shot('queue');
+  const t0 = Date.now(), maxMs = (+process.env.CS2SIM_SMOKE_PVP_MAX_MIN || 45) * 60000;
+  let begun = false, loadingShot = false, liveShot = false, deadShot = false, scoreShot = false, specShot = false, ended = false, endAt = 0, quitAt = null, lastLog = '';
+  // The pilot: once the match is on.
+  const pilot = `(() => { if (window.__pilot) return 1; const st = { goal: null, path: null, stuck: 0, last: null, bought: -1, jump: 0 };
+    window.__pilot = setInterval(() => { try {
+      const m = window.__pvpMatch, g = m?.game; if (!g || !g.match || g.matchOver || !g.player) return;
+      const me = g.me, inp = g.input, keys = inp.keys;
+      if (!me.alive) { keys.clear(); inp.buttons = 0; st.path = null; return; }
+      if (g.match.phase === 'freeze' && st.bought !== g.match.round) { st.bought = g.match.round; for (const id of [me.team === 'T' ? 'weapon_ak47' : 'weapon_m4a1', 'vesthelm', 'vest', 'weapon_p250']) g.buy(id); }
+      const eye = g.player.eye(); let best = null, bd = 1e9;
+      for (const b of g.bots) { if (!b.c.alive || !g.hostile(me, b.c)) continue; const h = b.eye(); h[2] -= 4; const d = Math.hypot(h[0] - eye[0], h[1] - eye[1], h[2] - eye[2]); if (d < bd && d < 2200 && g.canSee(eye, h)) { best = h; bd = d; } }
+      if (best) {
+        const dx = best[0] - eye[0], dy = best[1] - eye[1], dz = best[2] - eye[2];
+        const yaw = Math.atan2(dy, dx) * 180 / Math.PI, pitch = -Math.atan2(dz, Math.hypot(dx, dy)) * 180 / Math.PI;
+        const wrap = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
+        inp.yaw += wrap(yaw - inp.yaw) * 0.5 + (Math.random() - 0.5) * 1.5; inp.pitch += (pitch - inp.pitch) * 0.5;
+        keys.delete('w'); keys.add('ctrl'); inp.buttons |= 1; inp.clicked |= 1; return;
+      }
+      keys.delete('ctrl'); inp.buttons &= ~1;
+      if (g.match.phase === 'freeze') { keys.delete('w'); return; }
+      const p = g.player.origin;
+      if (!st.path || !st.path.length) { const goal = g.nav.randomPoint()?.point; st.path = goal ? (g.nav.path(p, goal)?.points || []).map((x) => [x[0], x[1], x[2]]) : []; }
+      const wp = st.path[0]; if (!wp) return;
+      if (Math.hypot(wp[0] - p[0], wp[1] - p[1]) < 40) { st.path.shift(); return; }
+      const want = Math.atan2(wp[1] - p[1], wp[0] - p[0]) * 180 / Math.PI, wrap = (a) => ((((a + 180) % 360) + 360) % 360) - 180;
+      inp.yaw += wrap(want - inp.yaw) * 0.35; inp.pitch *= 0.9; keys.add('w');
+      const sp = Math.hypot(g.player.velocity[0], g.player.velocity[1]);
+      if (sp < 30) { if (++st.stuck > 30) { st.path = null; st.stuck = 0; inp.pulses.add('jump'); } } else st.stuck = 0;
+    } catch (e) { console.warn('pilot', e.message); } }, 30); return 1; })()`;
+  while (Date.now() - t0 < maxMs) {
+    await wait(1000);
+    const s = JSON.parse(await js(`(() => { const m = window.__pvpMatch || null; const g = m?.game;
+      document.querySelector('.mm-accept [data-accept]:not([disabled])')?.click(); // (the match found: accepted)
+      return JSON.stringify({ begun: !!m?.begun, loading: !!document.querySelector('.pvp-load-box h2'), role: m?.role || null, round: g?.match?.round || 0, phase: g?.match?.phase || null,
+        score: g?.match ? [g.match.score.A, g.match.score.B] : null, alive: !!g?.me?.alive, over: !!g?.matchOver, net: g?.netText?.() || '', reward: g?.hud?.q('[data-reward]')?.textContent || '',
+        kills: g?.me?.kills ?? 0, deaths: g?.me?.deaths ?? 0, q: window.__pvpQ?.() || null, spec: g?.spectating?.c?.name || null, ended: m?.ended?.why || null, paused: !!document.querySelector('.pvp-banner'), err: [...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' / ') }); })()`));
+    fs.appendFileSync(logFile, JSON.stringify({ t: Math.round((Date.now() - t0) / 1000), ...s }) + '\n');
+    const line = `${s.role || '-'} r${s.round} ${s.phase} ${s.score?.join(':') || ''} ${s.alive ? 'alive' : 'dead'} k${s.kills}/d${s.deaths}${s.paused ? ' PAUSED' : ''} · ${s.net}${s.err ? ' · toast: ' + s.err : ''}`;
+    if (line !== lastLog && (Date.now() - t0) % 10000 < 1000) { say(line); lastLog = line; }
+    if (s.loading && !loadingShot) { loadingShot = true; await wait(1500); await shot('loading'); }
+    if (s.begun && !begun) {
+      begun = true; say('match begun as', s.role);
+      if (process.env.CS2SIM_SMOKE_PVP_QUIT_AT) quitAt = Date.now() + +process.env.CS2SIM_SMOKE_PVP_QUIT_AT * 1000;
+      if (process.env.CS2SIM_SMOKE_PVP_PILOT === '1') await js(pilot);
+    }
+    if (begun && !liveShot && s.phase === 'live') { liveShot = true; await wait(4000); await shot('live'); }
+    if (begun && !scoreShot && s.round >= 2 && s.phase === 'freeze') { scoreShot = true; await js(`window.__pvpMatch.game.input.keys.add('tab'); 1`); await wait(600); await shot('scores'); await js(`window.__pvpMatch.game.input.keys.delete('tab'); 1`); }
+    if (begun && !s.alive && !deadShot && s.phase === 'live') { deadShot = true; await wait(1200); await shot('deathcam'); }
+    if (begun && !s.alive && s.spec && !specShot && s.phase === 'live') { specShot = true; await wait(3000); await shot('spectating'); say('spectating', s.spec); }
+    if (quitAt && Date.now() > quitAt) { say('quitting on cue'); app.quit(); return; }
+    // (Every 15 s: how long the server takes to answer, the connection's own health.)
+    if ((Date.now() - t0) % 15000 < 1000) js(`import('./js/net/online.js').then(({ net }) => { const a = performance.now(); return net.pvp('state', {}).then(() => Math.round(performance.now() - a), (e) => 'no answer: ' + e.message); })`).then((r) => say('server answers in', r));
+    await poke();
+    if ((s.over || s.ended) && !ended) { ended = true; endAt = Date.now(); say('match over', s.score?.join(':'), s.ended || ''); }
+    if (ended && (s.reward && !/verifying|working/i.test(s.reward) || Date.now() - endAt > 60000)) { await wait(1500); await shot('end'); say('reward:', s.reward || '(none)'); break; }
+  }
+  await wait(1000);
+  app.quit();
+}
+
 function runSmokeTest(win) {
   win.webContents.on('console-message', (e, level, message, line, source) => {
     // (errors say where: the file under js/ and the line)
@@ -2941,6 +3070,7 @@ function runSmokeTest(win) {
   });
   if (process.env.CS2SIM_SMOKE === 'features') { win.webContents.once('did-finish-load', () => runFeatureSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'play') { win.webContents.once('did-finish-load', () => runPlaySmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'pvp') { win.webContents.once('did-finish-load', () => runPvpSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'perf') { win.webContents.once('did-finish-load', () => runPerfSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'maps') { win.webContents.once('did-finish-load', () => runMapsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'bots') { win.webContents.once('did-finish-load', () => runBotsSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }

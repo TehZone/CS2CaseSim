@@ -135,8 +135,10 @@ export class Game {
   // (the result moves your rank). quiet: no sound until it's shown (loading behind the menu while you search). cheats: the
   // console's cheats and server commands work (a private match; never one found through matchmaking).
   constructor(root, { map = 'de_dust2', mode = 'competitive', team = 'CT', teamSize = 5, difficulty = 'gold', length = 'short', overtime = true, friendlyFire = false,
-    site = 'A', minutes = 10, ffa = true, sensitivity = 1.25, quality = 'balanced', settings = {}, roster = null, ranked = false, quiet = false, cheats = false, onStatus = () => {} } = {}) {
-    Object.assign(this, { root, mapId: map, team, onStatus, ranked: !!ranked, quiet: !!quiet, cheatsAllowed: !!cheats });
+    site = 'A', minutes = 10, ffa = true, sensitivity = 1.25, quality = 'balanced', settings = {}, roster = null, ranked = false, quiet = false, cheats = false, online = false, onStatus = () => {} } = {}) {
+    // online: a match against other players (pvp.js): loaded the same, then run by its host's game (play/net-host.js) or shown
+    // from it (play/net-client.js); the server pays it, so it never asks the economy for a match here.
+    Object.assign(this, { root, mapId: map, team, onStatus, ranked: !!ranked, quiet: !!quiet, cheatsAllowed: !!cheats && !online, online: !!online });
     this.cheated = false; // (cheats were used in this match, however it goes on: see DevConsole.markCheated)
     quietKeyframes(); // (the bots' animation: see keyframes.js)
     this.enemyTeam = team === 'T' ? 'CT' : 'T';
@@ -426,16 +428,17 @@ export class Game {
     for (const sc of [this.scene, this.world.sky3d?.scene]) sc?.traverse((o) => { if (o.material) for (const v of Object.values(o.material)) if (v?.isTexture) textures.add(v); });
     for (const t of textures) this.renderer.initTexture(t);
     this.renderer.shadowMap.needsUpdate = true;
-    this.match.startRound();
+    // (An online match starts when everyone's loaded: its host starts the first round, see net-host.js.)
+    if (!this.online) this.match.startRound();
     // The match's start as the economy sees it: its run, which its reward is paid against (see payReward; online, the
     // server pays only a match it saw start, and only what it could have earned in the time).
-    this.started = act('play.start', { mode: this.mode }).then((r) => r?.run ?? null).catch((e) => { console.warn('match start', e); return null; });
+    this.started = this.online ? Promise.resolve(null) : act('play.start', { mode: this.mode }).then((r) => r?.run ?? null).catch((e) => { console.warn('match start', e); return null; });
     // One frame drawn now, behind the loading screen: what's made the first time anything is drawn (render targets, the
     // shadow map, the bots and your weapon) isn't in the match's first frame.
     this.acc = 0;
     this.frame(0);
     window.gc?.(); // (what loading left behind, collected now rather than in a stall mid-round: see main.js)
-    for (const c of this.combatants) if (c !== this.me) this.hud.chatLine({ system: true, text: `${c.name} has joined the ${this.ffa ? 'game' : c.team === 'CT' ? 'Counter-Terrorists' : 'Terrorists'}` });
+    if (!this.online) for (const c of this.combatants) if (c !== this.me) this.hud.chatLine({ system: true, text: `${c.name} has joined the ${this.ffa ? 'game' : c.team === 'CT' ? 'Counter-Terrorists' : 'Terrorists'}` });
     this.emit('loaded');
   }
 
@@ -1040,7 +1043,9 @@ export class Game {
   dropRifles(econ) {
     for (const side of ['T', 'CT']) {
       if (econ[side] !== 'full' && econ[side] !== 'force') continue;
-      const team = this.bots.filter((b) => b.c.team === side);
+      // (Online: a real player's body is in this.bots too, its guns their own (net-pawn.js): no bot buys for them or spends
+      // their money. One a bot is playing for, it is.)
+      const team = this.bots.filter((b) => b.c.team === side && (!b.human || b.pawn?.bot));
       for (const poor of team.filter((b) => !b.weapons.primary)) {
         const rifle = side === 'T' ? 'weapon_ak47' : 'weapon_m4a1', price = this.stats[rifle]?.price || 3000;
         const rich = team.filter((b) => b !== poor && b.weapons.primary && b.c.money >= price + 500).sort((a, b) => b.c.money - a.c.money)[0];
@@ -2279,7 +2284,8 @@ export class Game {
     const parts = (this.parts ||= { ai: 0, draw: 0, bots: 0, hud: 0 }); // (where the frame goes: net_graph 2; the HUD's is last frame's)
     parts.ai = 0; parts.draw = 0; parts.bots = 0;
     let steps = 0;
-    if (!this.paused) {
+    if (this.clock) steps = this.clock.run(true); // (online: the match's own clock ticks it, see net-match.js)
+    else if (!this.paused) {
       this.acc += dt;
       while (this.acc >= TICK && steps < 8) { this.tick(); this.acc -= TICK; steps++; }
       if (steps === 8) this.acc = 0;
@@ -2294,6 +2300,8 @@ export class Game {
       const eye = this.player.eye();
       const p = this.prevEye;
       camEye = [p[0] + (eye[0] - p[0]) * a, p[1] + (eye[1] - p[1]) * a, p[2] + (eye[2] - p[2]) * a];
+      const o = this.eyeOffset; // (online: a correction of your predicted movement, eased away: net-client.js)
+      if (o) { camEye[0] += o[0]; camEye[1] += o[1]; camEye[2] += o[2]; }
       const [pitch, yaw] = this.arsenal.viewAngles(this.input.pitch, this.input.yaw);
       this.camera.rotation.set((-pitch * Math.PI) / 180, (yaw * Math.PI) / 180 + Math.PI, 0);
     } else {
@@ -2453,6 +2461,7 @@ export class Game {
       text += `\nai ${gr.ai.toFixed(1)} · bodies ${gr.bots.toFixed(1)} · draw ${gr.draw.toFixed(1)} · hud ${gr.hud.toFixed(1)} ms · round ${this.match.round}`
         + `\n${bodies} bodies shown · ${this.drops.list.length} guns down · ${info.memory.textures} tex · ${info.memory.geometries} geo${heap}`;
     }
+    if (this.netText) text += '\n' + this.netText(); // (online: the connection, see net-host.js and net-client.js)
     this.hud.netGraph(text);
   }
 

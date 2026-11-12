@@ -32,7 +32,7 @@ export const ownSpawn = (game, side) => game.enemySpawnCenter(side === 'T' ? 'CT
 export function teamEconomy(game, side, pistol) {
   if (pistol) return 'pistol';
   const m = game.match, r = m.rules, team = game.combatants.filter((c) => c.team === side);
-  const money = avg(team.map((c) => c.money)), skill = teamSkill(game.bots.filter((b) => b.c.team === side));
+  const money = avg(team.map((c) => c.money)), skill = teamSkill(game.bots.filter((b) => b.c.team === side && !b.human)); // (online: the real players are no bot's to plan for)
   const lastOfHalf = m.round === r.halftime || m.round === r.maxRounds;
   const matchPoint = Math.max(m.score.A || 0, m.score.B || 0) >= r.winsNeeded - 1;
   if (money >= 3900) return 'full';
@@ -81,7 +81,7 @@ function assignThrows(game, bots, side, purposes, roles) {
 
 // A round's plan for a side (econ: teamEconomy's call). Bots read plan.site, plan.roles, plan.throws, plan.stage...
 export function teamPlan(game, side, econ = 'full') {
-  const bots = game.bots.filter((b) => b.c.team === side);
+  const bots = game.bots.filter((b) => b.c.team === side && !b.human);
   const sites = game.map.info.bombsites.map((s) => s.site);
   const skill = teamSkill(bots);
   const igl = bots.slice().sort((a, b) => (b.c.skill ?? 0) - (a.c.skill ?? 0))[0]?.c || null;
@@ -193,7 +193,7 @@ export function advancePlan(game, plan, t) {
   if (plan.stage === 'setup' && (left <= plan.execAt + 12 || plan.pick)) plan.stage = 'gather';
   if (plan.stage !== 'gather') return;
   const stage = plan.staging || stagingPoint(game, plan.site);
-  const bots = game.bots.filter((b) => b.c.team === 'T' && b.c.alive);
+  const bots = game.bots.filter((b) => b.c.team === 'T' && b.c.alive && !b.human);
   const off = (x) => { const b = game.botOf(x.by); return b ? Math.hypot(b.pos[0] - x.lineup.pos[0], b.pos[1] - x.lineup.pos[1]) : Infinity; };
   // (On it, or standing as near as it gets: see Brain.doLineup.)
   const onSpot = (x) => { const d = off(x), v = game.botOf(x.by)?.vel; return d < 6 || (d < 40 && (!v || Math.hypot(v[0], v[1]) < 30)); };

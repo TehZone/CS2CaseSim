@@ -5,7 +5,8 @@
 // HTTP: GET /health, POST /api/register | /api/login | /api/logout | /api/reset, GET /api/prices (brotli, gzip or plain, by
 // the request's Accept-Encoding), GET /pic/<hash> and POST /api/pic (players' profile pictures: face1, server/social.mjs)
 // WebSocket: /ws (protocol described in src/js/net/online.js), compressed with permessage-deflate when the game offers it
-// (Chromium and Electron always do; see DEFLATE). Capabilities: a game names the newer message shapes it understands in its
+// (Chromium and Electron always do; see DEFLATE). /match: an online PvP match's traffic (server/relay.mjs), never compressed;
+// every other path is refused as before (a 400). Capabilities: a game names the newer message shapes it understands in its
 // hello (caps: ['lean1']), and the server answers with the ones it will use (welcome.caps). Only a connection that announced
 // a capability is sent its shapes; a game that announces none (1.1.2 and older) gets exactly what it always got. See CAPS.
 // Staff, bans and the Discord bot: server/admin.mjs and server/discord.mjs (env: ADMIN_USERS, DISCORD_BOT_TOKEN or
@@ -33,6 +34,9 @@ import { Admin, banText, networkBanText } from './admin.mjs';
 import { Release, releaseFromEnv } from './release.mjs';
 import { Passive, PASSIVE_TICK_MS } from './passive.mjs';
 import { P2PMarket, P2P } from './p2pmarket.mjs';
+import { PvP, PVP } from './matchmaking.mjs';
+import { Relay } from './relay.mjs';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { D, initData } from '../src/js/engine/data.js';
 import { lockBase, dataLock, hasCustom, customPriceHash, stableJson } from '../src/js/engine/custom.js';
 import { hasBadges, badgeLock, withBadges } from '../src/js/engine/badgedata.js';
@@ -68,9 +72,15 @@ const PROTOCOL = 1;
 //          about.pic, user.pic, and user.avatar and user.badge); and { t: 'faces.d', ids }, the players whose faces changed
 //          (social.mjs facesChanged). Its requests are new ones: social 'faces', POST /api/pic and admin 'pic.clear' and
 //          'pic.get', used on a server whose welcome names face1.
+//   pvp1:  online PvP matches (server/matchmaking.mjs, server/relay.mjs, engine/pvp.js): the requests of ns 'pvp' (queue, leave,
+//          accept, decline, state, abandon; a game without pvp1 is refused, 'outdated'), their pushes ({ t: 'pvp.q' } to the
+//          connection that queued, and pvp.found, pvp.accepts, pvp.go, pvp.cancel, pvp.paid and pvp.over to the player's pvp1
+//          connections), tagged pings while queued (a ping's payload [0x70][f64], which the game's socket answers by itself: the
+//          round trip that picks a match's host), the /match socket, and the admin panel's 'pvp.live' and 'pvp.end'. A game
+//          without it is sent none of these.
 export const LEAN = 'lean1';
 export const FACE = 'face1';
-export const CAPS = new Set([LEAN, P2P, FACE]);
+export const CAPS = new Set([LEAN, P2P, FACE, PVP]);
 // A profile picture's upload: its base64 in JSON, with the login's token (64 KB of picture, engine/picture.js). A body
 // past the limit is read to its end (up to BODY_DRAIN, then the connection is cut) so the 413 reaches the game.
 const PIC_BODY = 96 * 1024, BODY_DRAIN = 1024 * 1024;
@@ -239,6 +249,10 @@ export async function startServer({
   // production always. RELEASE_FEED=off there (DEPLOY.md's emergency switch) lets every version in, but the server keeps
   // running what the published release has: a lock that no published game has would lock everyone out instead.
   gated = releaseOpt !== false || process.env.NODE_ENV === 'production',
+  // Online PvP (server/matchmaking.mjs): { tick: false } and the tests run its clock themselves; fillAfter (ms), how long a
+  // queue waits before it splits the players it has (PVP_FILL_AFTER_S, in seconds, outside production: a playtest's shorter
+  // wait); relay: server/relay.mjs's options.
+  pvp: pvpOpt = {},
 } = {}) {
   const data = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/game-data.json'), 'utf8'));
   const custom = customOpt === undefined ? readCustom(path.join(ROOT, 'src/data/custom.json')) : customOpt || null;
@@ -369,6 +383,8 @@ export async function startServer({
     // Throws a player off: `fatal` to each of their connections, which then close (and ignore anything still coming).
     kick(id, { code, error, ban } = {}) {
       kicks.set(id, { seq: ++kickSeq, at: Date.now(), msg: { t: 'fatal', code, error, ...(ban ? { ban } : {}) } });
+      // (Online PvP: out of the queue, off the match's socket, and a bot plays their slot: server/matchmaking.mjs kickUser.)
+      try { srv.pvp?.kickUser(id, code); } catch (e) { log('[pvp] kick failed', e?.message || e); }
       const set = sockets.get(id);
       if (!set) return false;
       const text = JSON.stringify(kicks.get(id).msg);
@@ -434,6 +450,23 @@ export async function startServer({
   const p2p = new P2PMarket(srv); // (the Market: players' listings, server/p2pmarket.mjs)
   srv.p2p = p2p;
   await p2p.init();
+  // Online PvP: the queue and the matches (server/matchmaking.mjs), and their /match socket (server/relay.mjs).
+  const { relay: relayOpt = {}, ...pvpRest } = pvpOpt || {};
+  const fillEnv = process.env.NODE_ENV !== 'production' && Number(process.env.PVP_FILL_AFTER_S) > 0 ? Number(process.env.PVP_FILL_AFTER_S) * 1000 : null;
+  const pvp = new PvP(srv, { clock, ...(fillEnv ? { fillAfter: fillEnv } : {}), ...pvpRest });
+  srv.pvp = pvp;
+  const relay = new Relay(srv, pvp, relayOpt);
+  srv.relay = relay;
+  // The event loop's delay (/health's pvp.loopP99, ms): everything the relay forwards waits behind it. Read over a minute.
+  // (The histogram times its own timer, so every sample includes the timer's interval, LOOP_RES, and on Windows the timer's
+  // granularity too: that's taken off, so an idle server reads about 0 on Linux. DEPLOY.md: move the relay out past 25.)
+  const LOOP_RES = 10;
+  const loopDelay = monitorEventLoopDelay({ resolution: LOOP_RES });
+  loopDelay.enable();
+  const loopMs = () => Math.max(0, Math.round((loopDelay.percentile(99) / 1e6 - LOOP_RES) * 100) / 100);
+  let loopP99 = null;
+  const loopTimer = setInterval(() => { loopP99 = loopMs(); loopDelay.reset(); }, 60000);
+  loopTimer.unref?.();
 
   // ---- market prices: same data build as the client, refreshed daily from the marketplaces ----------------
   // (Compressed once per price change, both ways: brotli at its best is a fifth smaller than gzip here, ~105 KB against
@@ -599,6 +632,7 @@ export async function startServer({
     }
     return req.socket.remoteAddress || '?';
   };
+  srv.ipOf = ipOf; // (the /match socket's hellos: server/relay.mjs)
   log(hops ? `[server] client addresses: X-Forwarded-For, ${hops} proxy hop${hops === 1 ? '' : 's'} (TRUST_PROXY)` : '[server] client addresses: the connection\'s own (no TRUST_PROXY)');
 
   const server = http.createServer(async (req, res) => {
@@ -615,7 +649,9 @@ export async function startServer({
         // one a game built from this commit sends.)
         return json(res, 200, { ok: true, online: sockets.size, data: D.lock, pricedAt: D.pricedAt, requiredVersion: release.required, ...(gate.held ? { customWaits: gate.held.app || 'a rebuild', customLock: held.lock } : {}),
           ...(bgate.held ? { badgesWait: bgate.held.app || 'a rebuild', badgesLock: held.lock } : {}), discord: { connected: !!discord.status().connected }, commit,
-          ws: { connections: conns.length, deflate: conns.filter((c) => /permessage-deflate/.test(c.extensions)).length } });
+          ws: { connections: conns.length, deflate: conns.filter((c) => /permessage-deflate/.test(c.extensions)).length },
+          // (Online PvP: players searching, matches, players on /match, and the event loop's p99 delay over the last minute, ms.)
+          pvp: { ...pvp.stats(), loopP99: loopP99 ?? loopMs() } });
       }
       if (url.pathname === '/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -775,7 +811,13 @@ export async function startServer({
       if (offers) new PerMessageDeflate({ ...DEFLATE, isServer: true }).accept(offers);
     } catch { delete req.headers['sec-websocket-extensions']; }
   });
-  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: MAX_MSG, perMessageDeflate: DEFLATE });
+  // (noServer, and one router for the upgrades: /match is the relay's, never compressed; every other path goes to /ws's server,
+  // which takes /ws exactly as before and answers anything else with its 400.)
+  const wss = new WebSocketServer({ noServer: true, path: '/ws', maxPayload: MAX_MSG, perMessageDeflate: DEFLATE });
+  server.on('upgrade', (req, socket, head) => {
+    if (String(req.url || '').split('?')[0] === '/match') return relay.handleUpgrade(req, socket, head);
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  });
 
   // Who's online: { name, online, worth } for each player connected. A game without lean1 is sent the whole list on every
   // join, leave, kick or rename, as before. A lean1 game gets it in its welcome, then only what changed since the last
@@ -809,7 +851,8 @@ export async function startServer({
     let user = null, greeting = false;
     let tokens = 60, lastRefill = Date.now();
     ws.isAlive = true;
-    ws.on('pong', () => { ws.isAlive = true; });
+    // (A pong whose payload starts 0x70 answers a queued pvp1 game's ping: a round trip for picking a match's host.)
+    ws.on('pong', (data) => { ws.isAlive = true; if (data?.[0] === 0x70) pvp.pong(ws, data); });
     const send = (m) => ws.readyState === 1 && ws.send(JSON.stringify(m));
     // A refused hello: the reason, then the connection closes (the game closes it too, on reading it).
     const refuse = (m) => { send(m); setTimeout(() => { if (!user && ws.readyState === 1) ws.close(1000); }, 1000).unref?.(); };
@@ -920,6 +963,9 @@ export async function startServer({
           const args = msg.args || {};
           const boughtNow = [];
           const name = String(msg.m);
+          // (A match against bots doesn't start, nor pay, while the player searches for or plays an online match: one game
+          // or two, the same minutes would be paid twice. Their search cleared any open one: server/matchmaking.mjs.)
+          if ((name === 'play.start' || name === 'play.reward') && pvp.playing(user.id)) throw new GameError('You are searching for or playing an online match: finish it first', 'busy');
           if (IN_TRANSACTION.test(name) && (store.cache.get(user.id)?.st.stored?.length || 0) > HEAVY_STORED && !txLimit(user.id)) {
             throw new GameError('Slow down: too many changes to your Storage Units, tools or Index at once. Wait a few seconds.', 'rate');
           }
@@ -980,6 +1026,11 @@ export async function startServer({
         if (msg.ns === 'admin') return reply(true, { r: await admin.rpc(user, String(msg.m), msg.args || {}, { faces: srv.faces(ws) }) });
         // The Market (server/p2pmarket.mjs): { r, d? }, d the changes to you (your other connections get them as a delta).
         if (msg.ns === 'p2p') return reply(true, await p2p.rpc(user, String(msg.m), msg.args || {}, ws));
+        // Online PvP (server/matchmaking.mjs): only from a game that announced pvp1.
+        if (msg.ns === 'pvp') {
+          if (!ws.caps?.has(PVP)) throw new GameError('Update the game to play online matches', 'outdated');
+          return reply(true, { r: await pvp.rpc(user, String(msg.m), msg.args || {}, ws) });
+        }
         reply(false, { err: 'Unknown request' });
       } catch (e) {
         if (e instanceof GameError) return reply(false, { err: e.message, code: e.code });
@@ -994,6 +1045,7 @@ export async function startServer({
       clearTimeout(hello);
       if (!user) return;
       p2p.subscribe(ws, false);
+      pvp.disconnected(ws); // (a search it made waits a moment for the game to come back: server/matchmaking.mjs)
       const set = sockets.get(user.id);
       set?.delete(ws);
       if (set && !set.size) {
@@ -1019,6 +1071,8 @@ export async function startServer({
   await new Promise((r) => (host ? server.listen(port, host, r) : server.listen(port, r)));
   const actualPort = server.address().port;
   log(`[server] listening on ${host || ''}:${actualPort}${commit ? ` (commit ${String(commit).slice(0, 7)})` : ''}`);
+  // (Online PvP matches from before this start: paused until their players are back, and any pay left owing.)
+  await pvp.restore().catch((e) => log('[pvp] restore failed', e));
   // The bot connects in the background; nothing waits for Discord.
   if (discord.enabled) Promise.resolve().then(() => discord.start()).catch((e) => log('[discord] start failed', e?.message || e));
 
@@ -1033,6 +1087,12 @@ export async function startServer({
     await saveSerials();
     if (marketDirty) await db.query("INSERT INTO kv (k, v) VALUES ('market', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(marketSnapshot())]).catch(() => {});
     live.close();
+    // (Online PvP: every live match paused and kept, then its players' /match sockets closed with 1012, which they come back
+    // from once the server's started again.)
+    await pvp.close().catch((e) => log('[pvp] close failed', e?.message || e));
+    await relay.close(1012);
+    clearInterval(loopTimer);
+    loopDelay.disable();
     for (const ws of wss.clients) ws.terminate();
     await new Promise((r) => server.close(() => r()));
     await store.close();

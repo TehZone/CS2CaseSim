@@ -42,6 +42,8 @@ export const onMatchmaking = (fn) => { subs.add(fn); return () => subs.delete(fn
 const changed = () => { drawBar(); for (const fn of subs) fn(); };
 const go = (page) => window.dispatchEvent(new CustomEvent('app:go', { detail: page }));
 const modeName = (mode) => MODES[mode]?.name || mode;
+// A map's name, as the Play page has it (pvp.js's loading screen).
+export const mapName = (id) => ctx.nameOf(id);
 export function setMaps({ maps, images, nameOf, wingman }) { ctx = { maps, images: images || {}, nameOf: nameOf || ((id) => id), wingman: wingman || null }; }
 // The maps a mode can play: any installed one, but for Wingman only CS2's Wingman maps (none till they've been read:
 // cs2.playWingmanMaps's pool).
@@ -72,8 +74,12 @@ function privateRoster(p, ffa) {
   return { A: Array.from({ length: size - 1 }, () => bot(ranks.A)), B: Array.from({ length: size }, () => bot(ranks.B)) };
 }
 
+// Something else using Play (an online match or search, pvp.js): matchmaking and private matches wait for it to end.
+let otherBusy = () => false;
+export const setOtherBusy = (fn) => { otherBusy = fn; };
+
 // A match's screen: the game draws into it; it's shown when you're in, kept out of sight while it loads behind the menu.
-function makeOverlay({ loading = false, behind = false } = {}) {
+export function makeOverlay({ loading = false, behind = false } = {}) {
   const el = document.createElement('div');
   el.className = 'play-root' + (behind ? ' behind' : '');
   el.innerHTML = `${loading ? '<div class="play-loading"><div class="spinner"></div><div data-status>Loading…</div><button class="btn ghost" data-cancel>Cancel</button></div>' : ''}
@@ -83,7 +89,7 @@ function makeOverlay({ loading = false, behind = false } = {}) {
   document.body.appendChild(el);
   return el;
 }
-function gameOptions(p, extra) {
+export function gameOptions(p, extra) {
   return {
     sensitivity: p.sensitivity, quality: p.quality,
     settings: { ...matchSettings(p), onBinds: (t) => { const q = playPrefs(); q.keybinds = t; q.bindsVersion = BINDS_VERSION; savePlayPrefs(q); }, onNetGraph: (n) => { const q = playPrefs(); q.netGraph = n; savePlayPrefs(q); },
@@ -104,6 +110,7 @@ export function poolOf(p, mode) {
 let starting = false; // (a search on its way: a second click doesn't start another)
 export async function startSearch() {
   if (search || live || starting) return;
+  if (otherBusy()) { toast('Cancel your online search (or finish your online match) first.', 'bad'); return; }
   starting = true;
   try { await beginSearch(); } finally { starting = false; }
 }
@@ -256,6 +263,7 @@ async function enter(s) {
 // Everything picked in the lobby (the map, sides, the bots' ranks...), loaded while you watch; it moves no rank.
 export async function startPrivate() {
   if (search || live || starting) return;
+  if (otherBusy()) { toast('Cancel your online search (or finish your online match) first.', 'bad'); return; }
   starting = true;
   try { await beginPrivate(); } finally { starting = false; }
 }

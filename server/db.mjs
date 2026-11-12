@@ -87,6 +87,24 @@ const MIGRATIONS = [
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS badge TEXT`,
   `CREATE INDEX IF NOT EXISTS users_pic ON users (pic) WHERE pic IS NOT NULL`,
   `ALTER TABLE reports ADD COLUMN IF NOT EXISTS pic TEXT`,
+  // Online PvP matches (server/matchmaking.mjs): a match per row, its status 'loading', 'live', 'paused', 'over', 'void' or
+  // 'cancelled'; members and data (its slots, the server's own round log, pauses, reports...) as JSON. A player's part in one
+  // is a pvp_players row, written when the match is made with paid NULL, and set once, in the same transaction as their pay
+  // (or their abandon): nothing is ever paid twice. (New tables only: an older server running at the same time never reads
+  // them.)
+  `CREATE TABLE IF NOT EXISTS pvp_matches (id TEXT PRIMARY KEY, mode TEXT NOT NULL, map TEXT NOT NULL, app TEXT NOT NULL,
+     status TEXT NOT NULL, host_id INT, members JSONB NOT NULL, data JSONB NOT NULL, created BIGINT NOT NULL,
+     started BIGINT, ended BIGINT, updated BIGINT NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS pvp_matches_open ON pvp_matches (status) WHERE status IN ('loading','live','paused')`,
+  `CREATE TABLE IF NOT EXISTS pvp_players (match_id TEXT NOT NULL REFERENCES pvp_matches(id) ON DELETE CASCADE,
+     user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, slot INT NOT NULL, squad TEXT NOT NULL, outcome TEXT,
+     paid BIGINT, earned DOUBLE PRECISION NOT NULL DEFAULT 0, xp INT NOT NULL DEFAULT 0, stats JSONB, at BIGINT NOT NULL,
+     PRIMARY KEY (match_id, user_id))`,
+  `CREATE INDEX IF NOT EXISTS pvp_players_user ON pvp_players (user_id, at)`,
+  // A player's dodges (matches found and not accepted, maps that "failed to load"): how many in the window, the last, until
+  // when they can't search, and how many were load failures. Kept so a restart doesn't wipe them.
+  `CREATE TABLE IF NOT EXISTS pvp_dodges (user_id INT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, n INT NOT NULL,
+     last BIGINT NOT NULL, until BIGINT NOT NULL, fails INT NOT NULL DEFAULT 0)`,
 ];
 
 export async function openDb({ url = process.env.DATABASE_URL, dataDir = process.env.PGLITE_DIR } = {}) {

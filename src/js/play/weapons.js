@@ -307,7 +307,8 @@ export class Arsenal {
   toggleSilencer(g, t) {
     const on = !g.silenced;
     const role = on ? 'silencerAttach' : 'silencerDetach';
-    const len = g.vm.has(role) ? g.vm.play(role, { fade: 0.08 }) : 2.6;
+    const played = g.vm.has(role) ? g.vm.play(role, { fade: 0.08 }) : 2.6;
+    const len = this.fixedTiming && g.vm.has(role) ? g.vm.length(role) || played : played;
     g.zoom = 0;
     g.animEnd = t + len;
     g.nextAttack = Math.max(g.nextAttack, t + len);
@@ -418,9 +419,11 @@ export class Arsenal {
     const pitch = game.input.pitch + this.aim[0] * RECOIL.scale, yaw = game.input.yaw + this.aim[1] * RECOIL.scale;
     const { fwd, right, up } = basis(pitch, yaw);
     const eye = game.player.eye();
-    const r0 = Math.random(), t0 = Math.random() * Math.PI * 2;
+    // (Online, the spread is the same in both games: rand is the shot's seeded stream, play/net-pawn.js spreadRand.)
+    const rnd = this.rand || Math.random;
+    const r0 = rnd(), t0 = rnd() * Math.PI * 2;
     for (let b = 0; b < (st.bullets || 1); b++) {
-      const r1 = Math.random(), t1 = Math.random() * Math.PI * 2;
+      const r1 = rnd(), t1 = rnd() * Math.PI * 2;
       const x = Math.cos(t0) * r0 * inacc + Math.cos(t1) * r1 * spread;
       const y = Math.sin(t0) * r0 * inacc + Math.sin(t1) * r1 * spread;
       const d = [fwd[0] + right[0] * x + up[0] * y, fwd[1] + right[1] * x + up[1] * y, fwd[2] + right[2] * x + up[2] * y];
@@ -458,7 +461,9 @@ export class Arsenal {
     g.zoom = 0; g.resumeZoom = 0; g.burstLeft = 0; g.cockAt = null;
     if (g.stats.bulletsPerReload === 1) { this.loadShell(g, t); this.game.emit('reload', g); return; }
     const empty = g.clip === 0 && g.vm.has('reloadEmpty');
-    const len = g.vm.play(empty ? 'reloadEmpty' : 'reload', { fade: BLEND }) || 2.5; // (from an inspect too, blended into it)
+    const played = g.vm.play(empty ? 'reloadEmpty' : 'reload', { fade: BLEND }); // (from an inspect too, blended into it)
+    // (fixedTiming, online: the reload takes its first clip's time whichever one plays, as long in both games.)
+    const len = (this.fixedTiming ? g.vm.length(empty ? 'reloadEmpty' : 'reload') : played) || 2.5;
     g.reloading = true;
     g.reloadEnd = t + len * 0.92;
     g.animEnd = t + len;
