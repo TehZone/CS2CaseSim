@@ -41,5 +41,6 @@ contextBridge.exposeInMainWorld('native', {
   cs2CharmAttach: (weapon) => ipcRenderer.invoke('cs2:charmAttach', weapon),
   cs2WeaponMarkup: (weapon) => ipcRenderer.invoke('cs2:weaponMarkup', weapon),
   cs2Crate: (id) => ipcRenderer.invoke('cs2:crate', id),
+  cs2Badge: (id) => ipcRenderer.invoke('cs2:badge', id),
   cs2Play: (fn, arg) => ipcRenderer.invoke('cs2:play', fn, arg),
 });

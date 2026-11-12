@@ -225,6 +225,7 @@ function registerIpc() {
   ipcMain.handle('cs2:charmAttach', (_e, weapon) => cs2.charmAttach(weapon));
   ipcMain.handle('cs2:weaponMarkup', (_e, weapon) => cs2.weaponMarkup(weapon));
   ipcMain.handle('cs2:crate', (_e, id) => cs2.crate(id));
+  ipcMain.handle('cs2:badge', (_e, id) => cs2.badge(id));
   ipcMain.handle('cs2:play', (_e, fn, arg) => playCall(fn, arg));
   ipcMain.handle('cs2:prepareAll', (_e, content) => cs2.prepareAll(content));
   ipcMain.handle('cs2:prepareStatus', () => cs2.prepareStatus());
@@ -2478,6 +2479,62 @@ async function runCharmSmoke(win) {
   app.quit();
 }
 
+// `CS2SIM_SMOKE=badges` opens the 3D inspect of badges (CS2SIM_SMOKE_BADGES: their ids; by default a pin, a coin, a Service
+// Medal, a trophy, a Premier Season medal, a crystal Pick'Em coin and a pass, which has no model) and screenshots each from
+// the front and the back into userData/badge-<id>-front.png and -back.png. With CS2SIM_SMOKE_COVERAGE=1 it first counts,
+// by kind, the badges this install has a model for.
+async function runBadgeSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `badge-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  await wait(4000);
+  if (process.env.CS2SIM_SMOKE_COVERAGE) {
+    const t = Date.now();
+    const models = await cs2.badgeModels();
+    const all = JSON.parse(await js(`import('./js/data.js').then(({ D }) => JSON.stringify(Object.values(D.badges).map((d) => [d.id, d.ty])))`));
+    const by = {};
+    for (const [id, ty] of all) {
+      const e = (by[ty] ||= { badges: 0, model: 0, models: new Set() });
+      e.badges++;
+      const m = models[id.replace(/^collectible-/, '')];
+      if (m) { e.model++; e.models.add(m.model); }
+    }
+    const rows = Object.entries(by).map(([ty, e]) => `${ty}: ${e.model} of ${e.badges} (${e.models.size} models)`);
+    console.log('SMOKE badge coverage', all.filter(([id]) => models[id.replace(/^collectible-/, '')]).length, 'of', all.length, 'in', ((Date.now() - t) / 1000).toFixed(1) + 's\n  ' + rows.join('\n  '));
+  }
+  const ids = (process.env.CS2SIM_SMOKE_BADGES || 'collectible-6001,collectible-874,service-2024-1,collectible-875,collectible-5000,collectible-4558,collectible-1000').split(',');
+  for (let id of ids) {
+    // (service-<year>-<colour>: that year's Service Medal in that colour.)
+    const sm = /^service-(\d+)-(\d+)$/.exec(id);
+    if (sm) id = await js(`import('./js/data.js').then(({ D }) => Object.values(D.badges).find((d) => d.ty === 'Service Medal' && d.n === '${sm[1]} Service Medal' && d.v === 'Level ${sm[2]}')?.id || '')`);
+    if (!id) continue;
+    const r = await js(`(async () => { const ui = await import('./js/ui.js'); const { inspectView } = await import('./js/inspect.js'); const { D } = await import('./js/data.js');
+      document.querySelector('.inspect [data-a=close]')?.click();
+      const t = performance.now();
+      ui.openInspect({ t: 'badge', id: ${JSON.stringify(id)}, uid: 'smoke-badge' }, { preview: true });
+      for (let i = 0; i < 960 && !(inspectView.model && !document.querySelector('.inspect .loading.model')); i++) await new Promise((r) => setTimeout(r, 250));
+      let meshes = 0, hidden = 0; inspectView.model?.traverse((o) => { if (o.isMesh) { meshes++; if (!o.visible) hidden++; } });
+      const d = D.badges[${JSON.stringify(id)}];
+      return JSON.stringify({ name: d?.n, kind: d?.ty, source: inspectView.source, model: inspectView.model?.userData.badge || null, meshes, hidden,
+        seconds: +((performance.now() - t) / 1000).toFixed(1), error: document.querySelector('.inspect .loading')?.textContent || null }); })()`);
+    console.log('SMOKE badge', id, r);
+    // (CS2SIM_SMOKE_BG=de_dust2: in front of that inspect backdrop.)
+    if (process.env.CS2SIM_SMOKE_BG) console.log('SMOKE backdrop', await js(`(async () => { const { inspectView } = await import('./js/inspect.js'); try { await inspectView.setBackdrop(${JSON.stringify(process.env.CS2SIM_SMOKE_BG)}); return 'ok'; } catch (e) { return 'FAILED ' + e.message; } })()`));
+    // Still, from the front, then the back (no sway).
+    const pose = (yaw) => js(`(async () => { const { inspectView } = await import('./js/inspect.js'); const s = inspectView.state;
+      s.anim = null; s.yaw = ${yaw}; s.pitch = 0.12; s.roll = 0; s.zOff = 0; s.vy = s.vp = 0; s.lastInput = performance.now() + 1e9; })()`);
+    await wait(1500);
+    await pose(0.22);
+    await wait(700);
+    await shot(id + '-front');
+    await pose(0.22 + Math.PI);
+    await wait(700);
+    await shot(id + '-back');
+  }
+  console.log('SMOKE screenshots saved to', app.getPath('userData'));
+  app.quit();
+}
+
 // `CS2SIM_SMOKE=play` starts a Play match on Dust II (exporting the map on first use), looks at a bot, shoots it and
 // screenshots the view into userData/play-*.png.
 async function runPlaySmoke(win) {
@@ -2905,6 +2962,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'prepare') { win.webContents.once('did-finish-load', () => runPrepareSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'crate') { win.webContents.once('did-finish-load', () => runCrateSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'charms') { win.webContents.once('did-finish-load', () => runCharmSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'badges') { win.webContents.once('did-finish-load', () => runBadgeSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   win.webContents.once('did-finish-load', async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     await wait(4000);

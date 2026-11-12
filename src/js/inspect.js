@@ -7,6 +7,7 @@ import { playside } from './engine/patterns.js';
 import { cs2Status } from './cs2/api.js';
 import { buildCS2Model } from './cs2/skin.js';
 import { buildCharmModel } from './cs2/charm.js';
+import { buildBadgeModel } from './cs2/badge.js';
 import { buildBackdrop, BlurredBackdrop, backdropEnvironment } from './cs2/backdrop.js';
 import { buildFirstPerson, RARE_CHANCE } from './cs2/firstperson.js';
 import { equipped } from './loadout.js';
@@ -437,7 +438,7 @@ class InspectView {
     this.init();
     const token = (this.token = {});
     const model = await this.buildModel(item);
-    if (token !== this.token) return; // a newer show() won the race
+    if (token !== this.token) { if (model) disposeTree(model); return; } // a newer show() won the race (this model is never shown)
     this.clearModel();
     // Measure visible geometry in the model's own frame (before it inherits the pivot's rotation).
     model.updateMatrixWorld(true);
@@ -498,8 +499,11 @@ class InspectView {
       this.sunLight.intensity = Math.min(2.2, bd.sun.intensity * 0.6);
       this.sunLight.position.copy(bd.sun.dir).multiplyScalar(-10);
     } else {
-      this.scene.environment = this.source === 'cs2' ? this.envStudio : this.envRoom;
-      this.scene.environmentIntensity = this.source === 'cs2' ? 1.0 : 0.95;
+      // (A model may ask for the bright room, and how strong: a badge's polished metal, lit as CS2's inventory lights its
+      // collectibles. The scene's environment sets the strength for every material that has no map of its own.)
+      const env = this.model?.userData.env, studio = this.source === 'cs2' && env?.room !== true;
+      this.scene.environment = studio ? this.envStudio : this.envRoom;
+      this.scene.environmentIntensity = env?.intensity ?? (this.source === 'cs2' ? 1.0 : 0.95);
       this.sunLight.intensity = 0;
     }
   }
@@ -615,6 +619,18 @@ class InspectView {
         }
       } catch (e) {
         console.warn('CS2 charm model unavailable, using the icon model instead:', e);
+      }
+    }
+    // Badges: CS2's own coin, medal, pin or trophy (null for one it has no model of: passes, tokens, stars).
+    if (item.t === 'badge') {
+      try {
+        const status = await cs2Status();
+        if (status.available) {
+          const real = await buildBadgeModel(item, status);
+          if (real) { this.source = 'cs2'; return real; }
+        }
+      } catch (e) {
+        console.warn('CS2 badge model unavailable, using the icon model instead:', e);
       }
     }
     this.source = 'icon';

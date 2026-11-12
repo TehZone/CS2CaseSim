@@ -7,6 +7,7 @@ const { parseKV1, parseKV3 } = require('./kv.cjs');
 const play = require('./play.cjs');
 const png = require('./png.cjs');
 const { nameOf } = require('./vanity.cjs');
+const { badgeModels, dynamicParams, compositePanel, panoramaLabels } = require('./badges.cjs');
 
 // Pixel-shader static combos of csgo_customweapon (feature F_X drives combo S_X).
 const STATIC_COMBOS = ['S_PAINT_STYLE', 'S_OVERRIDE_NORMAL', 'S_USE_ALL_MASKS', 'S_ROUGHNESS_TEXTURE', 'S_PEARLESCENCE_MASK',
@@ -95,6 +96,8 @@ const CUSTOM_TEX = 'custom:';
 const isCustomTex = (v) => typeof v === 'string' && v.startsWith(CUSTOM_TEX);
 const customUrl = (v) => (/^custom\/[\w./-]+\.png$/.test(v.slice(CUSTOM_TEX.length)) && !v.includes('..') ? v.slice(CUSTOM_TEX.length) : null);
 const TEMPLATES_VERSION = 1;
+// badges/models.json's format (see CS2Service.badgeModels).
+const BADGE_MODELS_VERSION = 1;
 // Sets a custom kit's values into a CS2 Workshop template's loose variables ({ 'alias.name': spec }, see
 // scripts/build-custom.mjs kitVars), as a finish made in CS2's Workshop tools has them. Returns the ones it found.
 function setLooseVars(doc, vars) {
@@ -472,6 +475,142 @@ class CS2Service {
       job.catch(() => this.crateJobs.delete(id));
     }
     return this.crateJobs.get(id);
+  }
+
+  // Collectible def index -> its 3D model and what its materials read ({ model, attrs? }, see badges.cjs): CS2's
+  // pedestal display models, read from items_game.txt (again when it or the install's inventory models change).
+  badgeModels() {
+    if (!this.badgeModelsJob) {
+      this.badgeModelsJob = (async () => {
+        const cs2 = this.ensureCS2();
+        const file = path.join(this.cacheDir, 'badges', 'models.json');
+        const inputs = ['scripts/items/items_game.txt', 'models/inventory_items/'];
+        const c = await cs2.cached(file, inputs, (x) => x.version === BADGE_MODELS_VERSION);
+        if (c?.models) return c.models;
+        await this.ensureIndex(); // extracts items_game.txt
+        const ig = parseKV1(fs.readFileSync(path.join(this.cacheDir, 'items_game.txt'), 'utf8')).items_game;
+        const files = await cs2.listing();
+        const models = badgeModels(ig, (f) => files.has(f));
+        await cs2.save(file, { version: BADGE_MODELS_VERSION, models }, inputs);
+        return models;
+      })();
+      this.badgeModelsJob.catch(() => { this.badgeModelsJob = null; });
+    }
+    return this.badgeModelsJob;
+  }
+
+  // A collectible's 3D model by def index (a badge's id is collectible-<def index>): CS2's own coin, medal, pin or trophy
+  // with its materials (see badgeModel), and the attributes those read (a Premier Season medal's colour and bands):
+  // { model, name, materials, composite? (the text CS2 draws in, see badgeComposite), attrs }. Null when CS2 isn't
+  // installed or has no model for it (passes, tokens, stars).
+  badge(id) {
+    id = String(id);
+    if (!/^\d+$/.test(id)) return Promise.reject(new Error('Bad badge id'));
+    return this.playJob('badge:' + id, async () => {
+      if (!this.status().available) return null;
+      const models = await this.badgeModels(), entry = models[id];
+      if (!entry) return null;
+      // (Its materials' expressions are only read for a model whose badges have attributes for them: Premier Season medals.)
+      const dynamic = Object.values(models).some((e) => e.model === entry.model && e.attrs);
+      return { ...await this.badgeModel(entry.model, { dynamic }), attrs: entry.attrs || {} };
+    });
+  }
+
+  // One badge model, exported on first use (badges/<its path>/, textures made smaller like a charm's: a coin is a few
+  // centimetres across) with its materials as CS2 has them, by glTF material name: { shader, ints, floats, vectors (the
+  // compiled parameters), dynamic (expressions of attributes, e.g. a Premier Season medal's band colours), textures }.
+  // The textures the export leaves out come with it: a Service Medal's tint mask (where its colour goes) and glass's tint
+  // and dust. Shared by the badges that use the model (a Premier Season's 29 medals, a Genuine pin and its plain one).
+  // `dynamic`: read its materials' dynamic expressions too (see badgeDynamic); the rest have none that badges feed.
+  badgeModel(vmdl, { dynamic = false } = {}) {
+    return this.playJob('badgeModel:' + vmdl, async () => {
+      const cs2 = this.ensureCS2();
+      const rel = vmdl.replace(/^models\//, '').replace(/\.vmdl$/i, ''), name = path.basename(rel);
+      const file = await cs2.exportGltf(vmdl, `badges/${rel}/${name}.gltf`, { materials: true });
+      const dir = path.dirname(file), stamp = path.join(dir, SHRUNK);
+      if (this.shrinkImages && !fs.existsSync(stamp)) {
+        await this.shrinkImages(fs.readdirSync(dir).filter((f) => /\.(png|jpe?g)$/i.test(f)).map((f) => path.join(dir, f)), 1024);
+        fs.writeFileSync(stamp, '');
+      }
+      const vmats = {};
+      for (const m of JSON.parse(fs.readFileSync(file, 'utf8')).materials || []) if (m.extras?.vmat?.Name) vmats[m.name] = m.extras.vmat;
+      const want = { tint: 'g_tTintMask', glassTint: 'g_tGlassTintColor', glassDust: 'g_tGlassDust' };
+      const textures = (v) => Object.entries(want).map(([k, p]) => [k, v.TextureParams?.[p]]).filter(([, t]) => typeof t === 'string');
+      // (Those textures, extracted on their own: none for most models, so no CLI run.)
+      const [got, exprs, composite] = await Promise.all([
+        cs2.extract([...new Set(Object.values(vmats).flatMap((v) => textures(v).map(([, t]) => t)))]),
+        dynamic ? this.badgeDynamic(dir, [...new Set(Object.values(vmats).map((v) => toPosix(v.Name)))]) : {},
+        this.badgeComposite(vmdl, dir),
+      ]);
+      const materials = {};
+      for (const [gltfName, v] of Object.entries(vmats)) {
+        const key = (p) => toPosix(p).replace(/(\.v\w+)$/, '$1_c'); // (as extract() names what it got)
+        const tex = {};
+        for (const [k, t] of textures(v)) { const local = got[key(t)]; if (local) tex[k] = this.url(local); }
+        const expr = exprs[toPosix(v.Name)];
+        materials[gltfName] = {
+          shader: String(v.ShaderName || '').replace(/\.vfx$/, ''), ints: v.IntParams || {}, floats: v.FloatParams || {}, vectors: v.VectorParams || {},
+          dynamic: expr && typeof expr === 'object' ? expr : {}, textures: tex,
+        };
+      }
+      return composite ? { model: this.url(file), name, materials, composite } : { model: this.url(file), name, materials };
+    });
+  }
+
+  // A badge model's materials' dynamic expressions, { vmat path: { parameter: expression } } (a Premier Season medal's
+  // band colours), decompiled once per export and kept beside it (dir/dynamic.json, gone with the export when CS2 changes
+  // the model). Decompiled from a copy outside the game and printed, not written into the cache: in the game, decompiling
+  // a material rebuilds every texture it was made from and writes them out full size (a Premier Season medal's took 40 s
+  // and 40 MB, none of it used); this way it's under a second.
+  async badgeDynamic(dir, vmats) {
+    const file = path.join(dir, 'dynamic.json');
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+    const cs2 = this.ensureCS2(), tmp = path.join(dir, 'tmp-materials');
+    let text;
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      await cs2.run(['-i', cs2.vpk, '-f', vmats.map((v) => v + '_c').join(','), '-o', tmp, '-q']); // (as compiled)
+      text = String(await cs2.run(['-i', tmp, '--recursive', '-d', '-o', '-', '-q']));
+    } catch (e) {
+      this.log(`badge materials: ${e.message}`);
+      return {}; // (not kept: tried again next time)
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+    const { dynamic, read } = dynamicParams(text);
+    if (read) { try { fs.writeFileSync(file, JSON.stringify(dynamic)); } catch {} } // (none read: tried again next time)
+    else this.log('badge materials: none decompiled');
+    return dynamic;
+  }
+
+  // A badge model's composite material: text CS2 draws into one of its materials as it shows it, from a Panorama layout
+  // (a CS2 map coin's "CS2 CONTRIBUTOR" and map name; a CS2 trophy's event, team and players), which the export can't
+  // carry. { match (the materials it's for: names containing it), res, labels } (see badges.cjs compositePanel and
+  // panoramaLabels) from its .vcompmat (beside the model, or in its materials/), kept in dir/composite.json; null for a
+  // model without one.
+  async badgeComposite(vmdl, dir) {
+    const file = path.join(dir, 'composite.json');
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')).composite ?? null; } catch {}
+    const cs2 = this.ensureCS2(), files = await cs2.listing();
+    const base = vmdl.replace(/\.vmdl$/i, ''), name = path.posix.basename(base);
+    const src = [`${base}.vcompmat_c`, `${path.posix.dirname(base)}/materials/${name}.vcompmat_c`].find((f) => files.has(f));
+    let composite = null;
+    if (src) {
+      // (Printed decompiled: small, and nothing written.)
+      const print = async (f) => String(await cs2.run(['-i', cs2.vpk, '-f', f, '-d', '-o', '-', '-q']));
+      try {
+        const panel = compositePanel(parseKV3(await print(src)));
+        if (panel && files.has(panel.panel + '_c')) {
+          const labels = panoramaLabels(await print(panel.panel + '_c'), panel.res);
+          if (labels.length) composite = { match: panel.match, res: panel.res, labels };
+        }
+      } catch (e) {
+        this.log(`badge composite ${src}: ${e.message}`);
+        return null; // (not kept: tried again next time)
+      }
+    }
+    try { fs.writeFileSync(file, JSON.stringify({ composite })); } catch {}
+    return composite;
   }
 
   // CS2's case-opening sounds extracted from the player's install, as { name: url }.

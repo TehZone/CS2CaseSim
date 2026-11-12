@@ -142,6 +142,20 @@ export function cs2Crate(id) {
   return crates.get(id);
 }
 
+// A collectible's 3D model by def index (CS2's coin, medal, pin or trophy), or null when the install has none for it:
+// { model, name, materials, attrs } (see CS2Service.badge).
+const badges = new Map();
+export function cs2Badge(id) {
+  id = String(id);
+  if (!badges.has(id)) {
+    const p = window.native?.cs2Badge ? window.native.cs2Badge(id)
+      : fetch(`api/cs2/badge?id=${encodeURIComponent(id)}`).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); });
+    badges.set(id, p);
+    p.catch(() => badges.delete(id));
+  }
+  return badges.get(id);
+}
+
 // CS2 asset calls: fn is one of maps, mapImages, wingmanMaps, map, progress, weapon, agent, anims, sounds, agentModel, stats, impacts, voices, icons, ranks, menuIcons, menuBackdrop, profileArt (see CS2Service).
 // Results of everything but progress are cached per argument.
 const playCache = new Map();
