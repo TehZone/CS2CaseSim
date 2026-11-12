@@ -256,6 +256,9 @@ What happens then:
 
 - Within five minutes the server reads the release. Players connected on older versions are told at once and taken
   offline five minutes later; a game on an older version is refused from then on. Offline play is never affected.
+- A release that brings what waited for it (badges, custom content, and the rules that ship with them: see
+  `CUSTOM_CONTENT.md`, section 8) makes the server start again with it once those five minutes are up (offline for a few
+  seconds). An updated game that connects before then is told the server is switching, and tries again.
 - The update window comes up at the game's next start or check, or straight away for anyone the server told or refused.
 - Exes from before the updater (1.0.0) can't update themselves: the server's refusal tells them where to download.
 
@@ -267,9 +270,14 @@ Good to know:
 - The server remembers the required version in its database. If GitHub is down it keeps the last one it read, and with
   no release at all it refuses nobody. `/health` shows it as `requiredVersion`.
 - A bad release: delete it (or publish a fixed, higher one). The server follows the newest published release, so the
-  version before it is let back in. In an emergency, `RELEASE_FEED=off` lets every version in: on the VPS, add that line
-  to `/etc/cs2-server/env` (`sudoedit /etc/cs2-server/env`) and `sudo systemctl restart cs2-server`; remove it again
-  afterwards.
+  version before it is let back in, **unless the bad release changed the data lock** (new badges or custom content: `/health`
+  showed `badgesWait` or `customWaits` before it was published). Once the server runs a release's new data, a game of the
+  version before can't play with it ("Your game data is a different version"), and deleting the release doesn't take the
+  data back off the server. Fix such a release forward: publish a fixed, higher version.
+- In an emergency, `RELEASE_FEED=off` lets every version in that has the server's data: on the VPS, add that line to
+  `/etc/cs2-server/env` (`sudoedit /etc/cs2-server/env`) and `sudo systemctl restart cs2-server`; remove it again
+  afterwards. In production the server then keeps running what the published release has: badges or custom content that
+  wait for a release keep waiting (they would lock out every game that's out), and none is let in by it.
 - Reusing a version number does nothing for players who already have it: always go up.
 - The lock trusts the version a game sends. It stops everyone playing the normal game, not someone who modifies theirs.
 - `node scripts/test-update-e2e.mjs build` and `run` try a real update on two test builds (its own install, never the real

@@ -76,6 +76,17 @@ const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS p2p_status ON p2p_listings (status)`,
   `CREATE INDEX IF NOT EXISTS p2p_seller ON p2p_listings (seller_id, status, updated)`,
   `CREATE INDEX IF NOT EXISTS p2p_buyer ON p2p_listings (buyer_id, updated)`,
+  // Profile pictures and featured badges (server/social.mjs). A picture is a row by the SHA-256 of its bytes (its address:
+  // /pic/<hash>), and users.pic is a player's; removed: staff took it down (then it isn't served, and can't go up again for a
+  // while). users.badge: the badge a player features (cleared when a save of theirs no longer has one: server/store.mjs).
+  // reports.pic: the picture of the player reported, at that moment. (An older server running at the same time never reads
+  // any of them.)
+  `CREATE TABLE IF NOT EXISTS pictures (
+     hash TEXT PRIMARY KEY, type TEXT NOT NULL, data BYTEA NOT NULL, size INT NOT NULL, by_id INT, at BIGINT NOT NULL, removed BIGINT, removed_by TEXT)`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS pic TEXT`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS badge TEXT`,
+  `CREATE INDEX IF NOT EXISTS users_pic ON users (pic) WHERE pic IS NOT NULL`,
+  `ALTER TABLE reports ADD COLUMN IF NOT EXISTS pic TEXT`,
 ];
 
 export async function openDb({ url = process.env.DATABASE_URL, dataDir = process.env.PGLITE_DIR } = {}) {

@@ -17,6 +17,8 @@ import * as N from './npcs.js';
 import * as SU from './storage.js';
 import * as T from './tools.js';
 import * as IX from './itemindex.js';
+import { featuredBadge } from './badges.js';
+import { dataUrlProblem } from './picture.js';
 import { rand, round2, clamp, pick, pickWeighted, uid as newUid } from './util.js';
 
 export class GameError extends Error {
@@ -54,11 +56,14 @@ function abandonMatch(ctx, { roundsFor = 0, roundsAgainst = 0 } = {}) {
   return { mode: m.mode, cooldown: ms, until: mm.until, rated };
 }
 
-// (system: the server running an action itself, not for a client's request: see 'passive.collect')
+// (system: the server running an action itself, not for a client's request: see 'passive.collect'. maxUnits and prestige: the
+// server's rules while the release that brings them isn't out, server/index.mjs HELD_RULES: the most Storage Units a player
+// can buy (SU.MAX_UNITS without), and whether passive income counts prestiges.)
 export function makeCtx(st, opts = {}) {
   return {
     st, rng: opts.rng || rand, now: opts.now || Date.now(), online: !!opts.online, system: !!opts.system,
     invCap: opts.invCap || Infinity, reserved: opts.reserved || null, asked: opts.asked || null,
+    maxUnits: opts.maxUnits || SU.MAX_UNITS, prestige: opts.prestige !== false,
     add: [], del: [], upd: new Map(), dirty: new Set(), sto: { add: [], del: [] }, ix: null,
   };
 }
@@ -118,14 +123,16 @@ export function findOwned(ctx, uid) {
   if (kept) fail(`${I.itemName(kept)} is in a Storage Unit. Retrieve it first.`, 'stored');
   fail('Item not found (it may have been sold or traded)', 'missing');
 }
-// Removes items from the inventory (fails if any is missing, locked, a Storage Unit, or tied up in a trade offer). Only
-// what's meant for units themselves passes allowUnit.
-export function take(ctx, uids, { allowLocked = false, allowUnit = false } = {}) {
+// Removes items from the inventory (fails if any is missing, locked, a Storage Unit, a bound badge, or tied up in a trade
+// offer). Only what's meant for units themselves passes allowUnit, and only staff allowBound: a badge that isn't a capsule's
+// pin (badges.js) goes nowhere else, so no trade, sale, stake, listing or contract can take one.
+export function take(ctx, uids, { allowLocked = false, allowUnit = false, allowBound = false } = {}) {
   if (!Array.isArray(uids) || new Set(uids).size !== uids.length) fail('Invalid items');
   const items = uids.map((u) => findOwned(ctx, String(u)));
   for (const it of items) {
     if (it.lk && !allowLocked) fail(`${I.itemName(it)} is locked. Unlock it first.`, 'locked');
     if (I.isUnit(it) && !allowUnit) fail("Storage Units can't be traded or sold", 'unit');
+    if (I.isBound(it) && !allowBound) fail(`${I.itemName(it)} can't be traded or sold`, 'bound');
     if (ctx.reserved?.has(it.uid)) fail(`${I.itemName(it)} is in a pending trade offer`, 'reserved');
   }
   const set = new Set(uids);
@@ -146,7 +153,7 @@ export function takeForStaff(ctx, uids) {
     if (left) fail(`${I.itemName(it)} still holds ${left} item${left === 1 ? '' : 's'}: remove them with it, or take them out first`, 'unit');
   }
   const out = uids.filter((u) => stored.has(u)).map((u) => stored.get(u));
-  const items = take(ctx, uids.filter((u) => !stored.has(u)), { allowLocked: true, allowUnit: true });
+  const items = take(ctx, uids.filter((u) => !stored.has(u)), { allowLocked: true, allowUnit: true, allowBound: true });
   if (out.length) {
     ctx.st.stored = SU.storedOf(ctx.st).filter((it) => !gone.has(it.uid));
     ctx.sto.del.push(...out.map((it) => it.uid));
@@ -424,7 +431,7 @@ export const ACTIONS = {
   // through give(); there's a limit on how many you can own instead.
   'storage.buy'(ctx, { n = 1 }) {
     n = int(n, 1, 10, 'count');
-    if (SU.unitsOf(ctx.st).length + n > SU.MAX_UNITS) fail(`You already own too many Storage Units (${SU.MAX_UNITS} at most)`, 'units');
+    if (SU.unitsOf(ctx.st).length + n > ctx.maxUnits) fail(`You already own too many Storage Units (${ctx.maxUnits} at most)`, 'units');
     const cost = round2(SU.UNIT_PRICE * n);
     spend(ctx, cost);
     const items = Array.from({ length: n }, () => ({ ...I.makeUnitItem('Store'), nw: true }));
@@ -648,13 +655,14 @@ export const ACTIONS = {
     s.playEarned = round2((s.playEarned || 0) + pay.total);
     return { result, earned: pay.total, pay, xp, before: lv.before, after: lv.after, levelUps: lv.levelUps, medals: lv.medals, waiting: lv.prof.drops.length };
   },
-  // Passive income (see levels.js): what's due since the time it was counted up to, by the clock's time (ctx.now), and the
-  // clock moved on in the same change as the money. Offline the game collects it on loading and every minute; online the
-  // server does, by its own clock (server/passive.mjs), so it's nothing a client can ask for. Takes no arguments: there is
-  // no time to send. → { earned, minutes (paid for), capped (an absence past the 12 hours) }
+  // Passive income (see levels.js): what's due since the time it was counted up to, by the clock's time (ctx.now), at the
+  // rate for the prestiges the profile has now, and the clock moved on in the same change as the money. Offline the game
+  // collects it on loading and every minute; online the server does, by its own clock (server/passive.mjs), so it's nothing
+  // a client can ask for. Takes no arguments: there is no time to send. → { earned, minutes (paid for), capped (an absence
+  // past the 12 hours) }
   'passive.collect'(ctx) {
     if (ctx.online && !ctx.system) fail('Passive income is paid by the server', 'server');
-    const was = ctx.st.passive, r = L.passivePay(was?.at, ctx.now);
+    const was = ctx.st.passive, r = L.passivePay(was?.at, ctx.now, ctx.prestige ? L.prestigesOf(ctx.st.prof) : 0);
     if (was && r.at === was.at) return { earned: 0, minutes: 0, capped: false };
     ctx.st.passive = { at: r.at, earned: round2((Number(was?.earned) || 0) + r.pay) };
     ctx.dirty.add('passive');
@@ -1033,6 +1041,7 @@ export const ACTIONS = {
     for (const it of yours) {
       if (it.lk) fail(`${I.itemName(it)} is locked. Unlock it first.`, 'locked');
       if (I.isUnit(it)) fail("Storage Units can't be traded or sold", 'unit');
+      if (I.isBound(it)) fail(`${I.itemName(it)} can't be traded or sold`, 'bound');
     }
     const their = theirs.map((u) => s.inv.find((x) => x.uid === u) || fail('They no longer have that item', 'missing'));
     if (myMoney > ctx.st.money + 1e-9) fail('Not enough money', 'funds');
@@ -1075,8 +1084,10 @@ export const ACTIONS = {
     keepSocial(ctx, so);
     return { friend: s.friend };
   },
-  // Your profile: name, avatar (an agent), country, bio, a map behind it, and up to 6 items to show off.
-  'persona.set'(ctx, { name, bio, avatar, country, showcase, bg }) {
+  // Your profile: name, avatar (an agent), country, bio, a map behind it, and up to 6 items to show off. pic: a picture of your
+  // own instead of the agent (a data: URL as engine/picture.js checks it; null takes it off); badge: the badge to feature, one
+  // you have (engine/badges.js; null: none).
+  'persona.set'(ctx, { name, bio, avatar, country, showcase, bg, pic, badge }) {
     const so = social(ctx);
     const me = { ...N.freshPersona(), ...so.me };
     const clean = (x, max) => String(x ?? '').replace(/[<>]/g, '').trim().slice(0, max);
@@ -1088,6 +1099,15 @@ export const ACTIONS = {
     if (showcase !== undefined) {
       if (!Array.isArray(showcase) || showcase.length > 6) fail('Pick up to 6 items');
       me.showcase = [...new Set(showcase.map(String))].filter((u) => ctx.st.inv.some((it) => it.uid === u && !I.isUnit(it)));
+    }
+    if (pic !== undefined) {
+      const bad = pic ? dataUrlProblem(pic) : '';
+      if (bad) fail(bad);
+      me.pic = pic || null;
+    }
+    if (badge !== undefined) {
+      if (badge != null && badge !== '' && !featuredBadge(ctx.st, badge)) fail("You don't have that badge");
+      me.badge = badge ? String(badge) : null;
     }
     so.me = me;
     keepSocial(ctx, so);

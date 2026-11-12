@@ -1,5 +1,7 @@
-// Passive income online: $100 for every whole minute, while the game is open and while it's closed, up to 12 hours of it at
-// a time (the rule: engine/levels.js PASSIVE; what pays it: the action 'passive.collect'). Only the server's clock counts, and
+// Passive income online: $100 for every whole minute and $100 more for each prestige (each Service Medal, as the account has
+// them when it's collected), while the game is open and while it's closed, up to 12 hours of it at a time (the rule:
+// engine/levels.js PASSIVE; what pays it: the action 'passive.collect'; the prestiges count only once the release that brings
+// them is out: server/index.mjs HELD_RULES, srv.rules). Only the server's clock counts, and
 // only the server collects: when a player connects (the time they were away, which the welcome tells them), then about
 // every minute for everyone connected, from one timer for the whole server (it looks every few seconds and pays whoever has
 // a whole minute due, so each player is paid on their own minute). A client can't ask for it or send a time.
@@ -26,10 +28,11 @@ const FIELDS = ['money', 'passive']; // (what 'passive.collect' changes: all a c
 // put back as it was, read again from the database and collected from there (once). Written with the whole row instead when
 // that's on its way anyway (a change of the player's own on this server not written yet, or being written), or when the
 // clock starts (an account from before passive income: once).
-export async function collectIn(store, e, now, again = true) {
+// (rules: the server's, server/index.mjs HELD_RULES: { prestige: false } pays $100 a minute whatever the prestiges.)
+export async function collectIn(store, e, now, again = true, rules = {}) {
   if (!passiveDue(e.st.passive, now)) return null;
   const was = { money: e.st.money, passive: e.st.passive };
-  const ctx = makeCtx(e.st, { online: true, system: true, now });
+  const ctx = makeCtx(e.st, { ...rules, online: true, system: true, now });
   const r = runAction(ctx, 'passive.collect');
   const { set } = delta(ctx);
   if (e.dirty || e.saving || !Number.isFinite(was.passive?.at) || Object.keys(set).some((k) => !FIELDS.includes(k))) {
@@ -41,10 +44,10 @@ export async function collectIn(store, e, now, again = true) {
   e.st.passive = was.passive;
   if (!again) { store.cache.delete(e.id); return null; } // (changed again meanwhile: read afresh next time)
   await store.reload(e);
-  return collectIn(store, e, now, false);
+  return collectIn(store, e, now, false, rules);
 }
 // The same, taking their lock; the time is read once it's held.
-export const collect = (store, id, clock = Date.now) => store.withUser(id, async (e) => collectIn(store, e, clock()));
+export const collect = (store, id, clock = Date.now, rules = {}) => store.withUser(id, async (e) => collectIn(store, e, clock(), true, rules));
 
 export class Passive {
   // srv: the server's { store, sockets, sendTo, log }. clock: the server's time (tests set their own); tick: how often it looks.
@@ -59,7 +62,7 @@ export class Passive {
   // A player connecting (the caller holds their lock): the time since they were last paid, at most 12 hours of it. (Async: by
   // the time it's done, `e` may have been read again from the database: collectIn.)
   connected(e) {
-    return collectIn(this.srv.store, e, this.clock());
+    return collectIn(this.srv.store, e, this.clock(), true, this.srv.rules);
   }
 
   // Sends to a player's windows that have had their welcome (ws.welcomed, server/index.mjs). One still saying hello gets the
@@ -82,7 +85,7 @@ export class Passive {
         const e = store.cache.get(id);
         if (e && !passiveDue(e.st.passive, this.clock())) return;
         try {
-          const out = await collect(store, id, this.clock);
+          const out = await collect(store, id, this.clock, this.srv.rules);
           if (out) this.push(id, { t: 'delta', d: out.d });
         } catch (err) { this.srv.log('[passive] collect failed', id, err?.message || err); }
       }));

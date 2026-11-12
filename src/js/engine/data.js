@@ -3,11 +3,12 @@
 // them to initData().
 import { round2 } from './util.js';
 import { mergeCustom } from './custom.js';
+import { mergeBadges } from './badgedata.js';
 
 export const D = {
   cases: [], skins: {}, stickers: {}, agents: {}, collections: [], events: {}, proTeams: {}, pros: {},
   charms: {}, charmCollections: [], slab: null, keys: {}, keyOf: {},
-  keyPrice: 2.49, generatedAt: '', pricedAt: '', lock: '', cx: null,
+  keyPrice: 2.49, generatedAt: '', pricedAt: '', lock: '', cx: null, badges: {}, bd: null,
 };
 
 export const WEARS = [
@@ -27,6 +28,7 @@ export const RARITY = {
   sticker: ['Default', 'Base Grade', 'High Grade', 'Remarkable', 'Exotic', 'Extraordinary', 'Rare Special', 'Contraband'],
   agent: ['', '', 'Distinguished', 'Exceptional', 'Superior', 'Master', '', ''],
   chicken: ['', '', 'Barnyard', 'Free-Range', 'Prize', 'Legendary', 'Mythic', ''],
+  badge: ['Base Grade', '', 'High Grade', 'Remarkable', 'Exotic', 'Extraordinary', '', ''], // (badgedata.js: Base Grade is grey)
   crate: ['Base Grade Container'],
   key: ['Base Grade Key'],
   unit: ['Base Grade Tool'],
@@ -42,22 +44,27 @@ export const CASE_ODDS = [
 export const COLLECTION_ODDS = { 0: 0.8, 1: 0.16, 2: 0.032, 3: 0.0064, 4: 0.00128, 5: 0.000256 };
 // Charm collections (High Grade, Remarkable, Exotic, Extraordinary): a capsule's odds.
 export const CHARM_ODDS = { 2: 0.7992, 3: 0.1598, 4: 0.032, 5: 0.009 };
+// Collectible Pins Capsules (badgedata.js): a capsule's odds, as the sticker capsules here have them (High Grade 80.1%,
+// Remarkable 16%, Exotic 3.2%, Extraordinary 0.64%). Like CS2's they open without a key.
+export const PIN_ODDS = { 2: 0.7992, 3: 0.1598, 4: 0.032, 5: 0.0064 };
 export const DOPPLER_PHASE_WEIGHT = {
   'Phase 1': 0.22, 'Phase 2': 0.22, 'Phase 3': 0.22, 'Phase 4': 0.22,
   Ruby: 0.045, Sapphire: 0.045, 'Black Pearl': 0.03, Emerald: 0.06,
 };
 // How often a finish's phase drops against its other phases (a custom item's own `pw`, else CS2's Doppler phase shares).
 export const phaseWeight = (s) => s?.pw ?? DOPPLER_PHASE_WEIGHT[s?.ph] ?? 0.2;
-export const CASE_KINDS = { case: 'Cases', souvenir: 'Souvenir Packages', package: 'Packages', capsule: 'Capsules', autograph: 'Capsules' };
+export const CASE_KINDS = { case: 'Cases', souvenir: 'Souvenir Packages', package: 'Packages', capsule: 'Capsules', autograph: 'Capsules', pins: 'Capsules' };
 
-// `custom`: src/data/custom.json (custom content, see custom.js), or null for none. D.lock is the data lock the game and the
-// server compare: D.generatedAt exactly without custom content.
-export function initData(json, { keys = {}, custom = null } = {}) {
+// `custom`: src/data/custom.json (custom content, see custom.js), or null for none. `badges`: src/data/badges.json (CS2's
+// collectibles and the Collectible Pins Capsules, see badgedata.js), or null for none. D.lock is the data lock the game and the
+// server compare: D.generatedAt exactly without either.
+export function initData(json, { keys = {}, custom = null, badges = null } = {}) {
   Object.assign(D, json);
   for (const c of D.cases) c.custom = false;
   D.lock = D.generatedAt;
   D.cx = null;
   mergeCustom(D, custom);
+  mergeBadges(D, badges);
   D.cases.push(makeAgentLocker());
   D.caseById = Object.fromEntries(D.cases.map((c) => [c.id, c]));
   initKeys(keys);
@@ -114,6 +121,7 @@ export function caseTiers(c) {
   }
   if (c.kind === 'souvenir' || c.kind === 'package' || c.kind === 'collection') return collectionTiers(c.pools);
   if (c.kind === 'charms') return Object.keys(c.pools).filter((k) => c.pools[k]?.length && CHARM_ODDS[k]).map((k) => [k, CHARM_ODDS[k]]);
+  if (c.kind === 'pins') return Object.keys(c.pools).filter((k) => c.pools[k]?.length && PIN_ODDS[k]).map((k) => [k, PIN_ODDS[k]]);
   const odds = { 2: 0.7992, 3: 0.1598, 4: 0.032, 5: 0.0064, 7: 0.0026 };
   return Object.keys(c.pools).map((k) => [k, odds[k] ?? 0.01]);
 }

@@ -6,7 +6,8 @@
 //   - the newest release going back to an older one (a bad release deleted) lowers the version again
 // The game sends its version in its hello. A game that sends none is from before the updater and counts as outdated.
 // When a release comes out, the players connected on older versions are told at once and dropped after `grace`.
-// Off unless NODE_ENV is production or RELEASE_FEED is set; RELEASE_FEED=off is the switch to let every version back in.
+// Off unless NODE_ENV is production or RELEASE_FEED is set; RELEASE_FEED=off is the switch to let every version back in
+// (every version that has the server's data: in production what waits for a release keeps waiting, server/index.mjs gated).
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);

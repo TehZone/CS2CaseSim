@@ -2,7 +2,7 @@
 // Accepting re-checks both sides and swaps everything in one database transaction.
 import crypto from 'node:crypto';
 import { makeCtx, delta, take, give, spend, credit, GameError } from '../src/js/engine/actions.js';
-import { isUnit, itemName, tradable } from '../src/js/engine/items.js';
+import { isBound, isUnit, itemName, tradable } from '../src/js/engine/items.js';
 import { listedOf, storedItem } from '../src/js/engine/storage.js';
 import { textProblem } from '../src/js/engine/tools.js';
 import { round2 } from '../src/js/engine/util.js';
@@ -168,6 +168,7 @@ export class Trades {
         if (!it) fail(`${whose} no longer ${whose === 'You' ? 'have' : 'has'} one of these items`);
         if (it.lk) fail(`${itemName(it)} is locked`);
         if (isUnit(it)) fail("Storage Units can't be traded");
+        if (isBound(it)) fail(`${itemName(it)} can't be traded (only pins from capsules trade)`);
         return structuredClone(it);
       });
       const giveItems = pick(me.st, give.uids, 'You');

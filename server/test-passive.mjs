@@ -1,6 +1,7 @@
 // Passive income online (server/passive.mjs): a real server (embedded Postgres on disk) and real WebSocket clients. The
 // server pays it by its own clock, which these checks move on (`skew`): on connecting for the time away, and about every
-// minute while connected, once per account however many windows; never twice across a restart or two server instances.
+// minute while connected, once per account however many windows; never twice across a restart or two server instances;
+// $100 more a minute for each prestige the account has when it's paid.
 //   node server/test-passive.mjs
 import fs from 'node:fs';
 import os from 'node:os';
@@ -67,7 +68,7 @@ const leave = async (id, ...cs) => { for (const c of cs) c.close(); await until(
 const clockTo = async (id, ms) => { skew += (await serverState(id)).passive.at + ms - clock(); };
 
 try {
-  check('passive income is $100 a minute, 12 hours at most', PASSIVE.perMinute === 100 && PASSIVE.capHours === 12);
+  check('passive income is $100 a minute and $100 more for each prestige, 12 hours at most', PASSIVE.perMinute === 100 && PASSIVE.perPrestige === 100 && PASSIVE.capHours === 12);
 
   // ---- a new account, and the time away on connecting (capped) ------------------------------------------------------------
   const t0 = clock();
@@ -222,7 +223,37 @@ try {
   check('a reset starts the clock again at the reset (on the server\'s clock)', fresh.money === 10 && fresh.passive.earned === 0 && fresh.passive.at > clock() - 1000 && fresh.passive.at <= clock());
   A = await client(token);
   check('so the three hours before it pay nothing', !A.welcome.away && A.st.money === 10);
-  A.close();
+  await leave(id, A);
+
+  // ---- prestige: $100 more a minute for each Service Medal, at the medals the account has when it's paid ---------------------
+  const rm = await post('/api/register', { name: 'medalist', password: 'secret123' });
+  let M = await client(rm.body.token);
+  const mid = M.user.id;
+  await boss.admin('edit', { id: mid, set: { prof: { medals: 3 } } });
+  const nm = pushes(M).length;
+  await clockTo(mid, MIN + 1e3);
+  await until(() => pushes(M).length > nm);
+  await wait(200); // (time for a second payment, were there one)
+  check('3 prestiges: the minute\'s timer pays $400 ($100 + 3 × $100), once', (await serverState(mid)).money === 410 && M.st.money === 410 && pushes(M).length === nm + 1
+    && (await serverState(mid)).passive.earned === 400, `money ${(await serverState(mid)).money}`);
+  await leave(mid, M);
+  await clockTo(mid, 13 * HOUR);
+  M = await client(rm.body.token);
+  check('3 prestiges: 13 hours away pays the 12 hours at $400 a minute ($288,000), and the welcome says so', M.welcome.away?.earned === 288000 && M.welcome.away.minutes === 720
+    && M.welcome.away.capped === true && M.st.money === 288410, JSON.stringify(M.welcome.away));
+  check('the welcome\'s away is as it always was: no new field for a 1.1.5 game', Object.keys(M.welcome.away).sort().join() === 'capped,earned,minutes', Object.keys(M.welcome.away).join());
+  await leave(mid, M);
+  await boss.admin('edit', { id: mid, set: { prof: { medals: 1 } } });
+  await clockTo(mid, 5 * MIN + 30e3);
+  M = await client(rm.body.token);
+  check('the rate is the prestiges the account has when it\'s paid: one medal now, so 5 minutes away pay $1,000', M.welcome.away?.earned === 1000 && M.welcome.away.minutes === 5
+    && M.st.money === 289410, JSON.stringify(M.welcome.away));
+  await leave(mid, M);
+  await server.store.withUser(mid, async (e) => { e.st.prof = { ...e.st.prof, medals: 1e6 }; server.store.markDirty(e); }); // (not a count the panel lets through)
+  await clockTo(mid, MIN + 1e3);
+  M = await client(rm.body.token);
+  check('a medal count past every medal there is pays as every medal (69: $7,000 a minute), no more', M.welcome.away?.earned === 7000 && M.welcome.away.minutes === 1, JSON.stringify(M.welcome.away));
+  M.close();
   boss.close();
 } catch (e) {
   failed++;

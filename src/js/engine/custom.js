@@ -76,8 +76,9 @@ export const dataLock = (generatedAt, custom) => {
   const h = customLock(custom);
   return h ? generatedAt + CX_LOCK + h : generatedAt;
 };
-// The game data build a lock is for (a price patch's ids are that build's, whatever custom content came with it).
-export const lockBase = (lock) => String(lock ?? '').split(CX_LOCK)[0];
+// The game data build a lock is for (a price patch's ids are that build's, whatever custom content or badges came with it:
+// every part after the build's own generatedAt starts with a +, see badgedata.js).
+export const lockBase = (lock) => String(lock ?? '').split('+')[0];
 
 // Merges custom content into D (called by initData, before its tables are built). New objects and arrays throughout: the
 // parsed game data passed to initData is left as it was. A custom entry whose id a real item has is left out (the build

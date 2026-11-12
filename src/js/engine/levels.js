@@ -4,8 +4,8 @@
 // reward like CS2's care package: four items to choose two from.
 //
 // Money comes from matches (a win or a draw pays $1,250, a loss $500, and every kill $100, assist $50 and round MVP $250)
-// and from passive income: $100 every minute, while the game is open and while it's closed, up to 12 hours of it at a time
-// (PASSIVE below).
+// and from passive income: $100 every minute and $100 more for each prestige (each Service Medal earned), while the game is
+// open and while it's closed, up to 12 hours of it at a time (PASSIVE below).
 import { D, COLLECTION_ODDS } from './data.js';
 import { makeSkinItem, makeCrateItem } from './items.js';
 import { pick, pickWeighted, rand, uid } from './util.js';
@@ -34,23 +34,34 @@ export function matchXp({ result, kills = 0, assists = 0, roundsWon = 0 }) {
 }
 
 // ---- passive income ----------------------------------------------------------------------------------------------------
-// $100 for every whole minute, online and offline, while the game is open and while it's closed: up to 12 hours of it at a
-// time (a longer absence pays 12 hours, $72,000). The one rule for both modes (offline the game runs it by the PC's clock,
-// online the server by its own: see actions.js 'passive.collect'). The state keeps passive = { at, earned }: the time it has
-// been counted up to, and what it has paid in all. Collecting at `now` pays the whole minutes since `at`, no more than the
-// cap, and moves `at` on by every whole minute that went by (paid, or past the cap), so the part of a minute left over
-// counts towards the next. A state with no time yet (saves and accounts from before passive income: no back pay) or one
-// ahead of the clock (a PC's clock put back) pays nothing and counts from now. Open, the game collects every minute, so
-// the cap only ever bites on time away.
-export const PASSIVE = { perMinute: 100, capHours: 12 };
+// $100 for every whole minute, and $100 more a minute for each prestige (a Service Medal earned: prof.medals), online and
+// offline, while the game is open and while it's closed: up to 12 hours of it at a time (a longer absence pays 12 hours:
+// $72,000 with no medal, $144,000 with one, 720 minutes × (100 + 100 × prestiges) in all). The one rule for both modes
+// (offline the game runs it by the PC's clock, online the server by its own: see actions.js 'passive.collect'). The state
+// keeps passive = { at, earned }: the time it has been counted up to, and what it has paid in all. Collecting at `now` pays
+// the whole minutes since `at`, no more than the cap, at the rate for the prestiges you have as it's collected, and moves
+// `at` on by every whole minute that went by (paid, or past the cap), so the part of a minute left over counts towards the
+// next. A state with no time yet (saves and accounts from before passive income: no back pay) or one ahead of the clock (a
+// PC's clock put back) pays nothing and counts from now. Open, the game collects every minute, so the cap only ever bites
+// on time away.
+export const PASSIVE = { perMinute: 100, perPrestige: 100, capHours: 12 };
 export const PASSIVE_MINUTE = 60 * 1000;
 // A new save's or account's: counting from its creation.
 export const freshPassive = (now = Date.now()) => ({ at: now, earned: 0 });
-// What collecting at `now` pays, from the time `at` it was counted up to. → { minutes, pay, capped, at (the new time) }
-export function passivePay(at, now) {
+// How many prestiges a profile has: its Service Medals, a whole number from 0 to every medal there is (anything else in
+// prof.medals counts as none).
+export function prestigesOf(prof) {
+  const n = Math.floor(Number(prof?.medals));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, MEDALS.length) : 0;
+}
+// What passive income pays a minute with that many prestiges: $100, and $100 for each.
+export const passiveRate = (prestiges = 0) => PASSIVE.perMinute + PASSIVE.perPrestige * prestigesOf({ medals: prestiges });
+// What collecting at `now` pays, from the time `at` it was counted up to, with `prestiges` (the profile's at that moment:
+// prestigesOf). → { minutes, pay, capped, at (the new time) }
+export function passivePay(at, now, prestiges = 0) {
   if (!Number.isFinite(at) || now < at) return { minutes: 0, pay: 0, capped: false, at: now };
   const whole = Math.floor((now - at) / PASSIVE_MINUTE), minutes = Math.min(whole, PASSIVE.capHours * 60);
-  return { minutes, pay: minutes * PASSIVE.perMinute, capped: whole > minutes, at: at + whole * PASSIVE_MINUTE };
+  return { minutes, pay: minutes * passiveRate(prestiges), capped: whole > minutes, at: at + whole * PASSIVE_MINUTE };
 }
 // Whether collecting at `now` would change anything: a whole minute is due, or the clock starts (or starts again).
 export const passiveDue = (passive, now) => !Number.isFinite(passive?.at) || now < passive.at || now - passive.at >= PASSIVE_MINUTE;

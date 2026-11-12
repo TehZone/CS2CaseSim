@@ -628,6 +628,9 @@ class InspectView {
       else if (def.cat === 'pistol') { depth = 0.12; width = 3.4; }
     } else if (item.t === 'sticker') {
       params = stickerMaterialParams(def); width = 2.8; depth = 0.035; bevel = 0.008;
+    } else if (item.t === 'badge') {
+      // (A pin, coin, medal or trophy: struck metal and enamel, thicker than a sticker.)
+      params = { metalness: 0.55, roughness: 0.38, clearcoat: 0.5, normalScale: 0.8 }; width = 3; depth = 0.16; bevel = 0.03; segments = 3;
     } else {
       params = { metalness: 0, roughness: 0.7, clearcoat: 0.1, normalScale: 0.6 }; width = 3.4; depth = 0.12; bevel = 0.02;
     }

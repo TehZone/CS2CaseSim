@@ -1,5 +1,5 @@
-// Passive income in the game (the rule: engine/levels.js PASSIVE): $100 every minute, even while the game is closed, up to
-// 12 hours of it at a time. Offline the save collects it as the game loads and then every minute while it runs, by this PC's
+// Passive income in the game (the rule: engine/levels.js PASSIVE): $100 every minute and $100 more for each prestige (each
+// Service Medal), even while the game is closed, up to 12 hours of it at a time. Offline the save collects it as the game loads and then every minute while it runs, by this PC's
 // clock (the action 'passive.collect'); online the server pays it by its own clock (server/passive.mjs) and its welcome says
 // what your time away paid. A collect that paid for time away gets one toast; the minute-by-minute ones only put the money
 // up.

@@ -11,16 +11,19 @@ import { indexProblem, mergeIndex } from './itemindex.js';
 import { MAX_LEVEL, MEDALS } from './levels.js';
 import * as N from './npcs.js';
 import { repairStorage, storedOf } from './storage.js';
+import { featuredBadge } from './badges.js';
+import { dataUrlProblem } from './picture.js';
 import { MAX_KILLS, nameable, nameProblem } from './tools.js';
 import { round2 } from './util.js';
 
 export const MAX_JSON = 48 * 1024, KEEP_AUTO = 20, MAX_MANUAL = 50, PAGE = 50;
 export const LEVEL_NAMES = ['Player', 'Moderator', 'Admin', 'Owner'];
-export const ITEM_KINDS = ['skin', 'crate', 'key', 'sticker', 'agent', 'charm', 'unit', 'tool'];
+export const ITEM_KINDS = ['skin', 'crate', 'key', 'sticker', 'agent', 'charm', 'unit', 'tool', 'badge'];
 // The objects of a raw edit whose fields the panel's editor shows by name: their field names must be plain identifiers.
 export const NAMED_FIELDS = new Set(['stats', 'rank', 'wingman', 'prof', 'mm', 'premier']);
 export const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
-export const SERIAL_KINDS = new Set(['skin', 'sticker', 'agent', 'charm']); // (what comes out of containers; bought cases and keys have none)
+// (What comes out of containers; bought cases and keys have none, and of the badges only a capsule's pins: items.isBound.)
+export const SERIAL_KINDS = new Set(['skin', 'sticker', 'agent', 'charm', 'badge']);
 
 export const fail = (m, code) => { throw new GameError(m, code); };
 export const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
@@ -287,7 +290,7 @@ export function saveFile(file, now = Date.now()) {
   const owned = new Set([...st.inv, ...(Array.isArray(st.stored) ? st.stored : [])].map((it) => it?.uid));
   (st.listed || []).forEach((it, i) => {
     item(it, `listed[${i}]`);
-    if (!isToken(it.lid) || !Number.isFinite(it.lp) || it.lp < 0.03 || it.lp > 1e6 || !optNum(it.lat) || I.isUnit(it) || owned.has(it.uid)) bad(`listed[${i}]`);
+    if (!isToken(it.lid) || !Number.isFinite(it.lp) || it.lp < 0.03 || it.lp > 1e6 || !optNum(it.lat) || I.isUnit(it) || I.isBound(it) || owned.has(it.uid)) bad(`listed[${i}]`);
     owned.add(it.uid);
   });
   (st.prof?.drops || []).forEach((d, i) => {
@@ -331,6 +334,8 @@ export function saveFile(file, now = Date.now()) {
     ...N.freshPersona(), ...me, name: str(me.name, 32), bio: str(me.bio, 300), country: /^[A-Z]{2}$/.test(me.country) ? me.country : '',
     avatar: Object.hasOwn(D.agents, me.avatar ?? '') ? me.avatar : null, bg: me.bg ? str(me.bg, 40) : null,
     showcase: Array.isArray(me.showcase) ? [...new Set(me.showcase.filter((u) => mine.has(u)))].slice(0, 6) : [],
+    // (a picture as the game makes one, and a badge the save has: engine/picture.js, badges.js)
+    pic: me.pic && !dataUrlProblem(me.pic) ? me.pic : null, badge: featuredBadge(st, me.badge),
   };
   for (const o of so.offers) if (o.status === 'open' && N.isBlocked(so, o.npc, now)) o.status = 'cancelled';
   return st;
@@ -393,6 +398,11 @@ export function itemSpec(x) {
       const c = D.charms[id] || fail(`Unknown charm: ${id}`);
       return { n, make: () => I.makeCharmItem(c, { src, pat }) };
     }
+    case 'badge': {
+      // (Any of CS2's collectibles, the ones nobody can get too: staff are the only way to one. engine/badges.js)
+      const b = (Object.hasOwn(D.badges, id) && D.badges[id]) || fail(`Unknown badge: ${id}`);
+      return { n, make: () => I.makeBadgeItem(b, src) };
+    }
   }
   return fail('Invalid item');
 }
@@ -406,7 +416,7 @@ export function giveSpecs(items) {
 // the save's: localSerial).
 export function buildItems(specs, serial) {
   const items = specs.flatMap((s) => Array.from({ length: s.n }, () => ({ ...s.make(), nw: true })));
-  for (const it of items) if (SERIAL_KINDS.has(it.t)) it.sn = serial(I.serialKey(it));
+  for (const it of items) if (SERIAL_KINDS.has(it.t) && !I.isBound(it)) it.sn = serial(I.serialKey(it));
   return items;
 }
 // The save's own serial counters, as a case opened offline numbers its drops (st.serials replaced, not changed).

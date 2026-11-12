@@ -221,7 +221,7 @@ async function boot() {
   if (S.stats.opened === 0 && S.inv.length === 0 && S.money - (Number(S.passive?.earned) || 0) === 10) {
     const usd = (n) => '$' + n.toLocaleString('en-US');
     toast(`Welcome! You start with <b class="green">$10.00</b>. Earn more by playing matches in <b>Play</b>: ${usd(PAY.win)} a win, ${usd(PAY.loss)} a loss, ${usd(PAY.kill)} a kill, ${usd(PAY.mvp)} a round MVP.
-      You also get ${usd(PASSIVE.perMinute)} every minute, even while the game is closed (up to ${PASSIVE.capHours} hours).`, 'gold', 10000);
+      You also get ${usd(PASSIVE.perMinute)} every minute, even while the game is closed (up to ${PASSIVE.capHours} hours), and ${usd(PASSIVE.perPrestige)} more a minute for every prestige (each Service Medal you earn).`, 'gold', 10000);
   }
   // Passive income: collected now (the time since the save was last open) and every minute (after net.resume(): see passive.js).
   initPassive();

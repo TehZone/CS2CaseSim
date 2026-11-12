@@ -6,30 +6,49 @@ import { S, storedPart, storedArrived } from './state.js';
 import * as SU from './engine/storage.js';
 import { itemValue } from './engine/items.js';
 import { round2 } from './engine/util.js';
+import { D } from './engine/data.js';
 import { net } from './net/online.js';
 
 // Whether a unit's contents are in S.stored.
 export const unitLoaded = (uid) => { const p = storedPart(); return !p || p.loaded.has(uid); };
 const sumOf = (uid) => storedPart()?.sums.get(uid) || null;
 
-export const unitCount = (uid) => (unitLoaded(uid) ? SU.unitCount(S, uid) : +sumOf(uid)?.n || 0);
-export const unitValue = (uid) => (unitLoaded(uid) ? SU.unitValue(S, uid) : round2(+sumOf(uid)?.value || 0));
+// What S.stored adds up to: each unit's count and value (engine/storage.js unitTotals), the value of all of it and its most
+// valuable item. Worked out once and kept while S.stored is the same list (a change to it is always a new one: state.js, the
+// actions) and the prices are the same. Up to 100 units show at once (the inventory, picking a unit), and a pass for each
+// one's card went through up to 100,000 items 100 times; net worth and the most valuable item are drawn on every change to
+// the inventory or the money, which leaves what's stored as it was.
+let totals = null;
+function loaded() {
+  const list = S.stored;
+  if (!totals || totals.list !== list || totals.n !== list?.length || totals.priced !== D.pricedAt) {
+    let value = 0, best = null, top = 0;
+    for (const it of SU.storedOf(S)) { const v = itemValue(it); value += v; if (!best || v > top) { best = it; top = v; } }
+    totals = { list, n: list?.length, priced: D.pricedAt, units: SU.unitTotals(S), value, best };
+  }
+  return totals;
+}
+const worthOf = (items) => items.reduce((s, it) => s + itemValue(it), 0);
+export const unitCount = (uid) => (unitLoaded(uid) ? loaded().units.get(uid)?.n || 0 : +sumOf(uid)?.n || 0);
+export const unitValue = (uid) => (unitLoaded(uid) ? loaded().units.get(uid)?.value || 0 : round2(+sumOf(uid)?.value || 0));
 // A unit's contents, once they're here (else []: see unitLoaded).
 export const unitContents = (uid) => (unitLoaded(uid) ? SU.contents(S, uid) : []);
 
 // Everything in your Storage Units: { n, value }.
 export function storedTotals() {
-  if (!storedPart()) { const all = SU.storedOf(S); return { n: all.length, value: all.reduce((s, it) => s + itemValue(it), 0) }; }
+  if (!storedPart()) return { n: SU.storedOf(S).length, value: loaded().value };
   let n = 0, value = 0;
   for (const u of SU.unitsOf(S)) { n += unitCount(u.uid); value += unitValue(u.uid); }
   return { n, value: round2(value) };
 }
-// Your inventory, Storage Units and Market listings together: what net worth and the stats count.
-export const ownedWorth = () => (storedPart() ? round2([...S.inv, ...SU.listedOf(S)].reduce((s, it) => s + itemValue(it), 0) + storedTotals().value) : SU.ownedValue(S));
-// Your most valuable item, in the inventory, a unit or on the Market (null: none).
+// Your inventory, Storage Units and Market listings together: what net worth and the stats count. (Offline, the same as
+// engine/storage.js ownedValue: every value is in whole cents, so the order they're added up in makes no difference.)
+export const ownedWorth = () => round2(worthOf(S.inv) + worthOf(SU.listedOf(S)) + storedTotals().value);
+// Your most valuable item, in the inventory, a unit or on the Market (null: none). (The first of the most valuable, in that
+// order, as when they were all looked through.)
 export function bestOwned() {
-  const p = storedPart();
-  const pool = p ? [...S.inv, ...SU.storedOf(S), ...SU.listedOf(S), ...SU.unitsOf(S).filter((u) => !p.loaded.has(u.uid)).map((u) => sumOf(u.uid)?.best).filter(Boolean)] : SU.ownedItems(S);
+  const p = storedPart(), inside = loaded().best;
+  const pool = [...S.inv, ...(inside ? [inside] : []), ...SU.listedOf(S), ...(p ? SU.unitsOf(S).filter((u) => !p.loaded.has(u.uid)).map((u) => sumOf(u.uid)?.best).filter(Boolean) : [])];
   return pool.reduce((b, it) => (!b || itemValue(it) > itemValue(b) ? it : b), null);
 }
 

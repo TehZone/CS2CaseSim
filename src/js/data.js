@@ -5,9 +5,17 @@ import { initData } from './engine/data.js';
 export * from './engine/data.js';
 
 export async function loadData() {
-  const [res, keys, custom] = await Promise.all([fetch('data/game-data.json'), fetch('data/keys.json').then((r) => (r.ok ? r.json() : {})).catch(() => ({})), loadCustom()]);
+  const [res, keys, custom, badges] = await Promise.all([fetch('data/game-data.json'), fetch('data/keys.json').then((r) => (r.ok ? r.json() : {})).catch(() => ({})), loadCustom(), loadBadges()]);
   if (!res.ok) throw new Error('Could not load game data');
-  initData(await res.json(), { keys, custom });
+  initData(await res.json(), { keys, custom, badges });
+}
+
+// Badges (engine/badgedata.js): data/badges.json, CS2's collectibles and the Collectible Pins Capsules. Like custom content
+// it's part of the data lock, so one that's there but broken stops the game; a game without the file has none.
+async function loadBadges() {
+  const res = await fetch('data/badges.json').catch(() => null);
+  if (!res?.ok) return null;
+  return res.json();
 }
 
 // Custom content (CUSTOM_CONTENT.md): data/custom.json, which only a game built with some has (the app answers null for

@@ -13,7 +13,7 @@ import { bestOwned, ownedWorth, storedTotals } from '../stored.js';
 import { moveToUnit, openUnit } from './storage.js';
 
 const view = { type: 'all', sort: 'new', q: '', select: false, selected: new Set(), limit: 150 };
-const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['crate', 'Cases'], ['key', 'Keys'], ['unit', 'Storage Units'], ['tool', 'Tools']];
+const TYPES = [['all', 'All'], ['gun', 'Guns'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['souvenir', 'Souvenirs'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['badge', 'Badges'], ['crate', 'Cases'], ['key', 'Keys'], ['unit', 'Storage Units'], ['tool', 'Tools']];
 let root, off;
 
 function matches(item) {
@@ -23,7 +23,7 @@ function matches(item) {
     if (view.type === 'gun' && !(item.t === 'skin' && !['knife', 'gloves'].includes(d.cat))) return false;
     if (view.type === 'knife' && !(item.t === 'skin' && d.cat === 'knife')) return false;
     if (view.type === 'gloves' && !(item.t === 'skin' && d.cat === 'gloves')) return false;
-    if (['sticker', 'charm', 'agent', 'crate', 'key', 'unit', 'tool'].includes(view.type) && item.t !== view.type) return false;
+    if (['sticker', 'charm', 'agent', 'badge', 'crate', 'key', 'unit', 'tool'].includes(view.type) && item.t !== view.type) return false;
     if (view.type === 'souvenir' && !item.sv) return false;
   }
   if (view.q && !I.itemName(item).toLowerCase().includes(view.q)) return false;

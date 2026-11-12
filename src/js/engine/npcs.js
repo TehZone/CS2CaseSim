@@ -167,7 +167,7 @@ const FLASHY = new Set(['AK-47', 'AWP', 'M4A4', 'M4A1-S', 'Desert Eagle', 'USP-S
 export function interest(npc, it) {
   if (npc.type === 'collector') return FOCUS[npc.focus].fit(it);
   const d = skinOf(it);
-  if (!d) return it.t === 'charm' || it.t === 'agent' ? 0.05 : 0;
+  if (!d) return it.t === 'charm' || it.t === 'agent' || (it.t === 'badge' && !I.isBound(it)) ? 0.05 : 0;
   if (npc.type === 'beginner') return (d.star ? 0.35 : FLASHY.has(d.w) ? 0.22 : 0.12) + (d.w === npc.fav ? 0.08 : 0);
   return (d.w === npc.fav ? 0.25 : 0.1) + (d.star ? 0.1 : 0);
 }
@@ -213,7 +213,8 @@ function index() {
   if (skinIndex?.data === D.lock) return skinIndex;
   const list = Object.values(D.skins).filter((s) => s.cat !== 'equipment' && Number.isFinite(lowest(s))).map((s) => ({ s, p: lowest(s) })).sort((a, b) => a.p - b.p);
   skinIndex = { data: D.lock, list: list.map((x) => x.s), all: list, plain: list.filter((x) => !x.s.star), pools: {},
-    old: Object.values(D.stickers).filter((x) => OLD_MAJOR.test(x.t || '') && x.p > 0), souvenirs: D.cases.filter((c) => c.kind === 'souvenir' && c.pools) };
+    old: Object.values(D.stickers).filter((x) => OLD_MAJOR.test(x.t || '') && x.p > 0), souvenirs: D.cases.filter((c) => c.kind === 'souvenir' && c.pools),
+    pins: D.cases.filter((c) => c.kind === 'pins' && Object.keys(c.pools || {}).length) };
   for (const f of FOCI) skinIndex.pools[f] = skinIndex.list.filter(FOCUS[f].pool);
   return skinIndex;
 }
@@ -268,7 +269,20 @@ export function startingState(seed, npc) {
     const gem = focusItem(pickWeighted([['lowfloat', 3], ['serial', 3], ['bluegem', 2], ['fade', 2], ['stickers', 1.5], ['doppler', 0.5], ['knives', 0.5]], r), r);
     if (gem) { gem.at = 0; gem.src = 'Unboxed'; inv.push(gem); }
   }
+  inv.push(...startingPins(seed, npc, tier));
   return { money: round2(span(cash)), inv, friend: 0, mood: npc.type === 'beginner' ? 0.9 : 0.7, trades: 0, tier };
+}
+// Pins from the Collectible Pins Capsules (badges.js), opened long ago: some own one or a few, collectors and the better off
+// more often, rolled at the capsules' own odds. Drawn from a seed of their own, after the rest, so everything else an NPC
+// starts with is as it was before there were pins.
+function startingPins(seed, npc, tier) {
+  const caps = index().pins;
+  if (!caps.length) return [];
+  const r = mulberry32(hashStr(seed + ':' + npc.id + ':pins'));
+  const chance = npc.type === 'collector' ? 0.45 : npc.type === 'beginner' ? 0.12 : [0.15, 0.25, 0.35][tier] ?? 0.25;
+  if (r() >= chance) return [];
+  const n = 1 + Math.floor(r() * r() * 4); // (mostly one or two)
+  return Array.from({ length: n }, () => ({ ...I.rollFromCase(pick(caps, r), r), at: 0, src: 'Trade' }));
 }
 
 // ---- the save's NPC state ---------------------------------------------------------------------------------------------------
@@ -282,7 +296,9 @@ export function freshSocial(seed, now = Date.now()) {
   for (const n of activeCrowd(seed).filter((x) => x.type === 'player').slice(0, 3)) npcState(so, n.id).friend = 1;
   return so;
 }
-export const freshPersona = () => ({ name: '', avatar: null, bio: '', country: '', showcase: [], bg: null });
+// (pic: your own profile picture, a data: URL (engine/picture.js), shown instead of the agent; badge: the badge you feature,
+// by its id: engine/badges.js featuredBadge)
+export const freshPersona = () => ({ name: '', avatar: null, bio: '', country: '', showcase: [], bg: null, pic: null, badge: null });
 export function npcState(so, id) {
   if (!so.npcs[id]) so.npcs[id] = startingState(so.seed, npcOf(so.seed, id));
   return so.npcs[id];
@@ -428,7 +444,7 @@ export function notable(it) {
 }
 // Picks one of your items and an NPC who wants it, and writes them an offer (null if nobody's interested now).
 export function makeOffer(so, st, { r, now }) {
-  const mine = st.inv.filter((it) => !it.lk && notable(it) && !so.offers.some((o) => o.status === 'open' && o.want.uids.includes(it.uid)));
+  const mine = st.inv.filter((it) => !it.lk && !I.isBound(it) && notable(it) && !so.offers.some((o) => o.status === 'open' && o.want.uids.includes(it.uid)));
   if (!mine.length) return null;
   const people = activeCrowd(so.seed).filter((n) => !isBlocked(so, n.id, now));
   const cands = [];

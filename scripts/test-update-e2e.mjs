@@ -296,7 +296,18 @@ async function run() {
   const only = process.argv[3];
   await new Promise((r) => feed.listen(0, '127.0.0.1', r));
   const { startServer } = await import('../server/index.mjs');
-  game = await startServer({ port: 0, log: () => {}, priceRefresh: false, discord: false, admins: ['e2e_staff'], release: { feed: `http://127.0.0.1:${feed.address().port}/latest.json`, every: 3600000 } });
+  // (The builds have the game's badges, src/data/badges.json, which a server with the release feed on runs only once the
+  // release they ship in is out: server/index.mjs badgeGate. So this server has seen NEW published already, and the badges
+  // are said to ship in it: the lock is the builds' own, as on the live server once their release is out.)
+  const dbDir = path.join(WORK, 'server-db');
+  fs.rmSync(dbDir, { recursive: true, force: true });
+  const { openDb } = await import('../server/db.mjs');
+  const seed = await openDb({ dataDir: dbDir });
+  await seed.query("INSERT INTO kv (k, v) VALUES ('release', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify({ version: NEW, at: Date.now() })]);
+  await seed.close();
+  const badgesFile = path.join(ROOT, 'src', 'data', 'badges.json');
+  const badges = fs.existsSync(badgesFile) ? { ...JSON.parse(fs.readFileSync(badgesFile, 'utf8')), app: NEW } : false;
+  game = await startServer({ port: 0, db: { dataDir: dbDir }, badges, log: () => {}, priceRefresh: false, discord: false, admins: ['e2e_staff'], release: { feed: `http://127.0.0.1:${feed.address().port}/latest.json`, every: 3600000 } });
   await until(() => game.srv.release.required === NEW, 15000, 'the server to read the release');
   await clearData();
   try {

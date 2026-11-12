@@ -24,7 +24,8 @@ import * as I from './items.js';
 import { CARE_SRC } from './levels.js';
 import { ownedItems } from './storage.js';
 
-const RECORDED = new Set(['skin', 'sticker', 'agent', 'charm']); // (the kinds of item boxes hold: not cases, keys or tools)
+// (The kinds of item boxes hold: not cases, keys or tools. Badges: the pins the Collectible Pins Capsules hold.)
+const RECORDED = new Set(['skin', 'sticker', 'agent', 'charm', 'badge']);
 const ENTRY_FIELDS = new Set(['at', 'n', 'st', 'sv', 'fl', 'pt']);
 const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
 
@@ -41,6 +42,7 @@ export function kindOf(id) {
   if (Object.hasOwn(D.skins, id)) return 'skin';
   if (Object.hasOwn(D.stickers, id)) return 'sticker';
   if (Object.hasOwn(D.agents, id)) return 'agent';
+  if (Object.hasOwn(D.badges || {}, id)) return 'badge';
   return Object.hasOwn(D.charms, id) ? 'charm' : null;
 }
 
@@ -303,7 +305,7 @@ export function rows(ix) {
   return out;
 }
 export const RECORD_SORTS = [['new', 'Newest first'], ['old', 'Oldest first'], ['rarity', 'Rarity'], ['count', 'Most unboxed'], ['float', 'Lowest float'], ['name', 'Name']];
-export const RECORD_TYPES = [['all', 'All items'], ['skin', 'Weapon skins'], ['star', '★ Knives & gloves'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents']];
+export const RECORD_TYPES = [['all', 'All items'], ['skin', 'Weapon skins'], ['star', '★ Knives & gloves'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['badge', 'Pins']];
 const SORTS = {
   new: (a, b) => (b.e.at || 0) - (a.e.at || 0),
   old: (a, b) => (a.e.at || 0) - (b.e.at || 0),

@@ -68,6 +68,14 @@ npm run custom                            checks everything and builds it into t
 - **Pushing custom content doesn't lock anyone out either.** The build stamps the game version the content ships in, and
   the live server runs content with a new lock only once that version's release is published. Until then it runs what
   the published release has (section 8).
+- **Badges** (CS2's collectibles and the Collectible Pins Capsules, `src/data/badges.json`, built by
+  `node scripts/build-badges.mjs --app <version>`) are part of the lock the same way: `+bd.<hash>` after the rest, made from
+  what defines them (src/js/engine/badgedata.js), and released the same way. The file says the version it ships in (`app`,
+  1.1.6 for the first badges), and the live server runs badges with a new lock only once that release is published
+  (`badgeGate` in server/index.mjs; `/health` shows `badgesWait` and `badgesLock` meanwhile). So the release that ships
+  them must be that version or newer. What ships with the first badges waits with them: until that release is out the
+  server keeps 1.1.5's rules, 20 Storage Units at most and $100 a minute of passive income whatever the prestiges
+  (`HELD_RULES` in server/index.mjs).
 
 ## 2. Try the example pack
 
@@ -447,11 +455,14 @@ There's no market for custom items, so their prices are yours:
      yet, and keeps running what the published release has. Its lock stays the same, so every game out there (1.1.3
      included) keeps playing. `/health` shows `customWaits: "<version>"` and the lock it will have (`customLock`).
    - Build the exes, upload the release as a **draft**, then **publish** it.
-   - Within five minutes the server reads the release, warns older versions to update, and starts again (offline for a
-     few seconds) with the new content. An updated game that connects first is told the server is switching, and makes the
-     server look for the release at once.
+   - Within five minutes the server reads the release and warns older versions to update. Once their five minutes are up
+     it starts again (offline for a few seconds) with the new content. An updated game that connects first is told the
+     server is switching, and makes the server look for the release at once.
    - The server keeps the custom content it ran in its database. So the next release's content waits the same way while
      this one keeps running.
+   - **Once it's out, a release that changed the lock can't be taken back by deleting it.** The server keeps running its
+     content, and games of the version before can't play with that ("Your game data is a different version"), with no
+     release to update to. Fix a bad one forward: publish a fixed, higher version. (DEPLOY.md, "Good to know".)
 
 To remove all custom content, empty `custom/` and build again. `src/data/custom.json` and `src/custom/` go away, and the
 lock is the game data's own again. That's a lock change with no version to wait for, so the server takes it at once: push

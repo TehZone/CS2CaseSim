@@ -124,6 +124,15 @@ try {
   check('offline: 4 hours asleep is told at once', t.length === 1 && t[0] === 'While you were away you earned $24,000.00' && state.S.money === 127410, JSON.stringify(t));
   now += 30e3; look(); await settle();
   check('and the half minute left over makes the next minute', state.S.money === 127510 && toasts.length === n + 1);
+
+  // ---- prestige: $100 more a minute for each Service Medal, at the medals the save has when it's collected ------------------
+  state.S.prof = { ...state.S.prof, medals: 2 };
+  now += MIN; look(); await settle();
+  check('offline with 2 prestiges: a minute pays $300, with no toast', state.S.money === 127810 && toasts.length === n + 1, `money ${state.S.money}`);
+  n = toasts.length;
+  now += 5 * MIN; look(); await settle();
+  t = since(n);
+  check('and time away is paid and told at that rate (5 minutes: $1,500)', t.length === 1 && t[0] === 'While you were away you earned $1,500.00' && state.S.money === 129310, JSON.stringify(t));
 } catch (e) {
   failed++;
   console.log('FAIL  (threw)', e);

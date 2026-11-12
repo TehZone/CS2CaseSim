@@ -10,7 +10,7 @@
 //                   game's ({ units: { [unit uid]: { n, value, best? } | null } }: best only when the most valuable item is
 //                   another one, or null when the unit is empty now; a unit as null when it's gone). Items moved into a unit
 //                   whose contents that game hasn't asked for are left out of d.sto.add (forConnection): it would drop them.
-//   The welcome: no state.stored (what's in Storage Units, up to 20,000 items), and { units } instead. The game asks for a
+//   The welcome: no state.stored (what's in Storage Units, up to 100,000 items: 100 units), and { units } instead. The game asks for a
 //                unit's contents when it needs them (social 'stored', server/index.mjs).
 import { itemValue } from '../src/js/engine/items.js';
 import { storedOf, unitsOf } from '../src/js/engine/storage.js';

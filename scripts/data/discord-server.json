@@ -853,7 +853,7 @@
       "embeds": [
         {
           "title": "🚀 Getting started",
-          "description": "**1. Download** the latest build from {{channel:releases}}. The **installer** sets up for your user (no admin needed) and starts fast. The **portable exe** needs no install but starts slower.\n**2. Run it.** Windows SmartScreen may warn you because the exe isn't signed. Click **More info**, then **Run anyway**.\n**3. Got CS2 installed?** You'll want it: Play mode, where the big money is, needs it, and so do inspect on real CS2 models and the 3D crate drop. Cases, inventory, trading and the Market work without it, starting from $10 plus $100 every minute, even while the game is closed (up to 12 hours).\n**4. Be online the first time.** Item images download the first time you see them, then they're cached.",
+          "description": "**1. Download** the latest build from {{channel:releases}}. The **installer** sets up for your user (no admin needed) and starts fast. The **portable exe** needs no install but starts slower.\n**2. Run it.** Windows SmartScreen may warn you because the exe isn't signed. Click **More info**, then **Run anyway**.\n**3. Got CS2 installed?** You'll want it: Play mode, where the big money is, needs it, and so do inspect on real CS2 models and the 3D crate drop. Cases, inventory, trading and the Market work without it, starting from $10 plus $100 every minute, even while the game is closed (up to 12 hours), and $100 more a minute for every prestige (each Service Medal).\n**4. Be online the first time.** Item images download the first time you see them, then they're cached.",
           "color": "#b0c3d9",
           "thumbnail": "{{icon}}",
           "fields": [],
@@ -893,7 +893,7 @@
         },
         {
           "title": "🎯 Play mode",
-          "description": "Offline CS2 matches against bots on real maps from your CS2 install (Dust II, Mirage, Inferno, Nuke, Ancient, Anubis, Overpass, Train, Vertigo, Cache and more), with your equipped skins. Queue **Premier, Competitive, Wingman, Deathmatch or Arms Race** and climb ranks and CS Rating against bots, or set up a **private match**.\n\n**What matches pay:** $1,250 for a win or draw, $500 for a loss, $100 per kill, $50 per assist and $250 per round MVP, on top of the $100 every minute you get anyway (even while the game is closed, up to 12 hours). Matches also give XP toward profile levels 1 to 40, Service Medals, and a care package every level up.",
+          "description": "Offline CS2 matches against bots on real maps from your CS2 install (Dust II, Mirage, Inferno, Nuke, Ancient, Anubis, Overpass, Train, Vertigo, Cache and more), with your equipped skins. Queue **Premier, Competitive, Wingman, Deathmatch or Arms Race** and climb ranks and CS Rating against bots, or set up a **private match**.\n\n**What matches pay:** $1,250 for a win or draw, $500 for a loss, $100 per kill, $50 per assist and $250 per round MVP, on top of the $100 every minute you get anyway (even while the game is closed, up to 12 hours), plus $100 more a minute for each prestige. Matches also give XP toward profile levels 1 to 40, Service Medals, and a care package every level up.",
           "color": "#eb4b4b",
           "thumbnail": "",
           "fields": [],
@@ -940,7 +940,7 @@
             },
             {
               "name": "How do I earn money?",
-              "value": "Play matches in Play mode (needs CS2 installed): $1,250 for a win or draw, $500 for a loss, $100 per kill, $50 per assist and $250 per round MVP. You also get $100 every minute, even while the game is closed (up to 12 hours at a time). Each level up brings a care package, and selling on the Market or trading with NPCs helps too.",
+              "value": "Play matches in Play mode (needs CS2 installed): $1,250 for a win or draw, $500 for a loss, $100 per kill, $50 per assist and $250 per round MVP. You also get $100 every minute, even while the game is closed (up to 12 hours at a time), and each prestige (a Service Medal, past level 40) adds $100 a minute: $300 a minute with two. Each level up brings a care package, and selling on the Market or trading with NPCs helps too.",
               "inline": false
             },
             {

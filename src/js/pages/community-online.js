@@ -7,17 +7,17 @@
 // Players are strangers: whatever one of them wrote (a name, a summary, a message) and whatever the server refuses with
 // reaches the page through esc(), on the sender's screen and the receiver's, and a name in running text goes in <bdi>.
 import { esc, money, timeAgo, debounce } from '../util.js';
-import { D } from '../data.js';
 import * as I from '../items.js';
 import { S, on, calmly } from '../state.js';
 import { sfx } from '../audio.js';
 import { toast, openModal, itemCard, openInspect, canInspect, showItemDetail, confirmDialog } from '../ui.js';
 import { medalOf } from '../engine/levels.js';
 import { RANK_FILTERS, SORT_NAMES, UNIT_CAP, viewItems } from '../engine/storage.js';
-import { levelIconHtml } from '../profile.js';
+import { levelIconHtml, passiveText } from '../profile.js';
 import { net } from '../net/online.js';
+import { avatarHtml, rememberFace, badgesBoxHtml } from '../faces.js';
 import { offerTo } from './trade.js';
-import { avatarTag, cc, backdrop, profileHeadHtml, profileDialog } from './community.js';
+import { cc, backdrop, profileHeadHtml, profileDialog, wireBadges } from './community.js';
 
 const MESSAGE_MAX = 300, REPORT_MAX = 500, UNIT_PAGE = 150;
 // Your own profile shows your inventory, so it's asked for again when that changes: at most once every OWN_GAP, not while auto
@@ -25,7 +25,7 @@ const MESSAGE_MAX = 300, REPORT_MAX = 500, UNIT_PAGE = 150;
 export const OWN_GAP = 15000;
 const DMS = [['everyone', 'Everyone'], ['friends', 'Friends only']];
 // (Said as it is: the reason goes to staff and the mod log in these words.)
-const REASONS = ['Harassment or threats', 'Hate speech', 'Scam or a dishonest trade', 'Spam', 'Something else'];
+const REASONS = ['Harassment or threats', 'Hate speech', 'Scam or a dishonest trade', 'Spam', 'Inappropriate profile picture', 'Something else'];
 
 // Who you're looking at ('me', or a player's id), and what you'd left behind there: kept when you leave the page.
 const view = { pane: 'chat', who: null, q: '', tab: 'showcase', drafts: new Map(), scroll: new Map() };
@@ -52,7 +52,8 @@ const unreadOf = (id) => +chatOf(id)?.unread || 0;
 // (Who's online comes from the `players` broadcast, by name: it has no ids.)
 const isHere = (p) => net.players().some((x) => x.name === p.name);
 const statusOf = (p) => (isHere(p) ? { s: 'online', label: 'Online' } : { s: 'offline', label: p.seen ? `Last online ${timeAgo(+p.seen)}` : 'Offline' });
-const avatar = (p, size, status = '') => avatarTag(p.avatar && Object.hasOwn(D.agents, p.avatar) ? D.agents[p.avatar] : null, String(p.name ?? '?'), size, status);
+// (A Person's face: their picture or agent, with their featured badge, faces.js. From a server without faces, the agent.)
+const avatar = (p, size, status = '') => avatarHtml(p, size, status);
 const named = (p) => `<b><bdi>${esc(p.name)}</bdi></b>`;
 const failed = (e) => { sfx.error(); toast(esc(e.message), 'bad'); };
 const msgKey = (m) => String(m.id); // (a BIGSERIAL: it may come as text)
@@ -60,8 +61,9 @@ const yearOf = (t) => (+t > 9999 ? new Date(+t).getFullYear() : t || '—');
 
 function remember(p) {
   if (p?.id == null) return;
-  const { id, name, avatar: face, country, level, online, seen } = p;
-  people.set(id, { id, name, avatar: face, country, level, online, seen });
+  const { id, name, avatar: face, country, level, online, seen, pic, badge } = p;
+  people.set(id, { id, name, avatar: face, country, level, online, seen, pic, badge });
+  rememberFace(p); // (the other pages that show them by name draw this face too)
 }
 
 // Unread messages and friend requests, for the pill at the top. (A blocked player's old messages have no row to read them on.)
@@ -383,7 +385,7 @@ async function setBlock(p) {
 function reportWindow(p) {
   const m = openModal({
     title: `Report <bdi>${esc(p.name)}</bdi>`,
-    body: `<div class="edit-prof"><p class="muted" style="margin:0;line-height:1.5">Staff get your reason and a copy of your last 30 messages with this player. It doesn't block them: you can do that too.</p>
+    body: `<div class="edit-prof"><p class="muted" style="margin:0;line-height:1.5">Staff get your reason, their profile picture and summary as they are now, and a copy of your last 30 messages with this player. It doesn't block them: you can do that too.</p>
       <label>Reason<select class="input" data-why>${REASONS.map((n) => `<option>${n}</option>`).join('')}</select></label>
       <label>Anything to add (optional)<textarea class="input" data-more maxlength="${REPORT_MAX}" rows="3"></textarea></label></div>`,
     foot: '<button class="btn ghost" data-close>Cancel</button><button class="btn danger" data-send>Send report</button>',
@@ -405,7 +407,8 @@ const threadOf = (id) => { if (!threads.has(id)) threads.set(id, { msgs: [], mor
 const isShown = (id) => !!root && view.pane === 'chat' && view.who === id && !!root.querySelector('[data-msgs]');
 const msgHtml = (m, p) => {
   const mine = +m.from === meId();
-  return `<div class="msg ${mine ? 'me' : 'them'}" data-id="${esc(m.id)}">${mine ? '' : avatar(p, 28)}<div class="bub"><div class="txt" dir="auto">${esc(m.text)}</div><div class="when">${timeAgo(+m.at)}</div></div></div>`;
+  // (keyed, so a change to their face redraws the ones already in the chat: faces.js, faces.d)
+  return `<div class="msg ${mine ? 'me' : 'them'}" data-id="${esc(m.id)}">${mine ? '' : avatarHtml(p, 28, '', { key: 'i' + p.id })}<div class="bub"><div class="txt" dir="auto">${esc(m.text)}</div><div class="when">${timeAgo(+m.at)}</div></div></div>`;
 };
 
 function drawChat(el, p) {
@@ -543,7 +546,8 @@ function drawProfile(el, who) {
         ${mine ? '' : `<div class="seg" data-tabs><button data-v="showcase" class="${showInv ? '' : 'active'}">Showcase</button><button data-v="inventory" class="${showInv ? 'active' : ''}">Inventory (${count})</button></div>`}
         ${showInv ? `<div class="grid">${[...units, ...items].map((it) => itemCard(it)).join('') || '<div class="empty">Empty</div>'}</div>
           <p class="muted" style="font-size:12px">${count > items.length ? `Their ${items.length} most valuable items. ` : ''}Click an item to inspect it${units.length ? ', or a Storage Unit to look inside' : ''}. Want something? <a href="#" data-offer2>Make an offer</a>.</p>`
-        : `<div class="sp-box"><div class="sp-bh">Item showcase${mine && !p.picked ? ' <span class="muted">(your most valuable: pick your own in Edit profile)</span>' : ''}</div><div class="grid showcase">${show.map((it) => itemCard(it)).join('') || '<div class="empty">Nothing to show yet</div>'}</div></div>`}
+        : `<div class="sp-box"><div class="sp-bh">Item showcase${mine && !p.picked ? ' <span class="muted">(your most valuable: pick your own in Edit profile)</span>' : ''}</div><div class="grid showcase">${show.map((it) => itemCard(it)).join('') || '<div class="empty">Nothing to show yet</div>'}</div></div>
+          ${Array.isArray(p.badges) ? badgesBoxHtml(p.badges, p.badge, { mine }) : ''}`}
       </div>
       <div class="sp-right">
         <div class="sp-status st-${st.s}" data-status>${statusHtml(st)}</div>
@@ -551,6 +555,7 @@ function drawProfile(el, who) {
         <div class="sp-stat"><span>Items</span><b>${count}</b></div>
         ${!mine && stored?.count ? `<div class="sp-stat"><span>In storage</span><b>${(+stored.count).toLocaleString('en-US')} · ${money(+stored.value || 0)}</b></div>` : ''}
         <div class="sp-stat"><span>Friends</span><b>${+p.friends || 0}</b></div>
+        <div class="sp-stat"><span>Passive income</span><b class="green">${passiveText(+p.medals || 0)}</b></div>
         ${mine ? '' : `<button class="btn primary" data-msg ${isBlocked(id) ? 'disabled' : ''}>Message</button><button class="btn gold" data-offer3>Make offer</button>`}
       </div>
     </div></div>`;
@@ -565,6 +570,7 @@ function drawProfile(el, who) {
     const it = mine ? S.inv.find((x) => x.uid === c.dataset.uid) : [...items, ...show].find((x) => x.uid === c.dataset.uid);
     if (it) mine ? showItemDetail(it) : canInspect(it) && openInspect(it, { preview: true }); // (someone else's: its charm isn't yours to move)
   }));
+  wireBadges(el);
   backdrop(el.querySelector('[data-sp]'), { bg: p.bg });
 }
 
@@ -620,17 +626,19 @@ async function unitWindow(p, unit) {
 async function editProfile() {
   const p = cards.get(meId()), at = era;
   if (!p || p.error || !home) return;
-  const dms = home.settings.dms || DMS[0][0];
+  const dms = home.settings.dms || DMS[0][0], faces = net.hasFaces();
   const m = await profileDialog({
     // (Your most valuable items, shown until you pick some, aren't picks to save.)
-    me: { name: p.name, bio: p.bio || '', country: p.country || '', avatar: p.avatar || null, bg: p.bg || null, showcase: p.picked ? list(p.showcase).map((it) => it.uid) : [] },
-    named: false,
+    me: { name: p.name, bio: p.bio || '', country: p.country || '', avatar: p.avatar || null, bg: p.bg || null, showcase: p.picked ? list(p.showcase).map((it) => it.uid) : [], pic: p.pic || null, badge: p.badge || null },
+    named: false, faces, badges: list(p.badges),
     extra: `<label>Who can message you<select class="input" data-dms>${DMS.map(([k, n]) => `<option value="${k}" ${k === dms ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`,
-    save: async (f, el) => {
+    save: async ({ pic, ...f }, el) => {
       // (The maps come from this PC's CS2: with no list, or yours not on it, the None showing isn't a choice, and yours stays.)
       const maps = el.querySelector('[data-bg]');
       const unseen = !maps || (!maps.value && ![...maps.options].some((o) => o.value === p.bg));
-      await net.social('profile.set', { ...f, bg: unseen ? undefined : f.bg, dms: el.querySelector('[data-dms]').value });
+      // A new picture goes up first, on its own (server/index.mjs POST /api/pic); taking yours off is part of the rest.
+      if (pic) await net.uploadPic(pic.base64);
+      await net.social('profile.set', { ...f, ...(pic === null ? { pic: null } : {}), bg: unseen ? undefined : f.bg, dms: el.querySelector('[data-dms]').value });
       cards.delete(meId());
       await loadHome();
       if (view.who === 'me') drawMain();

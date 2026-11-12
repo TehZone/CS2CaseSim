@@ -11,6 +11,10 @@ import { mountPicker } from '../picker.js';
 import { caseImage } from './cases.js';
 import * as G from '../engine/gamble.js';
 import { net } from '../net/online.js';
+import { avatarHtml, myFace, playerAvatar, unfeatureWarning } from '../faces.js';
+
+// A player's face in a seat or the pot (faces.js; yours as your profile has it). Bots keep theirs.
+const selfFace = (size) => (online() ? playerAvatar({ id: net.me()?.id, name: net.me()?.name }, size) : avatarHtml(myFace(), size));
 
 const randSeed = () => Math.random().toString(36).slice(2, 12);
 const view = {
@@ -65,7 +69,7 @@ const KIND_ORDER = ['case', 'package', 'souvenir', 'agents', 'capsule', 'autogra
 const battleCases = () => Object.entries(view.battle.cases).flatMap(([id, n]) => Array(n).fill(id));
 function drawBattleBuilder(el) {
   const b = view.battle;
-  const list = D.cases.filter((c) => c.price != null && ['case', 'souvenir', 'package', 'capsule', 'autograph', 'agents'].includes(c.kind))
+  const list = D.cases.filter((c) => c.price != null && ['case', 'souvenir', 'package', 'capsule', 'autograph', 'pins', 'agents'].includes(c.kind))
     .filter((c) => !b.q || c.n.toLowerCase().includes(b.q))
     .sort((a, c) => (b.cases[c.id] || 0) - (b.cases[a.id] || 0) || KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(c.kind) || casePrice(a) - casePrice(c));
   const cases = battleCases();
@@ -137,7 +141,8 @@ export async function playBattle(r, mySeat) {
   body.innerHTML = `<div class="battle">
     <div class="round-info" data-round>Round 0 / ${r.cases.length}</div>
     <div class="battle-seats" style="grid-template-columns:repeat(${f.seats}, 1fr)">${r.seats.map((p, i) => `<div class="seat" data-seat="${i}">
-      <div class="who"><span class="avatar" style="--c:${p.color || '#2d6cdf'}">${p.avatar ? `<img src="${imgUrl(p.avatar, 's')}" alt="">` : esc((p.name || '?').replace(/^bot /i, '').slice(0, 2).toUpperCase())}</span>
+      <div class="who">${i === mySeat ? selfFace(30) : !p.bot && online() && p.name ? playerAvatar({ name: p.name }, 30)
+        : `<span class="avatar" style="--c:${p.color || '#2d6cdf'}">${p.avatar ? `<img src="${imgUrl(p.avatar, 's')}" alt="">` : esc((p.name || '?').replace(/^bot /i, '').slice(0, 2).toUpperCase())}</span>`}
         <div><div>${esc(i === mySeat ? 'You' : p.name)}</div><div class="muted" style="font-size:10px">${f.teams.length === 2 && f.seats === 4 ? 'Team ' + (teamOf(i) + 1) : p.bot ? 'Bot' : 'Player'}</div></div>
         <span class="tot" data-tot>$0.00</span></div>
       <div class="vreel"><div class="strip-v"></div></div>
@@ -217,14 +222,18 @@ function stakePanel(which, extra = '') {
     <div data-picker></div>
     ${extra}
     <div class="muted">Total stake <b class="green" data-stake>${money(stakeValue(which))}</b></div>
+    <div class="goldtxt" data-unfeat style="font-size:12px"></div>
   </div>`;
 }
 function wireStake(el, which, after) {
+  // (The last of the badge you feature, staked: faces.js says what that does to it.)
+  const unfeat = () => { const n = el.querySelector('[data-unfeat]'); if (n) n.textContent = unfeatureWarning(stakeItems(which).map((it) => it.uid)); };
   el.querySelector('[data-money]').addEventListener('input', (e) => { view[which].money = Math.max(0, +e.target.value || 0); el.querySelector('[data-stake]').textContent = money(stakeValue(which)); after?.(); });
   mountPicker(el.querySelector('[data-picker]'), {
     items: () => S.inv.filter(I.tradable), selected: stake[which], empty: 'No unlocked items',
-    onChange: () => { el.querySelector('[data-stake]').textContent = money(stakeValue(which)); after?.(); },
+    onChange: () => { el.querySelector('[data-stake]').textContent = money(stakeValue(which)); unfeat(); after?.(); },
   });
+  unfeat();
 }
 
 function drawFlip(el) {
@@ -310,7 +319,9 @@ function drawJackpot(el) {
 const COLORS = ['#2d6cdf', '#d9480f', '#2b8a3e', '#ae3ec9', '#e8590c', '#1098ad', '#c2255c', '#5c940d'];
 export function drawEntries(el, entries, total, meName = 'You') {
   el.querySelector('[data-bar]').innerHTML = entries.map((e, i) => `<i style="--c:${e.color || COLORS[i % COLORS.length]};width:${(e.value / total) * 100}%"></i>`).join('');
-  el.querySelector('[data-entries]').innerHTML = entries.map((e, i) => `<div class="entry"><span class="avatar" style="--c:${e.color || COLORS[i % COLORS.length]}">${esc((e.name || '?').replace(/^bot /i, '').slice(0, 2).toUpperCase())}</span>
+  const face = (e, i) => (e.id === 'me' ? selfFace(30) : /^u\d+$/.test(String(e.id)) ? playerAvatar({ id: +String(e.id).slice(1), name: e.name }, 30)
+    : `<span class="avatar" style="--c:${e.color || COLORS[i % COLORS.length]}">${esc((e.name || '?').replace(/^bot /i, '').slice(0, 2).toUpperCase())}</span>`);
+  el.querySelector('[data-entries]').innerHTML = entries.map((e, i) => `<div class="entry">${face(e, i)}
     <span>${esc(e.id === 'me' ? meName : e.name)}</span><span class="green">${money(e.value)}</span><span class="pct">${((e.value / total) * 100).toFixed(1)}%</span></div>`).join('');
 }
 export function spinJackpot(el, entries, winnerId, total) {

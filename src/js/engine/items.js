@@ -43,8 +43,15 @@ export const UNIT_ID = 'casket';
 const UNIT_DEF = { id: UNIT_ID, n: 'Storage Unit', r: 0, p: 0 };
 export const makeUnitItem = (src = '') => ({ uid: uid(), t: 'unit', id: UNIT_ID, at: Date.now(), src });
 export const isUnit = (item) => item.t === 'unit';
-// What another player, a trader or a stake can take: not locked items, not units, and nothing the game no longer has.
-export const tradable = (item) => !item.lk && !isUnit(item) && !!itemDef(item);
+// A badge (CS2's collectibles: badgedata.js, and what a player can do with one: badges.js). Only a capsule's pins trade; every
+// other one is bound to whoever has it, as CS2's Service Medals and coins are: it can't be traded, sold, listed, staked or
+// stored. (A badge the game no longer has is bound too: it's nothing.)
+export const makeBadgeItem = (b, src = '') => ({ uid: uid(), t: 'badge', id: b.id, at: Date.now(), src });
+export const isBadge = (item) => item?.t === 'badge';
+export const isBound = (item) => item?.t === 'badge' && !itemDef(item)?.tr;
+// What another player, a trader or a stake can take: not locked items, not units, not a bound badge, and nothing the game no
+// longer has.
+export const tradable = (item) => !item.lk && !isUnit(item) && !isBound(item) && !!itemDef(item);
 
 // ---- tools -----------------------------------------------------------------------------------
 // CS2's Name Tag (item 1200) and StatTrak™ Swap Tool (item 1324), t: 'tool' in your inventory: Base Grade, with CS2's own
@@ -149,6 +156,7 @@ export function rollFromCase(c, r = rand) {
   }
   const id = pick(c.pools[tier], r);
   if (c.kind === 'charms') return makeCharmItem(D.charms[id], { src: c.n, r });
+  if (c.kind === 'pins') return makeBadgeItem(D.badges[id], c.n);
   return c.kind === 'agents' ? makeAgentItem(D.agents[id], c.n) : makeStickerItem(D.stickers[id], c.n);
 }
 
@@ -157,7 +165,7 @@ export function rollFromCase(c, r = rand) {
 export function fakeRoll(c, r = rand) {
   const tier = pickWeighted(caseTiers(c).filter(([k]) => k !== 'rare'), r);
   if (SKIN_KINDS.has(c.kind)) return { t: 'skin', id: pick(c.pools[tier], r), fl: 0.2, sv: c.kind === 'souvenir' };
-  return { t: c.kind === 'agents' ? 'agent' : c.kind === 'charms' ? 'charm' : 'sticker', id: pick(c.pools[tier], r) };
+  return { t: c.kind === 'agents' ? 'agent' : c.kind === 'charms' ? 'charm' : c.kind === 'pins' ? 'badge' : 'sticker', id: pick(c.pools[tier], r) };
 }
 
 // ---- pro player cards (the old Team manager's: kept to price the ones in older saves, see retireOld) ----------------
@@ -188,6 +196,7 @@ export function itemDef(item) {
     case 'key': return D.keys[item.id] || null;
     case 'unit': return UNIT_DEF;
     case 'tool': return Object.hasOwn(TOOLS, item.id) ? TOOLS[item.id] : null;
+    case 'badge': return Object.hasOwn(D.badges, item.id) ? D.badges[item.id] : null;
   }
   return null;
 }
@@ -198,6 +207,7 @@ export function itemName(item) {
   if (item.t === 'chicken') return chickenName(item);
   if (item.t === 'pro') return `${d.n} (${eventShort(d.ev)})`;
   if (item.t === 'unit') return item.name ? `${d.n} "${item.name}"` : d.n;
+  if (item.t === 'badge') return d.v ? `${d.n} (${d.v})` : d.n;
   if (item.t !== 'skin') return d.n;
   const real = item.sv ? 'Souvenir ' + d.n : !item.stt ? d.n : d.star ? d.n.replace('★ ', '★ StatTrak™ ') : 'StatTrak™ ' + d.n;
   return item.name ? `${real} "${item.name}"` : real;
@@ -229,6 +239,7 @@ export function nameParts(item) {
   if (item.t === 'key') return { top: 'Key', bottom: d.n };
   if (item.t === 'unit') return { top: d.n, bottom: item.name || 'Not labelled yet' };
   if (item.t === 'tool') return { top: 'Tool', bottom: d.n };
+  if (item.t === 'badge') return { top: d.ty || 'Badge', bottom: d.v ? `${d.n} (${d.v})` : d.n };
   return { top: '', bottom: '' };
 }
 
@@ -248,7 +259,7 @@ export function rarityRank(item) {
 export function rarityInfo(item) {
   const rank = rarityRank(item);
   if (item.t === 'pro') { const t = PRO_RARITY[rank - 2]; return { rank, n: t.n, c: t.c }; }
-  const fam = item.t === 'sticker' || item.t === 'charm' ? 'sticker' : ['agent', 'chicken', 'crate', 'key', 'unit', 'tool'].includes(item.t) ? item.t : 'skin';
+  const fam = item.t === 'sticker' || item.t === 'charm' ? 'sticker' : ['agent', 'chicken', 'crate', 'key', 'unit', 'tool', 'badge'].includes(item.t) ? item.t : 'skin';
   let n = RARITY[fam][rank] || '';
   if (item.t === 'skin' && rank === 6) n = itemDef(item).cat === 'gloves' ? 'Extraordinary' : 'Covert ★';
   return { rank, n, c: rarityColor(rank) };
@@ -261,7 +272,7 @@ export const canHaveStickers = (item) => item.t === 'skin' && !item.sv && STICKE
 export function basePrice(item) {
   const d = itemDef(item);
   if (!d) return 0;
-  if (item.t === 'sticker' || item.t === 'agent' || item.t === 'charm' || item.t === 'unit' || item.t === 'tool') return d.p || 0;
+  if (item.t === 'sticker' || item.t === 'agent' || item.t === 'charm' || item.t === 'unit' || item.t === 'tool' || item.t === 'badge') return d.p || 0;
   if (item.t === 'chicken') return chickenValue(item);
   if (item.t === 'pro') return proValue(d);
   if (item.t === 'crate') return d.price || 0;
@@ -401,7 +412,7 @@ export function itemValue(item) {
 export const KEEP_FLOAT_BELOW = 0.001;
 // Auto-sell: does a new drop match the player's rules? (see AUTO_SELL_DEFAULT in economy.js)
 export function autoSellMatch(item, rules) {
-  if (!rules?.on) return false;
+  if (!rules?.on || isBound(item)) return false;
   const rank = rarityRank(item);
   if (rank >= 6) return false; // knives, gloves: never
   if (rules.keepStt && item.stt) return false;

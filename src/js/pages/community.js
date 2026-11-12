@@ -1,9 +1,11 @@
 // Friends & Chat and profiles, like Steam's, with the NPC players of engine/npcs.js (offline only). On the left your
 // friends by status, friend requests and people you may know; on the right a chat (their offers inline, to accept,
 // decline or haggle over: a price and an argument for it, or just type, "would you do $500? it's a 0.01 float") or a
-// profile: their level and medal, item showcase, comments and inventory (make them an offer from it), or yours, which
-// you set up yourself (name, avatar, country, a map behind it, a bio and up to six items to show off). Online the page is
-// about real players instead: community-online.js takes over, and uses what's exported here so it looks the same.
+// profile: their level and medal, item showcase, badges, comments and inventory (make them an offer from it), or yours,
+// which you set up yourself (name, a picture of your own or an agent, country, a map behind it, a bio, up to six items to
+// show off and a badge to feature). Faces (the picture with the featured badge in its corner) are faces.js's: an NPC
+// features the rarest pin they have. Online the page is about real players instead: community-online.js takes over, and
+// uses what's exported here so it looks the same.
 import { esc, money, timeAgo, imgUrl } from '../util.js';
 import { D } from '../data.js';
 import * as I from '../items.js';
@@ -15,9 +17,12 @@ import { mountPicker } from '../picker.js';
 import * as N from '../engine/npcs.js';
 import { ownedItems } from '../engine/storage.js';
 import { MEDALS, medalOf } from '../engine/levels.js';
-import { levelIconHtml, medalHtml } from '../profile.js';
+import { levelIconHtml, medalHtml, passiveText } from '../profile.js';
 import { cs2Play } from '../cs2/api.js';
 import { backgroundMaps } from '../menu.js';
+import { avatarHtml as faceHtml, myFace, npcFace, badgesBoxHtml, badgeList, makePicture } from '../faces.js';
+import { badgeItem } from '../engine/badges.js';
+import { PIC_SIZE } from '../engine/picture.js';
 import { render as renderOnline, destroy as destroyOnline, unreadCount as unreadOnline } from './community-online.js';
 
 const view = { pane: 'chat', who: null, q: '', tab: 'showcase', haggle: null };
@@ -49,10 +54,9 @@ export function destroy() { offs.forEach((o) => o()); offs = []; root = null; de
 function drawAll() { if (!root || online() || !so()) return; drawList(); drawMain(); }
 
 // ---- avatars and names -------------------------------------------------------------------------------------------------
-export const avatarTag = (agent, name, size = 32, status = '') => `<span class="av ${status}" style="--s:${size}px">${agent ? `<img src="${imgUrl(agent.img, 's')}" alt="">` : `<b>${esc(name.slice(0, 2).toUpperCase())}</b>`}</span>`;
+// (faces.js draws them: yours as Edit profile set it, an NPC's agent with the rarest pin they have in its corner)
 function avatarHtml(id, size = 32, status = '') {
-  const agent = id === 'me' ? D.agents[so()?.me?.avatar] : D.agents[npc(id)?.avatar];
-  return avatarTag(agent, id === 'me' ? myName() : npc(id)?.name || '?', size, status);
+  return faceHtml(id === 'me' ? myFace() : npcFace(so(), npc(id)), size, status);
 }
 const myName = () => so()?.me?.name || 'You';
 // A country, as a small tag (Windows draws flag emoji as two letters anyway).
@@ -284,6 +288,7 @@ function profileData(id) {
       name: myName(), country: me.country, bio: me.bio || 'No information given.', level: S.prof.level, medal: medalOf(S.prof), medals: S.prof.medals,
       showcase: items.length ? items : top.slice(0, 6), picked: items.length > 0, inv: ownedItems(S), money: S.money, joined: new Date(S.created || Date.now()).getFullYear(),
       friends: people().filter((n) => stateOf(n.id)?.friend === 1).length, comments: so().comments, status: { s: 'online', label: 'Online' }, bg: me.bg,
+      badges: badgeList(S), featured: myFace().badge,
     };
   }
   const n = npc(id), s = stateOf(id);
@@ -291,7 +296,7 @@ function profileData(id) {
   return {
     name: n.name, country: n.country, bio: n.bio, level: n.level, medal: n.medals ? MEDALS[Math.min(n.medals, MEDALS.length) - 1] : null, medals: n.medals,
     showcase: top.slice(0, 6), inv: s.inv, money: s.money, joined: n.joined, friends: 12 + (n.level * 7) % 90, comments: [], status: N.presence(n), trades: s.trades || 0, kind: kindLabel(n),
-    bg: null, mapSeed: n.id,
+    bg: null, mapSeed: n.id, badges: badgeList({ inv: s.inv }), featured: npcFace(so(), n).badge,
   };
 }
 // The top of a profile: who they are, their level and medal. (avatar: its HTML; mine: yours, with Edit profile.)
@@ -312,6 +317,7 @@ function drawProfile(el, id) {
           <p class="muted" style="font-size:12px">Click an item to inspect it. Want something? <a href="#" data-offer2>Make an offer</a>.</p>`
         : `<div class="sp-box"><div class="sp-bh">Item showcase${mine && !p.picked ? ' <span class="muted">(your most valuable: pick your own in Edit profile)</span>' : ''}</div>
           <div class="grid showcase">${p.showcase.map((it) => itemCard(it)).join('') || '<div class="empty">Nothing to show yet</div>'}</div></div>
+          ${badgesBoxHtml(p.badges, p.featured, { mine })}
           <div class="sp-box"><div class="sp-bh">Comments</div>${p.comments.length ? p.comments.map((c) => `<div class="cm-row">${avatarHtml(c.npc, 30)}<div><b>${esc(npc(c.npc)?.name || '?')}</b> <span class="muted">${timeAgo(c.at)}</span><div>${esc(c.text)}</div></div></div>`).join('')
             : `<div class="muted">${mine ? 'Trade with people and some will leave you +rep.' : 'No comments.'}</div>`}</div>`}
       </div>
@@ -320,7 +326,7 @@ function drawProfile(el, id) {
         <div class="sp-stat"><span>Inventory value</span><b>${money(value)}</b></div>
         <div class="sp-stat"><span>Items</span><b>${p.inv.length}</b></div>
         <div class="sp-stat"><span>Friends</span><b>${p.friends}</b></div>
-        ${mine ? `<div class="sp-stat"><span>Trades with players</span><b>${S.stats.npcTrades || 0}</b></div><div class="sp-stat"><span>Matches won</span><b>${S.stats.playWins || 0}</b></div>`
+        ${mine ? `<div class="sp-stat"><span>Passive income</span><b class="green">${passiveText(S.prof.medals)}</b></div><div class="sp-stat"><span>Trades with players</span><b>${S.stats.npcTrades || 0}</b></div><div class="sp-stat"><span>Matches won</span><b>${S.stats.playWins || 0}</b></div>`
           : `<div class="sp-stat"><span>Trades with you</span><b>${p.trades}</b></div><button class="btn primary" data-msg>Message</button><button class="btn gold" data-offer3>Make offer</button>`}
       </div>
     </div></div>`;
@@ -333,7 +339,12 @@ function drawProfile(el, id) {
     const it = p.inv.find((x) => x.uid === c.dataset.uid);
     if (it) mine ? showItemDetail(it) : canInspect(it) && openInspect(it);
   }));
+  wireBadges(el);
   backdrop(el.querySelector('[data-sp]'), p);
+}
+// A profile's badges (faces.js badgesBoxHtml): each one to look at closely.
+export function wireBadges(el) {
+  el.querySelectorAll('.sp [data-badge]').forEach((b) => b.addEventListener('click', () => { const it = badgeItem(b.dataset.badge); if (it) openInspect({ ...it, uid: 'badge:' + it.id }, { preview: true }); }));
 }
 // A CS2 map's main-menu picture behind the profile (from the install), like a Steam profile background.
 export async function backdrop(el, p) {
@@ -346,14 +357,23 @@ export async function backdrop(el, p) {
 }
 
 const COUNTRY_LIST = ['', 'US', 'CA', 'GB', 'DE', 'FR', 'SE', 'DK', 'NO', 'FI', 'PL', 'CZ', 'UA', 'RU', 'BR', 'AR', 'AU', 'NL', 'ES', 'PT', 'IT', 'TR', 'KZ', 'RO', 'HU', 'IL', 'IN', 'JP', 'KR', 'CN', 'MX', 'ZA'];
-const editProfile = () => profileDialog({ me: so().me, save: (f) => act('persona.set', f) });
-// The Edit profile window. me: { name, bio, country, avatar, bg, showcase: uids }. named: with the Name box (an online name
-// is the account's). extra: more fields for the top row. save(fields, window's element) runs on Save; a throw is a toast.
-export async function profileDialog({ me, named = true, extra = '', save }) {
+// (a new picture goes in the save as the data: URL faces.js made: engine/picture.js)
+const editProfile = () => profileDialog({
+  me: { ...so().me, badge: myFace().badge }, badges: badgeList(S),
+  save: (f) => act('persona.set', { ...f, pic: f.pic === undefined ? undefined : f.pic?.dataUrl ?? null }),
+});
+// The Edit profile window. me: { name, bio, country, avatar, bg, showcase: uids, pic, badge }. named: with the Name box (an
+// online name is the account's). extra: more fields for the top row. faces: with the picture and the featured badge (a
+// server without them: not), badges what can be featured ([{ id, n }]: faces.js badgeList). save(fields, window's element)
+// runs on Save, a throw is a toast; with faces, fields.pic is undefined (unchanged), null (taken off) or the new picture
+// (faces.js makePicture's { bytes, dataUrl, base64 }), and fields.badge the badge's id or null.
+export async function profileDialog({ me, named = true, extra = '', save, faces = true, badges = [] }) {
   const show = new Set(me.showcase);
-  let avatar = me.avatar;
+  let avatar = me.avatar, badge = me.badge || null, pic, busy = false; // (pic: undefined, unchanged; null, off; or the new one)
+  const shownPic = () => (pic === undefined ? me.pic || null : pic?.dataUrl || null);
   const maps = await backgroundMaps().catch(() => []);
   const agents = Object.values(D.agents).sort((a, b) => b.r - a.r || a.n.localeCompare(b.n));
+  const badgeBtn = (b) => { const it = badgeItem(b.id); return it ? `<button class="ep-badge ${b.id === badge ? 'on' : ''}" data-bd="${esc(b.id)}" title="${esc(I.itemName(it))}"><img loading="lazy" src="${I.itemImage(it, 's')}" alt=""></button>` : ''; };
   const m = openModal({
     title: 'Edit profile', cls: 'xwide',
     body: `<div class="edit-prof">
@@ -361,19 +381,54 @@ export async function profileDialog({ me, named = true, extra = '', save }) {
         <label>Country<select class="input" data-country>${COUNTRY_LIST.map((c) => `<option value="${c}" ${c === me.country ? 'selected' : ''}>${c || 'None'}</option>`).join('')}</select></label>
         ${maps.length ? `<label>Background<select class="input" data-bg><option value="">None</option>${maps.map((x) => `<option value="${esc(x.id)}" ${x.id === me.bg ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : ''}${extra}</div>
       <label>Summary<textarea class="input" data-bio maxlength="300" rows="3" placeholder="A few words about you">${esc(me.bio)}</textarea></label>
-      <div class="section-title">Avatar</div><div class="ep-avatars">${agents.map((a) => `<button class="ep-av ${a.id === avatar ? 'on' : ''}" data-av="${a.id}" title="${esc(a.n)}"><img loading="lazy" src="${imgUrl(a.img, 's')}"></button>`).join('')}</div>
+      ${faces ? `<div class="section-title">Profile picture</div>
+      <div class="ep-face"><span data-preview></span><div class="ep-facebtns"><button class="btn sm" data-upload>Upload a picture…</button><button class="btn sm ghost" data-unpic>Remove picture</button></div>
+        <input type="file" data-file accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+        <div class="muted">A PNG, JPEG, WebP or GIF (its first frame) of your own: its middle square, made ${PIC_SIZE} × ${PIC_SIZE}. Or pick an agent below.</div></div>` : '<div class="section-title">Avatar</div>'}
+      <div class="ep-avatars">${agents.map((a) => `<button class="ep-av" data-av="${a.id}" title="${esc(a.n)}"><img loading="lazy" src="${imgUrl(a.img, 's')}"></button>`).join('')}</div>
+      ${faces ? `<div class="section-title">Featured badge <span class="muted" style="font-size:12px;text-transform:none;letter-spacing:0">on your profile, and in the corner of your picture</span></div>
+      ${badges.length ? `<div class="ep-badges"><button class="ep-badge none" data-bd="">None</button>${badges.map(badgeBtn).join('')}</div>`
+        : '<div class="muted" style="font-size:12px">No badges yet: open a Collectible Pins Capsule (Cases, Pin Capsules) for a pin.</div>'}` : ''}
       <div class="section-title">Item showcase <span class="muted" style="font-size:12px;text-transform:none;letter-spacing:0">up to 6</span></div><div data-show></div></div>`,
     foot: '<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>Save</button>',
   });
-  m.el.querySelectorAll('[data-av]').forEach((b) => b.addEventListener('click', () => { avatar = avatar === b.dataset.av ? null : b.dataset.av; m.el.querySelectorAll('[data-av]').forEach((x) => x.classList.toggle('on', x.dataset.av === avatar)); }));
+  // What the picture and badge parts show: the face as it will be, the agent (only without a picture) and the badge picked.
+  const drawFace = () => {
+    const prev = m.el.querySelector('[data-preview]');
+    if (prev) prev.innerHTML = faceHtml({ name: me.name || 'You', avatar, pic: shownPic(), badge }, 92);
+    const unpic = m.el.querySelector('[data-unpic]');
+    if (unpic) unpic.hidden = !shownPic();
+    m.el.querySelectorAll('[data-av]').forEach((x) => x.classList.toggle('on', !shownPic() && x.dataset.av === avatar));
+    m.el.querySelectorAll('[data-bd]').forEach((x) => x.classList.toggle('on', (x.dataset.bd || null) === badge));
+  };
+  // (an agent picked while there's a picture: the agent is what you want shown, so the picture comes off)
+  m.el.querySelectorAll('[data-av]').forEach((b) => b.addEventListener('click', () => {
+    if (shownPic()) { pic = null; avatar = b.dataset.av; } else avatar = avatar === b.dataset.av ? null : b.dataset.av;
+    drawFace();
+  }));
+  m.el.querySelectorAll('[data-bd]').forEach((b) => b.addEventListener('click', () => { badge = b.dataset.bd || null; drawFace(); }));
+  const file = m.el.querySelector('[data-file]');
+  m.el.querySelector('[data-upload]')?.addEventListener('click', () => file.click());
+  m.el.querySelector('[data-unpic]')?.addEventListener('click', () => { pic = null; drawFace(); });
+  file?.addEventListener('change', async () => {
+    const f = file.files?.[0];
+    file.value = '';
+    if (!f) return;
+    busy = true;
+    try { pic = await makePicture(f); drawFace(); } catch (e) { toast(esc(e.message), 'bad'); } finally { busy = false; }
+  });
+  drawFace();
   mountPicker(m.el.querySelector('[data-show]'), { items: () => S.inv.filter((it) => !I.isUnit(it)), selected: show, onChange: (sel) => { while (sel.size > 6) sel.delete([...sel][0]); }, empty: 'Your inventory is empty' });
-  m.el.querySelector('[data-save]').addEventListener('click', async () => {
+  const saveBtn = m.el.querySelector('[data-save]');
+  saveBtn.addEventListener('click', async () => {
+    if (busy) return;
+    saveBtn.disabled = true;
     try {
       await save({ ...(named ? { name: m.el.querySelector('[data-name]').value } : {}), bio: m.el.querySelector('[data-bio]').value, country: m.el.querySelector('[data-country]').value,
-        avatar, showcase: [...show].slice(0, 6), bg: m.el.querySelector('[data-bg]')?.value || null }, m.el);
+        avatar, showcase: [...show].slice(0, 6), bg: m.el.querySelector('[data-bg]')?.value || null, ...(faces ? { pic, badge } : {}) }, m.el);
       m.close();
       toast('Profile saved', 'good');
-    } catch (e) { toast(esc(e.message), 'bad'); }
+    } catch (e) { toast(esc(e.message), 'bad'); saveBtn.disabled = false; }
   });
   return m;
 }

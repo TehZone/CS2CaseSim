@@ -402,8 +402,10 @@ What's in a match:
 - Money comes from playing matches in Play: a win or a draw pays $1,250, a loss $500, every kill $100, every assist $50
   and every round MVP $250 (the scoreboard's stars: Deathmatch and Arms Race have no rounds, so no MVPs). Online too, for
   a match the server saw start, once, and only what it could have earned (no more MVPs than rounds your team won). And
-  from passive income: $100 every minute, while the game is open and while it's closed, up to 12 hours of it at a time
-  (back after longer, the game pays 12 hours, $72,000, and says so). Offline the save collects it by the PC's clock as
+  from passive income: $100 every minute, and $100 more a minute for each prestige (every Service Medal you've earned:
+  $300 a minute with two), while the game is open and while it's closed, up to 12 hours of it at a time (back after
+  longer, the game pays 12 hours, $72,000 with no medal, and says so). The profile shows your rate, and it goes by the
+  medals you have when it's paid. Offline the save collects it by the PC's clock as
   the game loads and every minute; online the server pays it by its own clock, when you connect and every minute you're
   connected. Saves and accounts from before it start counting the first time they're opened (no back pay); a reset
   starts the count again
@@ -417,8 +419,8 @@ What's in a match:
   Key for the Fever Case, the CS:GO Case Key for the first ones). Open them on the case's page (it shows how many cases
   and keys you have) or from the inventory; auto open uses yours first, then buys a case and a key for each opening
 - Storage Units, like CS2's: a $1.99 tool from the store (Cases, Tools, or the inventory) that can't be traded or sold.
-  Label it when you start using it (change the label for free), then move up to 1,000 items in and out, one at a time or
-  in bulk. A unit counts as one item in your inventory and shows how much it holds and when it last changed; its window
+  You can own up to 100 of them. Label one when you start using it (change the label for free), then move up to 1,000
+  items in and out, one at a time or in bulk. A unit counts as one item in your inventory and shows how much it holds and when it last changed; its window
   searches, sorts and filters by rarity. What's inside can't be traded, sold, staked, equipped, stickered or used in a
   trade-up until it comes out, but still counts toward your net worth and in the Item Database. An empty unit can be
   deleted, for no refund
@@ -438,8 +440,11 @@ What's in a match:
   or make an offer. They are also the bots in Play (offline): names, countries and avatars
 - Friends & Chat like Steam's (the people icon at the top): friends by status (In-Game, Online, Offline), friend requests,
   chats, and profiles with level, Service Medal, item showcase, comments (+rep after trades) and their whole inventory,
-  to make them an offer from. Your own profile: name, avatar (any agent), country, summary, a CS2 map behind it and up
-  to six items to show off
+  to make them an offer from. Your own profile: name, a picture of your own (a PNG, JPEG, WebP or GIF's first frame, cut to
+  its middle square at 184 x 184 and kept with the save) or any agent, country, summary, a CS2 map behind it, up to six
+  items to show off and a badge to feature. Profiles list every badge the player has, and the featured one sits small
+  in the bottom left corner of their picture wherever it's shown (the friends list, chats, profiles, the Market's sellers,
+  the Trade page, gambling); an NPC features the rarest pin they own
 - 42 real weapon cases, 150 souvenir packages (each Major's team stickers and gold MVP autographs), packages
   (X-Ray, Anubis, Genesis/Dead Hand Terminals), 229 sticker/autograph capsules and an Agent Locker
 - All 94 weapon collections (e.g. Cobblestone with the Dragon Lore), browsable with odds and prices
@@ -475,8 +480,12 @@ What's in a match:
 - Friends & Chat online: the same page as the NPC players' offline, with real players. Friend requests, private messages
   (live, or waiting for them if they're offline), a profile with a showcase, inventory, Storage Units to look through and
   summary, Everyone or Friends
-  only for who can message you, block and report. A report gives staff the last 30 messages with that player; nothing
-  else lets staff read a chat.
+  only for who can message you, block and report. A report gives staff the last 30 messages with that player, and their
+  summary and profile picture as they were; nothing else lets staff read a chat. Profile pictures and featured badges as
+  offline: the server checks each picture (PNG or WebP, 184 x 184, 64 KB at most, not animated, no metadata), keeps it
+  by the hash of its bytes, serves it at /pic/<hash> for good, and allows 3 new ones in 5 minutes. A featured badge must
+  be one the player has, and stops showing once they don't. Staff can remove a picture (from a report or the player's
+  page, audited): nobody can put the same one up again for 30 days.
 - Admin panel (More → Admin). Offline every player has it, for their own offline save only: edit your money, stats and
   items, snapshots of your save (one is saved before every change) and their restore, export, import and reset, and the
   NPC traders (edit, block, reset, a new NPC world), with a log of every change. It never works online and never touches

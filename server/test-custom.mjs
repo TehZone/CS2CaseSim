@@ -1,10 +1,12 @@
 // Custom content on the server (CUSTOM_CONTENT.md): the data lock with and without it (a game from before custom content,
 // 1.1.3, keeps connecting while there's none), and custom items online: opening a custom case, trading and selling a custom
-// drop, the price patch and saved prices. A real server (embedded Postgres) and real WebSocket clients.
+// drop, the price patch and saved prices. And the same release gate for badges (src/data/badges.json, the lock's other part).
+// A real server (embedded Postgres) and real WebSocket clients.
 //   node server/test-custom.mjs
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
@@ -12,6 +14,8 @@ for (const k of ['HOST', 'SERVER_COMMIT', 'RENDER_GIT_COMMIT', 'RELEASE_FEED']) 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { startServer, readCustom } = await import('./index.mjs');
 const { D, casePrice, keyFor } = await import('../src/js/engine/data.js');
+const { badgeLock } = await import('../src/js/engine/badgedata.js');
+const { compareVersions } = createRequire(import.meta.url)('../shared/release.cjs');
 const { itemValue, makeSkinItem } = await import('../src/js/engine/items.js');
 const { buildCustom, writeBuild } = await import('../scripts/build-custom.mjs');
 
@@ -61,7 +65,9 @@ const refused = async (p) => { try { await p; return null; } catch (e) { return 
 try {
   // ---- no custom content: exactly as before -----------------------------------------------------------------------------------
   check('src/data/custom.json isn\'t there, so a deployed server reads none', readCustom(path.join(ROOT, 'src', 'data', 'custom.json')) === null);
-  server = await startServer({ port: 0, db: { dataDir: path.join(TMP, 'db1') }, log: quiet, priceRefresh: false, discord: false, release: false });
+  // (Every server here runs without badges, the lock's other part: custom content is checked on its own. The badges'
+  // own gate is checked at the end.)
+  server = await startServer({ port: 0, db: { dataDir: path.join(TMP, 'db1') }, log: quiet, priceRefresh: false, discord: false, release: false, badges: false });
   const h0 = await (await fetch(base() + '/health')).json();
   check('without custom content /health\'s data is the game data\'s generatedAt, exactly as 1.1.3\'s', h0.data === GENERATED && D.lock === GENERATED, h0.data);
   const t0 = (await post('/api/register', { name: 'oldgame', password: 'secret123' })).body.token;
@@ -75,7 +81,7 @@ try {
 
   // ---- with custom content --------------------------------------------------------------------------------------------------
   const dir = path.join(TMP, 'db2');
-  server = await startServer({ port: 0, db: { dataDir: dir }, log: quiet, priceRefresh: false, discord: false, release: false, custom });
+  server = await startServer({ port: 0, db: { dataDir: dir }, log: quiet, priceRefresh: false, discord: false, release: false, custom, badges: false });
   const h1 = await (await fetch(base() + '/health')).json();
   check('with custom content the lock is generatedAt + the custom hash', h1.data === `${GENERATED}+cx.${built.lock}` && D.lock === h1.data && D.generatedAt === GENERATED, h1.data);
   const ta = (await post('/api/register', { name: 'alice', password: 'secret123' })).body.token;
@@ -140,7 +146,7 @@ try {
   const saved = { generatedAt: GENERATED, pricedAt: '2099-01-01T00:00:00.000Z', skins: { [realId]: { FN: [123.45, null] }, [ak.id]: { FN: [0.01, 0.01] } }, stickers: {}, agents: {}, cases: { [box.id]: 0.01 } };
   await db.query("INSERT INTO kv (k, v) VALUES ('prices', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(saved)]);
   await db.close?.();
-  server = await startServer({ port: 0, db: { dataDir: dir }, log: quiet, priceRefresh: false, discord: false, release: false, custom });
+  server = await startServer({ port: 0, db: { dataDir: dir }, log: quiet, priceRefresh: false, discord: false, release: false, custom, badges: false });
   check('saved prices (from before custom content) still apply to real items after the deploy', D.skins[realId].p.FN?.[0] === 123.45);
   check('…but never to custom ones: those are always their pack\'s', JSON.stringify(D.skins[ak.id].p) === JSON.stringify(custom.skins[ak.id].p) && D.caseById[box.id].price === box.price);
   const patch2 = await (await fetch(base() + '/api/prices')).json();
@@ -159,7 +165,7 @@ try {
     edit(path.join(s, 'cases', 'Example Case', 'case.json'), (j) => { j.price = 9.95; });
     const b = buildCustom({ src: s });
     check('(a price-only change keeps the lock)', b.ok && b.lock === built.lock);
-    server = await startServer({ port: 0, db: { dataDir: dir }, log: quiet, priceRefresh: false, discord: false, release: false, custom: b.custom });
+    server = await startServer({ port: 0, db: { dataDir: dir }, log: quiet, priceRefresh: false, discord: false, release: false, custom: b.custom, badges: false });
     const p3 = await (await fetch(base() + '/api/prices')).json();
     const tc = (await post('/api/register', { name: 'carol', password: 'secret123' })).body.token;
     const C = await client(tc);
@@ -169,7 +175,7 @@ try {
     C.close();
     await server.close();
     server = null;
-    server = await startServer({ port: 0, db: { dataDir: dir }, log: quiet, priceRefresh: false, discord: false, release: false, custom: b.custom });
+    server = await startServer({ port: 0, db: { dataDir: dir }, log: quiet, priceRefresh: false, discord: false, release: false, custom: b.custom, badges: false });
     check('…once: the next start with the same prices keeps that pricedAt', D.pricedAt === p3.pricedAt);
     await server.close();
     server = null;
@@ -182,7 +188,7 @@ try {
     const feed = { fetcher: async () => Response.json({ version: latest, notes: '', files: { portable: FILE } }), every: 3600000, grace: 150 };
     let restarts = 0;
     const gdir = path.join(TMP, 'db-gate');
-    const start = (c) => startServer({ port: 0, db: { dataDir: gdir }, log: quiet, priceRefresh: false, discord: false, release: feed, custom: c, restart: () => { restarts++; } });
+    const start = (c) => startServer({ port: 0, db: { dataDir: gdir }, log: quiet, priceRefresh: false, discord: false, release: feed, custom: c, badges: false, restart: () => { restarts++; } });
     const v999 = { ...custom, app: '9.9.9' };
     const lock1 = `${GENERATED}+cx.${built.lock}`;
     server = await start(v999);
@@ -217,6 +223,123 @@ try {
     await server.close();
     server = null;
     check('(no other restart was asked for)', restarts === 1);
+  }
+
+  // ---- the release gate for badges: they wait for the release that ships them, as custom content does ---------------------------
+  {
+    const FILE = { name: 'CS2-Case-Simulator.exe', size: 100, sha256: 'a'.repeat(64) };
+    let latest = '1.1.5';
+    const feed = { fetcher: async () => Response.json({ version: latest, notes: '', files: { portable: FILE } }), every: 3600000, grace: 150 };
+    let restarts = 0;
+    const bdir = path.join(TMP, 'db-badges');
+    const bfile = readCustom(path.join(ROOT, 'src', 'data', 'badges.json'));
+    const start = (b) => startServer({ port: 0, db: { dataDir: bdir }, log: quiet, priceRefresh: false, discord: false, release: feed, custom: false, badges: b, restart: () => { restarts++; } });
+    const health = async () => (await fetch(base() + '/health')).json();
+    check('badges: the game ships them for a release after 1.1.5 (src/data/badges.json)', !!bfile?.badges && compareVersions(bfile.app, '1.1.5') > 0, bfile?.app);
+    const v999 = { ...bfile, app: '9.9.9' }, lockB = `${GENERATED}+bd.${badgeLock(bfile)}`;
+    server = await start(v999);
+    let h = await health();
+    check('badges pushed before their release wait: the server runs none, and its lock stays 1.1.5\'s', h.data === GENERATED && D.lock === GENERATED && !Object.keys(D.badges).length
+      && !D.cases.some((c) => c.kind === 'pins') && h.badgesWait === '9.9.9' && h.badgesLock === lockB && !h.customWaits, JSON.stringify({ data: h.data, waits: h.badgesWait, lock: h.badgesLock }));
+    const t1 = (await post('/api/register', { name: 'badge1', password: 'secret123' })).body.token;
+    const g115 = await client(t1, { data: GENERATED, app: '1.1.5' });
+    check('…so 1.1.5 games play as they did', !!g115.welcome && !g115.welcome.state.inv.some((it) => it.t === 'badge'));
+    // What ships with the badges waits with them (HELD_RULES): 1.1.5's 20 Storage Units, and $100 a minute whatever the
+    // prestiges, as its texts say.
+    const uid1 = g115.user.id;
+    const paid = await server.store.withUser(uid1, async (e) => {
+      Object.assign(e.st, { money: 1e6, passive: { at: Date.now() - 2 * 60000 - 5000, earned: 0 } });
+      e.st.prof.medals = 3;
+      server.store.markDirty(e);
+      return (await server.srv.passive.connected(e))?.r.earned; // (as the server collects it, with its rules)
+    });
+    for (let i = 0; i < 2; i++) await g115.act('storage.buy', { n: 10 });
+    const unit21 = await refused(g115.act('storage.buy', { n: 1 }));
+    check('…and the rules that ship with them wait too: $100 a minute with 3 prestiges, and 20 Storage Units at most', paid === 200 && unit21?.code === 'units' && /20 at most/.test(unit21.message)
+      && server.srv.rules.maxUnits === 20, JSON.stringify({ paid, unit21: unit21?.message }));
+    g115.close();
+    const p0 = await (await fetch(base() + '/api/prices')).json();
+    check('…and their price patch is as it was: no badges, no pin capsules', p0.generatedAt === GENERATED && !('badges' in p0) && !bfile.cases.some((c) => c.id in p0.cases));
+    const early = await refused(client(t1, { data: lockB, app: '9.9.9' }));
+    check('a game that has them, before the server does, is told the server is switching', early?.code === 'version' && /switching to this version/.test(early.message), early?.message);
+    latest = '9.9.9';
+    await server.srv.release.poll();
+    await wait(3300);
+    check('once their release is published the server starts again (to run them)', restarts === 1, `${restarts} restarts`);
+    await server.close();
+    server = null;
+    server = await start(v999);
+    h = await health();
+    const g999 = await refused(client(t1, { data: lockB, app: '9.9.9' }));
+    check('started again, it runs the badges (their lock), and 9.9.9 games play', h.data === lockB && D.lock === lockB && !h.badgesWait && Object.keys(D.badges).length === 667
+      && D.cases.filter((c) => c.kind === 'pins').length === 4 && g999 === null, h.data);
+    {
+      const g = await client(t1, { data: lockB, app: '9.9.9' });
+      const paidNow = await server.store.withUser(g.user.id, async (e) => {
+        e.st.passive = { at: Date.now() - 60000 - 5000, earned: 0 };
+        server.store.markDirty(e);
+        return (await server.srv.passive.connected(e))?.r.earned;
+      });
+      const more = await refused(g.act('storage.buy', { n: 10 }));
+      check('…and the rules that waited with them: $100 more a minute for each prestige, and more than 20 Storage Units', paidNow === 400 && more === null && !server.srv.rules.maxUnits, JSON.stringify({ paidNow, more: more?.message }));
+      g.close();
+    }
+    const p1 = await (await fetch(base() + '/api/prices')).json();
+    check('…and the price patch has the pins\' prices and the capsules\'', p1.generatedAt === lockB && Object.keys(p1.badges || {}).length === 45 && bfile.cases.every((c) => p1.cases[c.id] === c.price));
+    await server.close();
+    server = null;
+    // The next badges (another lock), pushed before 9.9.10 is out: the server keeps running 9.9.9's, which it kept.
+    const next = structuredClone(bfile);
+    next.app = '9.9.10';
+    next.badges['collectible-6101'].n = 'Dust II Pin (renamed)';
+    server = await start(next);
+    h = await health();
+    check('newer badges pushed before their release: the server runs what 9.9.9 has (kept from its last run)', h.data === lockB && h.badgesWait === '9.9.10' && D.badges['collectible-6101']?.n === 'Dust II Pin', h.data);
+    check('…and keeps the rules 9.9.9 brought (only a server with no badges at all keeps 1.1.5\'s)', !server.srv.rules.maxUnits && server.srv.rules.prestige !== false);
+    await server.close();
+    server = null;
+    check('(no other restart was asked for)', restarts === 1);
+  }
+
+  // ---- the release gate's switch, and RELEASE_FEED=off ----------------------------------------------------------------------
+  {
+    const FILE = { name: 'CS2-Case-Simulator.exe', size: 100, sha256: 'a'.repeat(64) };
+    let latest = '1.1.5';
+    const feed = { fetcher: async () => Response.json({ version: latest, notes: '', files: { portable: FILE } }), every: 3600000, grace: 2500 };
+    let restarts = 0;
+    const dir = path.join(TMP, 'db-switch');
+    const bfile = readCustom(path.join(ROOT, 'src', 'data', 'badges.json'));
+    const lockB = `${GENERATED}+bd.${badgeLock(bfile)}`;
+    const start = (opts) => startServer({ port: 0, db: { dataDir: dir }, log: quiet, priceRefresh: false, discord: false, custom: false, badges: { ...bfile, app: '9.9.9' }, restart: () => { restarts++; }, ...opts });
+    server = await start({ release: feed });
+    const t = (await post('/api/register', { name: 'switch1', password: 'secret123' })).body.token;
+    const old = await client(t, { data: GENERATED, app: '1.1.5' });
+    const notices = [];
+    old.ws.on('message', (raw) => { const m = JSON.parse(raw); if (m.t === 'notice' || m.t === 'update' || m.t === 'fatal') notices.push(m); });
+    latest = '9.9.9';
+    await server.srv.release.poll();
+    await wait(3300);
+    const early = restarts;
+    await wait(2700);
+    check('published, the server waits out the five minutes it promised older games (release.grace) before it starts again', early === 0 && restarts === 1
+      && notices.some((m) => m.t === 'notice' && /taken offline/.test(m.msg)) && notices.some((m) => m.t === 'fatal' && m.code === 'outdated'), JSON.stringify({ early, restarts, notices: notices.map((m) => m.t) }));
+    old.close();
+    await server.close();
+    server = null;
+    // RELEASE_FEED=off in production (DEPLOY.md's emergency switch): every version in, and what waits keeps waiting.
+    const dir2 = path.join(TMP, 'db-feedoff');
+    latest = '1.1.5';
+    server = await startServer({ port: 0, db: { dataDir: dir2 }, log: quiet, priceRefresh: false, discord: false, custom: false, badges: bfile, release: feed });
+    await server.close();
+    server = await startServer({ port: 0, db: { dataDir: dir2 }, log: quiet, priceRefresh: false, discord: false, custom: false, badges: bfile, release: false, gated: true });
+    const h = await (await fetch(base() + '/health')).json();
+    const t2 = (await post('/api/register', { name: 'feedoff1', password: 'secret123' })).body.token;
+    const g = await refused(client(t2, { data: GENERATED, app: '1.1.5' }));
+    const newer = await refused(client(t2, { data: lockB, app: '1.1.6' }));
+    check('RELEASE_FEED=off in production: the badges still wait (lock 1.1.5\'s), 1.1.5 games play, and a game with them is told the server is switching', h.data === GENERATED && h.badgesWait === bfile.app
+      && g === null && newer?.code === 'version' && /switching/.test(newer.message) && server.srv.rules.maxUnits === 20, JSON.stringify({ data: h.data, g: g?.message, newer: newer?.message }));
+    await server.close();
+    server = null;
   }
 } finally {
   await server?.close().catch(() => {});

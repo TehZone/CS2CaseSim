@@ -74,6 +74,7 @@ export function suggestedPrice(ref, lowest = null) {
 export function listRefusal(item, { reserved = null } = {}) {
   if (!item) return 'Item not found (it may have been sold or traded)';
   if (I.isUnit(item)) return "Storage Units can't be listed";
+  if (I.isBound(item)) return `${I.itemName(item)} can't be listed (only pins from capsules trade)`;
   if (item.lk) return `${I.itemName(item)} is locked. Unlock it first.`;
   if (!I.itemDef(item)) return 'This item is no longer in the game';
   if (reserved?.has(item.uid)) return `${I.itemName(item)} is in a pending trade offer`;
@@ -99,12 +100,13 @@ export function repairListed(st) {
 // ---- what an item is, for the market's searches -------------------------------------------------------------------------
 // The category bar, as Skinport's: guns by kind, then the rest.
 export const CATS = [['knife', 'Knife'], ['gloves', 'Gloves'], ['pistol', 'Pistol'], ['rifle', 'Rifle'], ['smg', 'SMG'], ['heavy', 'Heavy'],
-  ['agent', 'Agent'], ['charm', 'Charm'], ['sticker', 'Sticker'], ['container', 'Container'], ['more', 'More']];
+  ['agent', 'Agent'], ['charm', 'Charm'], ['sticker', 'Sticker'], ['pin', 'Pin'], ['container', 'Container'], ['more', 'More']];
 const GUN_CATS = new Set(['knife', 'gloves', 'pistol', 'rifle', 'smg', 'heavy']);
 export const CAT_NAME = Object.fromEntries(CATS);
 export function categoryOf(item) {
   if (item.t === 'skin') { const c = I.itemDef(item)?.cat; return GUN_CATS.has(c) ? c : 'more'; } // (the Zeus x27: More)
   if (item.t === 'agent' || item.t === 'charm' || item.t === 'sticker') return item.t;
+  if (item.t === 'badge') return 'pin'; // (the only badges that list: badges.js)
   if (item.t === 'crate') return 'container';
   return 'more'; // keys and tools
 }
@@ -154,6 +156,8 @@ export function catalog() {
   for (const d of Object.values(D.stickers)) simple('sticker', d, 'sticker', d.r || 0, `${d.t || ''} ${d.fx || ''} ${d.ty || ''}`);
   for (const d of Object.values(D.agents)) simple('agent', d, 'agent', d.r || 0, d.team === 'T' ? 'terrorist' : 'counter-terrorist');
   for (const d of Object.values(D.charms)) simple('charm', d, 'charm', d.r || 0);
+  // (Only a capsule's pins: every other badge is bound to whoever has it, badges.js.)
+  for (const d of Object.values(D.badges || {})) if (d.tr) simple('badge', d, 'pin', d.r || 0, `${d.ty || ''} badge collectible`);
   for (const c of D.cases) if (!c.hidden) simple('crate', c, 'container', 0, c.kind);
   for (const [id, k] of Object.entries(D.keys)) simple('key', { ...k, id }, 'more', 0, 'key');
   for (const d of Object.values(I.TOOLS)) simple('tool', d, 'more', 0, 'tool');
@@ -394,7 +398,7 @@ const listChance = (n) => (n.active ? 0.12 : 0.035);
 // What a trader asks for one of their items (x: a throw 0..1): never under market but by a beginner's mistake.
 function npcAsk(n, it, x) {
   const ref = referencePrice(it);
-  if (!(ref >= MIN_PRICE) || I.isUnit(it)) return null;
+  if (!(ref >= MIN_PRICE) || I.isUnit(it) || I.isBound(it)) return null;
   let p;
   if (n.type === 'beginner') p = N.guess(n, it) * (0.95 + 0.2 * x);
   else if (n.type === 'collector') p = (N.FOCUS[n.focus].fit(it) > 0 ? N.keepValue(n, it) : ref * 1.02) * (1 + 0.1 * x);

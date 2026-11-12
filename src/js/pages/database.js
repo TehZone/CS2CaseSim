@@ -25,7 +25,7 @@ import { marketWindow, skinListings, localSold, lowestPrice } from '../engine/ma
 import { floatRanks, countCopies, copyCategory, CATEGORY_NAME, itemKey, floatRecords, FLOAT_TOP, patternCounts, patternCount, byPattern } from '../engine/database.js';
 
 const PAGE = 60;
-const TYPES = [['all', 'All items'], ['skin', 'Weapon skins'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['tool', 'Tools']];
+const TYPES = [['all', 'All items'], ['skin', 'Weapon skins'], ['knife', 'Knives'], ['gloves', 'Gloves'], ['sticker', 'Stickers'], ['charm', 'Charms'], ['agent', 'Agents'], ['badge', 'Badges'], ['tool', 'Tools']];
 const WEAPON_CATS = [['all', 'All weapons'], ['rifle', 'Rifles'], ['pistol', 'Pistols'], ['smg', 'SMGs'], ['heavy', 'Heavy']];
 const SORTS = [['owned', 'Most copies'], ['pricey', 'Price: high → low'], ['cheap', 'Price: low → high'], ['rarity', 'Rarity'], ['name', 'Name']];
 const COPY_SORTS = [['low', 'Float: low → high'], ['high', 'Float: high → low'], ['pattern', 'Pattern: low → high'], ['value', 'Value'], ['new', 'Newest']];
@@ -62,6 +62,8 @@ function catalog() {
   for (const c of Object.values(D.charms)) add('charm', c, 'charm', `Charm · ${(D.charmColById[c.col]?.n || '').replace(' Charm Collection', '')}`, c.n.replace('Charm | ', ''), c.p);
   for (const a of Object.values(D.agents)) { const [n, f] = a.n.split(' | '); add('agent', a, 'agent', f || 'Agent', n, a.p); }
   for (const t of Object.values(I.TOOLS)) add('tool', t, 'tool', 'Tool', t.n, t.p);
+  // Every one of CS2's collectibles (engine/badges.js): the pins from capsules, and the rest nobody can get.
+  for (const b of Object.values(D.badges || {})) add('badge', b, 'badge', b.ty || 'Badge', I.nameParts({ t: 'badge', id: b.id }).bottom, b.p);
   return (CATALOG = out);
 }
 let BY_KEY = null;
@@ -191,7 +193,7 @@ function draw() {
     ${shown.length ? `<div class="grid">${shown.map((e) => `<div class="card db-card" data-key="${esc(e.key)}" style="--rc:${e.rc}">
       <div class="img"><img loading="lazy" src="${pictureOf(e, 'm')}" alt=""></div><div class="rbar"></div>
       <div class="meta"><div class="n1" title="${esc(e.top)}">${esc(e.top)}</div><div class="n2" title="${esc(e.bottom)}">${esc(e.bottom)}</div>
-      <div class="row"><span class="wear">${esc(e.rn)}</span><span class="val">${e.kind === 'skin' || e.kind === 'knife' || e.kind === 'gloves' ? '<span class="dim" style="font-weight:400">from</span> ' : ''}${money(e.price)}</span></div>
+      <div class="row"><span class="wear">${esc(e.rn)}</span><span class="val">${e.t === 'badge' && !D.badges[e.id]?.tr ? '<span class="dim" style="font-weight:400" title="Nobody can get one, and it can’t be traded or sold">Not tradable</span>' : `${e.kind === 'skin' || e.kind === 'knife' || e.kind === 'gloves' ? '<span class="dim" style="font-weight:400">from</span> ' : ''}${money(e.price)}`}</span></div>
       <div class="row"><span class="db-count ${counts[e.key] ? '' : 'none'}">${counts[e.key] ? `${counts[e.key].toLocaleString()} ${counts[e.key] === 1 ? 'copy' : 'copies'}` : 'No copies yet'}</span></div></div></div>`).join('')}</div>`
       : '<div class="empty">No items match.</div>'}
     ${pages > 1 ? `<div class="pager"><button class="btn sm" data-pg="-1" ${view.page ? '' : 'disabled'}>‹ Prev</button><span>Page ${view.page + 1} / ${pages}</span><button class="btn sm" data-pg="1" ${view.page < pages - 1 ? '' : 'disabled'}>Next ›</button></div>` : ''}
@@ -260,7 +262,8 @@ function drawItem() {
   const owners = big ? big.owners : new Set(all.map((c) => c.owner)).size;
   const floats = all.map((c) => c.item.fl).filter((f) => f != null);
   const col = skin && d.col ? D.collections.find((c) => c.id === d.col)?.n : null;
-  const from = skin ? sourcesOf(e.id) : [];
+  const badge = e.t === 'badge', bound = badge && !d?.tr; // (a badge: a capsule's pin, or one nobody can get: engine/badges.js)
+  const from = skin || badge ? sourcesOf(e.id) : [];
   const w = marketWindow(now()), sold = skin ? soldFor(w) : null;
   const listings = skin ? skinListings(d, w).filter((l) => !sold.has(l.lid)).sort((a, b) => a.item.fl - b.item.fl) : [];
   const priceRows = skin && !d.v ? WEARS.filter((x) => d.p[x.k]) : [];
@@ -286,7 +289,9 @@ function drawItem() {
           ${creatorHTML(d) ? `<dt>Made by</dt><dd>${creatorHTML(d)}</dd>` : ''}
           ${from.length ? `<dt>Found in</dt><dd>${from.slice(0, 6).map(esc).join(', ')}${from.length > 6 ? ` and ${from.length - 6} more` : ''}</dd>` : ''}
           ${d.t ? `<dt>Tournament</dt><dd>${esc(d.t)}</dd>` : ''}
-          ${!priceRows.length ? `<dt>Price</dt><dd>${money(e.price)}</dd>` : ''}
+          ${badge && d.desc ? `<dt>About</dt><dd>${esc(d.desc)}</dd>` : ''}
+          ${badge ? `<dt>How to get one</dt><dd>${bound ? 'Nobody can: it’s here to look at. It can’t be traded or sold.' : 'Open its capsule (Cases, Pin Capsules), or buy one from a player. It trades and sells.'}</dd>` : ''}
+          ${!priceRows.length ? `<dt>Price</dt><dd>${bound ? '<span class="muted">None: it can’t be sold</span>' : money(e.price)}</dd>` : ''}
         </dl>
         ${priceRows.length ? `<table class="price-table"><thead><tr><th>Wear</th><th>Price</th>${d.stt ? '<th>StatTrak™</th>' : ''}${sv ? '<th>Souvenir</th>' : ''}</tr></thead><tbody>
           ${priceRows.map((x) => `<tr><td><b class="wk" style="--wc:${x.c}">${x.k}</b> ${esc(x.n)}</td><td>${money(d.p[x.k][0])}</td>${d.stt ? `<td>${d.p[x.k][1] != null ? money(d.p[x.k][1]) : '—'}</td>` : ''}${sv ? `<td>${d.p[x.k][2] != null ? money(d.p[x.k][2]) : '—'}</td>` : ''}</tr>`).join('')}</tbody></table>` : ''}
@@ -317,7 +322,8 @@ function drawItem() {
   </div>`;
   root.querySelector('[data-back]').addEventListener('click', back);
   root.querySelector('[data-inspect]')?.addEventListener('click', () => {
-    const it = e.t === 'skin' ? I.makeSkinItem(d, { stt: false, fl: d.v ? null : Math.min(d.mx, Math.max(d.mn, 0.02)), sd: 0 }) : e.t === 'sticker' ? I.makeStickerItem(d) : e.t === 'charm' ? I.makeCharmItem(d) : I.makeAgentItem(d);
+    const it = e.t === 'skin' ? I.makeSkinItem(d, { stt: false, fl: d.v ? null : Math.min(d.mx, Math.max(d.mn, 0.02)), sd: 0 }) : e.t === 'sticker' ? I.makeStickerItem(d)
+      : e.t === 'charm' ? I.makeCharmItem(d) : e.t === 'badge' ? I.makeBadgeItem(d) : I.makeAgentItem(d);
     openInspect(it);
   });
   root.querySelectorAll('[data-cats] button').forEach((b) => b.addEventListener('click', () => { view.copyCat = b.dataset.v; draw(); }));

@@ -198,9 +198,16 @@ function applyPrices(data, idx) {
     const p = priceOf(idx, c.n, null);
     if (p != null) { c.p = p; charms++; }
   }
+  // Badges (src/data/badges.json, when the data has them): only a capsule's pins have a market (the rest are bound, $0).
+  let badges = 0;
+  for (const b of Object.values(data.badges || {})) {
+    if (!b.tr) continue;
+    const p = priceOf(idx, b.n, null);
+    if (p != null) { b.p = p; badges++; }
+  }
   if (data.slab) data.slab.p = slabPrice(idx, data.stickers) ?? data.slab.p;
   data.pricedAt = new Date().toISOString();
-  return { skins, stickers, agents, cases, charms };
+  return { skins, stickers, agents, cases, charms, ...(data.badges ? { badges } : {}) };
 }
 
 module.exports = { SOURCES, WEARS, KEY_PRICE, fetchSources, buildIndex, priceOf, priceSkin, applyPrices, wearsFor, mhn };

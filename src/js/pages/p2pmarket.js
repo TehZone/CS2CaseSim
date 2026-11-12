@@ -15,6 +15,7 @@ import { toast, openModal, confirmDialog, openInspect, itemCard, contextMenu } f
 import * as P from '../engine/p2p.js';
 import { listedOf } from '../engine/storage.js';
 import * as M from '../p2pmarket.js';
+import { playerAvatar, unfeatureWarning } from '../faces.js';
 
 const MODE_KEY = 'cs2sim-market-view';
 const ALL_WEARS = P.WEAR_KEYS;
@@ -336,10 +337,11 @@ function floatHtml(it) {
   return `<div class="pm-fl"><span>${(+it.fl).toFixed(it.fl < 0.01 ? 4 : 3)}</span><div class="pm-wear" title="Float ${esc(I.floatString(it.fl))}"><i style="left:${Math.max(0, Math.min(100, it.fl * 100))}%"></i></div></div>`;
 }
 const thumbs = (it) => `${(it.stk || []).map((s) => (D.stickers[s.id] ? `<img src="${esc(I.itemImage({ t: 'sticker', id: s.id }, 's'))}" title="${esc(D.stickers[s.id].n)}" alt="">` : '')).join('')}${it.kc && I.itemDef(I.attachedCharm(it)) ? `<img class="kc" src="${esc(I.itemImage(I.attachedCharm(it), 's'))}" title="${esc(I.itemName(I.attachedCharm(it)))}" alt="">` : ''}`;
+// (with their face: faces.js, an NPC's offline, a player's online)
 function sellerHtml(l) {
   const s = l.seller || {};
   if (M.isMine(l)) return '<span class="pm-seller me">Your listing</span>';
-  return `<button class="pm-seller" data-seller="${esc(s.npc || s.id)}" title="${esc(s.name)}'s profile">${esc(s.name)}</button>`;
+  return `<button class="pm-seller" data-seller="${esc(s.npc || s.id)}" title="${esc(s.name)}'s profile">${playerAvatar(s, 18)}<span>${esc(s.name)}</span></button>`;
 }
 function buyBtn(l, cls = '') {
   if (M.isMine(l)) return `<button class="pm-buy mine ${cls}" data-editmine="${esc(l.lid)}">Your listing</button>`;
@@ -410,7 +412,7 @@ function listingMenu(e, l) {
   e.preventDefault();
   const it = l.item;
   contextMenu(e.clientX, e.clientY, [
-    ['skin', 'sticker', 'agent', 'charm'].includes(it.t) ? { label: 'Inspect', icon: 'zoom_in', hint: '3D', action: () => openInspect(it, { preview: true }) } : null,
+    ['skin', 'sticker', 'agent', 'charm', 'badge'].includes(it.t) ? { label: 'Inspect', icon: 'zoom_in', hint: '3D', action: () => openInspect(it, { preview: true }) } : null,
     { label: 'All listings of this item', icon: 'stats_grid', action: () => openItem(P.factsOf(l).key) },
     M.isMine(l) ? { label: 'Change price or cancel', icon: 'edit', action: () => setTab('mine') } : { label: `${l.seller?.name || 'Seller'}'s profile`, icon: 'player', action: () => openSeller(l.seller) },
     '-',
@@ -546,7 +548,7 @@ export async function sellOnMarket(item) {
   const why = P.listRefusal(item, { reserved: reserved() });
   if (why) { sfx.error(); toast(esc(why), 'bad'); return false; }
   if (listedOf(S).length >= P.MAX_LISTINGS) { sfx.error(); toast(`You have ${P.MAX_LISTINGS} listings. Cancel one first.`, 'bad'); return false; }
-  const ref = P.referencePrice(item), key = P.catalogKey(item);
+  const ref = P.referencePrice(item), key = P.catalogKey(item), unfeat = unfeatureWarning([item.uid]);
   return new Promise((resolve) => {
     let done = false;
     const m = openModal({
@@ -558,7 +560,7 @@ export async function sellOnMarket(item) {
           <dt>Suggested price</dt><dd><button class="link-btn" data-sug>${money(P.suggestedPrice(ref))}</button></dd></dl>
         <label class="pm-pricefield">Your price<span class="pm-dollar">$</span><input class="input" data-price inputmode="decimal" value="${P.suggestedPrice(ref).toFixed(2)}"></label>
         <div class="pm-get">You get <b data-get></b> when it sells <span class="muted">· ${P.MARKET_FEE ? `${Math.round(P.MARKET_FEE * 100)}% fee` : 'no fee'}</span></div>
-        <div class="pm-warn" data-warn></div></div></div>`,
+        <div class="pm-warn" data-warn></div>${unfeat ? `<div class="pm-warn">${esc(unfeat)}</div>` : ''}</div></div>`,
       foot: '<button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-list>List it</button>',
       onClose: () => { if (!done) resolve(false); },
     });

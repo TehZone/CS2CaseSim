@@ -173,6 +173,33 @@ try {
     S.inv.unshift(mk(skinIds[6], { at: 8000 }));
     await same('in a new NPC world');
   }
+
+  // ---- the featured badge offline: it goes with the last of it, as online (server/store.mjs) -------------------------------
+  {
+    const S = state.S, id = 'test-pin';
+    D.badges[id] = { id, n: 'Test Pin', ty: 'Pin', r: 2, tr: 1 }; // (a pin of this test's own: the data here has no badges)
+    S.social = N.freshSocial(778, Date.now());
+    S.social.me = { ...S.social.me, badge: id };
+    const pin = { uid: 'pin-1', t: 'badge', id };
+    S.inv.unshift(pin);
+    state.saveNow();
+    const kept = S.social.me.badge;
+    S.inv = S.inv.filter((it) => it.uid !== pin.uid);
+    S.stored = [...(S.stored || []), { ...pin, su: 'unit-x' }];
+    state.saveNow();
+    const stored = S.social.me.badge;
+    S.stored = S.stored.filter((it) => it.uid !== pin.uid);
+    S.listed = [{ ...pin, lid: 'l1', lp: 5 }];
+    state.saveNow();
+    const listed = S.social.me.badge;
+    S.listed = [];
+    S.inv.unshift(pin);
+    state.saveNow();
+    check('featured badge offline: kept while it\'s in the inventory or a Storage Unit; a save without one (listed on the Market) unfeatures it, and it stays off when it comes back',
+      kept === id && stored === id && listed === null && S.social.me.badge === null, JSON.stringify({ kept, stored, listed, back: S.social.me.badge }));
+    S.inv = S.inv.filter((it) => it.uid !== pin.uid);
+    delete D.badges[id];
+  }
 } finally {
   console.warn = quiet;
 }

@@ -131,6 +131,7 @@ body:not(.is-staff) .staff-only { display: none !important; }
 .player { display: flex; align-items: center; gap: 10px; background: var(--well); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; cursor: pointer; }
 .player:hover { border-color: rgba(255, 255, 255, .3); }
 .player.on { border-color: #fff; background: rgba(255, 255, 255, .06); }
+.tr-with { display: flex; align-items: center; gap: 10px; }
 .offer-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .offer-side { background: var(--well); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; min-height: 160px; }
 .offer-side h4 { margin: 0 0 8px; font-weight: 600; text-transform: uppercase; letter-spacing: .12em; font-size: 12px; color: var(--muted); }
@@ -424,6 +425,17 @@ a.db-owner:hover { text-decoration: underline; }
 .av.ingame { border-color: #a3cf06; }
 .av.online, .av.away { border-color: #57cbde; }
 .av.offline { border-color: #535b63; }
+/* faces.js: a picture of their own fills the square as it is; the badge they feature sits small in its bottom left corner */
+.av { position: relative; }
+.av img.pic { transform: none; object-position: 50% 50%; }
+.av img.av-badge { position: absolute; left: 1px; bottom: 1px; width: max(11px, calc(var(--s) * .4)); height: max(11px, calc(var(--s) * .4)); object-fit: contain; transform: none;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, .9)) drop-shadow(0 1px 2px rgba(0, 0, 0, .7)); pointer-events: auto; }
+/* a profile's badges, the featured one ringed */
+.sp-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.sp-badge { position: relative; width: 52px; height: 52px; display: grid; place-items: center; background: radial-gradient(circle at 50% 70%, color-mix(in srgb, var(--rc) 28%, transparent), rgba(0, 0, 0, .25) 70%); border: 1px solid rgba(255, 255, 255, .08); }
+.sp-badge img { width: 44px; height: 44px; object-fit: contain; }
+.sp-badge span { position: absolute; right: 2px; bottom: 1px; font-size: 10px; font-weight: 700; color: #dfe5ea; text-shadow: 0 1px 2px #000; }
+.sp-badge.on { border-color: var(--gold2, #e4ae39); box-shadow: inset 0 0 0 1px rgba(228, 174, 57, .45); }
 .cm-main { min-width: 0; background: rgba(14, 18, 23, .78); border: 1px solid var(--line); min-height: 520px; display: flex; flex-direction: column; }
 .ch-head { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); background: rgba(0, 0, 0, .25); flex-wrap: wrap; }
 .ch-head .grow { flex: 1; min-width: 160px; }
@@ -473,6 +485,15 @@ a.db-owner:hover { text-decoration: underline; }
 .ep-av { width: 56px; height: 56px; padding: 0; border: 2px solid transparent; background: #2a3138; overflow: hidden; }
 .ep-av img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 12%; transform: scale(1.45); transform-origin: 50% 20%; }
 .ep-av.on { border-color: #57cbde; }
+/* Edit profile: your picture (faces.js makePicture) and the badge you feature */
+.ep-face { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.ep-face .ep-facebtns { display: flex; gap: 8px; flex-wrap: wrap; }
+.ep-face .muted { font-size: 12px; flex-basis: 100%; }
+.ep-badges { display: flex; flex-wrap: wrap; gap: 6px; max-height: 170px; overflow: auto; }
+.ep-badge { width: 52px; height: 52px; padding: 0; border: 2px solid transparent; background: #2a3138; display: grid; place-items: center; }
+.ep-badge img { width: 42px; height: 42px; object-fit: contain; }
+.ep-badge.none { font-size: 11px; color: var(--muted); }
+.ep-badge.on { border-color: #57cbde; }
 /* online (community-online.js): the rest is the classes above; a real player's summary can be one very long word */
 .fr-groups { display: grid; gap: 8px; }
 .fr-panel, .fr-groups, .fr-group { grid-template-columns: minmax(0, 1fr); } /* (a long last message shortens: it doesn't widen the list) */

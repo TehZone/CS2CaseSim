@@ -2,7 +2,7 @@
 // those copies. Pure: the page (pages/database.js) and the server (its db.* requests) share it.
 
 // The kinds of item it covers, as inventory items' t.
-export const DB_TYPES = ['skin', 'sticker', 'charm', 'agent', 'tool'];
+export const DB_TYPES = ['skin', 'sticker', 'charm', 'agent', 'tool', 'badge'];
 export const itemKey = (item) => item.t + ':' + item.id;
 
 // A copy's category: float ranks are counted apart for normal, StatTrak™ and Souvenir copies (as CSFloat's are).

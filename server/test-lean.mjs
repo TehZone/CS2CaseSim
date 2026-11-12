@@ -145,8 +145,8 @@ const prices = (ae) => new Promise((resolve, reject) => {
 });
 
 try {
-  // (p2p1, the Market's, is the other: server/test-market.mjs)
-  check('lean1 is a capability, and its name; p2p1 the only other', LEAN === 'lean1' && CAPS.size === 2 && CAPS.has('lean1') && CAPS.has('p2p1'));
+  // (p2p1, the Market's, is another: server/test-market.mjs; face1, players' pictures and badges, the third: server/test-social.mjs)
+  check('lean1 is a capability, and its name; p2p1 and face1 the only others', LEAN === 'lean1' && CAPS.size === 3 && CAPS.has('lean1') && CAPS.has('p2p1') && CAPS.has('face1'));
   const tok = {};
   for (const n of ['olga', 'leo', 'erik', 'pia', 'quin', 'gabe', 'boss']) tok[n] = await register(n);
 
@@ -601,8 +601,31 @@ try {
   await until(() => stoIn(LS));
   check('staff restore a save: lean1 has every unit\'s contents from then on, and a deposit into any unit comes whole', !state.storedPart() && !!stoIn(LS)?.d.sto.add.some((it) => it.uid === afterRestore)
     && !(await differs(LEO)), await differs(LEO));
+  // 100 units (the most anyone can buy, up from 20), a few with things in them: lean1's welcome is still only their sums,
+  // one row each, and a game that follows it counts every unit as the server does.
+  const unitsNow = () => stOf(LEO).inv.filter((it) => it.t === 'unit');
+  await money(LEO, 1000);
+  while (unitsNow().length < 100) await LG.act('storage.buy', { n: Math.min(10, 100 - unitsNow().length) });
+  const fresh100 = unitsNow().filter((u) => u.uid !== u1 && u.uid !== u2).slice(0, 6);
+  await LG.act('case.open', { id: C.id, n: 6, buy: true });
+  for (const [i, u] of fresh100.entries()) {
+    await LG.act('storage.name', { unit: u.uid, name: 'n' + i });
+    await LG.act('storage.deposit', { unit: u.uid, uids: [stOf(LEO).inv.filter((it) => it.t === 'skin' && !it.lk)[0].uid] });
+  }
+  const tooMany = await LG.act('storage.buy', {}).catch((e) => e);
   game.stop();
-  for (const c of [LS, OS, LG]) c.close();
+  const L100 = await client(tok.leo, { caps: ['lean1'] }), O100 = await client(tok.leo);
+  game = follow(L100);
+  const sums100 = L100.welcome.units || {}, server100 = lean.unitSums(stOf(LEO));
+  check('100 units: the 101st is refused; lean1\'s welcome has a row for each of the 100 and no state.stored, its sums the server\'s', tooMany?.code === 'units' && Object.keys(sums100).length === 100
+    && !('stored' in L100.welcome.state) && Object.entries(server100).every(([uid, s]) => sums100[uid]?.n === s.n && sums100[uid].value === s.value) && fresh100.every((u) => sums100[u.uid]?.n === 1));
+  // (With this little stored, 1.1.2's welcome, which has it all, is the smaller one: lean1's pays off as units fill up.)
+  check('100 units: lean1\'s rows stay small: a few KB for all 100, one item at most in each', JSON.stringify(sums100).length < 20 * 1024 && Object.values(sums100).every((s) => JSON.stringify(s).length < 2048)
+    && L100.welcome.raw - JSON.stringify(sums100).length < O100.welcome.raw, `${L100.welcome.raw} against ${O100.welcome.raw} bytes, ${JSON.stringify(sums100).length} of rows`);
+  check('100 units: the game counts every unit as the server does, from the sums', unitsNow().every((u) => stored.unitCount(u.uid) === server100[u.uid].n && stored.unitValue(u.uid) === server100[u.uid].value)
+    && stored.storedTotals().n === stOf(LEO).stored.length);
+  game.stop();
+  for (const c of [LS, OS, LG, L100, O100]) c.close();
 
   // 1.1.2 games (olga's, and leo's other one) were never sent a lean1 field, nor an item as { uid } alone.
   const oldOnes = [...O.events, ...LO.events];

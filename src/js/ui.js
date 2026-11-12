@@ -235,7 +235,7 @@ export function itemCard(item, { selectable = false, selected = false, extra = '
       <div class="n1 ${item.stt ? 'stt' : item.sv ? 'sv' : ''}">${esc(np.top)}</div>
       <div class="n2">${esc(np.bottom)}</div>
       ${I.nameTagHtml(item)}
-      <div class="row"><span class="wear">${wear}</span><span class="val">${money(I.itemValue(item))}</span></div>
+      <div class="row"><span class="wear">${wear}</span>${I.isBound(item) ? '<span class="dim" title="Only pins from capsules trade, sell or go in Storage Units">Not tradable</span>' : `<span class="val">${money(I.itemValue(item))}</span>`}</div>
       ${line ? `<div class="row"><span class="wear">${line}</span></div>` : ''}
     </div>
   </div>`;
@@ -260,6 +260,7 @@ export async function sellItems(items, { ask = true } = {}) {
 
 // ---- item actions --------------------------------------------------------------------------
 // Cases, keys and tools in your inventory have no 3D model to inspect; a case opens instead (with one of your keys for it).
+// (A badge inspects as its picture struck in metal: inspect.js.)
 export const canInspect = (item) => item.t !== 'crate' && item.t !== 'key' && item.t !== 'unit' && item.t !== 'tool';
 const storage = () => import('./pages/storage.js');
 const tools = () => import('./pages/tools.js');
@@ -325,10 +326,14 @@ export function itemContextMenu(e, item, { onChange } = {}) {
   if (item.t === 'sticker' && D.slab) items.push({ label: 'Sticker Slab', icon: 'sticker', hint: money(D.slab.p), action: async () => done(await slabSticker(item)) });
   if (nameable(item)) items.push({ label: 'Apply Name Tag', icon: 'edit', action: async () => (await tools()).openNameTag(item, { onDone: () => done(true) }) });
   if (I.isTool(item)) items.push({ label: I.TOOLS[item.id].use, icon: item.id === I.NAME_TAG ? 'edit' : 'refresh', action: async () => (await tools()).useTool(item) });
-  items.push({ label: 'Move To Storage Unit', icon: 'crate', action: async () => done(await (await storage()).moveToUnit([item])) });
+  // (A bound badge stays where it is: no Storage Unit, no sale, no Market. engine/badges.js)
+  const bound = I.isBound(item);
+  if (!bound) items.push({ label: 'Move To Storage Unit', icon: 'crate', action: async () => done(await (await storage()).moveToUnit([item])) });
   items.push({ label: item.lk ? 'Unlock' : 'Lock', icon: item.lk ? 'unlocked' : 'locked', action: async () => done(await tryAct('item.lock', { uid: item.uid, lk: !item.lk })) });
-  items.push('-', { label: 'Sell', icon: 'dollar_sign', hint: money(I.itemValue(item)), disabled: !!item.lk, action: async () => done(await sellItems([item])) });
-  items.push({ label: 'Sell on Market', icon: 'market', hint: 'set your price', disabled: !!item.lk, action: async () => done(await (await p2pMarket()).sellOnMarket(item)) });
+  if (!bound) {
+    items.push('-', { label: 'Sell', icon: 'dollar_sign', hint: money(I.itemValue(item)), disabled: !!item.lk, action: async () => done(await sellItems([item])) });
+    items.push({ label: 'Sell on Market', icon: 'market', hint: 'set your price', disabled: !!item.lk, action: async () => done(await (await p2pMarket()).sellOnMarket(item)) });
+  }
   contextMenu(e.clientX, e.clientY, items);
 }
 
@@ -461,9 +466,13 @@ function detailBody(item) {
     kv.push(['Opens', d.cases.map((id) => esc(D.caseById[id]?.n || '?')).join(', ')]);
   } else if (item.t === 'tool') {
     kv.push(['Type', 'Tool']);
+  } else if (item.t === 'badge') {
+    kv.push(['Type', esc(d.ty || 'Badge')]);
+    if (d.box && D.caseById[d.box]) kv.push(['Found in', esc(D.caseById[d.box].n)]);
+    kv.push(['Tradable', I.isBound(item) ? 'No <span class="muted">· only pins from capsules trade, sell or go in Storage Units</span>' : 'Yes']);
   }
   if (item.sn) kv.push(['Serial number', `#${item.sn.toLocaleString()}${I.serialLabel(item.sn) ? ` <span class="muted">· ${I.serialLabel(item.sn)}</span>` : ''}`]);
-  else if (['skin', 'sticker', 'agent', 'charm'].includes(item.t)) kv.push(['Serial number', '<span class="muted">None (only unboxed items are numbered)</span>']);
+  else if (['skin', 'sticker', 'agent', 'charm'].includes(item.t) || (item.t === 'badge' && !I.isBound(item))) kv.push(['Serial number', '<span class="muted">None (only unboxed items are numbered)</span>']);
   if (item.src) kv.push(['Obtained from', esc(item.src)]);
   const made = creatorHTML(d);
   if (made) kv.push(['Made by', made]);
@@ -479,6 +488,8 @@ function detailBody(item) {
     if (d.slab) lines.push(['Sticker', money(D.stickers[item.sk]?.p || 0)], ['Sticker Slab', '+' + money(D.slab.p)]);
     else lines.push(['Market price', money(vb.base)]);
     if (vb.pat.mult !== 1) lines.push([`Pattern (${esc(vb.pat.label)})`, '×' + vb.pat.mult]);
+  } else if (I.isBound(item)) {
+    lines.push(['Market price', '<span class="muted">None: it can’t be sold</span>']);
   } else {
     lines.push(['Market price', money(vb.base)]);
   }
@@ -511,10 +522,10 @@ function detailBody(item) {
         ${I.loadoutSlot(item) ? (isEquipped(item)
           ? `<button class="btn" data-a="unequip" title="Equipped as your ${esc(slotName(I.loadoutSlot(item)))}">Unequip</button>`
           : `<button class="btn" data-a="equip">Equip (${esc(slotName(I.loadoutSlot(item)))})</button>`) : ''}
-        <button class="btn" data-a="store">Move To Storage Unit</button>
+        ${I.isBound(item) ? '' : '<button class="btn" data-a="store">Move To Storage Unit</button>'}
         <button class="btn" data-a="lock">${item.lk ? 'Unlock' : 'Lock'}</button>
-        <button class="btn primary" data-a="sell" ${item.lk ? 'disabled' : ''}>Sell ${money(vb.total)}</button>
-        <button class="btn" data-a="p2p" ${item.lk ? 'disabled' : ''} title="List it on the Market at a price you set: another player buys it">Sell on Market</button>
+        ${I.isBound(item) ? '' : `<button class="btn primary" data-a="sell" ${item.lk ? 'disabled' : ''}>Sell ${money(vb.total)}</button>
+        <button class="btn" data-a="p2p" ${item.lk ? 'disabled' : ''} title="List it on the Market at a price you set: another player buys it">Sell on Market</button>`}
       </div>
     </div>
   </div>`;

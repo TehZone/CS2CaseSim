@@ -10,7 +10,7 @@ process.env.JACKPOT_MS = '1500';
 for (const k of ['HOST', 'SERVER_COMMIT', 'RENDER_GIT_COMMIT']) delete process.env[k]; // (the checks of /health's commit and HOST set them)
 const { startServer } = await import('./index.mjs');
 const { D, casePrice, keyFor } = await import('../src/js/engine/data.js');
-const { serialKey, makeStickerItem, makeSkinItem, itemValue } = await import('../src/js/engine/items.js');
+const { serialKey, makeStickerItem, makeSkinItem, makeBadgeItem, itemValue } = await import('../src/js/engine/items.js');
 const SU = await import('../src/js/engine/storage.js');
 const IX = await import('../src/js/engine/itemindex.js');
 const { marketWindow, skinListings } = await import('../src/js/engine/market.js');
@@ -417,6 +417,18 @@ try {
   const mem = await serverState(A.user.id), row = await dbState(A.user.id);
   const uids = (l) => l.map((i) => i.uid).sort().join();
   check('race: after moves in both directions at once, the database has exactly what memory has', uids(mem.stored) === uids(row.stored) && uids(mem.inv) === uids(row.inv) && await noDupes(), `${mem.stored.length} stored`);
+
+  // As many units as a player may own (100, up from 20) on the server too, bought ten at a time, and not one more.
+  const ownUnits = async () => SU.unitsOf(await serverState(A.user.id)).length;
+  await give(A.user.id, 5000);
+  for (let have = await ownUnits(); have < SU.MAX_UNITS; have = await ownUnits()) await R1.act('storage.buy', { n: Math.min(10, SU.MAX_UNITS - have) });
+  const tooMany = await failure(R1.act('storage.buy', {}));
+  await server.store.flush();
+  check('storage: the server lets a player own 100 Storage Units, and refuses the 101st', SU.MAX_UNITS === 100 && await ownUnits() === 100 && tooMany?.code === 'units'
+    && /100 at most/.test(tooMany.message) && SU.unitsOf(await dbState(A.user.id)).length === 100, tooMany?.message);
+  const many = await client(la.body.token);
+  check('storage: and a new connection\'s welcome has all 100, and what\'s in them', SU.unitsOf(many.st).length === 100 && many.st.stored.length === (await serverState(A.user.id)).stored.length);
+  many.close();
   R1.close(); R2.close();
   await wait(50);
 
@@ -521,6 +533,51 @@ try {
     T1.close(); T2.close();
     await wait(50);
   }
+  }
+
+  // ---- badges online: a capsule's pins open, trade, list and store; the other badges go nowhere ---------------------------------
+  {
+    const failure = async (p) => { try { await p; return null; } catch (e) { return e; } };
+    const cap = D.cases.find((c) => c.kind === 'pins');
+    await give(A.user.id, 5000); await give(B.user.id, 5000);
+    await A.act('case.buy', { id: cap.id, n: 3 });
+    const op = await A.act('case.open', { id: cap.id, n: 3 });
+    const st = await serverState(A.user.id);
+    check('badges: a Pins Capsule opens on the server without a key, into numbered pins on the Index', !!cap && !cap.key && op.items.length === 3
+      && op.items.every((it) => it.t === 'badge' && D.badges[it.id]?.box === cap.id && it.sn >= 1 && st.inv.some((x) => x.uid === it.uid)) && st.index.items[op.items[0].id]?.n >= 1);
+    // A Service Medal from staff (nobody can get one otherwise), alongside the pins.
+    const medal = makeBadgeItem(D.badges['collectible-1340'], 'Admin');
+    await server.store.withUser(A.user.id, async (e) => { e.st.inv.unshift(medal); server.store.markDirty(e); });
+    A.st.inv.unshift(structuredClone(medal));
+    const [p1, p2, p3] = op.items;
+    const seen = await B.rpc('trade', 'inventory', { name: 'alice' });
+    check('badges: another player sees your pins to trade for, never a bound badge', seen.items.some((i) => i.uid === p1.uid) && !seen.items.some((i) => i.uid === medal.uid));
+    const offerMedal = await failure(A.rpc('trade', 'offer', { to: 'Bob_2', give: { uids: [medal.uid], money: 0 }, get: { uids: [], money: 1 } }));
+    const askMedal = await failure(B.rpc('trade', 'offer', { to: 'alice', give: { uids: [], money: 1 }, get: { uids: [medal.uid], money: 0 } }));
+    check('badges: a bound badge can\'t be offered in a trade, nor asked for', /can't be traded/.test(offerMedal?.message || '') && /can't be traded/.test(askMedal?.message || ''), offerMedal?.message);
+    const deal = await A.rpc('trade', 'offer', { to: 'Bob_2', give: { uids: [p1.uid], money: 0 }, get: { uids: [], money: 1 } });
+    await B.rpc('trade', 'accept', { id: deal.id });
+    const bSt = await serverState(B.user.id);
+    check('badges: a pin trades, its serial kept', bSt.inv.find((i) => i.uid === p1.uid)?.sn === p1.sn && !(await serverState(A.user.id)).inv.some((i) => i.uid === p1.uid));
+    const unit = (await serverState(A.user.id)).inv.find((i) => i.t === 'unit' && i.name && SU.unitCount(st, i.uid) < SU.UNIT_CAP);
+    const m0 = (await serverState(A.user.id)).money;
+    check('badges: a bound badge can\'t be sold, staked, stored or listed (server side)', (await failure(A.act('item.sell', { uids: [medal.uid] })))?.code === 'bound'
+      && (await failure(A.rpc('gamble', 'flip.create', { money: 1, uids: [medal.uid], side: 'ct', clientSeed: 'a' })))?.code === 'bound'
+      && (await failure(A.act('storage.deposit', { unit: unit.uid, uids: [medal.uid] })))?.code === 'unit'
+      && (await failure(A.rpc('p2p', 'list', { uid: medal.uid, price: 5 })))?.code === 'item'
+      && (await serverState(A.user.id)).inv.some((i) => i.uid === medal.uid) && (await serverState(A.user.id)).money === m0);
+    await A.act('storage.deposit', { unit: unit.uid, uids: [p2.uid] });
+    check('badges: a pin goes in a Storage Unit', (await serverState(A.user.id)).stored.some((i) => i.uid === p2.uid && i.su === unit.uid));
+    const listed = await A.rpc('p2p', 'list', { uid: p3.uid, price: 50 });
+    check('badges: and a pin lists on the Market', !!listed?.lid && (await serverState(A.user.id)).listed.some((i) => i.uid === p3.uid), JSON.stringify(listed));
+    await A.rpc('p2p', 'cancel', { lid: listed.lid });
+    const sold = await B.act('item.sell', { uids: [p1.uid] });
+    check('badges: and sells to the Store for its value', sold.total > 0 && !(await serverState(B.user.id)).inv.some((i) => i.uid === p1.uid));
+    // (db.index's counts are kept 15 seconds, and the tools' checks above read them: its copies are what's checked here.)
+    const copies = await A.rpc('social', 'db.item', { t: 'badge', id: medal.id }), stored = await A.rpc('social', 'db.item', { t: 'badge', id: p2.id });
+    check('badges: the item database has every copy (inventory and Storage Units)', copies.copies.some((c) => c.item.uid === medal.uid && c.owner === 'alice') && stored.copies.some((c) => c.item.uid === p2.uid));
+    const patch = await (await fetch(base() + '/api/prices')).json();
+    check('badges: the price patch has the pins\' prices (and the capsules\'), and nothing for the bound ones', Object.keys(patch.badges || {}).length === 45 && patch.cases[cap.id] === cap.price && !('collectible-1340' in patch.badges));
   }
 
   // ---- the Index: the server keeps the record, and pays each reward once ----------------------------------------------------

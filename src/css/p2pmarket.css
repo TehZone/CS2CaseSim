@@ -138,6 +138,9 @@
 .pm-rthumbs { display: flex; gap: 1px; flex-wrap: wrap; }
 .pm-rseller { display: flex; flex-direction: column; gap: 2px; font-size: 12px; min-width: 0; }
 .pm-seller { background: none; border: 0; padding: 0; color: #8fbfe8; font-size: 12.5px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button.pm-seller { display: flex; align-items: center; gap: 6px; max-width: 100%; }
+button.pm-seller > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pm-seller .av { border-width: 1px; }
 .pm-seller:hover { text-decoration: underline; color: #b7d7f2; }
 .pm-seller.me { color: var(--pm-accent-soft); }
 .pm-rprice { text-align: right; }

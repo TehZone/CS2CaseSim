@@ -125,6 +125,38 @@ try {
   check('offline, through the game: one action buys and opens, and the save has the drops and none of the cases', can('buyOpen') && viaGame.bought?.cases === 2 && viaGame.items.length === 2
     && Math.abs(state.S.money - (1000 - viaGame.bought.cost)) < 0.005 && !state.S.inv.some((it) => it.t === 'crate' || it.t === 'key') && viaGame.items.every((it) => state.S.inv.includes(it)));
   check('offline: the Storage Unit helpers are engine/storage.js\'s (no sums offline)', !state.storedPart() && stored.unitLoaded('anything') && stored.ownedWorth() === ownedValue(state.S) && stored.storedTotals().n === 0);
+  // 100 units (the most there can be bought), through the game: what each one's card reads is the engine's count and value,
+  // from one pass over what's stored, worked out again whenever what's stored changes.
+  {
+    const SU = await import('../src/js/engine/storage.js');
+    const invWas = state.S.inv, storedWas = state.S.stored, moneyWas = state.S.money;
+    state.S.money = 1000;
+    for (let i = 0; i < 10; i++) await act('storage.buy', { n: 10 });
+    let over = null;
+    try { await act('storage.buy', {}); } catch (e) { over = e; }
+    const units = SU.unitsOf(state.S);
+    check('offline: 100 Storage Units can be bought through the game, and not a 101st', units.length === 100 && SU.MAX_UNITS === 100 && over?.code === 'units', over?.message);
+    for (const u of units.slice(0, 3)) await act('storage.name', { unit: u.uid, name: 'u' });
+    state.S.inv.push(...Array.from({ length: 30 }, () => makeSkinItem(skinDef, { src: 'test' })));
+    const loose = () => state.S.inv.filter((it) => it.t === 'skin');
+    await act('storage.deposit', { unit: units[0].uid, uids: loose().slice(0, 20).map((it) => it.uid) });
+    await act('storage.deposit', { unit: units[1].uid, uids: loose().slice(0, 5).map((it) => it.uid) });
+    const agree = () => units.every((u) => stored.unitCount(u.uid) === SU.unitCount(state.S, u.uid) && stored.unitValue(u.uid) === SU.unitValue(state.S, u.uid));
+    check('offline: every unit\'s count and value as the engine has them', agree() && stored.unitCount(units[0].uid) === 20 && stored.unitCount(units[1].uid) === 5 && stored.unitCount(units[2].uid) === 0
+      && stored.storedTotals().n === 25 && Math.abs(stored.storedTotals().value - (SU.unitValue(state.S, units[0].uid) + SU.unitValue(state.S, units[1].uid))) < 0.011);
+    await act('storage.retrieve', { unit: units[0].uid, uids: SU.contents(state.S, units[0].uid).slice(0, 7).map((it) => it.uid) });
+    await act('storage.deposit', { unit: units[2].uid, uids: loose().slice(0, 3).map((it) => it.uid) });
+    check('offline: and again after moves out of one unit and into another', agree() && stored.unitCount(units[0].uid) === 13 && stored.unitCount(units[2].uid) === 3 && stored.storedTotals().n === 21);
+    const top = SU.ownedItems(state.S).reduce((b, it) => (!b || itemValue(it) > itemValue(b) ? it : b), null);
+    check('offline: net worth and the most valuable item count what\'s stored, as the engine does', stored.ownedWorth() === ownedValue(state.S) && stored.bestOwned() === top
+      && stored.storedTotals().value === SU.storedOf(state.S).reduce((s, it) => s + itemValue(it), 0), `${stored.ownedWorth()} / ${ownedValue(state.S)}`);
+    const gem = { ...makeSkinItem(skinDef, { src: 'test' }), uid: 'gem', fl: 0.2 };
+    state.S.inv.push(gem);
+    await act('storage.deposit', { unit: units[2].uid, uids: [gem.uid] });
+    check('offline: (a deposit is counted at once)', stored.storedTotals().n === 22 && stored.ownedWorth() === ownedValue(state.S) && agree());
+    state.S.inv = invWas; state.S.stored = storedWas; state.S.money = moneyWas;
+    check('offline: (and a save put back as it was counts as it does)', agree() && stored.storedTotals().n === 0 && stored.unitCount(units[0].uid) === 0);
+  }
 
   // ---- a server without lean1 (an older one): everything as before ---------------------------------------------------------
   net.resume();
@@ -132,7 +164,7 @@ try {
   let sock = sockets.at(-1);
   sock.open();
   const hello = sock.sent[0];
-  check('the hello announces lean1 (and the Market\'s p2p1)', hello?.t === 'hello' && same(hello.caps, ['lean1', 'p2p1']) && hello.v === 1 && hello.token === 'tok', JSON.stringify(hello));
+  check('the hello announces lean1 (and the Market\'s p2p1, and players\' faces, face1)', hello?.t === 'hello' && same(hello.caps, ['lean1', 'p2p1', 'face1']) && hello.v === 1 && hello.token === 'tok', JSON.stringify(hello));
   gamblePage.open();
   sock.deliver(welcome({ lobbies: { battles: [], flips: [{ id: 'f' }], jackpot: null } }));
   await settle();
@@ -490,6 +522,45 @@ try {
     same(cases.ownedCases(C).map((it) => it.uid), ['c2']) && cases.ownedKeys(C).length === 2);
   sock.deliver({ t: 'trades.d', upd: [{ id: 'mine', status: 'cancelled', version: 2, updated: 99 }] });
   check('cases.js: the offer closed: it counts again', cases.ownedCases(C).length === 2);
+
+  // ---- faces.js: players known only by name or id, asked about together and put in place when the answer comes (face1) -------
+  {
+    const F = await import('../src/js/faces.js');
+    // (The page, as far as faces.js reaches into it: the faces to put in place, found by data-face, and the browser's helpers.)
+    const placed = [], page = globalThis.document;
+    globalThis.CSS = { escape: (s) => s };
+    globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
+    globalThis.document = { ...page, querySelectorAll: (sel) => { const m = /data-face="([^"]+)"/.exec(sel); return m ? [{ dataset: { fs: '28', fst: 'online' }, set outerHTML(v) { placed.push([m[1], v]); } }] : []; } };
+    D.badges['test-pin'] = { id: 'test-pin', n: 'Test Pin', ty: 'Pin', r: 3, img: '~test', tr: 1 };
+    sock.deliver(welcome({ caps: ['lean1', 'face1'] }));
+    await settle();
+    const sent0 = sock.sent.length, first = F.playerAvatar({ name: 'Olga' }, 28, 'online');
+    F.playerAvatar({ id: 7, name: 'Ivan' }, 28);
+    F.playerAvatar({ name: 'olga' }, 28); // (the same player again)
+    await new Promise((r) => setTimeout(r, 60));
+    const asks = sock.sent.slice(sent0).filter((m) => m.t === 'rpc' && m.ns === 'social' && m.m === 'faces');
+    check('faces: players known only by name or id are asked about in one request, each once (their initials meanwhile)', net.hasFaces() && asks.length === 1 && same(asks[0].args, { ids: [7], names: ['olga'] })
+      && /data-face="nolga"/.test(first) && /<b>OL<\/b>/.test(first) && !/av-badge/.test(first), JSON.stringify(asks));
+    const hash = 'a'.repeat(64);
+    sock.deliver({ t: 'res', id: asks[0].id, ok: true, r: [{ id: 3, name: 'Olga', avatar: null, country: '', level: 1, online: true, seen: 0, pic: hash, badge: 'test-pin' }, { id: 7, name: 'Ivan', avatar: null, country: '', level: 1, online: false, seen: 0, pic: null, badge: null }] });
+    await new Promise((r) => setTimeout(r, 30));
+    const olga = placed.find(([k]) => k === 'nolga')?.[1] || '';
+    check('faces: the answer puts each face in place, the size and ring kept: their picture (fetched from the server once) and featured badge', /data-pic="a{64}"/.test(olga) && /class="av-badge"/.test(olga) && /class="av online"/.test(olga)
+      && /--s:28px/.test(olga) && placed.some(([k]) => k === 'i7') && fetched.filter((u) => u.endsWith('/pic/' + hash)).length === 1, olga.slice(0, 160));
+    const facesAsked = () => sock.sent.filter((m) => m.m === 'faces').length, askedThen = facesAsked();
+    F.playerAvatar({ name: 'OLGA' }, 40);
+    await new Promise((r) => setTimeout(r, 60));
+    check('faces: known after that, by name or id, with nothing more asked', F.playerFace({ name: 'OLGA' }).pic === hash && F.playerFace({ id: 3 }).badge === 'test-pin' && F.playerFace({ id: 7 }).pic === null
+      && facesAsked() === askedThen);
+    sock.deliver(welcome({ caps: ['lean1'] }));
+    await settle();
+    F.forgetFaces();
+    const sent1 = sock.sent.length, plain = F.playerAvatar({ name: 'Olga', avatar: null }, 28);
+    await new Promise((r) => setTimeout(r, 60));
+    check('faces: a server without face1 is asked nothing (initials or the agent are drawn)', !net.hasFaces() && !sock.sent.slice(sent1).some((m) => m.m === 'faces') && /<b>OL<\/b>/.test(plain));
+    delete D.badges['test-pin'];
+    globalThis.document = page;
+  }
 
   // ---- no keep-alive -------------------------------------------------------------------------------------------------------
   check('no /health keep-alive: nothing fetches it, and nothing is set to every 5 minutes', !fetched.some((u) => /\/health/.test(u)) && !intervals.includes(5 * 60 * 1000), JSON.stringify({ fetched, intervals }));

@@ -1070,7 +1070,7 @@ function tierFreq(box, n) {
   const { upgradeState } = await E('economy');
   const AD = await E('admin');
   const MIN = 60e3, HOUR = 3600e3, t = 1.7e12;
-  check('passive: $100 a minute, 12 hours at most', L.PASSIVE.perMinute === 100 && L.PASSIVE.capHours === 12);
+  check('passive: $100 a minute and $100 more for each prestige, 12 hours at most', L.PASSIVE.perMinute === 100 && L.PASSIVE.perPrestige === 100 && L.PASSIVE.capHours === 12);
   // The rule.
   const r1 = L.passivePay(t, t + 3 * MIN + 25e3);
   check('passive: whole minutes only, and the part of a minute left over carries over', r1.minutes === 3 && r1.pay === 300 && r1.at === t + 3 * MIN && !r1.capped
@@ -1086,6 +1086,16 @@ function tierFreq(box, n) {
   check('passive: a clock gone backwards pays nothing and counts from its time', back.pay === 0 && back.at === t - 5 * MIN && L.passiveDue({ at: t }, t - 1));
   const none = L.passivePay(undefined, t);
   check('passive: no time yet pays nothing and counts from now', none.pay === 0 && none.at === t && L.passiveDue(undefined, t) && L.passiveDue({}, t));
+  // Prestige: each Service Medal adds $100 a minute; the 12 hours stay 12 hours.
+  check('passive: the rate is $100 + $100 × prestiges', L.passiveRate(0) === 100 && L.passiveRate(1) === 200 && L.passiveRate(2) === 300 && L.passiveRate() === 100);
+  const p2 = L.passivePay(t, t + 3 * MIN + 25e3, 2);
+  check('passive: with 2 prestiges, 3 whole minutes pay $900 and the clock moves as without', p2.minutes === 3 && p2.pay === 900 && p2.at === r1.at && !p2.capped);
+  const capP = L.passivePay(t, t + 30 * HOUR, 3);
+  check('passive: with 3 prestiges the cap is still 12 hours: 720 minutes at $400 ($288,000)', capP.minutes === 720 && capP.pay === 288000 && capP.capped && capP.at === t + 30 * HOUR);
+  check('passive: nothing due pays nothing at any rate', L.passivePay(t, t + MIN - 1, 5).pay === 0 && L.passivePay(undefined, t, 5).pay === 0 && L.passivePay(t, t - MIN, 5).pay === 0);
+  check('passive: prestiges are the profile\'s medals, a whole number from 0 to every medal there is', L.prestigesOf({ medals: 4 }) === 4 && L.prestigesOf({ medals: 2.7 }) === 2
+    && L.prestigesOf(undefined) === 0 && L.prestigesOf({}) === 0 && L.prestigesOf({ medals: -3 }) === 0 && L.prestigesOf({ medals: 'x' }) === 0 && L.prestigesOf({ medals: NaN }) === 0
+    && L.prestigesOf({ medals: 1e9 }) === L.MEDALS.length && L.passiveRate(1e9) === 100 + 100 * L.MEDALS.length && L.passiveRate(-2) === 100);
 
   // The action, on a save.
   const collect = (st, now, opts = {}) => { const ctx = ACT.makeCtx(st, { now, ...opts }); const r = ACT.runAction(ctx, 'passive.collect'); return { r, d: ACT.delta(ctx) }; };
@@ -1108,6 +1118,31 @@ function tierFreq(box, n) {
   check('passive: a clock put back pays nothing and counts again from its time', behind.r.earned === 0 && st.money === 72410 && st.passive.at === t
     && 'passive' in behind.d.set && !('money' in behind.d.set));
   check('passive: and pays from there as usual', collect(st, t + MIN).r.earned === 100 && st.money === 72510);
+
+  // Prestige on a save: the medals the profile has when it's collected.
+  {
+    const ps = freshState(t);
+    ps.prof = { ...ps.prof, medals: 2 };
+    const c1 = collect(ps, t + 2 * MIN);
+    check('passive: a save with 2 prestiges is paid $300 a minute', c1.r.earned === 600 && c1.r.minutes === 2 && ps.money === 610 && ps.passive.earned === 600
+      && Object.keys(c1.d.set).sort().join() === 'money,passive' && Object.keys(c1.r).sort().join() === 'capped,earned,minutes');
+    // A prestige the way a match brings it: past level 40, the next medal. The next collect pays at the new rate.
+    ps.prof = { ...ps.prof, level: L.MAX_LEVEL, xp: L.XP_PER_LEVEL - 1 };
+    const up = L.addXp(ps.prof, 1, { now: t });
+    ps.prof = up.prof;
+    check('passive: the prestige a level up past 40 brings counts from the next collect', up.medals.length === 1 && ps.prof.medals === 3 && collect(ps, t + 3 * MIN).r.earned === 400 && ps.money === 1010);
+    check('passive: and all of the time due is paid at the medals had when it\'s collected', collect(ps, t + 6 * MIN + 59e3).r.earned === 1200 && ps.money === 2210);
+    const held = { ...freshState(t), prof: { ...ps.prof } };
+    check('passive: a context without prestige (the server\'s rules before they\'re out) pays $100 a minute whatever the medals', held.prof.medals === 3
+      && collect(held, t + 2 * MIN, { prestige: false }).r.earned === 200 && collect(held, t + 3 * MIN).r.earned === 400);
+    const away = collect(ps, t + 6 * MIN + 20 * HOUR);
+    check('passive: 20 hours away with 3 prestiges: 12 hours of $400 a minute', away.r.earned === 288000 && away.r.capped && ps.money === 290210);
+    ps.prof = { ...ps.prof, medals: 'lots' };
+    check('passive: a medal count that isn\'t one pays as none', collect(ps, t + 6 * MIN + 20 * HOUR + MIN).r.earned === 100);
+    const noProf = freshState(t);
+    delete noProf.prof;
+    check('passive: a state without a profile pays $100 a minute', collect(noProf, t + MIN).r.earned === 100);
+  }
 
   // Saves and accounts from before passive income: no back pay.
   const { passive: _p, ...older } = freshState(t - 30 * 24 * HOUR);
@@ -1319,6 +1354,47 @@ function tierFreq(box, n) {
     st.money = 1e4;
     for (let i = 0; i < SU.MAX_UNITS; i++) unit();
     check('Storage Unit: there is a limit on how many you own', code(() => run('storage.buy', {})) === 'units' && SU.unitsOf(st).length === SU.MAX_UNITS);
+  }
+  {
+    // 100 of them (it was 20), bought ten at a time; a buy that would go past it is refused whole, and costs nothing.
+    const { st, run } = setup();
+    st.money = 1e4;
+    for (let i = 0; i < 9; i++) run('storage.buy', { n: 10 });
+    run('storage.buy', { n: 5 });
+    const money = st.money;
+    let msg = '';
+    try { run('storage.buy', { n: 10 }); } catch (e) { msg = e.message; }
+    check('Storage Unit: you can own 100 (up from 20)', SU.MAX_UNITS === 100 && SU.unitsOf(st).length === 95 && /100 at most/.test(msg) && st.money === money && SU.unitsOf(st).length === 95, msg);
+    run('storage.buy', { n: 5 });
+    check('Storage Unit: the 100th fits, the 101st is refused', SU.unitsOf(st).length === 100 && code(() => run('storage.buy', {})) === 'units' && SU.unitsOf(st).length === 100);
+    // Staff can still give more (the panels' items.give doesn't count them), and an account with more keeps them all.
+    st.inv.push(I.makeUnitItem('Admin'));
+    const kept = upgradeState(JSON.parse(JSON.stringify(st)));
+    check('Storage Unit: more than 100 (given by staff) stay as they are, and none more can be bought', SU.unitsOf(kept).length === 101 && code(() => run('storage.buy', {})) === 'units');
+  }
+  {
+    // The server's rules while the release that brings 100 units isn't out (server/index.mjs HELD_RULES): a context's maxUnits.
+    const { st, run } = setup();
+    st.money = 1e4;
+    for (let i = 0; i < 2; i++) run('storage.buy', { n: 10 }, { maxUnits: 20 });
+    let msg = '';
+    try { run('storage.buy', {}, { maxUnits: 20 }); } catch (e) { msg = e.message; }
+    check('Storage Unit: a context\'s maxUnits (the server\'s rules before 100 are out) is the most that can be bought; by default 100', SU.unitsOf(st).length === 20 && /20 at most/.test(msg)
+      && ACT.makeCtx(st).maxUnits === SU.MAX_UNITS && code(() => run('storage.buy', {})) === null, msg);
+  }
+  {
+    // What a list of units reads: every unit's count and value from one pass, the same as unitCount and unitValue each.
+    const { st, run, named } = setup();
+    st.money = 1e4;
+    const us = Array.from({ length: 6 }, (_, i) => named('u' + i));
+    st.inv.push(...Array.from({ length: 60 }, (_, i) => skinOf({ fl: 0.01 + i / 100 })), ...Array.from({ length: 9 }, () => I.makeStickerItem(stickerDef, 'test')));
+    const loose = st.inv.filter((it) => !I.isUnit(it));
+    us.slice(0, 5).forEach((u, k) => run('storage.deposit', { unit: u.uid, uids: loose.filter((_, i) => i % 5 === k).map((it) => it.uid) }));
+    const tot = SU.unitTotals(st), counts = SU.unitCounts(st);
+    check('Storage Unit: unitTotals and unitCounts: every unit\'s count and value in one pass, as unitCount and unitValue give them',
+      us.every((u) => (tot.get(u.uid)?.n || 0) === SU.unitCount(st, u.uid) && (tot.get(u.uid)?.value || 0) === SU.unitValue(st, u.uid) && (counts.get(u.uid) || 0) === SU.unitCount(st, u.uid))
+      && SU.unitCount(st, us[0].uid) === 14 && !tot.has(us[5].uid) && !counts.has(us[5].uid) && [...tot.values()].reduce((s, x) => s + x.n, 0) === 69);
+    check('Storage Unit: and nothing stored, nothing counted', SU.unitTotals({ inv: [] }).size === 0 && SU.unitCounts({ inv: [], stored: [] }).size === 0);
   }
   {
     const { st, ctx } = setup();
@@ -2256,6 +2332,269 @@ function tierFreq(box, n) {
   check('Stickers in Play: one a player placed is the right way up, with no mask to read', [placed, assets.botMaterial(placed)].every((m) => { const r = shaded(m); return r.up && !r.masked; }));
   check('Stickers in Play: an icon in place of CS2\'s texture is left as it is', !shaded(icon).up && !shaded(assets.botMaterial(icon)).up);
   check('Stickers in Play: masked and unmasked don\'t share a shader', new Set([inSlot, placed, icon].map((m) => m.customProgramCacheKey())).size === 3);
+}
+
+// ---- badges: CS2's collectibles as items; only the Pins Capsules' pins can be had, and only they trade ------------------------
+// (Last: it loads the game data again with src/data/badges.json, and again without it at the end.)
+{
+  const BD = await E('badgedata');
+  const B = await E('badges');
+  const N = await E('npcs');
+  const SU = await E('storage');
+  const P = await E('p2p');
+  const IX = await E('itemindex');
+  const ADM = await E('admin');
+  const DB = await E('database');
+  const { lockBase } = await E('custom');
+  const { PIN_ODDS } = await E('data');
+  const read = (f) => JSON.parse(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+  const game = read('src/data/game-data.json'), keys = read('src/data/keys.json'), file = read('src/data/badges.json');
+  // (CS2's raw item data is only on a PC that has run the data build (cache/ isn't in git): without it, the checks against it
+  // check what the shipped badges.json holds, and the rebuild check is skipped.)
+  const hasRaw = fs.existsSync(path.join(ROOT, 'cache/raw/collectibles.json')) && fs.existsSync(path.join(ROOT, 'cache/raw/crates.json'));
+  const rawCol = hasRaw ? read('cache/raw/collectibles.json') : null, rawCrates = hasRaw ? read('cache/raw/crates.json') : null;
+  const frozen = JSON.stringify(file);
+  // NPCs' starting inventories without badges, to compare with theirs once there are badges.
+  const npcSeed = 4242, firstNpcs = N.crowd(npcSeed).slice(0, 60);
+  const plainInv = firstNpcs.map((n) => N.startingState(npcSeed, n).inv.map((it) => `${it.t}:${it.id}:${it.fl}:${it.sd}:${it.sn || ''}`).join());
+  const lockBefore = D.lock;
+  initData(game, { keys, badges: file });
+  const code = (fn) => { try { fn(); } catch (e) { return e instanceof ACT.GameError ? e.code : 'crash: ' + e.message; } return null; };
+  const setup = () => {
+    const st = { ...freshState(), money: 1000 };
+    const run = (name, args, o) => { const c = ACT.makeCtx(st, { rng, ...o }); const r = ACT.runAction(c, name, args); return { r, d: ACT.delta(c) }; };
+    const add = (id) => { const it = I.makeBadgeItem(D.badges[id], 'Admin'); st.inv.unshift(it); return it; };
+    return { st, run, add };
+  };
+
+  // The data
+  const all = Object.values(D.badges), pins = all.filter((b) => b.tr), caps = B.pinCapsules();
+  check('Badges: every one of CS2\'s 667 collectibles is a badge, each with a name, kind, rarity and picture', (!rawCol || all.length === rawCol.length) && all.length === 667
+    && all.every((b) => b.n && b.ty && [0, 2, 3, 4, 5].includes(b.r) && /^(~|https:\/\/cdn\.steamstatic\.com\/apps\/730\/)/.test(b.img)), `${all.length}`);
+  const rawCaps = rawCrates ? rawCrates.filter((c) => c.type === 'Pins') : null;
+  check('Badges: the 4 Collectible Pins Capsules (Series 1, 2, 3 and Half-Life: Alyx) are cases of their own kind, needing no key', caps.length === 4 && (!rawCaps || rawCaps.length === 4)
+    && caps.every((c) => c.kind === 'pins' && !c.key && !keyFor(c) && c.price > 0 && D.caseById[c.id] === c && casePrice(c) === c.price)
+    && ['Series 1', 'Series 2', 'Series 3', 'Half-Life: Alyx'].every((s) => caps.some((c) => c.n.includes(s))), caps.map((c) => `${c.n} $${c.price}`).join(', '));
+  const inCaps = new Set(caps.flatMap((c) => Object.values(c.pools).flat()));
+  check('Badges: the capsules hold exactly their 45 pins, and those are the only badges that trade', inCaps.size === 45 && pins.length === 45
+    && pins.every((b) => inCaps.has(b.id) && b.ty === 'Pin' && D.caseById[b.box]?.pools[b.r]?.includes(b.id))
+    && (!rawCaps || rawCaps.every((c) => c.contains.every((x) => D.badges[x.id]?.tr && D.badges[x.id].box === c.id))));
+  check('Badges: Genuine (operation) pins, coins, medals, trophies and passes are in the game but don\'t trade',
+    all.filter((b) => b.ty === 'Pin' && !b.tr).length === 34 && all.filter((b) => !b.tr).every((b) => b.p === 0 && !b.box)
+    && ['Service Medal', 'Operation Coin', 'Map Contributor Coin', "Pick'Em Coin", 'Premier Season Coin', 'Tournament Finalist Trophy', 'Operation Pass', 'Tournament Pass', 'Veteran Coin'].every((t) => all.some((b) => b.ty === t && !b.tr)));
+  check('Badges: names tell every badge apart (a Service Medal\'s level, a Premier Medal\'s colour, a CS2 map\'s coin)', new Set(all.map((b) => I.itemName({ t: 'badge', id: b.id }))).size === all.length
+    && I.itemName({ t: 'badge', id: 'collectible-1340' }) === '2016 Service Medal (Level 2)');
+  check('Badges: pins have market prices, from the price data the build reads', pins.every((b) => b.p > 0.5 && b.p < 500) && caps.every((c) => c.price > 1 && c.price < 50));
+
+  // The lock
+  check('Badges: they\'re part of the data lock (+bd.<hash>), and the game data\'s own build is still what a price patch goes by',
+    D.lock === `${game.generatedAt}+bd.${BD.badgeLock(file)}` && lockBefore === game.generatedAt && lockBase(D.lock) === game.generatedAt && D.generatedAt === game.generatedAt && D.bd?.app === file.app, D.lock);
+  const tweak = (fn) => { const b = structuredClone(file); fn(b); return BD.badgeLock(b); };
+  const L0 = BD.badgeLock(file);
+  check('Badges: prices, pictures and descriptions aren\'t in the lock (they reach games through the price patch)', tweak((b) => { b.badges['collectible-6101'].p = 999; b.badges['collectible-6101'].img = 'x'; b.badges['collectible-6101'].desc = 'y'; b.cases[0].price = 1; b.app = '9.9.9'; }) === L0);
+  check('Badges: what an item is, is: a name, a rarity, whether it trades, a capsule\'s contents',
+    [(b) => { b.badges['collectible-6101'].n = 'X'; }, (b) => { b.badges['collectible-6101'].r = 4; }, (b) => { b.badges['collectible-874'].tr = 1; }, (b) => { b.cases[0].pools['2'].pop(); }, (b) => { delete b.badges['collectible-874']; }]
+      .every((fn) => tweak(fn) !== L0));
+  check('Badges: merging leaves the parsed files as they were, and no badges file means no badges (the lock is as before)', JSON.stringify(file) === frozen
+    && (() => { initData(game, { keys }); const ok = !Object.keys(D.badges).length && D.lock === game.generatedAt && !D.cases.some((c) => c.kind === 'pins') && D.bd === null; initData(game, { keys, badges: file }); return ok; })());
+  if (!hasRaw) console.log('SKIP  Badges: the build script check needs cache/raw (run the data build on this PC)');
+  else check('Badges: the build script makes the same badges from the raw data (scripts/build-badges.mjs)', await (async () => {
+    const { buildBadges } = await import(new URL('../scripts/build-badges.mjs', import.meta.url));
+    const b = buildBadges();
+    return !b.problems.length && BD.badgeLock({ format: file.format, badges: b.badges, cases: b.cases }) === L0;
+  })());
+
+  // Opening a capsule
+  const s1 = caps.find((c) => c.n.includes('Series 1'));
+  check('Pins Capsules: CS2\'s capsule odds (High Grade, Remarkable, Exotic, Extraordinary)', JSON.stringify(caseTiers(s1)) === JSON.stringify(Object.entries(PIN_ODDS)));
+  {
+    const r = mulberry32(777), n = 40000, by = {};
+    for (let i = 0; i < n; i++) { const it = I.rollFromCase(s1, r); by[D.badges[it.id].r] = (by[D.badges[it.id].r] || 0) + 1; }
+    const tw = Object.values(PIN_ODDS).reduce((a, b) => a + b, 0);
+    check('Pins Capsules: drops come at those odds', Object.entries(PIN_ODDS).every(([k, w]) => near((by[k] || 0) / n, w / tw, 0.006)), JSON.stringify(by));
+  }
+  {
+    const { st, run } = setup();
+    const before = st.money;
+    run('case.buy', { id: s1.id, n: 2 });
+    check('Pins Capsules: bought in the Store at their price, to the inventory', near(st.money, before - s1.price * 2, 1e-6) && st.inv.filter((it) => it.t === 'crate' && it.id === s1.id).length === 2);
+    const got = run('case.open', { id: s1.id, n: 2 }).r.items;
+    check('Pins Capsules: open without a key into pins, numbered like any unboxing and on the Index', got.length === 2 && got.every((it) => it.t === 'badge' && D.badges[it.id].box === s1.id && it.sn >= 1 && it.src === s1.n && st.inv.includes(it))
+      && got.every((it) => st.index.items[it.id]?.n >= 1) && !st.inv.some((it) => it.t === 'crate'));
+    const pin = got[0];
+    check('Pins: they trade (trades, the Market, stakes, Storage Units)', I.tradable(pin) && !I.isBound(pin) && P.listRefusal(pin) === '' && SU.storeRefusal(pin) === '' && P.categoryOf(pin) === 'pin');
+    const u = run('storage.buy', {}).r.items[0];
+    run('storage.name', { unit: u.uid, name: 'pins' });
+    run('storage.deposit', { unit: u.uid, uids: [pin.uid] });
+    check('Pins: one goes into a Storage Unit, and still counts as theirs', SU.contents(st, u.uid).some((it) => it.uid === pin.uid) && B.ownsBadge(st, pin.id) && B.featuredBadge(st, pin.id) === pin.id);
+    run('storage.retrieve', { unit: u.uid, uids: [pin.uid] });
+    const value = I.itemValue(got[1]);
+    const sold = run('item.sell', { uids: [got[1].uid] }).r;
+    check('Pins: they sell to the Store for their value', near(sold.total, value, 1e-9) && !st.inv.includes(got[1]));
+    check('Pins: auto-sell can sell one as it drops (a bound badge never)', I.autoSellMatch(pin, { on: true, below: 1e6, ranks: [] }) && !I.autoSellMatch(I.makeBadgeItem(D.badges['collectible-874']), { on: true, below: 1e6, ranks: [0, 5] }));
+    check('Pins: and they stake', code(() => run('gamble.coinflip', { money: 0, uids: [pin.uid], side: 't', clientSeed: 's' })) === null);
+  }
+  check('Pins: nowhere sells them: not the Store\'s cases or tools, nor the Market\'s stock', code(() => setup().run('case.buy', { id: 'collectible-6101', n: 1 })) === 'bad'
+    && code(() => setup().run('market.buy', { kind: 'badge', id: 'collectible-6101', n: 0 })) === 'bad' && code(() => setup().run('tools.buy', { id: 'collectible-6101' })) === 'bad');
+
+  // Bound badges: nobody can get one but from staff, and nothing moves one
+  {
+    const { st, run, add } = setup();
+    const medal = add('collectible-1340'), coin = add('collectible-874');
+    check('Bound badges: everything but a capsule\'s pin', I.isBound(medal) && !I.tradable(medal) && I.isBound({ t: 'badge', id: 'collectible-6001' }) && !I.isBound({ t: 'badge', id: 'collectible-6101' }) && I.itemValue(medal) === 0);
+    const money = st.money;
+    const paths = {
+      'a sale': () => run('item.sell', { uids: [medal.uid] }),
+      'a coinflip stake': () => run('gamble.coinflip', { money: 1, uids: [medal.uid], side: 't', clientSeed: 's' }),
+      'a jackpot stake': () => run('gamble.jackpot', { money: 1, uids: [medal.uid], bots: 1, clientSeed: 's' }),
+      'a server-style take (trades, escrow)': () => ACT.take(ACT.makeCtx(st), [medal.uid]),
+      'a trade-up': () => run('tradeup.sign', { uids: [medal.uid, coin.uid] }),
+      'stickers': () => run('stickers.apply', { uid: medal.uid, stickers: [{ srcUid: coin.uid, x: 0.5, y: 0.5, r: 0 }] }),
+      'a charm': () => run('charms.attach', { uid: medal.uid, charm: coin.uid }),
+      'a Name Tag': () => run('tools.name', { uid: medal.uid, name: 'x' }),
+    };
+    for (const [name, fn] of Object.entries(paths)) check(`Bound badges: refuse ${name}`, code(fn) !== null && st.inv.includes(medal) && st.inv.includes(coin) && st.money === money, code(fn));
+    check('Bound badges: a sale or stake says why (code bound)', code(paths['a sale']) === 'bound' && code(paths['a coinflip stake']) === 'bound');
+    const u = run('storage.buy', {}).r.items[0];
+    run('storage.name', { unit: u.uid, name: 'x' });
+    check('Bound badges: no Storage Unit takes one (as CS2 keeps out Service Medals)', code(() => run('storage.deposit', { unit: u.uid, uids: [medal.uid] })) === 'unit' && st.inv.includes(medal) && /can't go into a Storage Unit/.test(SU.storeRefusal(medal)));
+    check('Bound badges: the Market refuses one', /can't be listed/.test(P.listRefusal(medal)) && code(() => run('p2p.list', { uid: medal.uid, price: 5 })) === 'item' && st.inv.includes(medal));
+    run('npc.tick');
+    const npc = N.crowd(st.social.seed)[0];
+    check('Bound badges: an NPC trader can\'t be offered one', code(() => run('npc.offer', { npc: npc.id, give: { uids: [medal.uid] }, get: { money: 1 } })) === 'bound');
+    check('Bound badges: they lock, and show on a profile\'s showcase', code(() => run('item.lock', { uid: medal.uid, lk: true })) === null && run('persona.set', { showcase: [medal.uid] }).r.me.showcase.includes(medal.uid));
+    run('item.lock', { uid: medal.uid, lk: false });
+    const c = ACT.makeCtx(st);
+    check('Bound badges: staff can take one away', ACT.takeForStaff(c, [coin.uid]).length === 1 && !st.inv.includes(coin));
+    check('Bound badges: they aren\'t in the Market\'s catalog; a capsule\'s pins are', !P.catalog().some((e) => e.t === 'badge' && !D.badges[e.id].tr) && pins.every((b) => P.catalogEntry(`badge:${b.id}`)?.cat === 'pin'));
+  }
+
+  // Staff giving them
+  {
+    const spec = ADM.giveSpecs([{ t: 'badge', id: 'collectible-1340', n: 2 }, { t: 'badge', id: 'collectible-6101' }]);
+    const st = { serials: {} }, made = ADM.buildItems(spec.specs, ADM.localSerial(st));
+    check('Admin: staff give any badge; a pin is numbered as it would be unboxed, a bound badge isn\'t', made.length === 3 && made.every((it) => it.t === 'badge' && it.src === 'Admin' && it.nw)
+      && made.filter((it) => it.id === 'collectible-1340').every((it) => !it.sn) && made.find((it) => it.id === 'collectible-6101').sn === 1 && ADM.ITEM_KINDS.includes('badge'));
+    check('Admin: an unknown badge is refused', (() => { try { ADM.giveSpecs([{ t: 'badge', id: 'collectible-0' }]); return false; } catch (e) { return /Unknown badge/.test(e.message); } })());
+    const save = { ...freshState(), money: 5, inv: [I.makeBadgeItem(D.badges['collectible-6101'])], listed: [{ ...I.makeBadgeItem(D.badges['collectible-874']), lid: 'l1', lp: 5, lat: 1 }] };
+    check('Admin: a save that has a bound badge on the Market isn\'t one the game wrote', (() => { try { ADM.saveFile(save); return false; } catch (e) { return /listed\[0\]/.test(e.message); } })());
+  }
+
+  // What a profile reads (engine/badges.js)
+  {
+    const { st, add } = setup();
+    add('collectible-874'); add('collectible-6101'); add('collectible-6101');
+    st.stored = [{ ...I.makeBadgeItem(D.badges['collectible-6132']), su: 'u1', sat: 1 }];
+    const list = B.badgesOf(st);
+    check('Profile: badgesOf lists each badge once with its copies (inventory and Storage Units), rarest first', list.length === 3 && list.find((x) => x.id === 'collectible-6101').n === 2
+      && list.some((x) => x.id === 'collectible-6132') && list.every((x, i) => !i || list[i - 1].def.r >= x.def.r) && B.isBadge({ t: 'badge' }) && !B.isBadge({ t: 'sticker' }));
+    check('Profile: a featured badge is kept while they own one, and only then', B.featuredBadge(st, 'collectible-874') === 'collectible-874' && B.featuredBadge(st, 'collectible-6132') === 'collectible-6132'
+      && B.featuredBadge(st, 'collectible-6102') === null && B.featuredBadge(st, 'nonsense') === null && B.featuredBadge(st, null) === null && B.featuredBadge(st, { toString: () => 'collectible-874' }) === 'collectible-874');
+    st.listed = [{ ...I.makeBadgeItem(D.badges['collectible-6102']), lid: 'l', lp: 9, lat: 1 }];
+    check('Profile: one listed on the Market isn\'t theirs to show', !B.ownsBadge(st, 'collectible-6102'));
+  }
+
+  // The Index and the Item Database
+  check('Index: the capsules are sets with a reward, and their pins go on the record as unboxed', caps.every((c) => IX.setOf(c.id)?.ids.length === Object.values(c.pools).flat().length && IX.goalOf(IX.setOf(c.id).goal))
+    && IX.kindOf('collectible-6101') === 'badge' && IX.RECORD_TYPES.some(([k]) => k === 'badge'));
+  check('Item Database: badges are one of its kinds', DB.DB_TYPES.includes('badge') && DB.countCopies([{ t: 'badge', id: 'collectible-874' }, { t: 'badge', id: 'collectible-874' }])['badge:collectible-874'] === 2);
+
+  // Prices
+  {
+    const pricing = createRequire(import.meta.url)('../shared/pricing.cjs');
+    const b = structuredClone(file.badges);
+    const idx = pricing.buildIndex({ skinport: [{ market_hash_name: 'Dust II Pin', min_price: 31.5, suggested_price: 30, quantity: 3 }, { market_hash_name: '5 Year Veteran Coin', min_price: 9, suggested_price: 9, quantity: 3 }] });
+    const n = pricing.applyPrices({ skins: {}, stickers: {}, agents: {}, cases: [], badges: b }, idx);
+    check('Prices: a refresh prices the pins from the markets, and leaves the bound badges at $0', b['collectible-6101'].p === 31.5 && b['collectible-874'].p === 0 && n.badges === 1);
+  }
+
+  // NPC traders own some pins (their own seed: the rest of what they start with is as it was)
+  {
+    const withPins = firstNpcs.map((n) => N.startingState(npcSeed, n).inv);
+    const same = withPins.every((inv, i) => inv.filter((it) => it.t !== 'badge').map((it) => `${it.t}:${it.id}:${it.fl}:${it.sd}:${it.sn || ''}`).join() === plainInv[i]);
+    const owners = N.crowd(npcSeed).filter((n) => N.startingState(npcSeed, n).inv.some((it) => it.t === 'badge'));
+    check('NPCs: some own pins from the capsules, and everything else they start with is as before', same && owners.length > 100 && owners.length < 900
+      && owners.every((n) => N.startingState(npcSeed, n).inv.filter((it) => it.t === 'badge').every((it) => D.badges[it.id]?.tr)), `${owners.length} of 2000 own pins`);
+    const so = N.freshSocial(npcSeed), npc = owners[0];
+    check('NPCs: their pins show as their badges', B.badgesOf({ inv: N.inventoryOf(so, npc) }).length > 0);
+  }
+
+  // ---- profile pictures (engine/picture.js) and the featured badge (persona.set) ---------------------------------------------
+  {
+    const PIC = await E('picture');
+    const zlib = await import('node:zlib');
+    // Pictures made here: a real PNG (zlib, with its CRCs), and WebPs whose headers are as libwebp writes them (the checks read
+    // headers only, as the server's do).
+    const pngChunk = (type, data) => { const td = Buffer.concat([Buffer.from(type, 'latin1'), data]), len = Buffer.alloc(4), crc = Buffer.alloc(4); len.writeUInt32BE(data.length); crc.writeUInt32BE(zlib.crc32(td)); return Buffer.concat([len, td, crc]); };
+    const png = (w, h, { extra = [], tail = Buffer.alloc(0), noise = 0 } = {}) => {
+      const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6;
+      const raw = Buffer.alloc((w * 4 + 1) * h); for (let i = 0; i < noise; i++) raw[(i * 7919) % raw.length] = (i * 31) & 255;
+      return new Uint8Array(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), pngChunk('IHDR', ihdr), ...extra.map(([t, d]) => pngChunk(t, d)), pngChunk('IDAT', zlib.deflateSync(raw, { level: noise ? 0 : 9 })), pngChunk('IEND', Buffer.alloc(0)), tail]));
+    };
+    const riffChunk = (tag, data) => { const head = Buffer.alloc(8); head.write(tag, 0, 'latin1'); head.writeUInt32LE(data.length, 4); return Buffer.concat([head, data, Buffer.alloc(data.length & 1)]); };
+    const riff = (chunks) => { const body = Buffer.concat(chunks), head = Buffer.alloc(12); head.write('RIFF', 0, 'latin1'); head.writeUInt32LE(4 + body.length, 4); head.write('WEBP', 8, 'latin1'); return new Uint8Array(Buffer.concat([head, body])); };
+    const vp8l = (w, h) => { const d = Buffer.alloc(15); d[0] = 0x2f; d.writeUInt32LE((((w - 1) & 0x3fff) | (((h - 1) & 0x3fff) << 14)) >>> 0, 1); return riffChunk('VP8L', d); };
+    const vp8 = (w, h) => { const d = Buffer.alloc(30); d.set([0x10, 0x02, 0x00, 0x9d, 0x01, 0x2a]); d.writeUInt16LE(w, 6); d.writeUInt16LE(h, 8); return riffChunk('VP8 ', d); };
+    const vp8x = (w, h, flags) => { const d = Buffer.alloc(10); d[0] = flags; d.writeUIntLE(w - 1, 4, 3); d.writeUIntLE(h - 1, 7, 3); return riffChunk('VP8X', d); };
+    const S = PIC.PIC_SIZE, ok = (b) => PIC.pictureProblem(b) === '';
+    const good = { png: png(S, S), lossless: riff([vp8l(S, S)]), lossy: riff([vp8(S, S)]), extended: riff([vp8x(S, S, 0x10), riffChunk('ALPH', Buffer.alloc(9)), vp8(S, S)]) };
+    check('Pictures: a 184 x 184 PNG, and WebP simple (lossy or lossless) and extended (with alpha), are taken', Object.values(good).every(ok)
+      && PIC.pictureInfo(good.png).type === 'png' && PIC.pictureInfo(good.lossy).type === 'webp' && PIC.pictureInfo(good.extended).w === S, JSON.stringify(Object.fromEntries(Object.entries(good).map(([k, b]) => [k, PIC.pictureProblem(b)]))));
+    const bad = {
+      'another size': png(185, 184), 'not square': riff([vp8l(184, 92)]), 'an APNG': png(S, S, { extra: [['acTL', Buffer.alloc(8)]] }), 'an animated WebP': riff([vp8x(S, S, 0x02), vp8l(S, S)]),
+      'an ANMF frame': riff([vp8x(S, S, 0), riffChunk('ANMF', Buffer.alloc(16))]), 'EXIF in a PNG': png(S, S, { extra: [['eXIf', Buffer.from('MM\0*')]] }), 'EXIF in a WebP': riff([vp8x(S, S, 0x08), vp8l(S, S)]),
+      'an XMP chunk': riff([vp8l(S, S), riffChunk('XMP ', Buffer.from('<x/>'))]), 'bytes after a PNG ends': png(S, S, { tail: Buffer.from('hidden') }), 'a RIFF the wrong length': (() => { const b = riff([vp8l(S, S)]); return new Uint8Array([...b, 1, 2]); })(),
+      'a cut-off PNG': png(S, S).subarray(0, 60), 'a JPEG': new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, 0]), 'a GIF': new Uint8Array(Buffer.from('GIF89a\xb8\0\xb8\0', 'latin1')), 'nothing': new Uint8Array(0),
+      'over 64 KB': png(S, S, { noise: 70000 }), 'not bytes': 'iVBORw0KGgo=',
+    };
+    const through = Object.entries(bad).filter(([, b]) => ok(b)).map(([k]) => k);
+    check(`Pictures: refused (${Object.keys(bad).length}): another size, animated, metadata, anything after the end, damaged, other types, too big`, !through.length && /up to 64 KB/.test(PIC.pictureProblem(bad['over 64 KB'])) && /animated/.test(PIC.pictureProblem(bad['an APNG'])) && /metadata/.test(PIC.pictureProblem(bad['EXIF in a WebP'])) && /184 x 184/.test(PIC.pictureProblem(bad['another size'])), through.join(', '));
+    // Only what a picture is made of: a browser's canvas writes a WebP as VP8X + ICCP (its sRGB colour profile) + ALPH + VP8.
+    const icc = (n) => riffChunk('ICCP', Buffer.alloc(n, 7));
+    const canvasLike = { opaque: riff([vp8x(S, S, 0x20), icc(456), vp8(S, S)]), alpha: riff([vp8x(S, S, 0x30), icc(456), riffChunk('ALPH', Buffer.alloc(47)), vp8(S, S)]),
+      'png with colour chunks': png(S, S, { extra: [['sRGB', Buffer.from([0])], ['gAMA', Buffer.alloc(4)], ['pHYs', Buffer.alloc(9)]] }) };
+    check('Pictures: what a browser\'s canvas makes is taken (a colour profile, alpha; a PNG\'s colour chunks)', Object.values(canvasLike).every(ok), JSON.stringify(Object.fromEntries(Object.entries(canvasLike).map(([k, b]) => [k, PIC.pictureProblem(b)]))));
+    const carrying = {
+      'XMP in a PNG (iTXt)': png(S, S, { extra: [['iTXt', Buffer.from('XML:com.adobe.xmp\0\0\0\0\0<x:xmpmeta/>')]] }), 'EXIF in a PNG (zTXt)': png(S, S, { extra: [['zTXt', Buffer.from('Raw profile type exif\0\0x')]] }),
+      'a PNG text chunk': png(S, S, { extra: [['tEXt', Buffer.from('Comment\0hi')]] }), 'a PNG chunk of its own': png(S, S, { extra: [['prVt', Buffer.alloc(40)]] }),
+      'a WebP chunk of its own': riff([vp8x(S, S, 0), vp8(S, S), riffChunk('JUNK', Buffer.alloc(30))]), 'a chunk after a simple WebP': riff([vp8(S, S), riffChunk('ICCP', Buffer.alloc(10))]),
+      'a big colour profile': riff([vp8x(S, S, 0x20), icc(30000), vp8(S, S)]), 'a canvas over a bigger image': riff([vp8x(S, S, 0), vp8(16000, 16000)]),
+      'two images': riff([vp8x(S, S, 0), vp8(S, S), vp8(S, S)]), 'an extended WebP with no image': riff([vp8x(S, S, 0x20), icc(100)]),
+    };
+    const carried = Object.entries(carrying).filter(([, b]) => ok(b)).map(([k]) => k);
+    check(`Pictures: nothing else rides along (${Object.keys(carrying).length}): text, EXIF or XMP in any chunk, chunks of anyone's own, a canvas that isn't its image's size`, !carried.length
+      && /metadata/.test(PIC.pictureProblem(carrying['XMP in a PNG (iTXt)'])) && /metadata/.test(PIC.pictureProblem(carrying['a WebP chunk of its own'])), carried.join(', '));
+    const url = PIC.bytesToDataUrl(good.lossless);
+    check('Pictures: a save keeps one as a data: URL of the type it is, and reads back the same bytes', url.startsWith('data:image/webp;base64,') && PIC.dataUrlProblem(url) === '' && Buffer.from(PIC.dataUrlBytes(url)).equals(Buffer.from(good.lossless))
+      && PIC.bytesToDataUrl(bad['an APNG']) === null);
+    check('Pictures: a data: URL that says another type, isn\'t base64 or isn\'t a picture is refused', !!PIC.dataUrlProblem(url.replace('image/webp', 'image/png')) && !!PIC.dataUrlProblem('data:image/png;base64,@@@') && !!PIC.dataUrlProblem('data:text/html;base64,PGI+')
+      && !!PIC.dataUrlProblem('https://example.com/a.png') && !!PIC.dataUrlProblem(null) && !!PIC.dataUrlProblem('data:image/png;base64,' + 'A'.repeat(100000)));
+
+    // persona.set: your picture, and the badge you feature
+    const { st, run, add } = setup();
+    const pin = add('collectible-6101');
+    const before = run('persona.set', { avatar: Object.keys(D.agents)[0] }).r.me;
+    const withPic = run('persona.set', { pic: url, badge: pin.id }).r.me;
+    check('persona.set: a picture of your own and a badge you have, kept with the save (the agent stays)', withPic.pic === url && withPic.badge === pin.id && withPic.avatar === before.avatar && st.social.me.pic === url);
+    const refusedPic = code(() => run('persona.set', { pic: PIC.bytesToDataUrl(good.png).replace('image/png', 'image/webp'), name: 'x' }));
+    check('persona.set: a picture that isn\'t one to keep is refused, and nothing else changes', refusedPic === 'bad' && st.social.me.pic === url && st.social.me.name !== 'x'
+      && code(() => run('persona.set', { pic: 'data:image/png;base64,' + Buffer.from(bad['an APNG']).toString('base64') })) === 'bad' && code(() => run('persona.set', { pic: 5 })) === 'bad');
+    check('persona.set: a badge you don\'t have, or isn\'t one, is refused', code(() => run('persona.set', { badge: 'collectible-874' })) === 'bad' && code(() => run('persona.set', { badge: 'nope' })) === 'bad' && st.social.me.badge === pin.id);
+    const off = run('persona.set', { pic: null, badge: null }).r.me;
+    check('persona.set: the picture and the badge come off with null, and what isn\'t sent stays', off.pic === null && off.badge === null && off.avatar === before.avatar
+      && run('persona.set', { badge: pin.id }).r.me.pic === null && st.social.me.badge === pin.id);
+    st.inv = st.inv.filter((it) => it !== pin);
+    check('A featured badge shows only while you have one (badges.js featuredBadge)', B.featuredBadge(st, st.social.me.badge) === null);
+    // The admin panel's save check keeps a picture the game made and a badge the save has, and drops anything else.
+    const file = { ...structuredClone(st), inv: [...st.inv, I.makeBadgeItem(D.badges['collectible-6102'])] };
+    file.social.me = { ...file.social.me, pic: url, badge: 'collectible-6102' };
+    const kept = ADM.saveFile(file).social.me;
+    file.social.me = { ...file.social.me, pic: 'data:image/png;base64,PHNjcmlwdD4=', badge: 'collectible-874' };
+    const dropped = ADM.saveFile(file).social.me;
+    check('Admin: a save\'s picture and featured badge are kept when the game could have made them, dropped otherwise', kept.pic === url && kept.badge === 'collectible-6102' && dropped.pic === null && dropped.badge === null);
+    check('A new profile has no picture and no badge', N.freshPersona().pic === null && N.freshPersona().badge === null);
+  }
+  initData(game, { keys });
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

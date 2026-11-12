@@ -3,7 +3,7 @@
 //                                     Postgres is used: in memory, or on disk with PGLITE_DIR=./server/.data)
 //   node server/index.mjs --admins alice,bob --discord-token-file <path>   (dev: staff by name, the bot's token from a file)
 // HTTP: GET /health, POST /api/register | /api/login | /api/logout | /api/reset, GET /api/prices (brotli, gzip or plain, by
-// the request's Accept-Encoding)
+// the request's Accept-Encoding), GET /pic/<hash> and POST /api/pic (players' profile pictures: face1, server/social.mjs)
 // WebSocket: /ws (protocol described in src/js/net/online.js), compressed with permessage-deflate when the game offers it
 // (Chromium and Electron always do; see DEFLATE). Capabilities: a game names the newer message shapes it understands in its
 // hello (caps: ['lean1']), and the server answers with the ones it will use (welcome.caps). Only a connection that announced
@@ -35,6 +35,7 @@ import { Passive, PASSIVE_TICK_MS } from './passive.mjs';
 import { P2PMarket, P2P } from './p2pmarket.mjs';
 import { D, initData } from '../src/js/engine/data.js';
 import { lockBase, dataLock, hasCustom, customPriceHash, stableJson } from '../src/js/engine/custom.js';
+import { hasBadges, badgeLock, withBadges } from '../src/js/engine/badgedata.js';
 import { makeCtx, runAction, delta, GameError } from '../src/js/engine/actions.js';
 import { dropEmbed } from './drops.mjs';
 import { marketWindow } from '../src/js/engine/market.js';
@@ -61,8 +62,25 @@ const PROTOCOL = 1;
 //   p2p1:  the Market (server/p2pmarket.mjs): its listings' changes ({ t: 'p2p.d' }), only while the game says its Market page
 //          is open ({ t: 'sub', p2p }). Its requests (ns 'p2p') are new ones: a game uses them on a server whose welcome names
 //          p2p1.
+//   face1: players' faces (server/social.mjs): a Person (social home, find, profile, and the chat push's `who`) with `pic`,
+//          their own profile picture's hash (GET /pic/<hash>), and `badge`, the badge they feature; a profile with `badges`,
+//          and profile.set's answer with its pic and badge; the staff panel's reports and players with their pictures (pic,
+//          about.pic, user.pic, and user.avatar and user.badge); and { t: 'faces.d', ids }, the players whose faces changed
+//          (social.mjs facesChanged). Its requests are new ones: social 'faces', POST /api/pic and admin 'pic.clear' and
+//          'pic.get', used on a server whose welcome names face1.
 export const LEAN = 'lean1';
-export const CAPS = new Set([LEAN, P2P]);
+export const FACE = 'face1';
+export const CAPS = new Set([LEAN, P2P, FACE]);
+// A profile picture's upload: its base64 in JSON, with the login's token (64 KB of picture, engine/picture.js). A body
+// past the limit is read to its end (up to BODY_DRAIN, then the connection is cut) so the 413 reaches the game.
+const PIC_BODY = 96 * 1024, BODY_DRAIN = 1024 * 1024;
+// The rules of the release before the badges' (1.1.5), which the server keeps while it runs no badges at all (with the release
+// gates on: the first badges wait for their release, badgeGate). They ship together, and until then the published game says
+// $100 a minute and 20 Storage Units at most, and was built for that many. Once the release is out the server starts again
+// with the badges, and without these (engine defaults: 100 units, $100 more a minute for each prestige: storage.js MAX_UNITS,
+// levels.js PASSIVE). Later badges waiting for their own release don't bring these back: the server runs the ones it ran
+// last meanwhile. makeCtx's options.
+export const HELD_RULES = Object.freeze({ maxUnits: 20, prestige: false });
 // WebSocket compression (permessage-deflate, RFC 7692). Each connection keeps its zlib streams between messages (context
 // takeover, ws's default, kept on purpose): a message is compressed against the ones before it, which is what makes a small
 // one, a reply or a lobbies push, shrink to a few dozen bytes. ws's 1 KB threshold only applies without context takeover.
@@ -87,8 +105,12 @@ const acceptsBrotli = (ae) => list(ae).some((part) => {
   return !q || Number(q.replace(/^q\s*=\s*/i, '')) > 0;
 });
 // Actions saved in a transaction before they're answered (others are written within a couple of seconds): what moves
-// items in and out of a Storage Unit, uses up a tool or claims an Index reward is never left only in memory.
-const IN_TRANSACTION = /^(storage|tools|index)\./;
+// items in and out of a Storage Unit, uses up a tool or claims an Index reward is never left only in memory. (A unit's label
+// moves nothing: it goes with the next save.) Each writes the player's whole state, which with 100 full Storage Units is
+// about 19 MB and over 100 ms of the server's thread: a player with more than HEAVY_STORED items stored can send TX_MAX of
+// them in TX_MS (more than anyone clicks; 20 full units, the old most, cost a fifth as much and go unlimited).
+const IN_TRANSACTION = /^(storage\.(?!name$)|tools\.|index\.)/;
+const HEAVY_STORED = 20000, TX_MAX = 10, TX_MS = 10000;
 // What a player opens or trades up to themselves: the rare ones go to the Discord server (see drops.mjs). Not a case battle's
 // drops, which another seat may have opened, and not a level-up reward, which isn't opened.
 const OPENED = new Set(['case.open', 'armory.redeem', 'tradeup.sign']);
@@ -132,6 +154,33 @@ export async function customGate({ db, custom, generatedAt, releaseOn, log = () 
   log(`[custom] custom content for version ${app || '(none: rebuild it with npm run custom)'} waits for its release (required now: ${required || 'none'}): `
     + `running ${live ? 'the custom content run last' : 'none'} until then (data lock ${lockOf(live)})`);
   return { use: live, held: { app, lock }, save: false, live };
+}
+
+// The same gate for badges (src/data/badges.json, CS2's collectibles and the Collectible Pins Capsules: engine/badgedata.js),
+// which are part of the data lock too (its `+bd.` part). Badges whose lock differs from the ones the server ran last (kv
+// 'badges') wait, with the release feed on, until the release they ship in (badges.app) is published; until then the server
+// runs the badges it ran last, or none: what the published release has. So pushing them keeps every game on the release
+// before playing, exactly as it did. Without the feed the file's badges always run.
+// Returns { use, held: null or { app, lock (the badges' part of the lock) }, save, live }.
+export async function badgeGate({ db, badges, releaseOn, log = () => {} }) {
+  const lockOf = (b) => badgeLock(hasBadges(b) ? b : null);
+  if (!releaseOn) return { use: badges, held: null, save: false, live: null };
+  const kv = async (k) => {
+    const { rows } = await db.query('SELECT v FROM kv WHERE k = $1', [k]);
+    return rows[0] && (typeof rows[0].v === 'string' ? JSON.parse(rows[0].v) : rows[0].v);
+  };
+  let live = null, required = null;
+  try { const k = await kv('badges'); live = typeof k?.json === 'string' ? JSON.parse(k.json) : null; } catch (e) { log('[badges] could not read the badges run last', e.message); }
+  try { required = (await kv('release'))?.version ?? null; } catch (e) { log('[badges] could not read the required version', e.message); }
+  live = hasBadges(live) ? live : null;
+  const go = { use: badges, held: null, save: true, live };
+  if (lockOf(badges) === lockOf(live)) return go;
+  if (!hasBadges(badges)) return go; // (taken out: nothing to wait for)
+  const app = parseVersion(badges.app) ? badges.app : null;
+  if (app && required && compareVersions(required, app) >= 0) return go;
+  log(`[badges] badges for version ${app || '(none: rebuild them with node scripts/build-badges.mjs --app <version>)'} wait for their release (required now: ${required || 'none'}): `
+    + `running ${live ? 'the badges run last' : 'none'} until then`);
+  return { use: live, held: { app, lock: lockOf(badges) }, save: false, live };
 }
 
 // The bot's options from the environment (false: no token, no bot). The token is read, never logged.
@@ -183,22 +232,43 @@ export async function startServer({
   clock = Date.now, passiveTick = PASSIVE_TICK_MS,
   // Custom content (src/js/engine/custom.js): undefined reads src/data/custom.json if there is one; tests pass a build's
   // object, or false for none. restart: how the server starts again (run directly: it stops, and systemd starts it), for
-  // custom content that waited for its release (customGate) once the release is out.
-  custom: customOpt, restart = null,
+  // custom content that waited for its release (customGate) once the release is out. badges: as custom, for
+  // src/data/badges.json (badgeGate).
+  custom: customOpt, badges: badgesOpt, restart = null,
+  // Whether the release gates hold back what waits for a release (customGate, badgeGate): with the release feed on, and in
+  // production always. RELEASE_FEED=off there (DEPLOY.md's emergency switch) lets every version in, but the server keeps
+  // running what the published release has: a lock that no published game has would lock everyone out instead.
+  gated = releaseOpt !== false || process.env.NODE_ENV === 'production',
 } = {}) {
   const data = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/game-data.json'), 'utf8'));
   const custom = customOpt === undefined ? readCustom(path.join(ROOT, 'src/data/custom.json')) : customOpt || null;
+  const badges = badgesOpt === undefined ? readCustom(path.join(ROOT, 'src/data/badges.json')) : badgesOpt || null;
   const db = await openDb(dbOpts);
   log(`[server] database: ${db.kind}`);
-  const gate = await customGate({ db, custom, generatedAt: data.generatedAt, releaseOn: releaseOpt !== false, log });
-  initData(data, { keys: JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/keys.json'), 'utf8')), custom: gate.use });
+  const gate = await customGate({ db, custom, generatedAt: data.generatedAt, releaseOn: !!gated, log });
+  const bgate = await badgeGate({ db, badges, releaseOn: !!gated, log });
+  initData(data, { keys: JSON.parse(fs.readFileSync(path.join(ROOT, 'src/data/keys.json'), 'utf8')), custom: gate.use, badges: bgate.use });
   if (D.cx) log(`[server] custom content: ${D.cx.skins} skins, ${D.cx.cases} cases (data lock ${D.lock})`);
+  if (D.bd) log(`[server] badges: ${D.bd.badges}, ${D.bd.cases} pin capsules (data lock ${D.lock})`);
+  // What waits for a release, custom content or badges, as one: the lock a game built with all of it has (both files', as this
+  // commit has them), and the earliest version any of it waits for.
+  const held = gate.held || bgate.held ? {
+    app: [gate.held?.app, bgate.held?.app].filter(Boolean).sort(compareVersions)[0] || null,
+    lock: withBadges(dataLock(data.generatedAt, hasCustom(custom) ? custom : null), hasBadges(badges) ? badges : null),
+  } : null;
   // (What runs now is what the published release has: kept for the next start, which may be before the next release.)
   if (gate.save) {
     const now = hasCustom(gate.use) ? gate.use : null;
     if (stableJson(now) !== stableJson(gate.live)) {
       await (now ? db.query("INSERT INTO kv (k, v) VALUES ('custom', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify({ json: JSON.stringify(now) })]) : db.query("DELETE FROM kv WHERE k = 'custom'"))
         .catch((e) => log('[custom] could not keep the custom content run', e.message));
+    }
+  }
+  if (bgate.save) {
+    const now = hasBadges(bgate.use) ? bgate.use : null;
+    if (stableJson(now) !== stableJson(bgate.live)) {
+      await (now ? db.query("INSERT INTO kv (k, v) VALUES ('badges', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify({ json: JSON.stringify(now) })]) : db.query("DELETE FROM kv WHERE k = 'badges'"))
+        .catch((e) => log('[badges] could not keep the badges run', e.message));
     }
   }
   const store = new Store(db, { log });
@@ -225,6 +295,8 @@ export async function startServer({
   const unitsSent = new Map();
   const srv = {
     db, store, log, INV_CAP, sockets, discord,
+    // (The game's rules as the published release has them, while what ships with them waits: HELD_RULES.)
+    rules: gated && !D.bd ? HELD_RULES : {},
     isOnline: (id) => sockets.has(id),
     forEachOnline: (fn) => { for (const id of sockets.keys()) fn(id); },
     sendTo(id, msg, except = null) {
@@ -235,6 +307,8 @@ export async function startServer({
     },
     // Whether a connection announced lean1 (see CAPS).
     lean: (ws) => !!ws?.caps?.has(LEAN),
+    // Whether a connection announced face1 (players' pictures and featured badges: server/social.mjs).
+    faces: (ws) => !!ws?.caps?.has(FACE),
     // A message shaped for each of a player's connections: pick(ws) gives it (null: nothing to that one). Each message
     // object is turned into text once, however many connections it goes to.
     sendEach(id, pick, except = null) {
@@ -323,24 +397,31 @@ export async function startServer({
   await trades.init();
   const socials = new Social(srv);
   srv.social = socials;
+  store.onCleared = (id) => socials.facesChanged(id); // (a save that took a featured badge off: faces.d)
   const live = new Live(srv);
   srv.live = live;
   await live.refundOpen();
   const admin = new Admin(srv, discord, { admins });
   srv.admin = admin;
   await admin.init();
-  // (Custom content that waits for its release, customGate: once the feed shows that version, the server starts again with
-  // it. A game that has it asking to play is a sign the release is out, so the feed is read then too, at most once a minute.)
+  // (Custom content or badges that wait for their release, customGate and badgeGate: once the feed shows that version, the
+  // server starts again with them. A game that has them asking to play is a sign the release is out, so the feed is read then
+  // too, at most once a minute.)
   let restarting = false, lastAsk = 0;
   const onVersion = (v) => {
-    if (!gate.held?.app || restarting || compareVersions(v, gate.held.app) < 0) return;
+    if (!held?.app || restarting || compareVersions(v, held.app) < 0) return;
     restarting = true;
-    log(`[custom] version ${v} is out: starting again with its custom content (data lock ${gate.held.lock})`);
-    if (restart) setTimeout(restart, 3000).unref?.(); // (a moment for the "update the game" notices to go out)
+    const what = [gate.held && 'its custom content', bgate.held && 'its badges'].filter(Boolean).join(' and ');
+    // (Players still on an older version were just told they'd be taken offline once release.grace is up, five minutes:
+    // the restart waits for that, as the notice says, and a game that has the new version is told the server is switching
+    // meanwhile. With nobody to wait for, a moment for the notices to go out.)
+    const wait = (release.outdated().length ? release.grace : 0) + 3000;
+    log(`[custom] version ${v} is out: starting again with ${what} in ${Math.round(wait / 1000)} s (data lock ${held.lock})`);
+    if (restart) setTimeout(restart, wait).unref?.();
     else log('[custom] (no restart here: start the server again to run it)');
   };
   srv.customWaits = () => {
-    if (!gate.held || restarting || Date.now() - lastAsk < 60000) return;
+    if (!held || !release.on || restarting || Date.now() - lastAsk < 60000) return;
     lastAsk = Date.now();
     release.poll().catch(() => {});
   };
@@ -367,9 +448,12 @@ export async function startServer({
   let marketAt = D.pricedAt;
   const buildPatch = () => {
     const pick = (obj, f) => Object.fromEntries(Object.values(obj).map((x) => [x.id, f(x)]));
+    // (Badges: the pins', the only ones with a market. Only when the server runs badges, so a patch without is as it was.)
+    const pins = Object.values(D.badges || {}).filter((b) => b.tr);
     pricePatch = {
       generatedAt: D.lock, pricedAt: D.pricedAt, // (the data lock: a game takes the patch only for its own data)
       skins: pick(D.skins, (s) => s.p), stickers: pick(D.stickers, (s) => s.p), agents: pick(D.agents, (a) => a.p),
+      ...(pins.length ? { badges: Object.fromEntries(pins.map((b) => [b.id, b.p])) } : {}),
       cases: Object.fromEntries(D.cases.filter((c) => !c.custom).map((c) => [c.id, c.price])),
       ...(cxp ? { cxp } : {}), ...(marketAt && marketAt !== D.pricedAt ? { marketAt } : {}),
     };
@@ -392,6 +476,7 @@ export async function startServer({
     for (const [id, v] of Object.entries(p.skins)) if (D.skins[id] && !D.skins[id].cx) D.skins[id].p = v;
     for (const [id, v] of Object.entries(p.stickers)) if (D.stickers[id]) D.stickers[id].p = v;
     for (const [id, v] of Object.entries(p.agents)) if (D.agents[id]) D.agents[id].p = v;
+    for (const [id, v] of Object.entries(p.badges || {})) if (D.badges[id]?.tr) D.badges[id].p = v;
     for (const [id, v] of Object.entries(p.cases)) if (D.caseById[id] && !D.caseById[id].cx) D.caseById[id].price = v;
     D.pricedAt = p.pricedAt;
   };
@@ -420,7 +505,7 @@ export async function startServer({
       log('[prices] refreshing from marketplaces…');
       const raw = await pricing.fetchSources(fetch, (m) => log('[prices]', m));
       if (!Object.values(raw).some(Boolean)) return;
-      pricing.applyPrices({ skins: D.skins, stickers: D.stickers, agents: D.agents, cases: D.cases }, pricing.buildIndex(raw));
+      pricing.applyPrices({ skins: D.skins, stickers: D.stickers, agents: D.agents, cases: D.cases, badges: D.badges }, pricing.buildIndex(raw));
       D.pricedAt = marketAt = new Date().toISOString();
       buildPatch();
       await db.query("INSERT INTO kv (k, v) VALUES ('prices', $1::jsonb) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v", [JSON.stringify(pricePatch)]);
@@ -484,12 +569,23 @@ export async function startServer({
   // ---- HTTP ----------------------------------------------------------------------------------------------
   const ipLimit = A.limiter(20, 60000);
   const nameLimit = A.limiter(30, 3600000);
+  const picLimit = A.limiter(30, 60000); // (uploads by address, before the login is looked up: social.mjs counts each player's)
+  const txLimit = A.limiter(TX_MAX, TX_MS); // (a heavy player's IN_TRANSACTION actions, by account)
   const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type', 'access-control-allow-methods': 'GET, POST, OPTIONS' };
   const json = (res, code, body) => { res.writeHead(code, { 'content-type': 'application/json', ...cors }); res.end(JSON.stringify(body)); };
-  const readBody = (req) => new Promise((resolve, reject) => {
+  // (A body past `max` is refused once it has all come, so the answer reaches the sender: cut off as it arrives, a browser
+  // reports a reset connection instead. Past BODY_DRAIN the connection is cut anyway.)
+  const readBody = (req, max = 16384) => new Promise((resolve, reject) => {
     let size = 0; const chunks = [];
-    req.on('data', (c) => { size += c.length; if (size > 16384) { reject(new Error('too large')); req.destroy(); } else chunks.push(c); });
-    req.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString() || '{}')); } catch { reject(new Error('bad json')); } });
+    if (Number(req.headers['content-length']) > BODY_DRAIN) { reject(new Error('too large')); req.destroy(); return; }
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > BODY_DRAIN) { reject(new Error('too large')); req.destroy(); } else if (size <= max) chunks.push(c);
+    });
+    req.on('end', () => {
+      if (size > max) return reject(new Error('too large'));
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString() || '{}')); } catch { reject(new Error('bad json')); }
+    });
     req.on('error', reject);
   });
   // The client's address (rate limits, network bans): the connection's own, unless TRUST_PROXY says how many reverse
@@ -514,8 +610,11 @@ export async function startServer({
       // many of them are compressed: behind a proxy, that the compression got through it.)
       if (url.pathname === '/health') {
         const conns = [...wss.clients];
-        // (customWaits: the version whose release the pushed custom content waits for, customGate; only while it does.)
-        return json(res, 200, { ok: true, online: sockets.size, data: D.lock, pricedAt: D.pricedAt, requiredVersion: release.required, ...(gate.held ? { customWaits: gate.held.app || 'a rebuild', customLock: gate.held.lock } : {}), discord: { connected: !!discord.status().connected }, commit,
+        // (customWaits: the version whose release the pushed custom content waits for, customGate; only while it does. The same
+        // for badges, badgeGate: badgesWait. customLock and badgesLock: the lock the server will have once it runs them, the
+        // one a game built from this commit sends.)
+        return json(res, 200, { ok: true, online: sockets.size, data: D.lock, pricedAt: D.pricedAt, requiredVersion: release.required, ...(gate.held ? { customWaits: gate.held.app || 'a rebuild', customLock: held.lock } : {}),
+          ...(bgate.held ? { badgesWait: bgate.held.app || 'a rebuild', badgesLock: held.lock } : {}), discord: { connected: !!discord.status().connected }, commit,
           ws: { connections: conns.length, deflate: conns.filter((c) => /permessage-deflate/.test(c.extensions)).length } });
       }
       if (url.pathname === '/') {
@@ -530,6 +629,41 @@ export async function startServer({
         const enc = acceptsBrotli(ae) && pricePatchBr ? 'br' : /gzip/.test(ae) ? 'gzip' : null; // (brotli: once it's made)
         res.writeHead(200, { 'content-type': 'application/json', ...(enc ? { 'content-encoding': enc } : {}), vary: 'Accept-Encoding', ...cors });
         return res.end(enc === 'br' ? pricePatchBr : enc === 'gzip' ? pricePatchGz : JSON.stringify(pricePatch));
+      }
+      // A profile picture (face1), by the hash of its bytes: the address changes with the picture, so it's cached for good.
+      // One taken down, or nobody's, isn't there.
+      const picPath = /^\/pic\/([0-9a-f]{64})$/.exec(url.pathname);
+      if (picPath && req.method === 'GET') {
+        const p = await socials.picture(picPath[1]);
+        if (!p) { res.writeHead(404, { 'cache-control': 'no-store', ...cors }); return res.end(); }
+        const tag = `"${picPath[1]}"`;
+        const head = { 'cache-control': 'public, max-age=31536000, immutable', etag: tag, 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'", ...cors };
+        if (req.headers['if-none-match'] === tag) { res.writeHead(304, head); return res.end(); }
+        res.writeHead(200, { 'content-type': p.type, 'content-length': p.data.length, ...head });
+        return res.end(p.data);
+      }
+      // A new profile picture of your own (face1): { token, data: its bytes in base64 } → { pic: its hash }. The login, bans and
+      // maintenance as a connection's; the picture itself is checked in social.mjs setPicture.
+      if (url.pathname === '/api/pic' && req.method === 'POST') {
+        const ip = ipOf(req);
+        if (!picLimit(ip)) return json(res, 429, { error: 'Too many attempts. Wait a minute.' });
+        let body;
+        try { body = await readBody(req, PIC_BODY); } catch (e) { return json(res, e.message === 'too large' ? 413 : 400, { error: e.message === 'too large' ? 'That picture is too big' : 'Not a picture' }); }
+        const u = await A.userForToken(db, body.token).catch(() => null);
+        if (!u) return json(res, 401, { error: 'Your login has expired. Log in again.', code: 'auth' });
+        const ban = await admin.activeBan({ userId: u.id, ipHash: admin.ipHash(ip) });
+        if (ban) return json(res, 403, { error: banText(ban), code: 'banned' });
+        if (admin.settings.maintenance && await admin.levelOf(u.id, { fast: true }) < 1) return json(res, 503, { error: admin.maintenanceMsg(), code: 'maintenance' });
+        // (Only while a game of theirs that reads faces is connected: one from before them, 1.1.5, can't show a picture, and its
+        // staff can't see, report or take one down. Such a game can't connect before the release that brings faces.)
+        if (![...(sockets.get(u.id) || [])].some((ws) => srv.faces(ws))) return json(res, 403, { error: 'Update the game to put up a profile picture', code: 'outdated' });
+        if (typeof body.data !== 'string' || body.data.length > PIC_BODY || !/^[A-Za-z0-9+/]+={0,2}$/.test(body.data)) return json(res, 400, { error: 'Not a picture' });
+        try {
+          return json(res, 200, await socials.setPicture(u.id, Buffer.from(body.data, 'base64')));
+        } catch (e) {
+          if (e instanceof GameError) return json(res, e.code === 'rate' ? 429 : 400, { error: e.message, code: e.code });
+          throw e;
+        }
       }
       if (req.method === 'POST' && ['/api/register', '/api/login', '/api/logout', '/api/reset'].includes(url.pathname)) {
         const ip = ipOf(req);
@@ -700,8 +834,9 @@ export async function startServer({
         const outdated = release.refusal(msg.app); // (first: an old game gets the reason it can read, whatever else differs)
         if (outdated) return refuse(outdated);
         if (msg.v !== PROTOCOL) return refuse({ t: 'fatal', error: 'Your game is a different version from the server. Update the game.', code: 'version' });
-        // (A game with the custom content that waits for its release: the release is out, or about to be. customGate.)
-        if (gate.held && msg.data === gate.held.lock && msg.data !== D.lock) {
+        // (A game with the custom content or badges that wait for their release: the release is out, or about to be. customGate,
+        // badgeGate.)
+        if (held && msg.data === held.lock && msg.data !== D.lock) {
           srv.customWaits();
           return refuse({ t: 'fatal', error: 'The server is switching to this version of the game. Try again in a few minutes.', code: 'version' });
         }
@@ -785,8 +920,11 @@ export async function startServer({
           const args = msg.args || {};
           const boughtNow = [];
           const name = String(msg.m);
+          if (IN_TRANSACTION.test(name) && (store.cache.get(user.id)?.st.stored?.length || 0) > HEAVY_STORED && !txLimit(user.id)) {
+            throw new GameError('Slow down: too many changes to your Storage Units, tools or Index at once. Wait a few seconds.', 'rate');
+          }
           const out = await store.withUser(user.id, async (e) => {
-            const ctx = makeCtx(e.st, { online: true, invCap: INV_CAP, reserved: trades.reserved(user.id), asked: trades.asked(user.id) });
+            const ctx = makeCtx(e.st, { ...srv.rules, online: true, invCap: INV_CAP, reserved: trades.reserved(user.id), asked: trades.asked(user.id) });
             // The market's stock is shared by everyone on the server.
             ctx.market = (w) => ({ has: (lid) => soldSet(w).has(lid), add: (lid) => { soldSet(w).add(lid); marketDirty = true; boughtNow.push([w, lid]); } });
             ctx.serial = srv.serial; // serial numbers are counted across the server
@@ -839,7 +977,7 @@ export async function startServer({
           return reply(true, { r: await live.rpc(user, String(msg.m), msg.args || {}) });
         }
         if (msg.ns === 'account') return reply(true, { r: await admin.accountRpc(user, String(msg.m), msg.args || {}) });
-        if (msg.ns === 'admin') return reply(true, { r: await admin.rpc(user, String(msg.m), msg.args || {}) });
+        if (msg.ns === 'admin') return reply(true, { r: await admin.rpc(user, String(msg.m), msg.args || {}, { faces: srv.faces(ws) }) });
         // The Market (server/p2pmarket.mjs): { r, d? }, d the changes to you (your other connections get them as a delta).
         if (msg.ns === 'p2p') return reply(true, await p2p.rpc(user, String(msg.m), msg.args || {}, ws));
         reply(false, { err: 'Unknown request' });

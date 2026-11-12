@@ -8,7 +8,7 @@ import { net } from '../net/online.js';
 import { sfx } from '../audio.js';
 import { toast, openModal, itemCard, patternTag, sellItems, openInspect, showItemDetail, rarityOddsHTML, creatorHTML } from '../ui.js';
 import { playCaseIntro } from '../caseintro.js';
-import { UNIT_CAP, UNIT_PRICE, unitsOf } from '../engine/storage.js';
+import { MAX_UNITS, UNIT_CAP, UNIT_PRICE, unitsOf } from '../engine/storage.js';
 import { buyUnit } from './storage.js';
 import { buyTool } from './tools.js';
 
@@ -86,7 +86,7 @@ export function caseEV(c) {
       }, 0) / c.rare.length;
     } else {
       const ids = c.pools[k];
-      const val = (id) => (SKIN_KINDS.has(c.kind) ? expectedSkin(D.skins[id], c.kind) : c.kind === 'agents' ? D.agents[id].p : D.stickers[id].p);
+      const val = (id) => (SKIN_KINDS.has(c.kind) ? expectedSkin(D.skins[id], c.kind) : c.kind === 'agents' ? D.agents[id].p : c.kind === 'pins' ? D.badges[id].p : D.stickers[id].p);
       avg = ids.reduce((s, id) => s + val(id), 0) / ids.length;
     }
     ev += (w / tw) * avg;
@@ -97,7 +97,7 @@ export function caseEV(c) {
 
 // ---- case list -----------------------------------------------------------------------------
 const FILTERS = [['case', 'Weapon Cases'], ['souvenir', 'Souvenir Packages'], ['package', 'Packages'], ['collection', 'Collections'],
-  ['capsule', 'Sticker Capsules'], ['autograph', 'Autograph Capsules'], ['special', 'Agents'], ['tools', 'Tools']];
+  ['capsule', 'Sticker Capsules'], ['autograph', 'Autograph Capsules'], ['pins', 'Pin Capsules'], ['special', 'Agents'], ['tools', 'Tools']];
 const majors = () => [...new Set(D.cases.filter((c) => c.kind === 'souvenir').map((c) => c.ev))].sort((a, b) => b - a);
 
 // The store's tools: the Storage Unit, and the Name Tag and StatTrak™ Swap Tool, any number at a time. They're only sold here.
@@ -129,7 +129,7 @@ function renderTools(root) {
       <div class="meta">
         <div class="n2">Storage Unit</div>
         <div class="row"><span class="price">${money(UNIT_PRICE)}</span><span class="key">holds ${UNIT_CAP.toLocaleString('en-US')} items</span></div>
-        <div class="row"><span class="dim" style="font-size:11px">Counts as one item. Can't be traded or sold.</span></div>
+        <div class="row"><span class="dim" style="font-size:11px">Counts as one item. Can't be traded or sold. You can own up to ${MAX_UNITS}${units ? ` (you have ${units})` : ''}.</span></div>
         <button class="btn gold" data-buyunit>Buy</button>
       </div>
     </div>${Object.values(I.TOOLS).map(toolCard).join('')}</div>
@@ -283,11 +283,12 @@ function defTile(kind, id, oddsEach) {
       <div class="meta"><div class="n1">${esc(w)}</div><div class="n2">${esc(f || '')}</div>
       <div class="row"><span class="wear">${money(lo)} – ${money(hi)}</span><span class="dim">${(oddsEach * 100).toFixed(oddsEach < 0.001 ? 3 : 2)}%</span></div></div></div>`;
   }
-  const d = kind === 'agents' ? D.agents[id] : D.stickers[id];
+  const d = kind === 'agents' ? D.agents[id] : kind === 'pins' ? D.badges[id] : D.stickers[id];
   const parts = kind === 'agents' ? d.n.split(' | ') : [d.n.replace('Sticker | ', '')];
-  return `<div class="card def" data-prev="${kind === 'agents' ? 'agent' : 'sticker'}|${id}|${oddsEach}" style="--rc:${rarityColor(d.r)}">
+  const what = kind === 'agents' ? 'agent' : kind === 'pins' ? 'badge' : 'sticker';
+  return `<div class="card def" data-prev="${what}|${id}|${oddsEach}" style="--rc:${rarityColor(d.r)}">
     <div class="img"><img loading="lazy" src="${imgUrl(d.img, 'm')}"></div><div class="rbar"></div>
-    <div class="meta"><div class="n1">${esc(parts[1] || (kind === 'agents' ? 'Agent' : 'Sticker'))}</div><div class="n2" title="${esc(parts[0])}">${esc(parts[0])}</div>
+    <div class="meta"><div class="n1">${esc(parts[1] || (kind === 'agents' ? 'Agent' : kind === 'pins' ? 'Pin' : 'Sticker'))}</div><div class="n2" title="${esc(parts[0])}">${esc(parts[0])}</div>
     <div class="row"><span class="val">${money(d.p)}</span><span class="dim">${(oddsEach * 100).toFixed(oddsEach < 0.001 ? 3 : 2)}%</span></div></div></div>`;
 }
 
@@ -319,8 +320,9 @@ function renderCase(root, c) {
     <div class="case-hero">
       <img class="ci" src="${caseImage(c)}" alt="">
       <div>
-        <div class="kicker">Unlock container · ${({ case: 'Weapon case', agents: 'Agent locker', autograph: 'Autograph capsule', capsule: 'Sticker capsule', souvenir: 'Souvenir package', package: 'Package' })[c.kind] || ''}</div>
+        <div class="kicker">Unlock container · ${({ case: 'Weapon case', agents: 'Agent locker', autograph: 'Autograph capsule', capsule: 'Sticker capsule', pins: 'Pin capsule', souvenir: 'Souvenir package', package: 'Package' })[c.kind] || ''}</div>
         <h2>${esc(c.n)}</h2>
+        ${c.kind === 'pins' ? '<div class="muted" style="margin:-4px 0 10px">Pins are collectibles: they show on your profile, and they trade, sell and go in Storage Units. A capsule is the only way to get one.</div>' : ''}
         ${c.kind === 'souvenir' ? `<div class="muted" style="margin:-4px 0 10px">${esc(D.events[c.ev]?.n || '')} · every drop is a Souvenir with that Major's team stickers${D.events[c.ev] && Object.keys(D.events[c.ev].mvp).length ? ' and a gold MVP autograph' : ''}${c.col && D.colById[c.col] ? ` · <a href="#" data-col="${c.col}">${esc(D.colById[c.col].n)}</a>` : ''}</div>` : ''}
         ${c.kind === 'package' && c.col && D.colById[c.col] ? `<div class="muted" style="margin:-4px 0 10px"><a href="#" data-col="${c.col}">${esc(D.colById[c.col].n)}</a></div>` : ''}
         <div class="stats">
@@ -377,6 +379,7 @@ function showContentPreview(c, kind, ids, odds) {
   const make = {
     sticker: () => I.makeStickerItem(D.stickers[ids[0]], c.n),
     agent: () => I.makeAgentItem(D.agents[ids[0]], c.n),
+    badge: () => I.makeBadgeItem(D.badges[ids[0]], c.n),
   }[kind];
   const item = make();
   const r = I.rarityInfo(item);

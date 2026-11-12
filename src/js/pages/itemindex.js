@@ -15,8 +15,8 @@ import { caseImage, openCaseView, openCollectionView } from './cases.js';
 
 const PAGE = 120;
 // As the Cases page lists them (a charm collection is a collection here).
-const KINDS = [['case', 'Weapon Cases'], ['souvenir', 'Souvenir Packages'], ['package', 'Packages'], ['collection', 'Collections'], ['capsule', 'Sticker Capsules'], ['autograph', 'Autograph Capsules'], ['agents', 'Agents']];
-const KIND_NAME = { case: 'Weapon case', souvenir: 'Souvenir package', package: 'Package', collection: 'Collection', charms: 'Charm collection', capsule: 'Sticker capsule', autograph: 'Autograph capsule', agents: 'Agent locker' };
+const KINDS = [['case', 'Weapon Cases'], ['souvenir', 'Souvenir Packages'], ['package', 'Packages'], ['collection', 'Collections'], ['capsule', 'Sticker Capsules'], ['autograph', 'Autograph Capsules'], ['pins', 'Pin Capsules'], ['agents', 'Agents']];
+const KIND_NAME = { case: 'Weapon case', souvenir: 'Souvenir package', package: 'Package', collection: 'Collection', charms: 'Charm collection', capsule: 'Sticker capsule', autograph: 'Autograph capsule', pins: 'Pin capsule', agents: 'Agent locker' };
 const SET_SORTS = [['near', 'Closest to finished'], ['reward', 'Biggest reward'], ['easy', 'Fewest openings'], ['name', 'Name']];
 const NEW_RECORD = () => ({ q: '', rank: 'all', type: 'all', sort: 'new', limit: PAGE });
 const view = { tab: 'sets', kind: 'case', q: '', sort: 'near', set: null, record: NEW_RECORD() };

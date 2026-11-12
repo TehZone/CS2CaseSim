@@ -8,6 +8,22 @@ import { backfillIndex } from '../src/js/engine/itemindex.js';
 
 const FLUSH_MS = 2000;
 const IDLE_EVICT_MS = 10 * 60 * 1000;
+// peek's copies of players who aren't in memory, kept a minute so that looking at one again (their profile, then a Storage
+// Unit of theirs) doesn't read and parse their whole state again: 100 full Storage Units are 100,000 items, about 19 MB of
+// JSON and 400 ms of the server's thread to read. At most PEEK_ITEMS items in all (a few such players, or many smaller ones).
+const PEEK_MS = 60 * 1000, PEEK_ITEMS = 300000, PEEK_MAX = 200;
+const itemsIn = (st) => (st.inv?.length || 0) + (st.stored?.length || 0) + (st.listed?.length || 0);
+// A player's whole state written, and with it their featured badge (users.badge, server/social.mjs) cleared when the state no
+// longer has one of it: in the inventory or a Storage Unit (engine/badges.js ownsBadge). Every change that can take a badge
+// away (a trade, a sale, a stake, staff) is written through here. `cleared`: this write took it off (the sub-select sees the row
+// as it was), which the server tells every game that draws faces (Store's onCleared).
+const WRITE = `UPDATE users SET state = $1::jsonb, last_seen = $2, badge = CASE WHEN badge = ANY($4::text[]) THEN badge END WHERE id = $3
+  RETURNING (badge IS NULL AND (SELECT badge FROM users WHERE id = $3) IS NOT NULL) AS cleared`;
+export function badgeIds(st) {
+  const ids = new Set();
+  for (const list of [st.inv, st.stored]) for (const it of Array.isArray(list) ? list : []) if (it?.t === 'badge') ids.add(String(it.id));
+  return [...ids];
+}
 
 export class Store {
   constructor(db, { log = () => {} } = {}) {
@@ -16,6 +32,9 @@ export class Store {
     this.cache = new Map(); // id -> { id, name, st, dirty, touched }
     this.locks = new Map(); // id -> tail promise
     this.online = new Set(); // ids with an open connection
+    this.peeked = new Map(); // id -> { st, at, n }: peek's copies (PEEK_MS), the least recently used first
+    this.peekedItems = 0;
+    this.onCleared = null; // (id): a write took their featured badge off (WRITE), once it's in the database
     this.timer = setInterval(() => this.flush().catch((e) => log('[store] flush failed', e.message)), FLUSH_MS);
   }
 
@@ -29,6 +48,7 @@ export class Store {
     if (e) return e;
     e = { id: rows[0].id, name: rows[0].name, st, dirty, touched: Date.now() };
     this.cache.set(id, e);
+    this.unpeek(id); // (memory's copy is the one from now on)
     return e;
   }
 
@@ -53,16 +73,39 @@ export class Store {
     return e;
   }
 
-  // A player's state to look at and let go: load's, without keeping it, so that looking at a lot of players doesn't hold them
-  // all in memory. (Not for changing: unless they're in memory it isn't the copy that gets saved.)
+  // A player's state to look at and let go: load's, without keeping it in memory as a player's, so that looking at a lot of
+  // players doesn't hold them all. One that isn't in memory is kept a minute as it was read (PEEK_MS), unless this server
+  // writes them or loads them meanwhile. (Not for changing: unless they're in memory it isn't the copy that gets saved, and a
+  // peeked copy is shared by everyone looking. isPeeked says which a state is.)
   async peek(id) {
     const e = this.cache.get(id);
     if (e) return e.st;
+    const kept = this.peeked.get(id);
+    if (kept && Date.now() - kept.at < PEEK_MS) { this.peeked.delete(id); this.peeked.set(id, kept); return kept.st; }
     const { rows } = await this.db.query('SELECT state FROM users WHERE id = $1', [id]);
     if (!rows.length) throw new Error('No such player');
     const st = upgradeState(typeof rows[0].state === 'string' ? JSON.parse(rows[0].state) : rows[0].state);
     retireOld(st);
+    if (this.cache.has(id)) return this.cache.get(id).st; // (loaded meanwhile: that copy is the one)
+    this.unpeek(id);
+    const n = itemsIn(st);
+    if (n <= PEEK_ITEMS) {
+      this.peeked.set(id, { st, at: Date.now(), n });
+      this.peekedItems += n;
+      for (const [old, p] of this.peeked) {
+        if (this.peekedItems <= PEEK_ITEMS && this.peeked.size <= PEEK_MAX && Date.now() - p.at < PEEK_MS) break;
+        this.unpeek(old);
+      }
+    }
     return st;
+  }
+  // Whether a state is one of peek's copies, which never change (what's worked out from one can be kept with it).
+  isPeeked(id, st) { return this.peeked.get(id)?.st === st; }
+  unpeek(id) {
+    const p = this.peeked.get(id);
+    if (!p) return;
+    this.peeked.delete(id);
+    this.peekedItems -= p.n;
   }
 
   // Every item that's been through a player's accepted trades or live gambling rounds (a trade keeps an item's `src`, so only
@@ -101,11 +144,13 @@ export class Store {
   // reloaded from the database so memory never claims something the database doesn't have.
   async commit(entries, extra = async () => {}) {
     try {
+      const cleared = [];
       await this.db.tx(async (q) => {
-        for (const e of entries) await q('UPDATE users SET state = $1::jsonb, last_seen = $2 WHERE id = $3', [JSON.stringify(e.st), Date.now(), e.id]);
+        for (const e of entries) if ((await q(WRITE, [JSON.stringify(e.st), Date.now(), e.id, badgeIds(e.st)])).rows[0]?.cleared) cleared.push(e.id);
         await extra(q);
       });
-      for (const e of entries) e.dirty = false;
+      for (const e of entries) { e.dirty = false; this.unpeek(e.id); }
+      for (const id of cleared) this.onCleared?.(id);
     } catch (err) {
       for (const e of entries) this.cache.delete(e.id);
       throw err;
@@ -141,7 +186,9 @@ export class Store {
       // (saving: the row is on its way with this copy as it is now, so a change meanwhile goes in the next write, not a patch)
       e.saving = true;
       try {
-        await this.db.query('UPDATE users SET state = $1::jsonb, last_seen = $2 WHERE id = $3', [JSON.stringify(e.st), Date.now(), e.id]);
+        const { rows } = await this.db.query(WRITE, [JSON.stringify(e.st), Date.now(), e.id, badgeIds(e.st)]);
+        this.unpeek(e.id);
+        if (rows[0]?.cleared) this.onCleared?.(e.id);
       } catch (err) {
         e.dirty = true;
         throw err;

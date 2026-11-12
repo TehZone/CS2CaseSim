@@ -67,7 +67,7 @@ export async function openUnit(unit, mode = 'contents') {
   const m = openModal({ title: 'Storage Unit', cls: 'wide su-modal', body: '<div data-su></div>', onClose: () => off?.() });
   const box = m.el.querySelector('[data-su]');
   const retrieving = () => v.mode === 'contents';
-  const source = () => (retrieving() ? unitContents(uid) : S.inv.filter((it) => !I.isUnit(it)));
+  const source = () => (retrieving() ? unitContents(uid) : S.inv.filter((it) => !SU.storeRefusal(it))); // (not units, nor a bound badge)
   // (What's in it, when it isn't here yet: asked for as the window shows it, and again after a reconnect, which forgets it;
   // drawn again when it comes. Depositing needs only its count, which is here: nothing is asked for then.)
   const inside = unitWatch(uid, () => { if (box.isConnected) draw(); });

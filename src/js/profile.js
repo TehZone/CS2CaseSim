@@ -4,7 +4,7 @@
 import { esc, imgUrl, money } from './util.js';
 import { S, on } from './state.js';
 import * as I from './items.js';
-import { XP_PER_LEVEL, MAX_LEVEL, MEDALS, XP, PAY, PASSIVE, CARE_PICKS, CARE_OFFERS, medalName, medalOf, nextMedal } from './engine/levels.js';
+import { XP_PER_LEVEL, MAX_LEVEL, MEDALS, XP, PAY, PASSIVE, CARE_PICKS, CARE_OFFERS, medalName, medalOf, nextMedal, passiveRate, prestigesOf } from './engine/levels.js';
 import { cs2Status, cs2Play } from './cs2/api.js';
 import { openModal, itemCard, toast, tryAct, showItemDetail } from './ui.js';
 import { sfx } from './audio.js';
@@ -14,6 +14,8 @@ let pics = {}; // Steam's medal pictures (data/medals.json), when CS2 isn't inst
 
 const medalKey = (m) => `${m.y}-${m.l}`;
 const usd = (n) => '$' + n.toLocaleString('en-US'); // (whole dollars: $1,250)
+// What passive income pays a profile with `medals` prestiges, a minute: "$300/min" (engine/levels.js passiveRate).
+export const passiveText = (medals) => `${usd(passiveRate(medals))}/min`;
 export function medalImg(m) {
   if (!m) return '';
   return art?.medals?.[medalKey(m)] || (pics[medalKey(m)] ? imgUrl(pics[medalKey(m)], 's') : '');
@@ -95,14 +97,15 @@ export function openProfile() {
         ${cur ? medalHtml(cur, 72) : ''}${levelIconHtml(prof.level, 72)}
         <div class="grow"><h3>Level ${prof.level}</h3>${xpBarHtml(prof)}
           <div class="muted">${prof.xp.toLocaleString()} / ${XP_PER_LEVEL.toLocaleString()} XP · ${prof.level < MAX_LEVEL ? `level ${prof.level + 1} next` : next ? `the ${esc(medalName(next))} next` : 'every medal earned'}</div>
-          <div class="muted">${cur ? `Your medal: <b>${esc(medalName(cur))}</b> (colour ${cur.l})` : 'No Service Medal yet: reach level 40 and level up once more for your first.'}</div></div>
+          <div class="muted">${cur ? `Your medal: <b>${esc(medalName(cur))}</b> (colour ${cur.l})` : 'No Service Medal yet: reach level 40 and level up once more for your first.'}</div>
+          <div class="muted" data-passive>Passive income: <b class="green">${passiveText(prestigesOf(prof))}</b>${next ? ` · ${usd(passiveRate(prestigesOf(prof) + 1))}/min with your next medal` : ''}</div></div>
         ${waiting ? `<button class="btn gold" data-claim>Claim reward${waiting > 1 ? `s (${waiting})` : ''}</button>` : ''}
       </div>
       <div class="section-title">Earning XP and money</div>
       <div class="muted" style="font-size:13px;line-height:1.6">Every finished match in Play: a win or draw <b>${usd(PAY.win)}</b> and ${XP.win} XP, a loss <b>${usd(PAY.loss)}</b> and ${XP.loss} XP;
         each kill <b>${usd(PAY.kill)}</b> and ${XP.kill} XP, each assist <b>${usd(PAY.assist)}</b> and ${XP.assist} XP, each round MVP <b>${usd(PAY.mvp)}</b>, and ${XP.round} XP for each round your team wins.
         ${XP_PER_LEVEL.toLocaleString()} XP is a level, and every level up brings a reward: ${CARE_OFFERS} items to keep ${CARE_PICKS} of.
-        You also get <b>${usd(PASSIVE.perMinute)}</b> every minute, even while the game is closed (up to ${PASSIVE.capHours} hours).</div>
+        You also get passive income every minute, even while the game is closed (up to ${PASSIVE.capHours} hours of it at a time): <b>${usd(PASSIVE.perMinute)}</b>, and <b>${usd(PASSIVE.perPrestige)}</b> more for each prestige (every Service Medal you've earned), so <b>${passiveText(prestigesOf(prof))}</b> for you now.</div>
       <div class="section-title">Service Medals <span class="muted" style="font-size:12px;text-transform:none;letter-spacing:0">${prof.medals} of ${MEDALS.length}</span></div>
       <div class="muted" style="font-size:13px;margin-bottom:10px">Past level 40 you earn the next medal and start again at level 1. Every colour of the newest medal comes first, then the year before's, back to the first ever, 2015's.</div>
       <div class="medal-years">${years.map((y) => `<div class="myear"><span>${y.y}</span>${y.list.map(medalCell).join('')}</div>`).join('')}</div>`,

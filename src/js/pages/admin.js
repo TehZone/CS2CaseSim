@@ -17,13 +17,14 @@ import { net } from '../net/online.js';
 import { LEVEL_NAMES } from '../account.js';
 import { localAdmin } from '../admin-local.js';
 import { FOCUS } from '../engine/npcs.js';
-import { ownedItems, unitCount, unitsOf } from '../engine/storage.js';
+import { ownedItems, unitCounts, unitsOf } from '../engine/storage.js';
 import { drawAdminIndex, recordSize } from './itemindex.js';
 import { playPrefs, savePlayPrefs } from './play-settings.js';
 import { BINDS_VERSION } from '../play/input.js';
 import { ASPECTS, RESOLUTIONS } from '../play/screen.js';
 import { formatWait } from '../engine/matchmaking.js';
 import { drawMarketTab, marketCount } from './p2p-admin.js';
+import { avatarHtml as faceHtml, myFace, playerFace } from '../faces.js';
 
 const TABS = [['dash', 'Dashboard'], ['players', 'Players'], ['bans', 'Bans'], ['reports', 'Reports'], ['audit', 'Audit log'], ['server', 'Server']];
 // (Offline the bans are the NPC traders you've blocked, and the server is your save and its NPC world.)
@@ -35,8 +36,8 @@ const filters = () => (online() ? FILTERS : OFF_FILTERS);
 const SUBS = [['overview', 'Overview'], ['inventory', 'Inventory'], ['market', 'Market'], ['index', 'Index'], ['configs', 'Configs'], ['snapshots', 'Snapshots'], ['history', 'History']];
 // (An NPC trader has no configs, Index or Market listings of their own here, and snapshots are of your own save only.)
 const NPC_SUBS = SUBS.filter(([k]) => k !== 'configs' && k !== 'index' && k !== 'snapshots' && k !== 'market');
-const KINDS = [['all', 'All items'], ['skin', 'Skins'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['charm', 'Charms'], ['crate', 'Cases'], ['key', 'Keys'], ['unit', 'Storage Units'], ['tool', 'Tools']];
-const GIVE_KINDS = [['skin', 'Skin'], ['crate', 'Case'], ['key', 'Key'], ['sticker', 'Sticker'], ['agent', 'Agent'], ['charm', 'Charm'], ['unit', 'Storage Unit'], ['tool', 'Tool']];
+const KINDS = [['all', 'All items'], ['skin', 'Skins'], ['sticker', 'Stickers'], ['agent', 'Agents'], ['charm', 'Charms'], ['badge', 'Badges'], ['crate', 'Cases'], ['key', 'Keys'], ['unit', 'Storage Units'], ['tool', 'Tools']];
+const GIVE_KINDS = [['skin', 'Skin'], ['crate', 'Case'], ['key', 'Key'], ['sticker', 'Sticker'], ['agent', 'Agent'], ['charm', 'Charm'], ['badge', 'Badge'], ['unit', 'Storage Unit'], ['tool', 'Tool']];
 const DURATIONS = [['60', '1 hour'], ['1440', '1 day'], ['10080', '7 days'], ['43200', '30 days'], ['perm', 'Permanent'], ['custom', 'Custom (minutes)']];
 const PAGE = 50, INV_PAGE = 100, MAX_JSON = 48 * 1024, MAX_MINUTES = 5256000, MAX_SAVE = 64 * 1024 * 1024;
 const STAT_LABELS = {
@@ -51,7 +52,7 @@ const ACCESS = [
   [1, 'See every player: stats, items, configs, snapshots and history'],
   [1, 'Ban, kick, warn and sign out players below your level; lift bans'],
   [1, 'Write notes and save snapshots'],
-  [1, 'Read and close player reports; clear a reported summary'],
+  [1, 'Read and close player reports; clear a reported summary or remove a profile picture'],
   [1, 'Remove matchmaking cooldowns'],
   [2, 'Edit money, stats and items; restore and delete snapshots; rename and reset accounts'],
   [2, 'Network bans and Discord bans'],
@@ -593,7 +594,7 @@ function playerHeadHtml(p, ban) {
   if (u.cooldown) facts.push(['Ranked cooldown', `${esc(formatWait(u.cooldown))} left`]);
   return `<div class="panel adm-head">
     <div class="adm-head-top">
-      ${avatar(u.name, 'adm-av')}
+      ${'pic' in u ? faceHtml({ name: u.name, pic: u.pic, avatar: u.avatar, badge: u.badge }, 64) : avatar(u.name, 'adm-av')}
       <div class="adm-who"><h2>${esc(u.name)}${isSelf(u) ? ' <span class="dim">(you)</span>' : ''}</h2>
         <div class="adm-chips"><span class="chip ${u.online ? 'green' : ''}"><span class="adm-dot ${u.online ? 'on' : ''}"></span>${u.online ? 'Online' : 'Offline'}</span>${staffChip(u.staff)}${ban ? '<span class="chip red">Banned</span>' : ''}</div></div>
       <dl class="kv adm-facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
@@ -611,6 +612,7 @@ function actionButtons(u, ban) {
       '<button class="btn" data-act="warn">Warn</button>', '<button class="btn" data-act="signout">Sign out everywhere</button>');
   }
   if (canTidy(u) && u.cooldown) b.push('<button class="btn" data-act="cooldown">Remove cooldown</button>');
+  if (canTidy(u) && u.pic) b.push('<button class="btn" data-act="unpic">Remove picture</button>');
   if (canChange(u)) b.push('<span class="spacer"></span><button class="btn" data-act="rename">Rename</button>', '<button class="btn ghost" data-act="reset">Reset account</button>');
   if (b.length) return (isSelf(u) ? '<span class="muted">That\'s you: you can\'t punish yourself.</span>' : '') + b.join('');
   return `<span class="muted">${isSelf(u) ? "That's you: you can look, but not punish yourself." : `${esc(u.name)} is ${esc(levelName(u.staff))}, the same level as you or above: you can only look.`}</span>`;
@@ -628,7 +630,7 @@ function localHeadHtml(p, ban) {
     : '<span class="chip gold">Your save</span>';
   return `<div class="panel adm-head">
     <div class="adm-head-top">
-      ${avatar(u.name, 'adm-av')}
+      ${faceHtml(n ? playerFace({ npc: u.id, name: u.name }) : myFace(), 64)}
       <div class="adm-who"><h2>${esc(u.name)}</h2><div class="adm-chips">${chips}</div></div>
       <dl class="kv adm-facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
     </div>
@@ -661,8 +663,19 @@ async function removeCooldown(p, btn) {
   const u = p.user;
   if (await run(btn, 'cooldown.clear', { id: u.id }, `Removed <b>${esc(u.name)}</b>'s matchmaking cooldown`)) afterChange();
 }
+// A profile picture that shouldn't be there comes off (theirs and anyone's with the very same one), and can't go up again for
+// 30 days: server/admin.mjs pic.clear. hash: which one (a report's, which they may have changed since); their current one
+// without it.
+async function removePicture(u, btn, hash = null) {
+  const old = !!hash && hash !== u.pic, who = `<b><bdi>${esc(u.name)}</bdi></b>`;
+  const ask = old ? `Take down the picture ${who} was reported for? They've changed it since: it comes off anyone else who has it, isn't shown anywhere, can't be put up again for 30 days, and this goes in the audit log.`
+    : `Remove ${who}'s profile picture? It comes off anyone who has it (they're told, and everyone sees their agent instead), the same picture can't be put up again for 30 days, and this goes in the audit log.`;
+  if (!(await confirmDialog(ask, { ok: 'Remove picture', danger: true }))) return false;
+  return !!(await run(btn, 'pic.clear', { id: u.id, ...(hash ? { pic: hash } : {}) }, old ? `Took down the picture ${who} was reported for` : `Removed ${who}'s profile picture`));
+}
 const PLAYER_ACTIONS = {
   cooldown: removeCooldown,
+  async unpic(p, btn) { if (await removePicture(p.user, btn)) afterChange(); },
   ban(p) {
     const u = p.user, admin = isAdmin();
     const m = formModal({
@@ -993,12 +1006,12 @@ const INSPECTABLE = new Set(['skin', 'sticker', 'agent', 'charm']);
 // Where an item is: in the inventory, or in which Storage Unit (their labels, for the filter and the rows).
 const unitLabel = (p, uid) => unitsOf(p.state || {}).find((u) => u.uid === uid)?.name || 'Unlabelled unit';
 function drawInventory(el, p) {
-  const edit = canChange(p.user), v = view.inv, units = unitsOf(p.state || {});
+  const edit = canChange(p.user), v = view.inv, units = unitsOf(p.state || {}), counts = unitCounts(p.state || {}); // (one pass for up to 100 units)
   if (v.where !== 'all' && v.where !== 'inv' && !units.some((u) => u.uid === v.where)) v.where = 'all';
   el.innerHTML = `<div class="toolbar adm-bar">
       <input class="input" type="search" data-iq placeholder="Search items…" value="${esc(v.q)}">
       <select class="input" data-ikind>${KINDS.map(([k, n]) => `<option value="${k}" ${v.kind === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
-      ${units.length ? `<select class="input" data-iwhere>${[['all', 'Inventory and storage'], ['inv', 'Inventory only'], ...units.map((u) => [u.uid, `Unit: ${u.name || 'Unlabelled'} (${unitCount(p.state, u.uid).toLocaleString()})`])].map(([k, n]) => `<option value="${esc(k)}" ${v.where === k ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>` : ''}
+      ${units.length ? `<select class="input" data-iwhere>${[['all', 'Inventory and storage'], ['inv', 'Inventory only'], ...units.map((u) => [u.uid, `Unit: ${u.name || 'Unlabelled'} (${(counts.get(u.uid) || 0).toLocaleString()})`])].map(([k, n]) => `<option value="${esc(k)}" ${v.where === k ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>` : ''}
       <select class="input" data-isort>${[['value', 'Most valuable'], ['new', 'Newest first'], ['old', 'Oldest first']].map(([k, n]) => `<option value="${k}" ${v.sort === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
       <span class="muted" data-isum></span><span class="spacer"></span>
       ${edit ? '<button class="btn danger" data-remove disabled>Remove selected</button><button class="btn primary" data-give>Give items</button>' : ''}
@@ -1016,7 +1029,7 @@ function drawInventory(el, p) {
 function drawInvList(el, p) {
   const box = el.querySelector('[data-ilist]');
   if (!box) return;
-  const edit = canChange(p.user), v = view.inv, reserved = reservedUids(p), all = ownedItems(p.state || {});
+  const edit = canChange(p.user), v = view.inv, reserved = reservedUids(p), all = ownedItems(p.state || {}), counts = unitCounts(p.state || {});
   const q = v.q.trim().toLowerCase();
   const inPlace = (i) => v.where === 'all' || (v.where === 'inv' ? !i.su : i.su === v.where);
   let items = all.filter((i) => inPlace(i) && (v.kind === 'all' || i.t === v.kind) && (!q || itemName(i).toLowerCase().includes(q) || String(i.uid).toLowerCase() === q));
@@ -1041,7 +1054,7 @@ function drawInvList(el, p) {
       i.stk?.length && `<span class="tag" title="Stickers">${+i.stk.length} stk</span>`, reserved.has(i.uid) && '<span class="tag pat" title="In an open trade offer">In trade</span>',
       i.lid && `<span class="tag pat" title="Listed on the Market for ${money(+i.lp || 0)}: take it down in the Market tab to change it">Listed</span>`,
       i.su && `<span class="tag" title="In this Storage Unit">In ${esc(unitLabel(p, i.su))}</span>`,
-      i.t === 'unit' && `<span class="tag" title="Items in it">${unitCount(p.state, i.uid).toLocaleString()} items</span>`].filter(Boolean).join('');
+      i.t === 'unit' && `<span class="tag" title="Items in it">${(counts.get(i.uid) || 0).toLocaleString()} items</span>`].filter(Boolean).join('');
     return `<tr style="--rc:${esc(itemColor(i))}" class="${v.sel.has(i.uid) ? 'sel' : ''}">
       ${edit ? `<td class="cb"><input type="checkbox" data-uid="${esc(i.uid)}" ${v.sel.has(i.uid) ? 'checked' : ''} ${res ? `disabled title="${i.lid ? 'Listed on the Market' : 'In an open trade offer'}"` : ''}></td>` : ''}
       <td class="adm-thumb"><img loading="lazy" src="${esc(itemImg(i))}" alt=""></td>
@@ -1101,6 +1114,8 @@ function giveList(kind) {
   if (kind === 'charm') list = Object.entries(D.charms || {}).map(([id, d]) => mk(id, d.n, { t: 'charm', id, pat: 50000 }));
   if (kind === 'unit') list = [mk(I.UNIT_ID, 'Storage Unit', { t: 'unit', id: I.UNIT_ID })];
   if (kind === 'tool') list = Object.values(I.TOOLS).map((d) => mk(d.id, d.n, { t: 'tool', id: d.id }));
+  // (Every badge: the ones nobody can get too, which staff are the only way to. A pin trades; the rest are bound. badges.js)
+  if (kind === 'badge') list = Object.keys(D.badges || {}).map((id) => mk(id, `${I.itemName({ t: 'badge', id })}${D.badges[id].tr ? '' : ' (not tradable)'}`, { t: 'badge', id }));
   return (giveLists[kind] = list.sort((a, b) => a.n.localeCompare(b.n)));
 }
 function giveModal(p) {
@@ -1575,22 +1590,56 @@ function reportDetail(r) {
   const nameOf = (id) => (+id === r.from?.id ? r.from.name : +id === r.about?.id ? r.about.name : `#${id}`);
   const list = Array.isArray(r.messages) ? r.messages : [];
   const bioNow = r.about?.bio || '';
+  // (Their profile picture when it was sent and now: a server with faces only. Each comes through the staff request, so one
+  // taken down since still shows here, and each has its own button: the one reported may not be the one they have now.)
+  const picNow = r.about?.pic || null, picThen = r.pic || null, tidy = canTidy(r.about);
+  const picBox = (pic, label, down) => `<div class="adm-pic"><span class="av" style="--s:92px"><img class="pic" alt="" data-staffpic="${esc(pic)}"></span><span class="muted">${label}${down ? ' · taken down' : ''}</span>
+    ${tidy && !down ? `<button class="btn sm danger" data-unpic="${esc(pic)}">Remove ${pic === picNow ? 'this picture' : 'the reported picture'}</button>` : ''}</div>`;
+  const pics = picThen || picNow ? `<div class="section-title">Their profile picture</div><div class="adm-pics">${picThen ? picBox(picThen, picThen === picNow ? 'When reported, and now' : 'When reported', !!r.picDown) : ''}${picNow && picNow !== picThen ? picBox(picNow, 'Now') : ''}${picThen && !picNow ? '<span class="muted">They have none now.</span>' : ''}</div>` : '';
   const m = openModal({
     title: `Report #${esc(r.id)}`, cls: 'wide',
     body: `<div class="adm-report"><div><span class="muted">About</span> ${playerLink(r.about)}</div><div><span class="muted">From</span> ${playerLink(r.from)} · ${when(r.at)}</div>
       <div><span class="muted">Reason</span> ${esc(r.reason)}</div>${r.text ? `<div class="adm-said" dir="auto">${esc(r.text)}</div>` : ''}<div>${reportStatus(r)}</div></div>
+      ${pics}
       ${r.bio ? `<div class="section-title">Their summary, saved with the report</div><div class="adm-said" dir="auto">${esc(r.bio)}</div>` : ''}
       ${bioNow && bioNow !== r.bio ? `<div class="section-title">Their summary now</div><div class="adm-said" dir="auto">${esc(bioNow)}</div>` : ''}
       <div class="section-title">Their last messages together, saved with the report (${list.length})</div>
       <div class="adm-chatlog">${list.map((x) => `<div><b><bdi>${esc(nameOf(x.from))}</bdi></b> <span class="muted">${when(x.at)}</span><div dir="auto">${esc(x.text)}</div></div>`).join('') || '<div class="muted">They had no messages together.</div>'}</div>`,
     foot: `<button class="btn ghost" data-close>Back</button>${canClearBio(r) ? '<button class="btn danger" data-unbio>Clear summary</button>' : ''}${canClose(r) ? '<button class="btn primary" data-shut>Close report</button>' : ''}`,
   });
+  fillStaffPics(m.el);
   wireOpen(m.el);
   m.el.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => m.close()));
   const shut = m.el.querySelector('[data-shut]');
   shut?.addEventListener('click', async () => { if (await closeReport(shut, r)) m.close(); });
   const unbio = m.el.querySelector('[data-unbio]');
   unbio?.addEventListener('click', async () => { if (await clearBio(unbio, r)) m.close(); });
+  m.el.querySelectorAll('[data-unpic]').forEach((b) => b.addEventListener('click', async () => {
+    if (!(await removePicture(r.about, b, b.dataset.unpic))) return;
+    invalidate('audit', 'overview', 'player');
+    refresh('reports', drawReportList);
+    m.close();
+  }));
+}
+// The pictures a staff window shows (img[data-staffpic]), fetched through admin pic.get: taken down or not, as the bytes the
+// server kept. (A server without it, or one that's gone: the box says so.)
+const staffPics = new Map(); // hash -> blob: URL
+async function fillStaffPics(el) {
+  for (const img of el.querySelectorAll('img[data-staffpic]')) {
+    const hash = img.dataset.staffpic;
+    let url = staffPics.get(hash);
+    if (!url) {
+      try {
+        const p = await adminCall('pic.get', { pic: hash });
+        if (!/^image\/(png|webp)$/.test(p?.type) || typeof p.data !== 'string') throw new Error('no picture');
+        const bin = atob(p.data), b = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+        url = URL.createObjectURL(new Blob([b], { type: p.type }));
+        staffPics.set(hash, url);
+      } catch { img.replaceWith(Object.assign(document.createElement('b'), { textContent: 'Gone' })); continue; }
+    }
+    if (img.isConnected) img.src = url;
+  }
 }
 
 // ---- Server --------------------------------------------------------------------------------------------------------

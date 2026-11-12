@@ -443,7 +443,7 @@ const METHODS = {
     if (t.npc) {
       const takeFrom = (s) => {
         const ctx = makeCtx({ inv: s.inv, loadout: {} }, { reserved: heldBy(S.social, t.id) });
-        return { items: take(ctx, uids, { allowLocked: true }), inv: ctx.st.inv };
+        return { items: take(ctx, uids, { allowLocked: true, allowBound: true }), inv: ctx.st.inv };
       };
       return change(t, 'items.remove', 'item removal', () => takeFrom(npcNow(t)), () => {
         const s = N.npcState(S.social, t.id);

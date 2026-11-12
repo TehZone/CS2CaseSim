@@ -8,6 +8,7 @@ import { toast, showItemDetail, confirmDialog } from '../ui.js';
 import { online } from '../backend.js';
 import { mountPicker } from '../picker.js';
 import { net } from '../net/online.js';
+import { playerAvatar } from '../faces.js';
 
 const view = { with: null, theirInv: [], mine: new Set(), theirs: new Set(), myMoney: 0, theirMoney: 0, msg: '', q: '', loading: false };
 let root = null, offs = [], startWith = null;
@@ -61,7 +62,7 @@ function drawPlayers() {
   const me = net.me();
   const list = net.players().filter((p) => p.name !== me?.name);
   el.innerHTML = list.length ? list.map((p) => `<div class="player ${view.with === p.name ? 'on' : ''}" data-p="${esc(p.name)}">
-    <span class="avatar" style="--c:hsl(${[...p.name].reduce((a, c) => a + c.charCodeAt(0), 0) % 360} 55% 40%)">${esc(p.name.slice(0, 2).toUpperCase())}</span>
+    ${playerAvatar({ name: p.name }, 32, p.online ? 'online' : 'offline')}
     <div><div>${esc(p.name)}</div><div class="muted" style="font-size:11px">${p.online ? '<span class="green">online</span>' : 'offline'} · ${money(p.worth || 0)}</div></div></div>`).join('')
     : '<div class="muted" style="font-size:12px">Nobody else is online. You can still trade with offline players by name.</div>';
   el.querySelectorAll('[data-p]').forEach((x) => x.addEventListener('click', () => pickPlayer(x.dataset.p)));
@@ -105,7 +106,7 @@ function drawCompose() {
   if (!view.with) { el.innerHTML = '<div class="panel"><h3>New offer</h3><div class="muted">Pick a player on the left to see their inventory.</div></div>'; return; }
   if (view.loading) { el.innerHTML = `<div class="panel"><h3>Trading with ${esc(view.with)}</h3><div class="muted">Loading their inventory…</div></div>`; return; }
   const { give, get } = offerValues();
-  el.innerHTML = `<div class="panel"><h3>Offer to ${esc(view.with)}</h3>
+  el.innerHTML = `<div class="panel"><h3 class="tr-with">${playerAvatar({ name: view.with }, 34)}<span>Offer to ${esc(view.with)}</span></h3>
     <div class="offer-sides">
       <div class="offer-side"><h4>You give · <span class="green" data-give>${money(give)}</span></h4>
         <label class="check" style="margin-bottom:8px">Money <input class="input" type="number" min="0" step="0.01" data-mym value="${view.myMoney}" style="width:110px"></label><div data-mypick></div></div>
@@ -161,12 +162,12 @@ function drawOffers() {
   const done = list.filter((t) => t.status !== 'open').slice(0, 10);
   const card = (t) => {
     const incoming = t.to.name === me?.name;
-    const other = incoming ? t.from.name : t.to.name;
+    const otherOne = incoming ? t.from : t.to, other = otherOne.name;
     // From my point of view: what I give and what I get.
     const mineSide = incoming ? t.get : t.give, theirSide = incoming ? t.give : t.get;
     return `<div class="trade-card">
       <div style="display:flex;gap:10px;align-items:center"><span class="chip ${incoming ? 'gold' : ''}">${incoming ? 'Incoming' : 'Sent'}</span>
-        <b>${esc(other)}</b><span class="muted" style="font-size:12px">${timeAgo(t.created)}</span>
+        ${playerAvatar({ id: otherOne.id, name: other }, 28)}<b>${esc(other)}</b><span class="muted" style="font-size:12px">${timeAgo(t.created)}</span>
         ${t.status !== 'open' ? `<span class="chip ${t.status === 'accepted' ? 'green' : 'red'}">${esc(t.status)}</span>` : ''}
         ${t.msg ? `<span class="muted" style="font-size:12px">“${esc(t.msg)}”</span>` : ''}</div>
       <div class="offer-sides">${sideHTML(mineSide, 'You give')}${sideHTML(theirSide, 'You get')}</div>

@@ -62,7 +62,12 @@ const LEAN = 'lean1';
 // price }], open? (the admin panel opened or closed it) } (net.on('p2p')). A server whose welcome doesn't name it has no Market
 // (net.hasMarket()).
 const P2P = 'p2p1';
-const CAPS = [LEAN, P2P];
+// face1: players' faces (server/social.mjs): Persons with `pic` (their own profile picture's hash: GET <server>/pic/<hash>)
+// and `badge` (the badge they feature), profiles with `badges`, social 'faces' ({ ids } or { names } → [Person]), a new
+// picture through POST /api/pic (net.uploadPic), staff's admin 'pic.clear' and 'pic.get', and { t: 'faces.d', ids }: the
+// players whose faces changed (net.on('faces')). faces.js draws them (net.hasFaces()).
+const FACE = 'face1';
+const CAPS = [LEAN, P2P, FACE];
 let caps = new Set();
 const TRADES_SHOWN = 30; // (the server's MAX_LIST: a trades.d keeps the list to the 30 latest)
 // The one server the game plays on, and the only place its address is written: changing it is this one line, and only
@@ -133,6 +138,11 @@ export const net = {
   // The Market (p2p1). (Its answers as they came: listings are other players' items, not your inventory's.)
   p2p: (m, args) => rpc('p2p', m, args, { relink: false }),
   hasMarket: () => caps.has(P2P),
+  // Players' faces (face1): whether this connection's server has them; a profile picture's address (its hash); and a new
+  // picture of your own, its bytes in base64 (→ { pic: hash }; a refusal is an Error with the server's words and code).
+  hasFaces: () => caps.has(FACE),
+  picUrl: (hash) => (/^[0-9a-f]{64}$/.test(String(hash)) ? `${net.serverUrl()}/pic/${hash}` : ''),
+  uploadPic: (data) => http('/api/pic', { token: saved().token, data }),
   account: () => account,
   motd: () => motd,
   // Whether this connection's server sends the lean1 shapes (see the protocol above).
@@ -305,6 +315,7 @@ async function syncPrices(pricedAt) {
   for (const [id, v] of Object.entries(p.skins || {})) if (D.skins[id]) D.skins[id].p = v;
   for (const [id, v] of Object.entries(p.stickers || {})) if (D.stickers[id]) D.stickers[id].p = v;
   for (const [id, v] of Object.entries(p.agents || {})) if (D.agents[id]) D.agents[id].p = v;
+  for (const [id, v] of Object.entries(p.badges || {})) if (D.badges[id]?.tr) D.badges[id].p = v; // (the pins': engine/badges.js)
   for (const [id, v] of Object.entries(p.cases || {})) if (D.caseById[id]) D.caseById[id].price = v;
   D.pricedAt = p.pricedAt;
   if (p !== kept && isPatch(p)) { try { localStorage.setItem(PRICES_KEY, JSON.stringify(p)); } catch {} }
@@ -350,6 +361,7 @@ function handle(msg) {
     case 'update': emit('update', { version: msg.version || '' }); return;
     case 'chat': emit('chat', { msg: msg.msg, who: msg.who }); return;
     case 'friends': emit('friends'); return;
+    case 'faces.d': emit('faces', { ids: Array.isArray(msg.ids) ? msg.ids : [] }); return; // (face1: faces.js)
     case 'p2p.d': emit('p2p', { add: msg.add || [], del: msg.del || [], upd: msg.upd || [], ...(typeof msg.open === 'boolean' ? { open: msg.open } : {}) }); return;
   }
 }

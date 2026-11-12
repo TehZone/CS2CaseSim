@@ -40,8 +40,9 @@ const register = async (name) => {
   if (!b.token) throw new Error('could not register ' + name + ': ' + JSON.stringify(b));
   return b.token;
 };
-// A game: WebSocket, rpc and everything pushed to it. `app` left out: as the tests of the other suites.
-async function client(token) {
+// A game: WebSocket, rpc and everything pushed to it. `app` left out: as the tests of the other suites. caps: what its hello
+// announces (left out: none, as the older games).
+async function client(token, { caps } = {}) {
   const ws = new WebSocket(base().replace('http', 'ws') + '/ws');
   const c = { ws, events: [], pending: new Map(), seq: 0, closed: false };
   ws.on('close', () => { c.closed = true; });
@@ -55,7 +56,7 @@ async function client(token) {
       c.events.push(m);
     });
   });
-  ws.send(JSON.stringify({ t: 'hello', token, data: D.lock, v: 1 }));
+  ws.send(JSON.stringify({ t: 'hello', token, data: D.lock, v: 1, ...(caps ? { caps } : {}) }));
   c.welcome = await welcome;
   c.id = c.user.id;
   const ask = (ns, m, args) => new Promise((res, rej) => { const id = ++c.seq; c.pending.set(id, { res, rej }); ws.send(JSON.stringify({ t: 'rpc', id, ns, m, args })); });
@@ -146,9 +147,19 @@ try {
   check('unit: an empty one opens too', (await bob.s('unit', { id: alice.id, uid: 'test-empty' })).items.length === 0);
   check('unit: not one they don\'t have, an item that isn\'t a unit, a player who doesn\'t exist, or anything that isn\'t an id', (await refused(bob.s('unit', { id: alice.id, uid: 'nope' })))?.code === 'missing' && (await refused(bob.s('unit', { id: alice.id, uid: pa.inv[0].uid })))?.code === 'missing'
     && (await refused(bob.s('unit', { id: 999999, uid: unitUid })))?.code === 'missing' && !!(await refused(bob.s('unit', { id: 'x', uid: unitUid }))) && (await refused(bob.s('unit', { id: alice.id, uid: { a: 1 } })))?.code === 'missing' && (await refused(bob.s('unit', { id: alice.id })))?.code === 'missing');
+  // 100 of them (the most anyone can buy), some full, some empty: each listed with its own count and value (one pass over
+  // what's stored for all of them).
+  const many = Array.from({ length: 100 }, (_, i) => ({ uid: `test-many-${i}`, t: 'unit', id: 'storage-unit', name: `u${i}`, mod: 1, at: 1, src: 'Store' }));
+  const manyIn = many.flatMap((u, i) => Array.from({ length: i % 20 }, (_, j) => ({ ...aSkin(j % 11), su: u.uid, sat: 1 })));
+  await server.store.withUser(alice.id, async (e) => { e.st.inv.push(...many); e.st.stored.push(...manyIn); server.store.markDirty(e); });
+  server.srv.social.hits.delete(`profile:${bob.id}`);
+  const big = await bob.s('profile', { id: alice.id }), rowOf = (i) => big.units.find((u) => u.uid === `test-many-${i}`);
+  check('profile: 100 Storage Units, each with its own count and value', big.units.length === 102 && many.every((u, i) => rowOf(i)?.n === i % 20
+    && Math.abs(rowOf(i).value - manyIn.filter((it) => it.su === u.uid).reduce((t, it) => t + itemValue(it), 0)) < 0.01) && rowOf(0).n === 0 && rowOf(0).value === 0
+    && big.units.find((u) => u.uid === unitUid)?.n === 2 && big.stored.count === 3 + manyIn.length, `${big.units.length} units`);
   await server.store.withUser(alice.id, async (e) => {
     e.st.inv = e.st.inv.filter((i) => i.t !== 'unit');
-    e.st.stored = e.st.stored.filter((i) => i.su !== unitUid);
+    e.st.stored = e.st.stored.filter((i) => i.su !== unitUid && !String(i.su).startsWith('test-many-'));
     server.store.markDirty(e);
   });
   check('profile: items as publicCopy (a uid, what it is, no `src`)', pa.inv.length >= 8 && pa.inv.every((i) => i.uid && i.t && i.id && !('src' in i) && !('lk' in i)));
@@ -644,10 +655,225 @@ try {
   const source = fs.readFileSync(new URL('./social.mjs', import.meta.url), 'utf8');
   check('the server\'s address isn\'t in the module', !/https?:\/\/|onrender|cs2casesim/.test(source));
 
+  // ---- faces (face1): profile pictures and featured badges ----------------------------------------------------------
+  {
+    const zlib = await import('node:zlib');
+    const crypto = await import('node:crypto');
+    const { makeBadgeItem } = await import('../src/js/engine/items.js');
+    // A real PNG (zlib, with its CRCs); seed makes each one a different picture.
+    const pngChunk = (type, data) => { const td = Buffer.concat([Buffer.from(type, 'latin1'), data]), len = Buffer.alloc(4), crc = Buffer.alloc(4); len.writeUInt32BE(data.length); crc.writeUInt32BE(zlib.crc32(td)); return Buffer.concat([len, td, crc]); };
+    const png = (w, h, { seed = 0, extra = [] } = {}) => {
+      const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6;
+      const raw = Buffer.alloc((w * 4 + 1) * h); for (let i = 1; i < 200; i++) raw[(i * 131 + seed * 17) % raw.length] = (seed + i) & 255;
+      return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), pngChunk('IHDR', ihdr), ...extra.map(([t, d]) => pngChunk(t, d)), pngChunk('IDAT', zlib.deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
+    };
+    const sha = (b) => crypto.createHash('sha256').update(b).digest('hex'), b64 = (b) => Buffer.from(b).toString('base64');
+    const upload = (token, data) => fetch(base() + '/api/pic', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token, data }) })
+      .then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }), () => ({ status: 'closed', body: {} }));
+    const col = async (c, k) => (await server.db.query(`SELECT ${k} FROM users WHERE id = $1`, [c.id])).rows[0][k];
+    const FACES = ['lean1', 'p2p1', 'face1'], faceKeys = [...personKeys.split(','), 'badge', 'pic'].sort().join();
+    for (const n of ['faye', 'gus', 'hal']) tok[n] = await register(n);
+    const faye = await client(tok.faye, { caps: FACES }), gus = await client(tok.gus, { caps: FACES }), hal = await client(tok.hal);
+    check('face1: named back in the welcome of a game that announced it (and not to one that didn\'t)', faye.welcome.caps?.includes('face1') && !('caps' in hal.welcome));
+    const tables2 = (await server.db.query("SELECT table_name AS t FROM information_schema.tables WHERE table_schema = 'public'")).rows.map((r) => r.t);
+    const cols = (await server.db.query("SELECT table_name || '.' || column_name AS c FROM information_schema.columns WHERE (table_name = 'users' AND column_name IN ('pic', 'badge')) OR (table_name = 'reports' AND column_name = 'pic')")).rows.map((r) => r.c).sort().join();
+    check('faces: a pictures table, users.pic, users.badge and reports.pic', tables2.includes('pictures') && cols === 'reports.pic,users.badge,users.pic', cols);
+    fresh();
+    for (const [x, y] of [[faye, gus], [faye, hal]]) { await x.s('friend', { id: y.id, on: true }); await y.s('friend', { id: x.id, on: true }); }
+    gus.forget(); hal.forget();
+
+    // A picture goes up, and is served
+    const pic1 = png(184, 184, { seed: 1 }), hash1 = sha(pic1);
+    const up1 = await upload(tok.faye, b64(pic1));
+    check('POST /api/pic: a 184 x 184 PNG goes up, by the SHA-256 of its bytes', up1.status === 200 && up1.body.pic === hash1 && await col(faye, 'pic') === hash1, JSON.stringify(up1));
+    const got = await fetch(base() + '/pic/' + hash1), gotBytes = Buffer.from(await got.arrayBuffer()), h = (k) => got.headers.get(k);
+    check('GET /pic/<hash>: the very bytes as their type, cached for good (the address changes with the picture)', got.status === 200 && h('content-type') === 'image/png' && gotBytes.equals(pic1)
+      && /max-age=31536000/.test(h('cache-control')) && /immutable/.test(h('cache-control')) && h('etag') === `"${hash1}"` && h('x-content-type-options') === 'nosniff' && h('access-control-allow-origin') === '*', JSON.stringify([...got.headers]));
+    check('GET /pic/<hash>: asked again with its etag, 304; nobody\'s picture, or not a hash, isn\'t there', (await fetch(base() + '/pic/' + hash1, { headers: { 'if-none-match': `"${hash1}"` } })).status === 304
+      && (await fetch(base() + '/pic/' + 'a'.repeat(64))).status === 404 && (await fetch(base() + '/pic/' + hash1.toUpperCase())).status === 404);
+    check('a new picture: their friends\' games are told to look again', !!(await gus.waitFor((e) => e.t === 'friends')) && !!(await hal.waitFor((e) => e.t === 'friends')));
+    const fayeIn = (home) => home.friends.find((p) => p.id === faye.id);
+    const hg = await gus.s('home'), hh = await hal.s('home');
+    check('face1: a Person has their picture and featured badge', fayeIn(hg)?.pic === hash1 && fayeIn(hg).badge === null && Object.keys(fayeIn(hg)).sort().join() === faceKeys, JSON.stringify(fayeIn(hg)));
+    check('without face1: the Person as it always was (the agent as their picture), and the picture nowhere', Object.keys(fayeIn(hh)).sort().join() === personKeys && !JSON.stringify(hh).includes(hash1), JSON.stringify(fayeIn(hh)));
+    const pf = await gus.s('profile', { id: faye.id }), ph = await hal.s('profile', { id: faye.id });
+    check('profile (face1): the picture, the featured badge and their badges; without face1 none of them', pf.pic === hash1 && pf.badge === null && Array.isArray(pf.badges) && !pf.badges.length && !['pic', 'badge', 'badges'].some((k) => k in ph));
+    check('find (face1) has the picture, and without face1 not', (await gus.s('find', { q: 'faye' }))[0]?.pic === hash1 && !('pic' in (await hal.s('find', { q: 'faye' }))[0]));
+
+    // What isn't a picture to keep
+    const refusals = {
+      'another size': b64(png(183, 183)), 'animated': b64(png(184, 184, { extra: [['acTL', Buffer.alloc(8)]] })), 'over 64 KB': b64(png(184, 184, { extra: [['prVt', Buffer.alloc(66000)]] })),
+      'text in it': b64(png(184, 184, { extra: [['iTXt', Buffer.from('XML:com.adobe.xmp\0\0\0\0\0<x:xmpmeta>GPS</x:xmpmeta>')]] })), 'a chunk of its own': b64(png(184, 184, { extra: [['prVt', Buffer.alloc(4000)]] })),
+      'a JPEG': b64(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70])), 'not base64': '<svg onload=alert(1)>', 'not text': 5, 'nothing': '',
+    };
+    const outs = {};
+    for (const [k, d] of Object.entries(refusals)) outs[k] = await upload(tok.faye, d);
+    outs['no login'] = await upload('not-a-token-at-all-really', b64(pic1));
+    check(`POST /api/pic: refuses (${Object.keys(outs).length}) another size, animated, over 64 KB, other types, what isn't a picture, and without a login`, Object.values(outs).every((o) => o.status >= 400 && !o.body.pic) && outs['no login'].status === 401
+      && /184 x 184/.test(outs['another size'].body.error) && /animated/.test(outs.animated.body.error) && /64 KB/.test(outs['over 64 KB'].body.error) && await col(faye, 'pic') === hash1
+      && /metadata/.test(outs['text in it'].body.error) && /metadata/.test(outs['a chunk of its own'].body.error), JSON.stringify(Object.fromEntries(Object.entries(outs).map(([k, o]) => [k, [o.status, o.body.error]]))));
+    const huge = await upload(tok.faye, 'A'.repeat(200000));
+    check('POST /api/pic: a body too big for any picture isn\'t kept, and the game is told so (413, not a cut connection)', huge.status === 413 && /too big/.test(huge.body.error), JSON.stringify(huge));
+    tok.ivy = await register('ivy');
+    const noFace = [await upload(tok.hal, b64(png(184, 184, { seed: 3 }))), await upload(tok.ivy, b64(png(184, 184, { seed: 4 })))];
+    check('POST /api/pic: only while a game of theirs that reads faces is connected (1.1.5 can\'t show, report or take one down)', noFace.every((o) => o.status === 403 && o.body.code === 'outdated')
+      && await col(hal, 'pic') === null, JSON.stringify(noFace));
+
+    // How often
+    fresh();
+    const ups = [];
+    for (let i = 0; i < 4; i++) ups.push({ bytes: png(184, 184, { seed: 10 + i }), ...(await upload(tok.faye, b64(png(184, 184, { seed: 10 + i })))) });
+    check('POST /api/pic: at most 3 new pictures in 5 minutes', ups.slice(0, 3).every((u) => u.status === 200) && ups[3].status === 429 && ups[3].body.code === 'rate', ups.map((u) => u.status).join());
+    const cur = ups[2], curHash = cur.body.pic;
+    const left = await count('SELECT count(*)::int AS n FROM pictures WHERE hash = ANY($1::text[])', [[hash1, ups[0].body.pic, ups[1].body.pic]]);
+    check('a picture nobody has any more is gone; the new one is theirs', left === 0 && await col(faye, 'pic') === curHash && await count('SELECT count(*)::int AS n FROM pictures WHERE hash = $1', [curHash]) === 1);
+
+    // The badge they feature
+    fresh();
+    const pin = makeBadgeItem(D.badges['collectible-6101'], 'test'), medal = makeBadgeItem(D.badges['collectible-874'], 'Admin');
+    await giveItems(faye, [pin, medal]);
+    const setMedal = await faye.s('profile.set', { badge: medal.id });
+    check('profile.set (face1): a badge they have is featured, and the answer says so with the picture', setMedal.badge === medal.id && setMedal.pic === curHash && await col(faye, 'badge') === medal.id);
+    const pf2 = await gus.s('profile', { id: faye.id }), rank = (id) => D.badges[id].r;
+    check('profile: the featured badge, and each badge they have once with its copies, rarest first', pf2.badge === medal.id && pf2.badges.length === 2 && pf2.badges.every((b) => b.n === 1 && [pin.id, medal.id].includes(b.id))
+      && rank(pf2.badges[0].id) >= rank(pf2.badges[1].id) && fayeIn(await gus.s('home')).badge === medal.id, JSON.stringify(pf2.badges));
+    const noBadge = [await refused(faye.s('profile.set', { badge: 'collectible-6102' })), await refused(faye.s('profile.set', { badge: 'nope' })), await refused(faye.s('profile.set', { badge: 7 }))];
+    check('profile.set: a badge they don\'t have isn\'t featured', noBadge.every((e) => /don't have that badge/.test(e?.message)) && await col(faye, 'badge') === medal.id, noBadge.map((e) => e?.message).join(' / '));
+    check('without face1: no badge, in the Person or the profile', !('badge' in (await hal.s('profile', { id: faye.id }))) && Object.keys(fayeIn(await hal.s('home'))).sort().join() === personKeys);
+    // In a Storage Unit it's still theirs; gone, it stops being featured (the save that no longer has one clears it).
+    await faye.s('profile.set', { badge: pin.id });
+    await server.store.withUser(faye.id, async (e) => {
+      e.st.inv = e.st.inv.filter((it) => it.uid !== pin.uid);
+      e.st.inv.push({ uid: 'unit-faye', t: 'unit', id: 'storage-unit', at: 1 });
+      e.st.stored = [...(e.st.stored || []), { ...pin, su: 'unit-faye', sat: 1 }];
+      server.store.markDirty(e);
+    });
+    await server.store.flush();
+    check('a featured badge in a Storage Unit is still theirs', await col(faye, 'badge') === pin.id && (await gus.s('profile', { id: faye.id })).badge === pin.id);
+    gus.forget(); hal.forget();
+    await server.store.withUser(faye.id, async (e) => { e.st.stored = e.st.stored.filter((it) => it.uid !== pin.uid); server.store.markDirty(e); });
+    await server.store.flush();
+    check('a featured badge goes with the last of it: the save written without one clears it', await col(faye, 'badge') === null && fayeIn(await gus.s('home')).badge === null && (await gus.s('profile', { id: faye.id })).badge === null);
+    const facesD = await gus.waitFor((e) => e.t === 'faces.d' && e.ids.includes(faye.id));
+    check('…and every game that reads faces is told whose face changed (faces.d), so pages that show them by name draw it again; an older game isn\'t', !!facesD && !hal.pushed('faces.d').length, JSON.stringify(facesD));
+    await server.db.query("UPDATE users SET badge = 'collectible-6102' WHERE id = $1", [faye.id]);
+    check('and one they don\'t have isn\'t shown (a profile clears it)', (await gus.s('profile', { id: faye.id })).badge === null && await col(faye, 'badge') === null);
+    await server.db.query("UPDATE users SET badge = 'collectible-874' WHERE id = $1", [faye.id]);
+
+    // faces: Persons for the pages that know players by name or id
+    const fs1 = await gus.s('faces', { ids: [faye.id, 999999], names: ['HAL', 'nobody'] });
+    check('faces: Persons by id or name (any case), with their faces; unknown ones left out', fs1.length === 2 && fs1.some((p) => p.id === faye.id && p.pic === curHash && p.badge === 'collectible-874') && fs1.some((p) => p.name === 'hal' && p.pic === null), JSON.stringify(fs1));
+    check('faces: not for a game without face1, at most 100, and ids only', /Unknown request/.test((await refused(hal.s('faces', { ids: [faye.id] })))?.message) && !!(await refused(gus.s('faces', { ids: Array(101).fill(faye.id) }))) && !!(await refused(gus.s('faces', { ids: ['x'] }))) && !!(await refused(gus.s('faces', { names: 'faye' }))));
+    // A chat's `who`
+    fresh();
+    gus.forget(); hal.forget();
+    await send(faye, gus, 'hi gus');
+    await send(faye, hal, 'hi hal');
+    const cg = await gus.waitFor((e) => e.t === 'chat'), chh = await hal.waitFor((e) => e.t === 'chat');
+    check('chat: the `who` a face1 game is sent has the face, an older game\'s doesn\'t', cg?.who.pic === curHash && cg.who.badge === 'collectible-874' && Object.keys(chh?.who || {}).sort().join() === personKeys, JSON.stringify([cg?.who, chh?.who]));
+
+    // Reported, and taken down by staff
+    const repPic = await gus.s('report', { id: faye.id, reason: 'Inappropriate profile picture' });
+    check('report: keeps the picture they had then', (await server.db.query('SELECT pic FROM reports WHERE id = $1', [repPic.id])).rows[0].pic === curHash);
+    server.admin.levels.set(moddy.id, { level: 1, at: Date.now() });
+    const modFace = await client(tok.moddy, { caps: FACES });
+    const rowF = (await modFace.admin('reports')).rows.find((r) => r.id === repPic.id), rowOld = (await moddy.admin('reports')).rows.find((r) => r.id === repPic.id);
+    check('reports (face1): the picture when reported and now; an older panel gets the rows as they were', rowF?.pic === curHash && rowF.about.pic === curHash && !!rowOld && !('pic' in rowOld) && !('pic' in rowOld.about), JSON.stringify(rowF?.about));
+    const pu = (await modFace.admin('player', { id: faye.id })).user, pOld = (await moddy.admin('player', { id: faye.id })).user;
+    check('player (face1): their face (picture, agent and featured badge); an older panel, none of it', pu.pic === curHash && 'avatar' in pu && pu.badge === 'collectible-874' && !['pic', 'badge'].some((k) => k in pOld), JSON.stringify({ pic: pu.pic, badge: pu.badge }));
+    const shared = await upload(tok.gus, b64(cur.bytes));
+    check('the very same picture from two players is one stored picture', shared.body.pic === curHash && await count('SELECT count(*)::int AS n FROM pictures WHERE hash = $1', [curHash]) === 1);
+    const picRefusals = [await refused(alice.admin('pic.clear', { id: faye.id })), await refused(moddy.admin('pic.clear', { id: boss.id }))];
+    check('pic.clear: not by a player, or a moderator on an admin', picRefusals.every((e) => e?.code === 'perm') && await col(faye, 'pic') === curHash, picRefusals.map((e) => e?.message).join(' / '));
+    modLog.length = 0;
+    faye.forget(); gus.forget();
+    await modFace.admin('pic.clear', { id: faye.id, reason: 'not for a profile' });
+    await wait(50);
+    check('pic.clear: off them and anyone with the very same picture, and no longer served', await col(faye, 'pic') === null && await col(gus, 'pic') === null && (await fetch(base() + '/pic/' + curHash)).status === 404);
+    check('pic.clear: they\'re told, and everyone sees their agent again', !!(await faye.waitFor((e) => e.t === 'notice' && /profile picture/.test(e.msg))) && (await hal.s('profile', { id: faye.id })).avatar === (await gus.s('profile', { id: faye.id })).avatar
+      && (await gus.s('profile', { id: faye.id })).pic === null && !!(await gus.waitFor((e) => e.t === 'friends')));
+    const picAudit = (await server.db.query("SELECT * FROM audit WHERE action = 'pic.clear' ORDER BY id DESC LIMIT 1")).rows[0], picDetail = typeof picAudit?.detail === 'string' ? JSON.parse(picAudit.detail) : picAudit?.detail;
+    check('pic.clear: audited with the picture\'s hash, and in the mod log', picAudit?.actor === 'moddy' && picAudit.target_id === faye.id && picDetail?.pic === curHash && picDetail.reason === 'not for a profile' && modLog.some((m) => m.title === 'Profile picture removed'), JSON.stringify(picAudit));
+    check('pic.clear: nothing to clear is refused', /no profile picture/.test((await refused(modFace.admin('pic.clear', { id: faye.id })))?.message));
+    fresh();
+    const back = await upload(tok.faye, b64(cur.bytes)), backGus = await upload(tok.gus, b64(cur.bytes));
+    check('a picture staff took down can\'t go up again, from anyone', back.status === 400 && back.body.code === 'removed' && backGus.body.code === 'removed' && await col(faye, 'pic') === null, JSON.stringify([back, backGus]));
+    check('the report still has its hash', (await modFace.admin('reports')).rows.find((r) => r.id === repPic.id)?.pic === curHash);
+    const other = await upload(tok.faye, b64(png(184, 184, { seed: 99 })));
+    check('another picture goes up', other.status === 200 && await col(faye, 'pic') === other.body.pic);
+    passTime(30 * 24 * 3600000 + 1000);
+    const later = await upload(tok.gus, b64(cur.bytes));
+    check('after 30 days the one taken down can go up again', later.status === 200 && (await fetch(base() + '/pic/' + curHash)).status === 200, JSON.stringify(later));
+    // Taking your own off
+    const offPic = await faye.s('profile.set', { pic: null });
+    check('profile.set { pic: null }: your picture comes off, and goes when nobody has it', offPic.pic === null && await col(faye, 'pic') === null && await count('SELECT count(*)::int AS n FROM pictures WHERE hash = $1', [other.body.pic]) === 0);
+    check('profile.set: a picture itself isn\'t sent there', /on its own/.test((await refused(faye.s('profile.set', { pic: 'data:image/png;base64,AAAA' })))?.message));
+    // The picture reported isn't always the one they have when staff look: each comes down by its own hash.
+    fresh();
+    const rp1 = png(184, 184, { seed: 201 }), rp2 = png(184, 184, { seed: 202 });
+    const upA = await upload(tok.faye, b64(rp1));
+    const rep2 = await gus.s('report', { id: faye.id, reason: 'Inappropriate profile picture' });
+    gus.forget(); hal.forget();
+    const upB = await upload(tok.faye, b64(rp2));
+    const seenA = await modFace.admin('pic.get', { pic: upA.body.pic });
+    check('replaced, a reported picture isn\'t served to anyone (only staff see it, pic.get), and the change is pushed as faces.d', upA.status === 200 && upB.status === 200
+      && (await fetch(base() + '/pic/' + upA.body.pic)).status === 404 && seenA.data === b64(rp1) && seenA.type === 'image/png' && (await refused(alice.admin('pic.get', { pic: upA.body.pic })))?.code === 'perm'
+      && !!(await gus.waitFor((e) => e.t === 'faces.d' && e.ids.includes(faye.id))) && !hal.pushed('faces.d').length);
+    const rowNow = (await modFace.admin('reports')).rows.find((r) => r.id === rep2.id);
+    check('reports (face1): the picture reported and the one they have now, told apart', rowNow?.pic === upA.body.pic && rowNow.about.pic === upB.body.pic && rowNow.picDown === false, JSON.stringify(rowNow && { pic: rowNow.pic, now: rowNow.about.pic }));
+    faye.forget();
+    const clearA = await modFace.admin('pic.clear', { id: faye.id, pic: upA.body.pic });
+    await wait(50);
+    const rowAfter = (await modFace.admin('reports')).rows.find((r) => r.id === rep2.id);
+    check('pic.clear of the reported picture: that one comes down (and can\'t go up again), the one they have now stays, and they aren\'t told their picture went',
+      clearA.pic === upA.body.pic && await col(faye, 'pic') === upB.body.pic && (await fetch(base() + '/pic/' + upB.body.pic)).status === 200 && rowAfter?.picDown === true
+      && (await modFace.admin('pic.get', { pic: upA.body.pic })).data === b64(rp1) && (await upload(tok.gus, b64(rp1))).body.code === 'removed' && !faye.pushed('notice').length);
+    const wrong = [await refused(modFace.admin('pic.clear', { id: faye.id, pic: sha(png(184, 184, { seed: 999 })) })), await refused(modFace.admin('pic.clear', { id: faye.id, pic: upA.body.pic }))];
+    check('pic.clear: a picture that isn\'t theirs, or one down already, is refused', /isn't a picture of theirs/.test(wrong[0]?.message) && /taken down already/.test(wrong[1]?.message), wrong.map((e) => e?.message).join(' / '));
+    await boss.admin('report.close', { id: rep2.id });
+    await boss.admin('report.close', { id: repPic.id });
+    for (const c of [faye, gus, hal, modFace]) c.close();
+  }
+
+  // ---- looking at players who aren't in memory: their state read once a minute, not on every look ---------------------------
+  {
+    tok.peeky = await register('peeky');
+    const peekyId = (await server.db.query("SELECT id FROM users WHERE name_lc = 'peeky'")).rows[0].id;
+    const look = () => bob.s('profile', { id: peekyId });
+    const first = await look(), st1 = server.store.peeked.get(peekyId)?.st;
+    const second = await look();
+    check('a player not in memory: their profile reads their state once, and looking again within the minute uses that copy (and what was worked out from it)', !server.store.cache.has(peekyId) && !!st1
+      && server.store.peeked.get(peekyId)?.st === st1 && server.store.isPeeked(peekyId, st1) && JSON.stringify(first) === JSON.stringify(second));
+    const pk = await client(tok.peeky);
+    check('…until they come online: memory\'s copy is the one then', server.store.cache.has(peekyId) && !server.store.peeked.has(peekyId));
+    await server.store.withUser(peekyId, async (e) => { e.st.inv.push(aSkin(1)); server.store.markDirty(e); });
+    const third = await look();
+    check('…so a change shows at once', third.count === first.count + 1, `${first.count} → ${third.count}`);
+    pk.close();
+    // A player with a lot in their Storage Units (each change writes all of it): only so many such changes at once.
+    const heavy = await client(await register('heavy'));
+    await server.store.withUser(heavy.id, async (e) => {
+      const unit = { uid: 'unit-heavy', t: 'unit', id: 'storage-unit', name: 'full', at: 1 };
+      e.st.inv.push(unit);
+      e.st.stored = Array.from({ length: 20050 }, (_, i) =>({ uid: 'h' + i, t: 'sticker', id: Object.keys(D.stickers)[i % 50], su: unit.uid, sat: 1 }));
+      server.store.markDirty(e);
+    });
+    const names = [];
+    for (let i = 0; i < 12; i++) names.push(await heavy.rpc('act', 'storage.retrieve', { unit: 'unit-heavy', uids: ['h' + i] }).then(() => 'ok', (e) => e.code));
+    const labels = [];
+    for (let i = 0; i < 3; i++) labels.push(await heavy.rpc('act', 'storage.name', { unit: 'unit-heavy', name: 'full ' + i }).then(() => 'ok', (e) => e.code));
+    check('a player with over 20,000 items stored: 10 Storage Unit changes in 10 seconds, then "slow down" (a label isn\'t one of them)', names.slice(0, 10).every((x) => x === 'ok') && names.slice(10).every((x) => x === 'rate')
+      && labels.every((x) => x === 'ok'), names.join() + ' / ' + labels.join());
+    heavy.close();
+  }
+
   // ---- a 1.1.0 game -----------------------------------------------------------------------------------------------
   // Exactly what src/js/net/online.js' handle() takes in that version: anything else falls through its switch.
   const OLD = new Set(['res', 'delta', 'lobbies', 'players', 'trades', 'gamble.result', 'notice', 'market', 'account', 'admin.msg', 'update']);
   const welcomeKeys = 'account,lobbies,market,motd,players,pricedAt,serverTime,state,t,trades,user';
+  // (A welcome says what passive income paid for time away, `away`, when a whole minute was due as it connected: carol's
+  // clock counted up to now, so whether one is due doesn't hang on how long the checks above took.)
+  await server.store.withUser(carol.id, async (e) => { e.st.passive = { ...e.st.passive, at: Date.now() }; server.store.markDirty(e); });
   const old = await new Promise((resolve, reject) => {
     const ws = new WebSocket(base().replace('http', 'ws') + '/ws');
     const c = { ws, unknown: [], closed: false, handled: 0 };

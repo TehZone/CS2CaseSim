@@ -13,7 +13,10 @@ import { round2 } from './util.js';
 export const UNIT_CAP = 1000; // CSGO_Tool_Casket_Tag_Desc: "store up to 1,000"
 export const UNIT_PRICE = 1.99; // what CS2's store charges, in USD
 export const UNIT_NAME_MAX = 20; // (CS2 labels units with its Name Tag window: 20 is that window's limit)
-export const MAX_UNITS = 20; // CS2 stops you at some number too ("You already own too many Storage Units"); it doesn't say which
+// How many you can own (bought: staff can give more). CS2 stops you at some number too ("You already own too many Storage
+// Units"); it doesn't say which. 100 full units are 100,000 items: anything that shows units goes through all of what's
+// stored once (unitTotals, unitCounts), never once for each unit.
+export const MAX_UNITS = 100;
 
 export const storedOf = (st) => st.stored || [];
 // What's listed on the Market (engine/p2p.js): out of the inventory until it sells or the listing is cancelled, but still yours.
@@ -26,13 +29,33 @@ export const contents = (st, unit) => storedOf(st).filter((it) => it.su === unit
 export const storedItem = (st, uid) => storedOf(st).find((it) => it.uid === uid) || null;
 export const unitCount = (st, unit) => { let n = 0; for (const it of storedOf(st)) if (it.su === unit) n++; return n; };
 export const unitValue = (st, unit) => round2(contents(st, unit).reduce((s, it) => s + I.itemValue(it), 0));
+// Every unit's count (unitCounts) or count and value (unitTotals) from one pass over what's stored, by unit uid: what a list
+// of units reads, as unitCount and unitValue each go through all of it. The same numbers as theirs (values added up in the
+// same order); a unit with nothing in it isn't in the Map.
+export function unitCounts(st) {
+  const out = new Map();
+  for (const it of storedOf(st)) out.set(it.su, (out.get(it.su) || 0) + 1);
+  return out;
+}
+export function unitTotals(st) {
+  const out = new Map();
+  for (const it of storedOf(st)) {
+    let s = out.get(it.su);
+    if (!s) out.set(it.su, (s = { n: 0, value: 0 }));
+    s.n++;
+    s.value += I.itemValue(it);
+  }
+  for (const s of out.values()) s.value = round2(s.value);
+  return out;
+}
 
 // A label as a unit keeps it: plain text with none of the characters a save file loses (see admin.js saveFile).
 export const cleanName = (v) => String(v ?? '').replace(/[\u0000-\u001f\u007f<>]/g, '').replaceAll('"', "'").trim().slice(0, UNIT_NAME_MAX).trim();
 
-// Why an item can't go into a unit ('' if it can). CS2 also keeps out default weapons, Service Medals and Pick'Em trophies:
-// none of those are inventory items here.
-export const storeRefusal = (item) => (I.isUnit(item) ? "Storage Units can't go inside other Storage Units" : '');
+// Why an item can't go into a unit ('' if it can). CS2 also keeps out default weapons (not inventory items here), and Service
+// Medals, coins and trophies: so here every badge but a capsule's pin (a bound one, items.isBound).
+export const storeRefusal = (item) => (I.isUnit(item) ? "Storage Units can't go inside other Storage Units"
+  : I.isBound(item) ? `${I.itemName(item)} can't go into a Storage Unit (only pins from capsules can)` : '');
 
 // The rarities a unit's contents filter by (ranks: see items.rarityRank), and how they're ordered.
 export const RANK_FILTERS = [['all', 'All rarities'], ['0', 'Consumer / Default'], ['1', 'Industrial / Base Grade'], ['2', 'Mil-Spec / High Grade'],

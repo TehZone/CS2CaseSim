@@ -6,6 +6,7 @@
 // audit row and mod-log message is the same whichever way a request comes in. Permissions are always checked here.
 import crypto from 'node:crypto';
 import { makeCtx, delta, takeForStaff, clearNameForStaff, give, GameError } from '../src/js/engine/actions.js';
+import { featuredBadge } from '../src/js/engine/badges.js';
 import { upgradeState } from '../src/js/engine/economy.js';
 import { customName, itemName } from '../src/js/engine/items.js';
 import { cooldownLeft, forgive, formatWait } from '../src/js/engine/matchmaking.js';
@@ -33,7 +34,7 @@ const TITLES = {
   rename: 'Player renamed', reset: 'Account reset', 'settings.set': 'Server settings changed', broadcast: 'Broadcast sent',
   link: 'Discord account linked', unlink: 'Discord account unlinked', resetpassword: 'Password reset through Discord',
   report: 'Player reported', 'report.close': 'Report closed', 'bio.clear': 'Summary cleared', 'cooldown.clear': 'Matchmaking cooldown removed',
-  'market.cancel': 'Market listing taken down',
+  'market.cancel': 'Market listing taken down', 'pic.clear': 'Profile picture removed',
 };
 const RED = 0xeb4b4b, GOLD = 0xe4ae39, BLUE = 0x4b69ff, GREEN = 0x4ade80;
 const COLORS = { ban: RED, kick: RED, signout: RED, reset: RED, warn: GOLD, unban: GREEN, link: GREEN, broadcast: BLUE, 'settings.set': BLUE };
@@ -79,9 +80,12 @@ function banRow(r, now = Date.now()) {
   };
 }
 const snapRow = (r) => ({ id: r.id, label: r.label, kind: r.kind, by: r.by_name, created: num(r.created), size: Number(r.size) || 0 });
-// (bio: their summary when reported; about.bio: as it is now. about.staff: what the panel offers, the server still checks.)
-const reportRow = (r, staff) => ({
-  id: r.id, from: { id: r.from_id, name: r.from_name }, about: { id: r.about_id, name: r.about_name, staff, bio: r.about_bio || '' }, reason: r.reason, text: r.text, bio: r.bio || '',
+// (bio: their summary when reported; about.bio: as it is now. about.staff: what the panel offers, the server still checks.
+// faces (a staff game with face1): pic, their profile picture when reported (picDown: staff have taken it down since), and
+// about.pic as it is now: hashes, which staff fetch with pic.get.)
+const reportRow = (r, staff, faces = false) => ({
+  id: r.id, from: { id: r.from_id, name: r.from_name }, about: { id: r.about_id, name: r.about_name, staff, bio: r.about_bio || '', ...(faces ? { pic: r.about_pic || null } : {}) },
+  reason: r.reason, text: r.text, bio: r.bio || '', ...(faces ? { pic: r.pic || null, picDown: r.pic_removed != null } : {}),
   messages: parse(r.messages) ?? [], at: num(r.at), closedAt: num(r.closed_at), closedBy: r.closed_by || null,
 });
 
@@ -266,6 +270,7 @@ export class Admin {
     if (action === 'rename') fields.push({ name: 'Name', value: `${md(detail.before)} → ${md(detail.after)}` });
     if (action === 'items.unname') fields.push({ name: 'Name', value: `${md(detail.item)}: ${md(detail.name)}` });
     if (action === 'bio.clear') fields.push({ name: 'Summary', value: md(String(detail.bio).slice(0, 1000)) });
+    if (action === 'pic.clear') fields.push({ name: 'Picture', value: `\`${String(detail.pic).slice(0, 16)}\``, inline: true });
     Promise.resolve()
       .then(() => this.discord.modLog({ title: TITLES[action] || action, description: t ? `**${md(t.name)}**` : '', fields, color: COLORS[action] ?? GOLD }))
       .catch((e) => this.log('[discord] mod log failed', e?.message || e));
@@ -366,8 +371,9 @@ export class Admin {
     return { id: user.id, name: rows[0]?.name || user.name, discordId: rows[0]?.discord_id || null, level: await this.levelOf(user.id, { fast: true }) };
   }
 
-  async rpc(user, m, args) {
-    return this.exec(await this.actorFor(user), String(m), isObj(args) ? args : {});
+  // (faces: the staff member's game reads face1's shapes, server/index.mjs CAPS: their requests' answers can have pictures.)
+  async rpc(user, m, args, { faces = false } = {}) {
+    return this.exec({ ...(await this.actorFor(user)), faces }, String(m), isObj(args) ? args : {});
   }
 
   // Every admin request, from the panel or a slash command. `actor` = { id (game id or null), name, discordId, level }.
@@ -386,7 +392,7 @@ export class Admin {
       ban: this.ban, unban: this.unban, bans: this.bans, kick: this.kick, warn: this.warn, signout: this.signout, 'note.add': this.noteAdd,
       rename: this.rename, reset: this.reset, audit: this.auditList, 'settings.get': this.settingsGet, 'settings.set': this.settingsSet,
       broadcast: this.broadcast, reports: this.reports, 'report.close': this.reportClose, 'bio.clear': this.bioClear, 'cooldown.clear': this.cooldownClear,
-      'market.player': this.marketPlayer, 'market.cancel': this.marketCancel,
+      'market.player': this.marketPlayer, 'market.cancel': this.marketCancel, 'pic.clear': this.picClear, 'pic.get': this.picGet,
     };
   }
 
@@ -478,7 +484,7 @@ export class Admin {
     const t = await this.target(a.id);
     const { state, rev } = await this.srv.store.withUser(t.id, async (e) => ({ state: structuredClone(e.st), rev: revOf(e.st) }));
     const now = Date.now();
-    const { rows: [cfg] } = await this.db.query('SELECT config, config_at FROM users WHERE id = $1', [t.id]);
+    const { rows: [cfg] } = await this.db.query("SELECT config, config_at, pic, badge, profile->>'avatar' AS avatar FROM users WHERE id = $1", [t.id]);
     const { rows: bans } = await this.db.query('SELECT b.*, u.name FROM bans b LEFT JOIN users u ON u.id = b.user_id WHERE b.user_id = $1 ORDER BY b.created DESC, b.id DESC', [t.id]);
     const { rows: notes } = await this.db.query('SELECT id, by_name, text, created FROM notes WHERE user_id = $1 ORDER BY created DESC, id DESC LIMIT 200', [t.id]);
     const { rows: snaps } = await this.db.query('SELECT id, label, kind, by_name, created, length(state::text) AS size FROM snapshots WHERE user_id = $1 ORDER BY created DESC, id DESC', [t.id]);
@@ -493,6 +499,8 @@ export class Admin {
         id: t.id, name: t.name, created: num(t.created), lastSeen: num(t.last_seen), online: this.srv.isOnline(t.id),
         discord: t.discord_id ? { id: t.discord_id, name: t.discord_name || '', linkedAt: num(t.linked_at) } : null,
         staff: await this.levelOf(t.id, { fast: true }), ban: ban && publicBan(ban), cooldown: cooldownLeft(state.mm),
+        // (face1: their face, as players see it: their own picture's hash, the agent they picked and the badge they feature)
+        ...(actor.faces ? { pic: cfg?.pic || null, avatar: cfg?.avatar || null, badge: featuredBadge(state, cfg?.badge) } : {}),
       },
       state, rev, config: parse(cfg?.config) ?? null, configAt: num(cfg?.config_at),
       bans: bans.map((r) => banRow(r, now)),
@@ -901,11 +909,12 @@ export class Admin {
     const page = a.page == null ? 0 : int(a.page, 'Page', 0, 1e6), closed = optBool(a.closed, 'closed');
     const [seen, args] = actor.level >= 2 ? ['TRUE', []] : ['NOT COALESCE(t.id = $1::int OR t.discord_id = $2::text, FALSE)', [actor.id ?? null, actor.discordId ?? null]];
     const { rows: [c] } = await this.db.query(`SELECT count(*)::int AS total, count(r.closed_at)::int AS closed FROM reports r JOIN users t ON t.id = r.about_id WHERE ${seen}`, args);
-    const { rows } = await this.db.query(`SELECT r.*, f.name AS from_name, t.name AS about_name, t.profile->>'bio' AS about_bio FROM reports r
+    const { rows } = await this.db.query(`SELECT r.*, f.name AS from_name, t.name AS about_name, t.profile->>'bio' AS about_bio, t.pic AS about_pic,
+      (SELECT removed FROM pictures p WHERE p.hash = r.pic) AS pic_removed FROM reports r
       JOIN users f ON f.id = r.from_id JOIN users t ON t.id = r.about_id WHERE ${seen} AND r.closed_at IS ${closed ? 'NOT ' : ''}NULL
       ORDER BY r.at DESC, r.id DESC LIMIT ${PAGE} OFFSET ${page * PAGE}`, args);
     const open = c.total - c.closed;
-    return { rows: rows.map((r) => reportRow(r, this.knownLevel({ id: r.about_id, name: r.about_name }))), total: closed ? c.closed : open, open, page };
+    return { rows: rows.map((r) => reportRow(r, this.knownLevel({ id: r.about_id, name: r.about_name }), actor.faces)), total: closed ? c.closed : open, open, page };
   }
 
   // Not a report about yourself, or about staff at or above your level.
@@ -932,6 +941,32 @@ export class Admin {
     await this.audit(actor, 'bio.clear', t, { bio: r.bio });
     this.srv.social.changed(t.id);
     return {};
+  }
+
+  // The same for a profile picture (face1): it comes off them (they, and everyone, see their agent or the default again), off
+  // anyone else who has the very same picture, isn't served any more, and can't go up again for 30 days (server/social.mjs
+  // removePicture). Its hash is on record, in the audit log and any report that had it. pic: which picture (its hash): their
+  // current one without it, or one a report about them kept (what was reported, though they've changed it since).
+  async picClear(actor, a) {
+    const t = await this.target(a.id);
+    await this.canTidy(actor, t);
+    const reason = text(a.reason, 'Reason', 300, { min: 0 });
+    const which = a.pic == null ? null : text(a.pic, 'Picture', 64);
+    const { rows: [now] } = await this.db.query('SELECT pic FROM users WHERE id = $1', [t.id]);
+    const pic = await this.srv.social.removePicture(t.id, actor.name, { hash: which });
+    if (!pic) fail(which ? 'That picture is taken down already' : `${t.name} has no profile picture`);
+    await this.audit(actor, 'pic.clear', t, { pic, ...(reason ? { reason } : {}) });
+    // (Told only when it was the picture they have: one they'd changed already is just gone from everywhere.)
+    if (now?.pic === pic) this.srv.notice(t.id, 'Staff removed your profile picture', 'bad');
+    return { pic };
+  }
+  // A picture a report kept or a player has, for staff to look at, taken down or not (face1's panel: the report window).
+  // → { type, data (its bytes, base64) }
+  async picGet(actor, a) {
+    this.need(actor, 1);
+    const p = await this.srv.social.staffPicture(text(a.pic, 'Picture', 64));
+    if (!p) fail('That picture is gone', 'missing');
+    return p;
   }
 
   // A matchmaking cooldown comes off, as a ban can be lifted, and with it the abandons that would make the next one longer.

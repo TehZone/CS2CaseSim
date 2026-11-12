@@ -3,6 +3,7 @@
 import * as E from './engine/economy.js';
 import { backfillSerials, retireOld, isUnit } from './engine/items.js';
 import { applyChange, backfillIndex } from './engine/itemindex.js';
+import { ownsBadge } from './engine/badges.js';
 
 const LS_KEY = 'cs2-case-sim-save';
 // The last price patch the server sent (net/online.js syncPrices), kept between launches. In a browser it shares the save's
@@ -51,6 +52,10 @@ export async function loadState() {
 function serialize() {
   const local = offlineS || S;
   local.lastSeen = Date.now();
+  // (A featured badge goes with the last of it, as the server does it online, server/store.mjs: one sold, traded away, listed
+  // on the Market or staked is no longer featured, even if it comes back.)
+  const me = local.social?.me;
+  if (me?.badge && !ownsBadge(local, me.badge)) local.social.me = { ...me, badge: null };
   return JSON.stringify(local);
 }
 // (In a browser, the save goes before the kept prices: they only make the next launch quicker.)

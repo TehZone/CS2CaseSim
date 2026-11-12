@@ -51,6 +51,8 @@
 /* A report: what was said about it, and the messages saved with it (a player's text can be one very long word). */
 .adm-report { display: grid; gap: 6px; font-size: 13px; }
 .adm-said { padding: 8px 10px; background: rgba(0, 0, 0, .3); white-space: pre-wrap; overflow-wrap: anywhere; }
+.adm-pics { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
+.adm-pic { display: grid; gap: 4px; justify-items: center; font-size: 12px; }
 .adm-chatlog { display: grid; gap: 8px; max-height: 340px; overflow: auto; padding: 10px; background: rgba(0, 0, 0, .3); font-size: 13px; line-height: 1.4; }
 .adm-chatlog [dir] { white-space: pre-wrap; overflow-wrap: anywhere; }
 .adm-label { width: 320px; }
