@@ -178,7 +178,7 @@ export function badgesBoxHtml(list, featured = null, { mine = false } = {}) {
   };
   return `<div class="sp-box"><div class="sp-bh">Badges${shown.length ? ` <span class="muted">${shown.length}</span>` : ''}</div>
     ${shown.length ? `<div class="sp-badges">${shown.map(cell).join('')}</div>`
-    : `<div class="muted">${mine ? 'No badges yet: open a Collectible Pins Capsule (Cases, Pin Capsules) for a pin.' : 'No badges yet.'}</div>`}</div>`;
+    : `<div class="muted">${mine ? 'No badges yet: open a Collectible Pins Capsule (Cases, Pin Capsules) for a pin, or prestige (past level 40) for a Service Medal.' : 'No badges yet.'}</div>`}</div>`;
 }
 // [{ id, n }] of what a save has (inventory and Storage Units), for badgesBoxHtml.
 export const badgeList = (st) => badgesOf(st).map((b) => ({ id: b.id, n: b.n }));

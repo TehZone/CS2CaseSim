@@ -52,6 +52,13 @@ export const isBound = (item) => item?.t === 'badge' && !itemDef(item)?.tr;
 // What another player, a trader or a stake can take: not locked items, not units, not a bound badge, and nothing the game no
 // longer has.
 export const tradable = (item) => !item.lk && !isUnit(item) && !isBound(item) && !!itemDef(item);
+// How many of these items count toward an inventory's limit (online, the server's INV_CAP): all but bound badges (the
+// Service Medals prestiging gives, and what staff gave), which nothing but staff can take out of an inventory again.
+export function capCount(items) {
+  let n = 0;
+  for (const it of items || []) if (!isBound(it)) n++;
+  return n;
+}
 
 // ---- tools -----------------------------------------------------------------------------------
 // CS2's Name Tag (item 1200) and StatTrak™ Swap Tool (item 1324), t: 'tool' in your inventory: Base Grade, with CS2's own

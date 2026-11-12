@@ -3,7 +3,7 @@
 import * as E from './engine/economy.js';
 import { backfillSerials, retireOld, isUnit } from './engine/items.js';
 import { applyChange, backfillIndex } from './engine/itemindex.js';
-import { ownsBadge } from './engine/badges.js';
+import { ownsBadge, grantMedals } from './engine/badges.js';
 
 const LS_KEY = 'cs2-case-sim-save';
 // The last price patch the server sent (net/online.js syncPrices), kept between launches. In a browser it shares the save's
@@ -19,6 +19,7 @@ export const on = (type, fn) => {
 
 export let S = E.freshState();
 export let retiredOnLoad = null; // { n, value }: the chickens and pro cards an older save had, sold on load
+export let medalsOnLoad = []; // the Service Medals' badges an older save's prestiges got on load (items)
 let offlineS = null; // the local save, kept aside while playing online
 export const isOnlineState = () => offlineS != null;
 // Online with lean1 (net/online.js), the welcome leaves out what's in Storage Units. Then this is { sums, loaded }: sums is
@@ -40,6 +41,7 @@ export async function loadState() {
       backfillSerials(S); // saves from before serial numbers (once)
       backfillIndex(S); // and from before the Index (after those: it reads the serial counters)
       retiredOnLoad = retireOld(S);
+      medalsOnLoad = grantMedals(S); // prestiges from before they gave their Service Medal's badge (once: engine/badges.js)
     } catch (e) {
       console.error('Save corrupted, starting fresh', e);
     }

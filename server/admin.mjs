@@ -6,9 +6,9 @@
 // audit row and mod-log message is the same whichever way a request comes in. Permissions are always checked here.
 import crypto from 'node:crypto';
 import { makeCtx, delta, takeForStaff, clearNameForStaff, give, GameError } from '../src/js/engine/actions.js';
-import { featuredBadge } from '../src/js/engine/badges.js';
+import { featuredBadge, grantMedals } from '../src/js/engine/badges.js';
 import { upgradeState } from '../src/js/engine/economy.js';
-import { customName, itemName } from '../src/js/engine/items.js';
+import { capCount, customName, itemName } from '../src/js/engine/items.js';
 import { cooldownLeft, forgive, formatWait } from '../src/js/engine/matchmaking.js';
 import { listedOf, ownedItems } from '../src/js/engine/storage.js';
 import { round2 } from '../src/js/engine/util.js';
@@ -355,6 +355,7 @@ export class Admin {
       // (its items and its rewards' items owned elsewhere now are left out: see restoreMerge)
       const elsewhere = await this.ownedElsewhere(t.id, restoreUids(next));
       const { dropped, rewards } = restoreMerge(e.st, next, { elsewhere, startOver: what === 'reset' });
+      grantMedals(next); // (as a loaded state: a snapshot's prestiges from before their badges get them, engine/badges.js)
       const before = JSON.stringify(e.st);
       const gone = Object.keys(e.st).filter((k) => !(k in next));
       replaceInPlace(e.st, next);
@@ -523,10 +524,11 @@ export class Admin {
       if (!changed.length) return { state: pick(st, Object.keys(next)), changed };
       const snapJson = JSON.stringify(st);
       applyEdit(st, next);
+      const medals = grantMedals(st); // (Service Medals staff raised: their badges, as prestiging gives them: engine/badges.js)
       this.srv.store.markDirty(e);
       await this.srv.store.commit([e], this.autoSnap(t, actor, 'edit', snapJson));
       const keys = Object.keys(before);
-      this.srv.deltaTo(t.id, { set: pick(st, keys), add: [], del: [], upd: [] });
+      this.srv.deltaTo(t.id, { set: pick(st, keys), add: medals, del: [], upd: [] });
       return { state: pick(st, Object.keys(next)), changed, before, after };
     });
     if (out.changed.length) await this.audit(actor, 'edit', t, { changed: out.changed, before: out.before, after: out.after });
@@ -543,10 +545,13 @@ export class Admin {
       if (!changed.length) return { state: rawView(e.st), rev: revOf(e.st), changed };
       const snapJson = JSON.stringify(e.st);
       replaceInPlace(e.st, next);
+      const medals = grantMedals(e.st); // (as an edit of the medals gives their badges)
       this.srv.store.markDirty(e);
       await this.srv.store.commit([e], this.autoSnap(t, actor, 'raw edit', snapJson));
       // (a field the new state no longer has goes as null: the game only sets the keys it's sent)
-      this.srv.deltaTo(t.id, { set: Object.fromEntries(changed.map((k) => [k, e.st[k] ?? null])), add: [], del: [], upd: [] });
+      const set = Object.fromEntries(changed.map((k) => [k, e.st[k] ?? null]));
+      if (medals.length) set.prof = e.st.prof;
+      this.srv.deltaTo(t.id, { set, add: medals, del: [], upd: [] });
       return { state: rawView(e.st), rev: revOf(e.st), changed, before, after };
     });
     if (out.changed.length) await this.audit(actor, 'edit.raw', t, { changed: out.changed, before: out.before, after: out.after });
@@ -556,10 +561,11 @@ export class Admin {
   async itemsGive(actor, a) {
     const t = await this.target(a.id);
     await this.canChange(actor, t);
-    const { specs, total } = giveSpecs(a.items);
+    const { specs, counted } = giveSpecs(a.items);
     const out = await this.srv.store.withUser(t.id, async (e) => {
       const cap = this.srv.INV_CAP;
-      if (e.st.inv.length + total > cap) fail(`${t.name}'s inventory would be over the limit (${cap} items)`, 'full');
+      // (Bound badges, a Service Medal given back say, don't count: items.capCount.)
+      if (capCount(e.st.inv) + counted > cap) fail(`${t.name}'s inventory would be over the limit (${cap} items, not counting badges that can't be traded)`, 'full');
       const items = buildItems(specs, (key) => this.srv.serial(key)); // (the server's own counters)
       const ctx = makeCtx(e.st, { online: true, invCap: cap });
       give(ctx, items);

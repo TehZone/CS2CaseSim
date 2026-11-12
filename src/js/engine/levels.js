@@ -1,7 +1,8 @@
 // Your profile level, like CS2's: 5,000 XP a level from 1 to 40, earned by playing matches. Earning past level 40 awards
 // the next Service Medal and starts you again at level 1. The medals go newest first: every colour of the 2026 Service
-// Medal, then every colour of 2025's, and so on back to the first one ever made, 2015's. Each level up comes with a
-// reward like CS2's care package: four items to choose two from.
+// Medal, then every colour of 2025's, and so on back to the first one ever made, 2015's. Each one comes with its badge:
+// CS2's Service Medal collectible, in your inventory to feature on your profile (badges.js grantMedals). Each level up
+// comes with a reward like CS2's care package: four items to choose two from.
 //
 // Money comes from matches (a win or a draw pays $1,250, a loss $500, and every kill $100, assist $50 and round MVP $250)
 // and from passive income: $100 every minute and $100 more for each prestige (each Service Medal earned), while the game is
@@ -14,7 +15,9 @@ export const XP_PER_LEVEL = 5000, MAX_LEVEL = 40;
 
 // Each year's Service Medal and how many colours it comes in (CS2's items_game: the 2015 medal has two, 2017's seven).
 const MEDAL_YEARS = [[2026, 6], [2025, 6], [2024, 6], [2023, 6], [2022, 6], [2021, 6], [2020, 6], [2019, 6], [2018, 6], [2017, 7], [2016, 6], [2015, 2]];
-// In the order they're earned: { y: year, l: its colour (1 = the first) }.
+// In the order they're earned: { y: year, l: its colour (1 = the first) }. A profile's medals (prof.medals) count into this
+// list, so a new year's medal put first moves everyone's medals onto it; the badges given for them stay, and none is given
+// twice (badges.js grantMedals keeps the ids it gave).
 export const MEDALS = MEDAL_YEARS.flatMap(([y, n]) => Array.from({ length: n }, (_, i) => ({ y, l: i + 1 })));
 export const medalName = (m) => `${m.y} Service Medal`;
 
@@ -66,8 +69,9 @@ export function passivePay(at, now, prestiges = 0) {
 // Whether collecting at `now` would change anything: a whole minute is due, or the clock starts (or starts again).
 export const passiveDue = (passive, now) => !Number.isFinite(passive?.at) || now < passive.at || now - passive.at >= PASSIVE_MINUTE;
 
-// A new player's profile: level 1, no XP, no medals yet, no rewards waiting.
-export const freshProfile = () => ({ level: 1, xp: 0, medals: 0, total: 0, drops: [] });
+// A new player's profile: level 1, no XP, no medals yet, no rewards waiting. (medalBadges: the ids of the medals' badges
+// given, badges.js grantMedals: each prestige gives its Service Medal's badge, once.)
+export const freshProfile = () => ({ level: 1, xp: 0, medals: 0, total: 0, drops: [], medalBadges: [] });
 export const medalOf = (prof) => (prof?.medals ? MEDALS[Math.min(prof.medals, MEDALS.length) - 1] : null);
 // The medal the next prestige brings (null once you have every one).
 export const nextMedal = (prof) => MEDALS[prof?.medals || 0] || null;

@@ -1,6 +1,7 @@
 // Your profile, like CS2's: your level in the top bar (CS2's own level icon when it's installed) with its XP bar and the
 // Service Medal you've reached, the medals you can earn, and the rewards each level up brings: four items to keep two
-// of (CS2's care package). Levels and medals are earned by playing matches (rules in engine/levels.js).
+// of (CS2's care package). Levels and medals are earned by playing matches (rules in engine/levels.js); each medal's
+// badge comes with it (engine/badges.js grantMedals).
 import { esc, imgUrl, money } from './util.js';
 import { S, on } from './state.js';
 import * as I from './items.js';
@@ -48,7 +49,8 @@ export function matchRewardHtml(r) {
   const parts = [p.result && `${{ win: 'Win', draw: 'Draw', loss: 'Loss' }[r.result] || 'Result'} ${usd(p.result)}`, p.kills && `kills ${usd(p.kills)}`, p.assists && `assists ${usd(p.assists)}`, p.mvps && `MVPs ${usd(p.mvps)}`].filter(Boolean).join(' · ');
   const prof = { ...S.prof, ...r.after };
   const medal = r.medals?.length ? MEDALS[r.medals.at(-1)] : null;
-  const ups = r.levelUps ? `<div class="lvl-up">${medal ? `${medalHtml(medal, 40)}<b>${esc(medalName(medal))}</b> earned! Back to level 1`
+  const badge = r.badges?.length ? ` · its badge is in your inventory, to feature on your profile picture` : '';
+  const ups = r.levelUps ? `<div class="lvl-up">${medal ? `${medalHtml(medal, 40)}<b>${esc(medalName(medal))}</b> earned! Back to level 1${badge}`
     : `${levelIconHtml(prof.level, 36)}<b>Level ${prof.level}</b>`}${r.levelUps > 1 ? ` (${r.levelUps} level ups)` : ''} · ${r.waiting} reward${r.waiting === 1 ? '' : 's'} waiting at the top of the menu</div>` : '';
   return `<div class="match-pay"><div><b class="green">+${money(r.earned)}</b> <span class="muted">${parts}</span></div>
     <div class="xp-line">${levelIconHtml(prof.level, 26)}<span>+${x.total.toLocaleString()} XP</span>${xpBarHtml(prof, { from: r.levelUps ? 0 : r.before.xp })}<span class="muted">${prof.xp.toLocaleString()} / ${XP_PER_LEVEL.toLocaleString()}</span></div>
@@ -88,7 +90,7 @@ export function openProfile() {
   }
   const medalCell = ({ m, i }) => {
     const state = i < prof.medals ? 'got' : i === prof.medals ? 'next' : 'locked';
-    return `<div class="mcell ${state}" title="${esc(medalName(m))} · colour ${m.l}${state === 'next' ? ' · your next medal' : state === 'got' ? ' · earned' : ''}">${medalHtml(m, 46) || `<span class="mph">${m.l}</span>`}</div>`;
+    return `<div class="mcell ${state}" title="${esc(medalName(m))} · colour ${m.l}${state === 'next' ? ' · your next medal, with its badge' : state === 'got' ? ' · earned, with its badge' : ''}">${medalHtml(m, 46) || `<span class="mph">${m.l}</span>`}</div>`;
   };
   const m = openModal({
     title: 'Profile',
@@ -97,7 +99,7 @@ export function openProfile() {
         ${cur ? medalHtml(cur, 72) : ''}${levelIconHtml(prof.level, 72)}
         <div class="grow"><h3>Level ${prof.level}</h3>${xpBarHtml(prof)}
           <div class="muted">${prof.xp.toLocaleString()} / ${XP_PER_LEVEL.toLocaleString()} XP · ${prof.level < MAX_LEVEL ? `level ${prof.level + 1} next` : next ? `the ${esc(medalName(next))} next` : 'every medal earned'}</div>
-          <div class="muted">${cur ? `Your medal: <b>${esc(medalName(cur))}</b> (colour ${cur.l})` : 'No Service Medal yet: reach level 40 and level up once more for your first.'}</div>
+          <div class="muted">${cur ? `Your medal: <b>${esc(medalName(cur))}</b> (colour ${cur.l}), and the badge of every medal you've earned in your inventory` : 'No Service Medal yet: reach level 40 and level up once more for your first, and its badge.'}</div>
           <div class="muted" data-passive>Passive income: <b class="green">${passiveText(prestigesOf(prof))}</b>${next ? ` · ${usd(passiveRate(prestigesOf(prof) + 1))}/min with your next medal` : ''}</div></div>
         ${waiting ? `<button class="btn gold" data-claim>Claim reward${waiting > 1 ? `s (${waiting})` : ''}</button>` : ''}
       </div>
@@ -107,7 +109,8 @@ export function openProfile() {
         ${XP_PER_LEVEL.toLocaleString()} XP is a level, and every level up brings a reward: ${CARE_OFFERS} items to keep ${CARE_PICKS} of.
         You also get passive income every minute, even while the game is closed (up to ${PASSIVE.capHours} hours of it at a time): <b>${usd(PASSIVE.perMinute)}</b>, and <b>${usd(PASSIVE.perPrestige)}</b> more for each prestige (every Service Medal you've earned), so <b>${passiveText(prestigesOf(prof))}</b> for you now.</div>
       <div class="section-title">Service Medals <span class="muted" style="font-size:12px;text-transform:none;letter-spacing:0">${prof.medals} of ${MEDALS.length}</span></div>
-      <div class="muted" style="font-size:13px;margin-bottom:10px">Past level 40 you earn the next medal and start again at level 1. Every colour of the newest medal comes first, then the year before's, back to the first ever, 2015's.</div>
+      <div class="muted" style="font-size:13px;margin-bottom:10px">Past level 40 you earn the next medal and start again at level 1. Every colour of the newest medal comes first, then the year before's, back to the first ever, 2015's.
+        Each prestige also gives that medal's badge (CS2's Service Medal collectible) to your inventory, once: feature it on your profile picture (your profile's Edit profile). Badges like it can't be traded, sold or stored, and don't count toward your inventory's limit.</div>
       <div class="medal-years">${years.map((y) => `<div class="myear"><span>${y.y}</span>${y.list.map(medalCell).join('')}</div>`).join('')}</div>`,
     foot: '<button class="btn ghost" data-close>Close</button>',
   });

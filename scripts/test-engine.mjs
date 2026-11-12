@@ -2594,6 +2594,142 @@ function tierFreq(box, n) {
     check('Admin: a save\'s picture and featured badge are kept when the game could have made them, dropped otherwise', kept.pic === url && kept.badge === 'collectible-6102' && dropped.pic === null && dropped.badge === null);
     check('A new profile has no picture and no badge', N.freshPersona().pic === null && N.freshPersona().badge === null);
   }
+
+  // ---- Service Medals: each prestige gives its medal's badge, once (badges.js grantMedals) -----------------------------------
+  {
+    const L = await E('levels');
+    const { upgradeState } = await E('economy');
+    const ids = B.medalBadgeIds(), medalDefs = all.filter((b) => b.ty === 'Service Medal');
+    check('Medals: every prestige there is (69) maps to its own Service Medal badge, of its year and colour (Level <colour>)', L.MEDALS.length === 69 && ids.length === 69
+      && ids.every(Boolean) && new Set(ids).size === 69 && L.MEDALS.every((m, i) => D.badges[ids[i]].n === `${m.y} Service Medal` && D.badges[ids[i]].v === `Level ${m.l}` && D.badges[ids[i]].ty === 'Service Medal'));
+    check('Medals: and every Service Medal badge is one of them (1:1), none of them a pin', medalDefs.length === 69 && medalDefs.every((d) => ids.includes(d.id)) && medalDefs.every((d) => !d.tr && I.isBound({ t: 'badge', id: d.id })));
+    check('Medals: the first prestige is the 2026 medal\'s first colour, the 69th the 2015 medal\'s second; there\'s none past it', B.medalBadgeId(0) === ids[0] && D.badges[ids[0]].n === '2026 Service Medal' && D.badges[ids[0]].v === 'Level 1'
+      && D.badges[ids[68]].n === '2015 Service Medal' && D.badges[ids[68]].v === 'Level 2' && B.medalBadgeId(69) === null && B.medalBadgeId(-1) === null && B.medalBadgeId('0') === null);
+    check('Medals: a new profile has had none given (the record is a list of the badge ids given; anything else is none)', Array.isArray(L.freshProfile().medalBadges) && !L.freshProfile().medalBadges.length
+      && !B.medalBadgesGiven(L.freshProfile()).length && !B.medalBadgesGiven({ medalBadges: 'x' }).length && !B.medalBadgesGiven({ medalBadges: 3 }).length && !B.medalBadgesGiven(undefined).length
+      && B.medalBadgesGiven({ medalBadges: [ids[0], 7, null] }).join() === ids[0]);
+
+    // Prestiging in a match (play.reward), offline and online alike: the badge with it, in the same change.
+    const prestige = (st, o = {}) => {
+      const t0 = Date.UTC(2026, 10, 11);
+      ACT.runAction(ACT.makeCtx(st, { rng, now: t0, ...o }), 'play.start', { mode: 'deathmatch' });
+      const c = ACT.makeCtx(st, { rng, now: t0 + 120000, ...o });
+      const r = ACT.runAction(c, 'play.reward', { run: st.play.run, result: 'win', kills: 3 });
+      return { r, d: ACT.delta(c) };
+    };
+    {
+      const { st } = setup();
+      st.prof = { ...st.prof, level: 40, xp: 4999 };
+      const { r, d } = prestige(st);
+      const it = st.inv[0];
+      check('Medals: a prestige in a match gives that medal\'s badge: new, from "Prestige", in the change (add, and the profile)', r.medals.length === 1 && st.prof.medals === 1 && st.prof.medalBadges.join() === ids[0]
+        && it?.t === 'badge' && it.id === ids[0] && it.src === B.MEDAL_SRC && it.nw === true && !it.sn && d.add.length === 1 && d.add[0] === it && d.set.prof === st.prof && r.badges?.[0] === it);
+      check('Medals: it\'s bound: not tradable, not sellable, worth $0, kept out of Storage Units and the Market', I.isBound(it) && !I.tradable(it) && I.itemValue(it) === 0 && /can't go into a Storage Unit/.test(SU.storeRefusal(it)) && /can't be listed/.test(P.listRefusal(it)));
+      const was = st.inv.length;
+      check('Medals: a sale, a stake or a take refuses it (bound)', code(() => ACT.runAction(ACT.makeCtx(st), 'item.sell', { uids: [it.uid] })) === 'bound'
+        && code(() => ACT.runAction(ACT.makeCtx(st), 'gamble.coinflip', { money: 1, uids: [it.uid], side: 't', clientSeed: 's' })) === 'bound' && code(() => ACT.take(ACT.makeCtx(st), [it.uid])) === 'bound' && st.inv.length === was && st.inv.includes(it));
+      check('Medals: it can be featured on the profile picture like any badge you own', ACT.runAction(ACT.makeCtx(st), 'persona.set', { badge: it.id }).me.badge === it.id && B.featuredBadge(st, it.id) === it.id
+        && B.badgesOf(st).some((b) => b.id === it.id));
+      const plain = prestige(st);
+      check('Medals: a match that\'s no prestige gives none (no badges in its answer, nothing added)', !plain.r.medals.length && !('badges' in plain.r) && plain.d.add.length === 0 && st.prof.medalBadges.length === 1);
+      st.prof = { ...st.prof, level: 40, xp: 4999 };
+      const second = prestige(st);
+      check('Medals: the next prestige gives the next one (2026, its second colour), the newest first in the inventory', second.r.badges?.length === 1 && st.inv[0].id === ids[1] && st.prof.medalBadges.join() === [ids[0], ids[1]].join()
+        && st.inv.filter((x) => x.t === 'badge').map((x) => x.id).join() === [ids[1], ids[0]].join());
+    }
+    {
+      // The Index's rewards give XP too: a claim that prestiges gives the badge the same way.
+      const { st } = setup();
+      const xray = D.cases.find((c) => c.n === 'X-Ray P250 Package'), g = IX.goalOf(IX.setOf(xray.id).goal);
+      IX.record(st, g.ids.map((id) => I.makeSkinItem(D.skins[id], { src: xray.n, r: rng })), Date.UTC(2026, 10, 11));
+      st.prof = { ...st.prof, level: 40, xp: 5000 - Math.min(g.reward.xp, 5000) };
+      const c = ACT.makeCtx(st, { rng });
+      const r = ACT.runAction(c, 'index.claim', { goal: g.key }), d = ACT.delta(c);
+      check('Medals: an Index reward that prestiges gives the badge too (index.claim)', g.reward.xp > 0 && r.medals.length === 1 && r.badges?.[0]?.id === ids[0] && d.add.some((x) => x.id === ids[0]) && st.prof.medalBadges.join() === ids[0], `${g.reward.xp} XP`);
+    }
+    {
+      const { st } = setup();
+      st.prof = { ...st.prof, level: 40, xp: 4999, medals: 69, medalBadges: [...ids] };
+      const { r, d } = prestige(st);
+      check('Medals: past the last one (69) a level up past 40 brings no medal and no badge, just its reward', r.levelUps === 1 && !r.medals.length && !r.badges && st.prof.medals === 69 && st.prof.medalBadges.length === 69 && d.add.length === 0 && st.prof.drops.length === 1);
+    }
+
+    // Prestiges from before: given once, as the save or account loads.
+    {
+      const old = { ...freshState(), money: 5 };
+      old.prof = { level: 7, xp: 10, medals: 3, total: 1, drops: [] }; // (a save from before: no medalBadges)
+      const st = upgradeState(JSON.parse(JSON.stringify(old)));
+      const got = B.grantMedals(st, { now: 5 });
+      check('Backfill: a save with 3 prestiges gets the 3 medals\' badges as it loads, the newest first, once', got.length === 3 && st.prof.medalBadges.join() === ids.slice(0, 3).join() && st.inv.slice(0, 3).map((x) => x.id).join() === [ids[2], ids[1], ids[0]].join()
+        && got.every((x) => x.at === 5 && x.nw && x.src === 'Prestige') && B.grantMedals(st).length === 0 && st.inv.length === 3 && st.prof.medals === 3 && st.prof.level === 7);
+      const again = upgradeState(JSON.parse(JSON.stringify(st)));
+      check('Backfill: loaded again (the record kept with the save) it gives nothing more', B.grantMedals(again).length === 0 && again.inv.filter((x) => x.t === 'badge').length === 3);
+      const staff = ACT.takeForStaff(ACT.makeCtx(again), [again.inv.find((x) => x.id === ids[1]).uid]);
+      const reloaded = upgradeState(JSON.parse(JSON.stringify(again)));
+      check('Backfill: one staff took away isn\'t given back, on loading or on a prestige', staff.length === 1 && B.grantMedals(reloaded).length === 0 && !B.ownsBadge(reloaded, ids[1])
+        && (() => { reloaded.prof = { ...reloaded.prof, level: 40, xp: 4999 }; const p = prestige(reloaded); return p.r.badges.length === 1 && p.r.badges[0].id === ids[3] && !B.ownsBadge(reloaded, ids[1]); })());
+      const fresh = upgradeState({ ...freshState() });
+      check('Backfill: a save with no prestiges gets nothing', B.grantMedals(fresh).length === 0 && !fresh.prof.medalBadges.length && !fresh.inv.length);
+    }
+    {
+      // Medals taken off (staff lowering them) and earned again: their badges came already.
+      const st = { ...freshState(), money: 1 };
+      st.prof = { ...st.prof, medals: 4 };
+      B.grantMedals(st);
+      st.prof = { ...st.prof, medals: 1 };
+      check('Backfill: fewer medals than were given takes nothing away and gives nothing', B.grantMedals(st).length === 0 && st.prof.medalBadges.length === 4 && st.inv.length === 4);
+      st.prof = { ...st.prof, medals: 4, level: 40, xp: 4999 };
+      const fifth = prestige(st);
+      check('Backfill: earned again up to where they were, then a new one: only the new one\'s badge (no copy twice)', fifth.r.badges.length === 1 && fifth.r.badges[0].id === ids[4] && st.inv.length === 5 && new Set(st.inv.map((x) => x.id)).size === 5);
+    }
+    {
+      // Without badges in the game data nothing is given (or counted), so they come once there are.
+      initData(game, { keys });
+      const st = { ...freshState() };
+      st.prof = { ...st.prof, medals: 2 };
+      const none = B.grantMedals(st);
+      initData(game, { keys, badges: file });
+      check('Backfill: game data without badges gives none and counts none, so they\'re given once the badges are there', none.length === 0 && !st.prof.medalBadges.length && B.grantMedals(st).length === 2 && st.prof.medalBadges.length === 2);
+    }
+    {
+      // The record is of the badges given, not how many: whatever it holds (a list from before the medals changed order, say),
+      // a badge on it is never given again, and each prestige's medal not on it is.
+      const st = { ...freshState() };
+      st.prof = { ...st.prof, medals: 6, medalBadges: [ids[5], ids[2], ids[40]] };
+      const got = B.grantMedals(st);
+      check('Backfill: badges already on the record are passed over, the rest of the prestiges\' given: none twice', got.map((x) => x.id).join() === [ids[4], ids[3], ids[1], ids[0]].join()
+        && st.prof.medalBadges.join() === [ids[5], ids[2], ids[40], ids[0], ids[1], ids[3], ids[4]].join() && B.grantMedals(st).length === 0);
+    }
+    {
+      // A raw edit (the admin panels) can't reset the record: it goes with the inventory, which isn't edited there.
+      const st = upgradeState({ ...freshState(), money: 1 });
+      st.prof = { ...st.prof, medals: 6 };
+      B.grantMedals(st);
+      const { medalBadges: _given, ...bare } = st.prof;
+      const raw = (prof) => ({ ...ADM.rawView(st), prof });
+      const left = ADM.rawEdit(st, raw({ ...bare }), ADM.revOf(st)).next, emptied = ADM.rawEdit(st, raw({ ...bare, medalBadges: [], level: 3 }), ADM.revOf(st)).next;
+      check('Admin: a raw edit\'s prof without the record of badges given, or with it emptied, keeps it (no medal\'s badge again)', B.grantMedals(left).length === 0 && B.grantMedals(emptied).length === 0
+        && left.prof.medalBadges.join() === ids.slice(0, 6).join() && emptied.prof.medalBadges.join() === ids.slice(0, 6).join() && emptied.prof.level === 3);
+      check('Admin: staff giving bound badges counts none of them toward the limit (giveSpecs counted); a pin and anything else counts',
+        ADM.giveSpecs([{ t: 'badge', id: ids[0], n: 2 }, { t: 'badge', id: 'collectible-6101' }, { t: 'key', id: Object.keys(D.keys)[0], n: 3 }]).counted === 4
+        && ADM.giveSpecs([{ t: 'badge', id: ids[0], n: 2 }]).total === 2 && ADM.giveSpecs([{ t: 'badge', id: ids[0], n: 2 }]).counted === 0);
+    }
+
+    // A full inventory loses no medal: bound badges don't count toward its limit (items.capCount).
+    {
+      const { st } = setup();
+      for (let i = 0; i < 5; i++) st.inv.push(I.makeKeyItem(Object.keys(D.keys)[0], 'test'));
+      st.prof = { ...st.prof, level: 40, xp: 4999 };
+      const full = { invCap: 5 }; // (5 items: full)
+      let got = null;
+      try { got = prestige(st, full); } catch (e) { got = e; }
+      check('Full inventory: the prestige\'s badge is given all the same (a full inventory takes no medal from you)', !(got instanceof Error) && got.r.badges?.length === 1 && st.inv.length === 6 && I.capCount(st.inv) === 5, got?.message);
+      const k = Object.keys(D.keys)[0];
+      check('Full inventory: and it doesn\'t count: 5 other items are still full, 4 have room for one more', code(() => ACT.runAction(ACT.makeCtx(st, full), 'key.buy', { key: k, n: 1 })) === 'full'
+        && (() => { st.inv.splice(st.inv.findIndex((x) => x.t === 'key'), 1); return code(() => ACT.runAction(ACT.makeCtx(st, full), 'key.buy', { key: k, n: 1 })) === null && I.capCount(st.inv) === 5 && st.inv.length === 6; })());
+      check('Full inventory: capCount counts all but bound badges (a pin counts)', I.capCount([{ t: 'badge', id: ids[0] }, { t: 'badge', id: 'collectible-6101' }, { t: 'key', id: k }]) === 2 && I.capCount([]) === 0 && I.capCount(undefined) === 0);
+    }
+  }
   initData(game, { keys });
 }
 

@@ -1,7 +1,7 @@
 import { $, $$, money, debounce, esc } from './util.js';
 import { act, online } from './backend.js';
 import { loadData } from './data.js';
-import { S, loadState, on, saveSync, save, retiredOnLoad } from './state.js';
+import { S, loadState, on, saveSync, save, retiredOnLoad, medalsOnLoad } from './state.js';
 import { ownedWorth } from './stored.js';
 import { toast, topModal, openModal, installTooltips } from './ui.js';
 import { initMenu, initMoreMenu } from './menu.js';
@@ -217,11 +217,18 @@ async function boot() {
     save();
     toast(`Chickens and player cards are no longer in the game, so ${retiredOnLoad.n === 1 ? 'yours was' : `your ${retiredOnLoad.n} were`} sold for <b class="green">${money(retiredOnLoad.value)}</b>.`, 'gold');
   }
+  // (Prestiges from before each gave its Service Medal's badge: theirs now, once. The offline save's: one going online gets
+  // the account's own from the server, so then it says whose.)
+  if (medalsOnLoad.length) {
+    save();
+    const n = medalsOnLoad.length, away = net.status() === 'connecting';
+    toast(`Every prestige now comes with its Service Medal's badge, so ${away ? 'your offline save\'s' : 'your'} ${n === 1 ? 'prestige got its badge' : `${n} prestiges got theirs`}: in ${away ? 'its' : 'your'} inventory, to feature on your profile picture.`, 'gold');
+  }
   // (Until you've opened, played or spent anything: passive income alone doesn't count.)
   if (S.stats.opened === 0 && S.inv.length === 0 && S.money - (Number(S.passive?.earned) || 0) === 10) {
     const usd = (n) => '$' + n.toLocaleString('en-US');
     toast(`Welcome! You start with <b class="green">$10.00</b>. Earn more by playing matches in <b>Play</b>: ${usd(PAY.win)} a win, ${usd(PAY.loss)} a loss, ${usd(PAY.kill)} a kill, ${usd(PAY.mvp)} a round MVP.
-      You also get ${usd(PASSIVE.perMinute)} every minute, even while the game is closed (up to ${PASSIVE.capHours} hours), and ${usd(PASSIVE.perPrestige)} more a minute for every prestige (each Service Medal you earn).`, 'gold', 10000);
+      You also get ${usd(PASSIVE.perMinute)} every minute, even while the game is closed (up to ${PASSIVE.capHours} hours), and ${usd(PASSIVE.perPrestige)} more a minute for every prestige (each Service Medal you earn, which comes with its badge).`, 'gold', 10000);
   }
   // Passive income: collected now (the time since the save was last open) and every minute (after net.resume(): see passive.js).
   initPassive();

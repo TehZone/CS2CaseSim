@@ -299,10 +299,11 @@ function profileData(id) {
     bg: null, mapSeed: n.id, badges: badgeList({ inv: s.inv }), featured: npcFace(so(), n).badge,
   };
 }
-// The top of a profile: who they are, their level and medal. (avatar: its HTML; mine: yours, with Edit profile.)
+// The top of a profile: who they are, their level and medal. (avatar: its HTML; mine: yours, with Edit profile. An NPC's,
+// p.kind, says nothing of the medal's badge: traders aren't given them.)
 export const profileHeadHtml = (p, avatar, mine) => `<div class="sp-head">${avatar}
       <div class="sp-who"><h2>${esc(p.name)}</h2><div class="muted">${cc(p.country)}${p.kind ? esc(p.kind) + ' · ' : ''}Member since ${p.joined}</div><p class="sp-bio">${esc(p.bio)}</p></div>
-      <div class="sp-level"><div class="lvl-big">${levelIconHtml(p.level, 46)}<span>Level <b>${p.level}</b></span></div>${p.medal ? `<div class="sp-medal">${medalHtml(p.medal, 54)}<span>${esc(p.medal.y)} Service Medal<br><small>${p.medals} medal${p.medals === 1 ? '' : 's'}</small></span></div>` : ''}
+      <div class="sp-level"><div class="lvl-big">${levelIconHtml(p.level, 46)}<span>Level <b>${p.level}</b></span></div>${p.medal ? `<div class="sp-medal"${p.kind ? '' : ' title="Each prestige gives its Service Medal, and the medal\'s badge"'}>${medalHtml(p.medal, 54)}<span>${esc(p.medal.y)} Service Medal<br><small>${p.medals} medal${p.medals === 1 ? '' : 's'}</small></span></div>` : ''}
         ${mine ? '<button class="btn sm" data-edit>Edit profile</button>' : ''}</div></div>`;
 function drawProfile(el, id) {
   const p = profileData(id), mine = id === 'me';
@@ -388,7 +389,7 @@ export async function profileDialog({ me, named = true, extra = '', save, faces 
       <div class="ep-avatars">${agents.map((a) => `<button class="ep-av" data-av="${a.id}" title="${esc(a.n)}"><img loading="lazy" src="${imgUrl(a.img, 's')}"></button>`).join('')}</div>
       ${faces ? `<div class="section-title">Featured badge <span class="muted" style="font-size:12px;text-transform:none;letter-spacing:0">on your profile, and in the corner of your picture</span></div>
       ${badges.length ? `<div class="ep-badges"><button class="ep-badge none" data-bd="">None</button>${badges.map(badgeBtn).join('')}</div>`
-        : '<div class="muted" style="font-size:12px">No badges yet: open a Collectible Pins Capsule (Cases, Pin Capsules) for a pin.</div>'}` : ''}
+        : '<div class="muted" style="font-size:12px">No badges yet: open a Collectible Pins Capsule (Cases, Pin Capsules) for a pin, or prestige (past level 40) for a Service Medal.</div>'}` : ''}
       <div class="section-title">Item showcase <span class="muted" style="font-size:12px;text-transform:none;letter-spacing:0">up to 6</span></div><div data-show></div></div>`,
     foot: '<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>Save</button>',
   });

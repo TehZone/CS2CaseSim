@@ -22,7 +22,7 @@ import crypto from 'node:crypto';
 import { makeCtx, delta, take, give, spend, credit, GameError } from '../src/js/engine/actions.js';
 import * as P from '../src/js/engine/p2p.js';
 import { D } from '../src/js/engine/data.js';
-import { itemName } from '../src/js/engine/items.js';
+import { capCount, itemName } from '../src/js/engine/items.js';
 import { publicCopy } from '../src/js/engine/database.js';
 import { listedOf, storedItem } from '../src/js/engine/storage.js';
 import { round2 } from '../src/js/engine/util.js';
@@ -398,7 +398,7 @@ export class P2PMarket {
           fail('That listing is no longer for sale', 'gone');
         }
         if (buyer.st.money + 1e-9 < l.price) fail('Not enough money', 'funds');
-        if (buyer.st.inv.length + 1 > INV_CAP) fail(`Inventory full (${INV_CAP} items). Sell something first.`, 'full');
+        if (capCount(buyer.st.inv) + 1 > INV_CAP) fail(`Inventory full (${INV_CAP} items, not counting badges that can't be traded). Sell something first.`, 'full');
         // (Nothing below can refuse.)
         const cb = makeCtx(buyer.st, { online: true, invCap: INV_CAP }), cs = makeCtx(seller.st, { online: true });
         spend(cb, l.price);

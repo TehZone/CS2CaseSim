@@ -5,6 +5,7 @@
 import { upgradeState } from '../src/js/engine/economy.js';
 import { retireOld } from '../src/js/engine/items.js';
 import { backfillIndex } from '../src/js/engine/itemindex.js';
+import { grantMedals } from '../src/js/engine/badges.js';
 
 const FLUSH_MS = 2000;
 const IDLE_EVICT_MS = 10 * 60 * 1000;
@@ -61,6 +62,9 @@ export class Store {
     let dirty = false;
     if (retireOld(st).n) dirty = true; // older accounts' chickens and pro cards, sold once
     if (moved) { backfillIndex(st, { moved }); dirty = true; }
+    // The Service Medals' badges for prestiges from before they came with them (and any staff gave by raising the medals),
+    // once: the profile lists those given (engine/badges.js grantMedals). Here, so the welcome has them.
+    if (grantMedals(st).length) dirty = true;
     return { st, dirty };
   }
 
@@ -86,6 +90,7 @@ export class Store {
     if (!rows.length) throw new Error('No such player');
     const st = upgradeState(typeof rows[0].state === 'string' ? JSON.parse(rows[0].state) : rows[0].state);
     retireOld(st);
+    grantMedals(st); // (as loading them would: their profile shows the medals' badges they'll have)
     if (this.cache.has(id)) return this.cache.get(id).st; // (loaded meanwhile: that copy is the one)
     this.unpeek(id);
     const n = itemsIn(st);

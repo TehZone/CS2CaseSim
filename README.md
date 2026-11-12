@@ -411,7 +411,11 @@ What's in a match:
   starts the count again
 - Profile levels like CS2's: 5,000 XP a level, from 1 to 40 (a win or draw is 250 XP, a loss 100, each kill 20, each assist
   10 and each round your team wins 50). Past level 40 you earn the next Service Medal and start again at level 1: every
-  colour of the 2026 medal first, then 2025's, back to the first ever (2015's), 69 in all. Your level, XP bar and medal
+  colour of the 2026 medal first, then 2025's, back to the first ever (2015's), 69 in all. Each prestige also gives that
+  medal's badge (CS2's Service Medal collectible of that year and colour) to your inventory, once, to feature on your
+  profile picture; prestiges from before badges got theirs the first time the save or account loaded. Like every badge
+  but a pin, it can't be traded, sold, listed or stored, and it doesn't count toward the inventory's limit. Past the
+  69th prestige there's no new medal or badge (you keep the last). Your level, XP bar and medal
   sit in the top bar (CS2's own level icons and medal art from your install; Steam's pictures without it), and the
   profile shows every medal. Each level up brings a care package like CS2's: four items from its drop pool (the six
   newest weapon cases and the timed-drop collections) to keep two of
@@ -444,7 +448,10 @@ What's in a match:
   its middle square at 184 x 184 and kept with the save) or any agent, country, summary, a CS2 map behind it, up to six
   items to show off and a badge to feature. Profiles list every badge the player has, and the featured one sits small
   in the bottom left corner of their picture wherever it's shown (the friends list, chats, profiles, the Market's sellers,
-  the Trade page, gambling); an NPC features the rarest pin they own
+  the Trade page, gambling); an NPC features the rarest pin they own. Badges are CS2's 667 collectibles: the pins come
+  from the Collectible Pins Capsules (Cases, Pin Capsules) and trade like stickers, the Service Medals from prestiging
+  (see the profile levels above), and every other badge (coins, trophies, passes, the Genuine operation pins) nobody
+  can get: they're in the Item Database to look at, and only staff can give one
 - 42 real weapon cases, 150 souvenir packages (each Major's team stickers and gold MVP autographs), packages
   (X-Ray, Anubis, Genesis/Dead Hand Terminals), 229 sticker/autograph capsules and an Agent Locker
 - All 94 weapon collections (e.g. Cobblestone with the Dragon Lore), browsable with odds and prices

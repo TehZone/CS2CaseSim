@@ -32,6 +32,47 @@ let failed = 0, passed = 0;
 const check = (name, ok, info = '') => { ok ? passed++ : failed++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  — ' + info : ''}`); };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const refusal = async (p) => { try { await p; return null; } catch (e) { return e; } };
+// An IndexedDB in memory, as much of one as admin-local.js uses (open with an upgrade, object stores with a keyPath and
+// autoIncrement, an index, transactions that complete once their requests have): node has none.
+function fakeIndexedDB() {
+  const dbs = new Map(), later = (fn) => setTimeout(fn, 0);
+  return {
+    open(name) {
+      const req = {};
+      later(() => {
+        const fresh = !dbs.has(name);
+        if (fresh) dbs.set(name, new Map());
+        const stores = dbs.get(name);
+        const db = {
+          createObjectStore(n, def = {}) { const s = { def, rows: new Map(), seq: 0, idx: {} }; stores.set(n, s); return { createIndex(i, key) { s.idx[i] = key; } }; },
+          transaction(names) {
+            const t = { pending: 0, done: false, error: null, abort() {} };
+            const settle = () => { if (!t.pending && !t.done) { t.done = true; later(() => (t.error ? t.onerror?.() : t.oncomplete?.())); } };
+            const ask = (fn) => { const r = {}; t.pending++; later(() => { try { r.result = fn(); r.onsuccess?.(); } catch (e) { t.error = e; } t.pending--; settle(); }); return r; };
+            later(settle);
+            t.objectStore = (n) => {
+              const s = stores.get(n), kp = s.def.keyPath, rows = (q) => [...s.rows.values()].filter((v) => q === undefined || v === q).map((v) => structuredClone(v));
+              return {
+                add: (v) => ask(() => { const row = structuredClone(v), k = row[kp] ?? (s.def.autoIncrement ? ++s.seq : undefined); row[kp] = k; s.rows.set(k, row); return k; }),
+                put: (v) => ask(() => { s.rows.set(v[kp], structuredClone(v)); return v[kp]; }),
+                get: (k) => ask(() => structuredClone(s.rows.get(k))),
+                getAll: () => ask(() => rows()),
+                delete: (k) => ask(() => { s.rows.delete(k); }),
+                index: (i) => ({ getAll: (q) => ask(() => [...s.rows.values()].filter((v) => q === undefined || v[s.idx[i]] === q).map((v) => structuredClone(v))) }),
+              };
+            };
+            return t;
+          },
+          close() {},
+        };
+        req.result = db;
+        if (fresh) req.onupgradeneeded?.();
+        req.onsuccess?.();
+      });
+      return req;
+    },
+  };
+}
 
 try {
   // ---- the admin panel offline: everyone's, on their own save; never while online ---------------------------------------
@@ -199,6 +240,62 @@ try {
       kept === id && stored === id && listed === null && S.social.me.badge === null, JSON.stringify({ kept, stored, listed, back: S.social.me.badge }));
     S.inv = S.inv.filter((it) => it.uid !== pin.uid);
     delete D.badges[id];
+  }
+
+  // ---- Service Medals offline: the badges of prestiges from before, as the save loads; each prestige's, as it comes ---------
+  {
+    initData(JSON.parse(fs.readFileSync(new URL('game-data.json', DATA), 'utf8')), { keys: JSON.parse(fs.readFileSync(new URL('keys.json', DATA), 'utf8')), badges: JSON.parse(fs.readFileSync(new URL('badges.json', DATA), 'utf8')) });
+    const { act } = await import('../src/js/backend.js');
+    const { medalBadgeIds, featuredBadge } = await import('../src/js/engine/badges.js');
+    const { isBound } = await import('../src/js/engine/items.js');
+    const faces = await import('../src/js/faces.js');
+    const ids = medalBadgeIds(), medalsOf = () => state.S.inv.filter((x) => x.t === 'badge' && x.src === 'Prestige').map((x) => x.id);
+    let saved = null;
+    const native = window.native, writeSync = native.writeSaveSync;
+    native.loadSave = async () => saved;
+    native.writeSaveSync = (t) => { saved = t; return true; };
+    const old = freshState();
+    old.prof = { level: 9, xp: 120, medals: 3, total: 1, drops: [] }; // (a save from before: no medalBadges)
+    saved = JSON.stringify(old);
+    await state.loadState();
+    check('medals offline: a save with 3 prestiges from before gets their 3 Service Medal badges as it loads, the newest first (for the toast: medalsOnLoad)', medalsOf().join() === [ids[2], ids[1], ids[0]].join()
+      && state.S.prof.medalBadges.join() === ids.slice(0, 3).join() && state.medalsOnLoad.length === 3 && state.S.inv.filter((x) => x.t === 'badge').every((x) => isBound(x) && x.nw));
+    state.saveSync();
+    await state.loadState();
+    check('medals offline: loaded again it gets nothing more (the record is in the save)', medalsOf().length === 3 && state.medalsOnLoad.length === 0 && state.S.prof.medalBadges.length === 3);
+    // A prestige, through the game's own backend (the engine on the save).
+    state.S.prof = { ...state.S.prof, level: 40, xp: 4999 };
+    let invEvents = 0;
+    const off = state.on('inv', () => invEvents++);
+    await act('play.start', { mode: 'competitive' });
+    state.S.play = { ...state.S.play, at: Date.now() - 30 * 60 * 1000 };
+    const r = await act('play.reward', { run: state.S.play.run, mode: 'competitive', result: 'loss', roundsWon: 0, rounds: 0 });
+    off();
+    check('medals offline: a prestige in a match gives the next medal\'s badge to the save, and the inventory is told', r.medals?.length === 1 && r.badges?.length === 1 && state.S.inv[0].id === ids[3]
+      && state.S.prof.medals === 4 && state.S.prof.medalBadges.join() === ids.slice(0, 4).join() && medalsOf().length === 4 && invEvents >= 1);
+    const me = await act('persona.set', { badge: ids[3] });
+    check('medals offline: featured on your profile picture like any badge you have', me.me.badge === ids[3] && faces.myFace().badge === ids[3] && featuredBadge(state.S, ids[3]) === ids[3]
+      && faces.badgeList(state.S).some((b) => b.id === ids[3]));
+    // The offline admin panel: raising the medals gives their badges, as the server's does (an IndexedDB of this test's own).
+    globalThis.indexedDB = fakeIndexedDB();
+    await localAdmin('edit', { id: 'me', set: { prof: { medals: 6 } } });
+    check('medals offline: the admin panel raising the medals gives their badges', medalsOf().slice(0, 2).join() === [ids[5], ids[4]].join() && medalsOf().length === 6 && state.S.prof.medalBadges.length === 6);
+    await localAdmin('edit', { id: 'me', set: { prof: { medals: 2 } } });
+    check('medals offline: lowering them takes none away', medalsOf().length === 6 && state.S.prof.medals === 2);
+    // The offline panel's raw edit too: a prof without the record of badges given gives none again (engine/admin.js rawEdit).
+    const view = await localAdmin('player', { id: 'me' }), { medalBadges: _given, ...bare } = view.state.prof;
+    const { inv: _inv, stored: _stored, listed: _listed, index: _index, social: _social, ...rawState } = view.state;
+    await localAdmin('edit.raw', { id: 'me', state: { ...rawState, prof: { ...bare, medals: 6, level: 8 } }, base: view.rev });
+    check('medals offline: a raw edit raising them again, with the record of badges given left out, gives none twice', medalsOf().length === 6 && new Set(medalsOf()).size === 6
+      && state.S.prof.medals === 6 && state.S.prof.level === 8 && state.S.prof.medalBadges.length === 6, medalsOf().join());
+    const file = { ...freshState(), money: 50 };
+    file.prof = { ...file.prof, medals: 2 };
+    delete file.prof.medalBadges;
+    await localAdmin('save.import', { json: JSON.stringify(file) });
+    check('medals offline: an imported save from before gets its prestiges\' badges, as a save loads', medalsOf().join() === [ids[1], ids[0]].join() && state.S.prof.medalBadges.join() === [ids[0], ids[1]].join() && state.S.money === 50);
+    delete globalThis.indexedDB;
+    native.writeSaveSync = writeSync;
+    delete native.loadSave;
   }
 } finally {
   console.warn = quiet;

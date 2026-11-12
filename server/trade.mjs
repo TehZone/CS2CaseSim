@@ -2,7 +2,7 @@
 // Accepting re-checks both sides and swaps everything in one database transaction.
 import crypto from 'node:crypto';
 import { makeCtx, delta, take, give, spend, credit, GameError } from '../src/js/engine/actions.js';
-import { isBound, isUnit, itemName, tradable } from '../src/js/engine/items.js';
+import { capCount, isBound, isUnit, itemName, tradable } from '../src/js/engine/items.js';
 import { listedOf, storedItem } from '../src/js/engine/storage.js';
 import { textProblem } from '../src/js/engine/tools.js';
 import { round2 } from '../src/js/engine/util.js';
@@ -229,7 +229,7 @@ export class Trades {
         if (from.st.money + 1e-9 < t.offer.give.money) return `${t.offer.fromName} doesn't have enough money any more`;
         if (to.st.money + 1e-9 < t.offer.get.money) return 'You don’t have enough money';
         const cap = this.srv.INV_CAP;
-        if (from.st.inv.length - t.offer.give.uids.length + t.offer.get.uids.length > cap || to.st.inv.length - t.offer.get.uids.length + t.offer.give.uids.length > cap) return 'An inventory would be over the limit';
+        if (capCount(from.st.inv) - t.offer.give.uids.length + t.offer.get.uids.length > cap || capCount(to.st.inv) - t.offer.get.uids.length + t.offer.give.uids.length > cap) return 'An inventory would be over the limit';
         return '';
       })();
       if (problem) {

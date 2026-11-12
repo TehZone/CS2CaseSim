@@ -16,6 +16,8 @@ import * as I from '../items.js';
 import { S, on } from '../state.js';
 import { act, online } from '../backend.js';
 import { worldCopies, crowd } from '../engine/npcs.js';
+import { medalBadgeIds } from '../engine/badges.js';
+import { MEDALS, medalName } from '../engine/levels.js';
 import { ownedItems } from '../engine/storage.js';
 import { openPerson } from './community.js';
 import { openProfile } from './community-online.js';
@@ -62,7 +64,8 @@ function catalog() {
   for (const c of Object.values(D.charms)) add('charm', c, 'charm', `Charm · ${(D.charmColById[c.col]?.n || '').replace(' Charm Collection', '')}`, c.n.replace('Charm | ', ''), c.p);
   for (const a of Object.values(D.agents)) { const [n, f] = a.n.split(' | '); add('agent', a, 'agent', f || 'Agent', n, a.p); }
   for (const t of Object.values(I.TOOLS)) add('tool', t, 'tool', 'Tool', t.n, t.p);
-  // Every one of CS2's collectibles (engine/badges.js): the pins from capsules, and the rest nobody can get.
+  // Every one of CS2's collectibles (engine/badges.js): the pins from capsules, the Service Medals from prestiging, and the
+  // rest nobody can get.
   for (const b of Object.values(D.badges || {})) add('badge', b, 'badge', b.ty || 'Badge', I.nameParts({ t: 'badge', id: b.id }).bottom, b.p);
   return (CATALOG = out);
 }
@@ -193,7 +196,7 @@ function draw() {
     ${shown.length ? `<div class="grid">${shown.map((e) => `<div class="card db-card" data-key="${esc(e.key)}" style="--rc:${e.rc}">
       <div class="img"><img loading="lazy" src="${pictureOf(e, 'm')}" alt=""></div><div class="rbar"></div>
       <div class="meta"><div class="n1" title="${esc(e.top)}">${esc(e.top)}</div><div class="n2" title="${esc(e.bottom)}">${esc(e.bottom)}</div>
-      <div class="row"><span class="wear">${esc(e.rn)}</span><span class="val">${e.t === 'badge' && !D.badges[e.id]?.tr ? '<span class="dim" style="font-weight:400" title="Nobody can get one, and it can’t be traded or sold">Not tradable</span>' : `${e.kind === 'skin' || e.kind === 'knife' || e.kind === 'gloves' ? '<span class="dim" style="font-weight:400">from</span> ' : ''}${money(e.price)}`}</span></div>
+      <div class="row"><span class="wear">${esc(e.rn)}</span><span class="val">${e.t === 'badge' && !D.badges[e.id]?.tr ? `<span class="dim" style="font-weight:400" title="${D.badges[e.id]?.ty === 'Service Medal' ? 'A prestige gives it' : 'Nobody can get one'}, and it can’t be traded or sold">Not tradable</span>` : `${e.kind === 'skin' || e.kind === 'knife' || e.kind === 'gloves' ? '<span class="dim" style="font-weight:400">from</span> ' : ''}${money(e.price)}`}</span></div>
       <div class="row"><span class="db-count ${counts[e.key] ? '' : 'none'}">${counts[e.key] ? `${counts[e.key].toLocaleString()} ${counts[e.key] === 1 ? 'copy' : 'copies'}` : 'No copies yet'}</span></div></div></div>`).join('')}</div>`
       : '<div class="empty">No items match.</div>'}
     ${pages > 1 ? `<div class="pager"><button class="btn sm" data-pg="-1" ${view.page ? '' : 'disabled'}>‹ Prev</button><span>Page ${view.page + 1} / ${pages}</span><button class="btn sm" data-pg="1" ${view.page < pages - 1 ? '' : 'disabled'}>Next ›</button></div>` : ''}
@@ -263,6 +266,8 @@ function drawItem() {
   const floats = all.map((c) => c.item.fl).filter((f) => f != null);
   const col = skin && d.col ? D.collections.find((c) => c.id === d.col)?.n : null;
   const badge = e.t === 'badge', bound = badge && !d?.tr; // (a badge: a capsule's pin, or one nobody can get: engine/badges.js)
+  const mi = badge ? medalBadgeIds().indexOf(e.id) : -1, medal = mi >= 0 ? MEDALS[mi] : null; // (a Service Medal: a prestige's)
+  const ordinal = (n) => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
   const from = skin || badge ? sourcesOf(e.id) : [];
   const w = marketWindow(now()), sold = skin ? soldFor(w) : null;
   const listings = skin ? skinListings(d, w).filter((l) => !sold.has(l.lid)).sort((a, b) => a.item.fl - b.item.fl) : [];
@@ -290,7 +295,7 @@ function drawItem() {
           ${from.length ? `<dt>Found in</dt><dd>${from.slice(0, 6).map(esc).join(', ')}${from.length > 6 ? ` and ${from.length - 6} more` : ''}</dd>` : ''}
           ${d.t ? `<dt>Tournament</dt><dd>${esc(d.t)}</dd>` : ''}
           ${badge && d.desc ? `<dt>About</dt><dd>${esc(d.desc)}</dd>` : ''}
-          ${badge ? `<dt>How to get one</dt><dd>${bound ? 'Nobody can: it’s here to look at. It can’t be traded or sold.' : 'Open its capsule (Cases, Pin Capsules), or buy one from a player. It trades and sells.'}</dd>` : ''}
+          ${badge ? `<dt>How to get one</dt><dd>${medal ? `Prestige: your ${ordinal(mi + 1)} prestige earns the ${esc(medalName(medal))} in colour ${medal.l}, and gives you this badge. It can’t be traded or sold.` : bound ? 'Nobody can: it’s here to look at. It can’t be traded or sold.' : 'Open its capsule (Cases, Pin Capsules), or buy one from a player. It trades and sells.'}</dd>` : ''}
           ${!priceRows.length ? `<dt>Price</dt><dd>${bound ? '<span class="muted">None: it can’t be sold</span>' : money(e.price)}</dd>` : ''}
         </dl>
         ${priceRows.length ? `<table class="price-table"><thead><tr><th>Wear</th><th>Price</th>${d.stt ? '<th>StatTrak™</th>' : ''}${sv ? '<th>Souvenir</th>' : ''}</tr></thead><tbody>

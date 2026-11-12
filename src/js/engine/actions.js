@@ -17,7 +17,7 @@ import * as N from './npcs.js';
 import * as SU from './storage.js';
 import * as T from './tools.js';
 import * as IX from './itemindex.js';
-import { featuredBadge } from './badges.js';
+import { featuredBadge, grantMedals } from './badges.js';
 import { dataUrlProblem } from './picture.js';
 import { rand, round2, clamp, pick, pickWeighted, uid as newUid } from './util.js';
 
@@ -111,10 +111,18 @@ export function stats(ctx) {
   ctx.dirty.add('stats');
   return ctx.st.stats;
 }
+// (A bound badge doesn't count toward the limit: items.capCount.)
 export function give(ctx, items) {
-  if (ctx.st.inv.length + items.length > ctx.invCap) fail(`Inventory full (${ctx.invCap} items). Sell something first.`, 'full');
+  if (Number.isFinite(ctx.invCap) && I.capCount(ctx.st.inv) + I.capCount(items) > ctx.invCap) fail(`Inventory full (${ctx.invCap} items, not counting badges that can't be traded). Sell something first.`, 'full');
   ctx.st.inv.unshift(...items);
   ctx.add.push(...items);
+}
+// The Service Medals' badges the profile is owed (each prestige's, once: badges.js grantMedals), given now, whatever the
+// inventory holds (they don't count toward its limit), with the profile's count of them. → the items given.
+export function giveMedals(ctx) {
+  const items = grantMedals(ctx.st, { now: ctx.now });
+  if (items.length) { ctx.add.push(...items); ctx.dirty.add('prof'); }
+  return items;
 }
 export function findOwned(ctx, uid) {
   const it = ctx.st.inv.find((i) => i.uid === uid);
@@ -648,12 +656,13 @@ export const ACTIONS = {
     const lv = L.addXp(ctx.st.prof, xp.total, { r: ctx.rng, now: ctx.now });
     ctx.st.prof = lv.prof;
     ctx.dirty.add('prof');
+    const badges = giveMedals(ctx); // (a prestige: its Service Medal's badge)
     const s = stats(ctx);
     s.playMatches = (s.playMatches || 0) + 1;
     s.playWins = (s.playWins || 0) + (result === 'win' ? 1 : 0);
     s.playKills = (s.playKills || 0) + kills;
     s.playEarned = round2((s.playEarned || 0) + pay.total);
-    return { result, earned: pay.total, pay, xp, before: lv.before, after: lv.after, levelUps: lv.levelUps, medals: lv.medals, waiting: lv.prof.drops.length };
+    return { result, earned: pay.total, pay, xp, before: lv.before, after: lv.after, levelUps: lv.levelUps, medals: lv.medals, waiting: lv.prof.drops.length, ...(badges.length ? { badges } : {}) };
   },
   // Passive income (see levels.js): what's due since the time it was counted up to, by the clock's time (ctx.now), at the
   // rate for the prestiges the profile has now, and the clock moved on in the same change as the money. Offline the game
@@ -697,7 +706,8 @@ export const ACTIONS = {
     const lv = L.addXp(ctx.st.prof, xp, { r: ctx.rng, now: ctx.now });
     ctx.st.prof = lv.prof;
     ctx.dirty.add('prof');
-    return { goal: g.key, n: g.n, kind: g.kind, xp, stars, before: lv.before, after: lv.after, levelUps: lv.levelUps, medals: lv.medals, waiting: lv.prof.drops.length };
+    const badges = giveMedals(ctx); // (a prestige: its Service Medal's badge)
+    return { goal: g.key, n: g.n, kind: g.kind, xp, stars, before: lv.before, after: lv.after, levelUps: lv.levelUps, medals: lv.medals, waiting: lv.prof.drops.length, ...(badges.length ? { badges } : {}) };
   },
 
   // Searching for a match. A ranked match still open from before (the game closed during it) was abandoned: settled

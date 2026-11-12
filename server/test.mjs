@@ -580,6 +580,70 @@ try {
     check('badges: the price patch has the pins\' prices (and the capsules\'), and nothing for the bound ones', Object.keys(patch.badges || {}).length === 45 && patch.cases[cap.id] === cap.price && !('collectible-1340' in patch.badges));
   }
 
+  // ---- Service Medals online: each prestige's badge, from the server's engine, in the change; and prestiges from before -------
+  {
+    const failure = async (p) => { try { await p; return null; } catch (e) { return e; } };
+    const { medalBadgeIds } = await import('../src/js/engine/badges.js');
+    const { isBound, capCount, makeKeyItem } = await import('../src/js/engine/items.js');
+    const ids = medalBadgeIds();
+    const dbState = async (id) => { const v = (await server.db.query('SELECT state FROM users WHERE id = $1', [id])).rows[0].state; return typeof v === 'string' ? JSON.parse(v) : v; };
+    const reg = await post('/api/register', { name: 'medal_player', password: 'secret123' });
+    const M = await client(reg.body.token), M2 = await client(reg.body.token);
+    const toPrestige = () => server.store.withUser(M.user.id, async (e) => { e.st.prof = { ...e.st.prof, level: 40, xp: 4999 }; server.store.markDirty(e); });
+    const aged = () => server.store.withUser(M.user.id, async (e) => { e.st.play = { ...e.st.play, at: Date.now() - 30 * 60 * 1000 }; server.store.markDirty(e); });
+    const match = async () => { const { run } = await M.act('play.start', { mode: 'competitive' }); await aged(); return M.act('play.reward', { run, mode: 'competitive', result: 'loss', roundsWon: 0, rounds: 0 }); };
+    await toPrestige();
+    const r = await match();
+    const st = await serverState(M.user.id), it = st.inv.find((x) => x.t === 'badge');
+    check('medals online: a prestige in a match gives its Service Medal\'s badge on the server (2026, colour 1: bound, from "Prestige")', r.medals?.length === 1 && st.prof.medals === 1 && st.prof.medalBadges?.join() === ids[0]
+      && it?.id === ids[0] && it.src === 'Prestige' && it.nw === true && isBound(it), `medals ${st.prof.medals}, given ${st.prof.medalBadges}`);
+    check('medals online: the game gets it in the action\'s change: the item added, and the profile', M.st.inv.some((x) => x.uid === it.uid && x.id === ids[0]) && M.st.prof.medalBadges?.join() === ids[0] && M.st.prof.medals === 1 && r.badges?.[0]?.uid === it.uid);
+    const other = await M2.waitFor((m) => m.t === 'delta' && m.d.add?.some((x) => x.uid === it.uid));
+    check('medals online: and the player\'s other window is pushed the same change', !!other && M2.st.inv.some((x) => x.uid === it.uid) && M2.st.prof.medalBadges?.join() === ids[0]);
+    const plain = await match();
+    check('medals online: a match that\'s no prestige gives none', !plain.medals.length && !plain.badges && (await serverState(M.user.id)).inv.filter((x) => x.t === 'badge').length === 1);
+    check('medals online: it can\'t be sold or listed, and is featured like any badge you have', (await failure(M.act('item.sell', { uids: [it.uid] })))?.code === 'bound' && (await failure(M.rpc('p2p', 'list', { uid: it.uid, price: 5 })))?.code === 'item'
+      && !!(await M.rpc('social', 'profile.set', { badge: ids[0] })) && (await server.db.query('SELECT badge FROM users WHERE id = $1', [M.user.id])).rows[0].badge === ids[0]);
+    // A full inventory (the server's 3,000 items) loses no medal: bound badges don't count toward it.
+    await server.store.withUser(M.user.id, async (e) => { while (capCount(e.st.inv) < 3000) e.st.inv.push(makeKeyItem(Object.keys(D.keys)[0], 'test')); server.store.markDirty(e); });
+    await toPrestige();
+    const full = await match();
+    const fs2 = await serverState(M.user.id);
+    check('medals online: with the inventory full (3,000 items) the prestige\'s badge is given all the same', full.badges?.length === 1 && fs2.inv.length === 3002 && capCount(fs2.inv) === 3000 && fs2.inv[0].id === ids[1] && fs2.prof.medalBadges.join() === [ids[0], ids[1]].join());
+    check('medals online: and they don\'t count: 3,000 other items are full', (await failure(M.act('key.buy', { key: Object.keys(D.keys)[0], n: 1 })))?.code === 'full');
+    await server.store.withUser(M.user.id, async (e) => { e.st.inv = e.st.inv.filter((x) => x.t !== 'key'); server.store.markDirty(e); });
+    M.close(); M2.close();
+    await wait(40);
+
+    // Prestiges from before badges: given once, as the account is loaded (so the welcome has them), and not again.
+    const old = await post('/api/register', { name: 'medal_veteran', password: 'secret123' });
+    const O = await client(old.body.token);
+    const oid = O.user.id;
+    O.close();
+    await wait(40);
+    await server.store.flush();
+    server.store.cache.delete(oid);
+    const was = await dbState(oid);
+    was.prof = { level: 12, xp: 300, medals: 3, total: 3 * 40 * 5000, drops: [] }; // (as an account from before had it: no medalBadges)
+    await server.db.query('UPDATE users SET state = $1::jsonb WHERE id = $2', [JSON.stringify(was), oid]);
+    const O2 = await client(old.body.token);
+    const welcomed = O2.welcome.state, mine = welcomed.inv.filter((x) => x.t === 'badge');
+    check('backfill online: an account with 3 prestiges from before gets their 3 badges as it connects, in its welcome', mine.length === 3 && welcomed.prof.medalBadges?.join() === ids.slice(0, 3).join() && welcomed.prof.medals === 3
+      && mine.map((x) => x.id).join() === [ids[2], ids[1], ids[0]].join() && mine.every((x) => x.src === 'Prestige' && isBound(x)));
+    await server.store.flush();
+    check('backfill online: and they\'re saved with the record of them', (await dbState(oid)).inv.filter((x) => x.t === 'badge').length === 3 && (await dbState(oid)).prof.medalBadges.length === 3);
+    // Staff take one away: never given back.
+    await server.store.withUser(oid, async (e) => { e.st.inv = e.st.inv.filter((x) => x.id !== ids[1]); server.store.markDirty(e); });
+    O2.close();
+    await wait(40);
+    await server.store.flush();
+    server.store.cache.delete(oid);
+    const O3 = await client(old.body.token);
+    check('backfill online: connecting again gives nothing more (none twice), and one taken away stays gone', O3.welcome.state.inv.filter((x) => x.t === 'badge').map((x) => x.id).join() === [ids[2], ids[0]].join() && O3.welcome.state.prof.medalBadges.length === 3);
+    O3.close();
+    await wait(40);
+  }
+
   // ---- the Index: the server keeps the record, and pays each reward once ----------------------------------------------------
   {
     const code = async (p) => { try { await p; return null; } catch (e) { return e.code || e.message; } };

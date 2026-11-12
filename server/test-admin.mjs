@@ -1297,6 +1297,53 @@ try {
     delete D.caseById['test-doppler']; delete D.caseById['test-plain'];
   }
 
+  // ---- staff and the Service Medals: raising them gives their badges, as prestiging does (engine/badges.js grantMedals) ------
+  {
+    const { medalBadgeIds } = await import('../src/js/engine/badges.js');
+    const { capCount } = await import('../src/js/engine/items.js');
+    const ids = medalBadgeIds(), medalsOf = (st) => st.inv.filter((x) => x.t === 'badge' && x.src === 'Prestige').map((x) => x.id);
+    const md = await acct('medalist', '10.0.9.1');
+    const mc = await client(md.token, md.ip);
+    await boss.admin('edit', { id: md.id, set: { prof: { medals: 2 } } });
+    const pushed = await mc.waitFor((m) => m.t === 'delta' && m.d.add?.length);
+    check('medals: staff raising the Service Medals (edit) gives their badges, pushed with the profile in one change', pushed?.d.add.map((x) => x.id).join() === [ids[1], ids[0]].join() && pushed.d.set.prof?.medalBadges?.join() === [ids[0], ids[1]].join()
+      && medalsOf(mc.st).join() === [ids[1], ids[0]].join() && medalsOf(await dbState(md.id)).length === 2);
+    await boss.admin('edit', { id: md.id, set: { prof: { medals: 0 } } });
+    await boss.admin('edit', { id: md.id, set: { prof: { medals: 2 } } });
+    check('medals: lowering them takes none away, and raising them again gives none twice', medalsOf(await dbState(md.id)).length === 2 && (await dbState(md.id)).prof.medalBadges.length === 2 && medalsOf(mc.st).length === 2);
+    const p = await boss.admin('player', { id: md.id }), raw = rawOf(p.state);
+    await boss.admin('edit.raw', { id: md.id, state: { ...raw, prof: { ...raw.prof, medals: 3 } }, base: p.rev });
+    const third = await mc.waitFor((m) => m.t === 'delta' && m.d.add?.some((x) => x.id === ids[2]));
+    check('medals: and a raw edit of them too', !!third && medalsOf(await dbState(md.id)).join() === [ids[2], ids[1], ids[0]].join() && mc.st.prof.medalBadges.length === 3 && medalsOf(mc.st).length === 3);
+    const one = mc.st.inv.find((x) => x.id === ids[1]);
+    await boss.admin('items.remove', { id: md.id, uids: [one.uid] });
+    await boss.admin('edit', { id: md.id, set: { prof: { medals: 3, level: 5 } } });
+    check('medals: one staff took away isn\'t given back', medalsOf(await dbState(md.id)).join() === [ids[2], ids[0]].join() && (await dbState(md.id)).prof.medalBadges.length === 3);
+    // A raw edit's prof without the record of the badges given (copied from an older snapshot, or by hand), or with it
+    // emptied, gives none again: the record goes with the inventory, which a raw edit doesn't change (engine/admin.js rawEdit).
+    for (const medalBadges of [undefined, []]) {
+      const p2 = await boss.admin('player', { id: md.id }), raw2 = rawOf(p2.state);
+      const { medalBadges: _given, ...bare } = raw2.prof;
+      await boss.admin('edit.raw', { id: md.id, state: { ...raw2, prof: { ...bare, ...(medalBadges ? { medalBadges } : {}), level: 6 + !!medalBadges } }, base: p2.rev });
+    }
+    const afterRaw = await dbState(md.id);
+    check('medals: a raw edit with the record of badges given left out, or emptied, gives none again (no second copies)', afterRaw.prof.level === 7
+      && medalsOf(afterRaw).join() === [ids[2], ids[0]].join() && afterRaw.prof.medalBadges.join() === [ids[0], ids[1], ids[2]].join() && medalsOf(mc.st).join() === [ids[2], ids[0]].join(), JSON.stringify(medalsOf(afterRaw)));
+    // Staff giving one back into a full inventory (3,000 other items): a bound badge doesn't count toward the limit, as
+    // everywhere else (items.capCount); anything else is still refused.
+    await server.store.withUser(md.id, async (e) => {
+      for (let i = 0, n = server.srv.INV_CAP - capCount(e.st.inv); i < n; i++) e.st.inv.push({ uid: 'test-medal-full-' + i, t: 'crate', id: D.cases[0].id, at: Date.now(), src: '' });
+      server.store.markDirty(e);
+    });
+    const back = await refused(boss.admin('items.give', { id: md.id, items: [{ t: 'badge', id: ids[1] }] }));
+    const more = await refused(boss.admin('items.give', { id: md.id, items: [{ t: 'crate', id: D.cases[0].id }] }));
+    const fullNow = await dbState(md.id);
+    check('medals: staff can give a Service Medal back into a full inventory; anything that counts is still refused as full', back === null && more?.code === 'full'
+      && fullNow.inv.filter((x) => x.t === 'badge' && x.id === ids[1]).length === 1 && capCount(fullNow.inv) === server.srv.INV_CAP, `${back?.message} / ${more?.code}`);
+    await server.store.withUser(md.id, async (e) => { e.st.inv = e.st.inv.filter((x) => !String(x.uid).startsWith('test-medal-full-')); server.store.markDirty(e); });
+    mc.close();
+  }
+
   for (const c of [boss, alice, bob]) c.close();
 } catch (e) {
   failed++;

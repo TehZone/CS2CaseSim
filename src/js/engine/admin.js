@@ -189,8 +189,10 @@ export function rawEdit(cur, state, base) {
   }
   if (src.money != null && src.money > 1e12) fail('Money must be a number from 0 to 1000000000000');
   const st = upgradeState({ ...src, inv: cur.inv, stored: cur.stored, index: cur.index, social: cur.social, ...('listed' in cur ? { listed: cur.listed } : {}) });
-  // Never from the JSON: the rewards waiting (their items' uids are handed out as they are), and what keepLive keeps.
-  st.prof = { ...st.prof, drops: cur.prof?.drops ?? [] };
+  // Never from the JSON: the rewards waiting (their items' uids are handed out as they are), the Service Medal badges given
+  // (their record goes with the inventory, which isn't edited here: one left out or emptied would give every medal's badge
+  // again, as second copies: engine/badges.js grantMedals), and what keepLive keeps.
+  st.prof = { ...st.prof, drops: cur.prof?.drops ?? [], medalBadges: cur.prof?.medalBadges ?? [] };
   keepLive(st, cur);
   fitLoadout(st);
   // What passive income paid since the panel loaded this (it didn't make it stale: revOf) stays paid, on top of its money.
@@ -399,18 +401,20 @@ export function itemSpec(x) {
       return { n, make: () => I.makeCharmItem(c, { src, pat }) };
     }
     case 'badge': {
-      // (Any of CS2's collectibles, the ones nobody can get too: staff are the only way to one. engine/badges.js)
+      // (Any of CS2's collectibles, the ones nobody can get too: staff are the only way to one. The Service Medals come from
+      // prestiging as well, and a copy given here is one more: engine/badges.js)
       const b = (Object.hasOwn(D.badges, id) && D.badges[id]) || fail(`Unknown badge: ${id}`);
-      return { n, make: () => I.makeBadgeItem(b, src) };
+      return { n, bound: !b.tr, make: () => I.makeBadgeItem(b, src) };
     }
   }
   return fail('Invalid item');
 }
-// items.give's list (1 to 50 entries). → { specs, total (copies in all) }
+// items.give's list (1 to 50 entries). → { specs, total (copies in all), counted (those that count toward an inventory's
+// limit: all but bound badges, items.capCount) }
 export function giveSpecs(items) {
   if (!Array.isArray(items) || !items.length || items.length > 50) fail('Give 1 to 50 kinds of items at a time');
   const specs = items.map(itemSpec);
-  return { specs, total: specs.reduce((s, x) => s + x.n, 0) };
+  return { specs, total: specs.reduce((s, x) => s + x.n, 0), counted: specs.reduce((s, x) => s + (x.bound ? 0 : x.n), 0) };
 }
 // The new items, marked new, those that have serials numbered by serial(key) (online the server's counters, offline
 // the save's: localSerial).

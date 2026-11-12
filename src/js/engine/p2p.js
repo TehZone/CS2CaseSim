@@ -512,7 +512,7 @@ export const P2P_ACTIONS = {
     const l = found.listing;
     if (price != null && cleanPrice(price) !== l.price) fail(`The price changed to ${usd(l.price)}`, 'price');
     if (ctx.st.money + 1e-9 < l.price) fail('Not enough money', 'funds');
-    if (ctx.st.inv.length + 1 > ctx.invCap) fail(`Inventory full (${ctx.invCap} items). Sell something first.`, 'full');
+    if (Number.isFinite(ctx.invCap) && I.capCount(ctx.st.inv) + 1 > ctx.invCap) fail(`Inventory full (${ctx.invCap} items, not counting badges that can't be traded). Sell something first.`, 'full');
     const so = structuredClone(ctx.st.social), s = N.npcState(so, found.n.id);
     const i = fids(s.inv).indexOf(found.fid);
     if (i < 0) fail('That listing is no longer for sale', 'gone');

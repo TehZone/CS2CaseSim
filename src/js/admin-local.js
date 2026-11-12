@@ -12,6 +12,7 @@ import { GameError, makeCtx, delta, give, take, takeForStaff, clearNameForStaff 
 import { freshState, upgradeState } from './engine/economy.js';
 import { backfillSerials, customName, itemName } from './engine/items.js';
 import { backfillIndex } from './engine/itemindex.js';
+import { grantMedals } from './engine/badges.js';
 import { cooldownLeft, forgive, formatWait } from './engine/matchmaking.js';
 import * as N from './engine/npcs.js';
 import { ownedItems } from './engine/storage.js';
@@ -296,6 +297,7 @@ function loadable(v) {
   backfillSerials(next);
   backfillIndex(next);
   const { dropped, rewards } = restoreMerge(S, next, { keepRewards: true });
+  grantMedals(next); // (prestiges from before their badges: state.js loadState)
   return { next, dropped, rewards };
 }
 
@@ -376,7 +378,8 @@ const METHODS = {
     const plan = () => { const p = editPlan(S, a.set); return p.changed.length ? p : { noop: { state: pick(S, Object.keys(p.next)) } }; };
     return change(t, 'edit', 'edit', plan, (p) => {
       applyEdit(S, p.next);
-      announce(pick(S, Object.keys(p.before)));
+      const medals = grantMedals(S); // (Service Medals raised: their badges, as prestiging gives them: engine/badges.js)
+      announce(pick(S, Object.keys(p.before)), { add: medals });
       return { answer: { state: pick(S, Object.keys(p.next)) }, detail: { changed: p.changed, before: p.before, after: p.after } };
     });
   },
@@ -402,8 +405,9 @@ const METHODS = {
     };
     return change(t, 'edit.raw', 'raw edit', plan, (p) => {
       replaceInPlace(S, p.next);
+      const medals = grantMedals(S); // (as an edit of the medals gives their badges)
       // (a field the save no longer has goes as null, as the server sends it)
-      announce(Object.fromEntries(p.changed.map((k) => [k, S[k] ?? null])));
+      announce({ ...Object.fromEntries(p.changed.map((k) => [k, S[k] ?? null])), ...(medals.length ? { prof: S.prof } : {}) }, { add: medals });
       return { answer: { state: rawView(S), rev: myRev() }, detail: { changed: p.changed, before: p.before, after: p.after } };
     });
   },
