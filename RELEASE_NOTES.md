@@ -1,8 +1,8 @@
-Play sounds and moves like CS2: every footstep, sound you can place, CS2's movement speeds, and grenades that can't be duplicated.
+Badges are here: collect pins, show one off on your profile picture, and set a profile picture of your own.
 
-- Sound: every footstep plays now (half of them were silent), and other players' steps are louder.
-- Sound: ambience and music are quieter, so gunshots and footsteps stand out, and loud fights no longer distort.
-- Sound: much more directional. Left and right are clearly apart, and sounds behind, above and below you each sound different.
-- Settings: turn on a speed bar in Play's settings to see your speed in units per second.
-- Movement: walking and crouching go at CS2's speeds with every weapon, getting shot slows you by that weapon's own amount, and planting, defusing and freeze time stop you on the spot.
-- Grenades: jump-throws no longer fly too far, and switching weapons right after a throw can't keep the grenade. You can buy at most 4 grenades a round, as in CS2.
+- Badges: open the new Pin Capsules (Cases → Pin Capsules) to collect CS2's collectible pins. Pins can be traded, sold on the Market and kept in Storage Units.
+- Badges: every CS2 collectible (coins, medals, trophies and more) is in the Item Database to look at. Only pins can be collected.
+- Profiles: your badges show on your profile, and the one you feature sits in the corner of your profile picture everywhere it appears.
+- Profiles: upload your own profile picture in Edit profile. You can report pictures that break the rules.
+- Prestige: every prestige adds $100 a minute to your passive income.
+- Storage Units: own up to 100.
