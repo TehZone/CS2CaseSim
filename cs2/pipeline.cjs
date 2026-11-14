@@ -244,8 +244,15 @@ class CS2 {
     const lane = low ? 'bg' : 'fg';
     const r = this.lanes[lane].then(job, job);
     this.lanes[lane] = r.catch(() => {});
+    // (Counted from when it's queued: the cache's compression waits while anything is being exported.)
+    this.active = (this.active || 0) + 1;
+    const over = () => { this.active--; this.lastActive = Date.now(); };
+    r.then(over, over);
     return r;
   }
+
+  // Has the CLI been idle (nothing running or waiting in either lane) for `ms`?
+  quietFor(ms) { return !this.active && Date.now() - (this.lastActive || 0) >= ms; }
 
   // The game build (pak01's size and time): when it's the one a cache was made on, the cache holds.
   vpkStamp() {

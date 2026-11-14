@@ -25,7 +25,14 @@ remembers the CRC of the game file it came from (the VPK listing has one per fil
 whose VPK Steam rewrote with nothing in it changed (most of them, most updates) keeps its export. With "Keep what you
 prepared up to date after CS2 updates" on, a CS2 update brings what was prepared last (everything, or the maps only) up
 to date at the next start.
-`CS2SIM_SMOKE=prepare` times a map load and runs Prepare all for a while (`CS2SIM_SMOKE_PREPARE=maps`: Maps only). Gloves are shown as CS2's
+`CS2SIM_SMOKE=prepare` times a map load and runs Prepare all for a while (`CS2SIM_SMOKE_PREPARE=maps`: Maps only).
+**Settings → Compress the CS2 cache** (on by default) has Windows keep the cache's map geometry, models, sounds and data
+compressed on the drive with its own file compression (LZX, what `compact /c /exe:lzx` sets): Windows unpacks them in
+memory as the game reads them, so nothing is unpacked onto the drive while you play and nothing needs compressing again
+after; the game reads the same bytes either way. It saves about a quarter of the cache (its PNG and EXR textures are
+compressed already), new exports are compressed once the game is idle (never during a match) and each map as soon as
+Prepare has made it, and turning it off unpacks everything again when there's room. It needs an NTFS drive; elsewhere
+the row says it isn't available. Gloves are shown as CS2's
 glove models (just the gloves, posed by CS2's own glove inspect animation), with the skin baked per hand by CS2's
 glove compositing shader (csgo_customglove), including the newest gloves' layered materials. Agents still use the
 icon-based 3D view. Without CS2 installed, everything falls back to that view.
@@ -564,6 +571,7 @@ npm run dev       # browser preview at http://localhost:5178
 npm run dist      # build dist/CS2-Case-Simulator-Setup.exe, dist/CS2-Case-Simulator.exe and dist/latest.json (a release: see DEPLOY.md)
 node scripts/test-engine.mjs            # game rule checks (odds, trade-ups, armory, gambling, NPCs)
 node scripts/test-play.mjs              # Play mode checks (traces, movement, ladders, rules, overtime, smoke, modes)
+node scripts/test-compact.mjs           # the CS2 cache's compression, on a pretend cache in the temp folder
 cd server && npm install && cd ..       # multiplayer server dependencies
 PGLITE_DIR=server/.data node server/index.mjs   # run the server locally (port 8787)
 node server/test.mjs                    # server checks (accounts, trading, live gambling, restarts)
@@ -572,5 +580,9 @@ node scripts/cs2/dev-index.cjs           # build the CS2 index from your install
 node scripts/cs2/dev-prepare.cjs weapon_ak47 aq_oiled   # extract one skin's assets (dev)
 ```
 Game rules live in `src/js/engine` and are shared by the game and the server (`server/`), so offline and online
-play follow the same code. `tools/s2v` holds the patched Source 2 Viewer CLI (adds GLSL ES output with combined samplers so CS2's
+play follow the same code. The CS2 cache's compression runs only in the installed game: `npm start`, a test build (a
+patched package `name`) and smoke runs use the player's real `%APPDATA%/CS2 Case Simulator` (from `productName`), so
+there it's off unless `CS2SIM_COMPACT=1` (a smoke run: `CS2SIM_SMOKE_COMPACT=1`), and both want `CS2SIM_CACHE` pointed
+at a copy of the cache; `CS2SIM_COMPACT=0` turns it off anywhere. `CS2SIM_SMOKE=compact` turns it off and on in
+Settings and checks the map reads the same and loads as fast. `tools/s2v` holds the patched Source 2 Viewer CLI (adds GLSL ES output with combined samplers so CS2's
 shaders run in WebGL); rebuild it from the ValveResourceFormat sources with `tools/vrf-glsl-es.patch` applied (the exe is not in git).

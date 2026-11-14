@@ -245,6 +245,9 @@ export class Game {
   // ---- loading ----------------------------------------------------------------------------------------------------
   async load() {
     const status = (m) => { if (!this.disposed) this.onStatus(m); };
+    // (The CS2 cache's compression waits while a match loads and plays: straight to main, cs2Play keeps its answers.)
+    this.compactHold = true;
+    window.native?.cs2Hold?.(true);
     status('Preparing the map from your CS2 install (the first time takes a couple of minutes)…');
     // CS2's weapon icons for the buy menu and the kill feed, as pictures (they show the names until these arrive, or
     // without CS2).
@@ -2646,6 +2649,7 @@ export class Game {
 
   dispose() {
     this.disposed = true;
+    if (this.compactHold) { this.compactHold = false; window.native?.cs2Hold?.(false); }
     if (this.log) { this.log.save().catch(() => {}); this.log.stop(); } // (leaving: net_graph 2's log so far)
     this.console?.dispose();
     cancelAnimationFrame(this.raf);

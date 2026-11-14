@@ -1306,6 +1306,7 @@ function gameHtml(g) {
   const known = {
     volume: ['Sound volume', (v) => rangeHtml(v, [0, 1], pct)], fast: ['Fast open', yesNo], caseIntro: ['Case drop animation', (v) => yesNo(v !== false)],
     confirmSellAbove: ['Confirm sales above', (v) => money(+v || 0)], showOdds: ['Show odds', yesNo], menuBg: ['Menu background', valHtml], keepPrepared: ['Keep CS2 content prepared', yesNo],
+    compressCache: ['Compress the CS2 cache', (v) => yesNo(v !== false)],
     autoSell: ['Auto-sell', (a) => (a?.on ? `On${a.below ? ` · below ${money(+a.below || 0)}` : ''}${a.ranks?.length ? ` · ${plural(a.ranks.length, 'rarity', 'rarities')}` : ''}` : 'Off')],
   };
   // (Own keys only: a config can name one every object has, toString or __proto__.)
@@ -1392,7 +1393,7 @@ const ADOPT = {
 // background is a map's id, checked against the maps there are when its picker is drawn.)
 const mapId = (v) => (typeof v === 'string' && /^[\w.-]{1,64}$/.test(v) ? v : undefined);
 const ADOPT_GAME = {
-  volume: clampTo([0, 1]), fast: isBool, caseIntro: isBool, confirmSellAbove: clampTo([0, 1e9]), showOdds: isBool, keepPrepared: isBool,
+  volume: clampTo([0, 1]), fast: isBool, caseIntro: isBool, confirmSellAbove: clampTo([0, 1e9]), showOdds: isBool, keepPrepared: isBool, compressCache: isBool,
   menuBg: mapId, inspectBg: mapId,
   autoSell: {
     on: isBool, below: clampTo([0, 1e9]), keepStt: isBool, keepRare: isBool, keepBlue: isBool, keepFloat: isBool,

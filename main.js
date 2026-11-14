@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const pricing = require('./shared/pricing.cjs');
 const { CS2Service } = require('./cs2/service.cjs');
+const { Compactor } = require('./cs2/compact.cjs');
 const { agentVoice } = require('./cs2/voice.cjs');
 const { initUpdater } = require('./shared/updater.cjs');
 
@@ -21,7 +22,26 @@ const MIME = {
   '.gltf': 'model/gltf+json', '.glb': 'model/gltf-binary', '.bin': 'application/octet-stream', '.exr': 'image/x-exr',
 };
 
-let userDir, imgDir, savePath, refreshedDataPath, cs2Cache, cs2;
+let userDir, imgDir, savePath, refreshedDataPath, cs2Cache, cs2, compactor = null;
+
+// The CS2 cache's compression (cs2/compact.cjs; Settings → Compress the CS2 cache), on Windows. Only in the game itself
+// by default: a development run (npm start), a test build (another package name) and a smoke run share the player's
+// real cache, so there it's on only when asked for (CS2SIM_COMPACT=1; in a smoke run CS2SIM_SMOKE_COMPACT=1, with
+// CS2SIM_CACHE at a copy). CS2SIM_COMPACT=0 turns it off anywhere.
+function makeCompactor() {
+  const env = process.env;
+  if (process.platform !== 'win32' || env.CS2SIM_COMPACT === '0') return null;
+  if (SMOKE ? env.CS2SIM_SMOKE_COMPACT !== '1' : !(env.CS2SIM_COMPACT === '1' || (app.isPackaged && require('./package.json').name === 'cs2-case-sim'))) {
+    if (app.isPackaged && !SMOKE) console.warn('[compact] off in this test build (CS2SIM_COMPACT=1 turns it on: point CS2SIM_CACHE at a copy of the cache first)');
+    return null;
+  }
+  return new Compactor({
+    dir: cs2Cache, log: (m) => console.log('[compact]', m),
+    quiet: () => !cs2?.preparing && (cs2?.cs2 ? cs2.cs2.quietFor(60000) : true), // (no Prepare, no export for a minute)
+    busyDirs: () => cs2?.busyDirs() || [],
+    onChange: () => { if (cs2) cs2.sizeJob = null; },
+  });
+}
 
 function initPaths() {
   userDir = app.getPath('userData');
@@ -35,10 +55,11 @@ function initPaths() {
   const cli = app.isPackaged
     ? path.join(process.resourcesPath, 's2v', 'Source2Viewer-CLI.exe')
     : process.env.CS2SIM_CLI || path.join(__dirname, 'tools', 's2v', 'Source2Viewer-CLI.exe');
+  compactor = makeCompactor();
   cs2 = makeCS2(cli);
 }
 // (One place for its options: Settings' clear makes a new one, which must read custom content's paint kits too.)
-const makeCS2 = (cliPath) => new CS2Service({ cacheDir: cs2Cache, cliPath, log: (m) => console.log('[cs2]', m), shrinkImages, customKits });
+const makeCS2 = (cliPath) => new CS2Service({ cacheDir: cs2Cache, cliPath, log: (m) => console.log('[cs2]', m), shrinkImages, customKits, compactor });
 
 // Play mode calls from the renderer (one channel, whitelisted).
 const PLAY_CALLS = {
@@ -233,11 +254,18 @@ function registerIpc() {
   ipcMain.handle('cs2:prepareStatus', () => cs2.prepareStatus());
   ipcMain.handle('cs2:prepareCancel', () => cs2.prepareCancel());
   ipcMain.handle('cs2:cacheSize', () => cs2.cacheSize());
-  ipcMain.handle('cs2:clear', () => {
+  // The cache's compression: its state for Settings ({ off: true } where there's none: the row stays hidden), the
+  // setting, and a match holding passes off while it loads and plays (Game.load / dispose).
+  ipcMain.handle('cs2:compactStatus', async () => (compactor ? { ...compactor.status(), supported: await compactor.supported() } : { supported: false, off: true }));
+  ipcMain.handle('cs2:compact', (_e, on) => { compactor?.setEnabled(!!on); return true; });
+  ipcMain.handle('cs2:hold', (_e, on) => { compactor?.hold(!!on); return true; });
+  ipcMain.handle('cs2:clear', async () => {
     cs2.prepareCancel();
+    await Promise.race([compactor?.stop(), new Promise((r) => setTimeout(r, 20000))]); // (compact.exe off the files first)
     cs2.flush(); // nothing left to write into the folder once it's gone
-    fs.rmSync(cs2Cache, { recursive: true, force: true });
+    fs.rmSync(cs2Cache, { recursive: true, force: true, maxRetries: 3 });
     cs2 = makeCS2(cs2.cliPath);
+    compactor?.reset();
     return true;
   });
 
@@ -307,6 +335,9 @@ function createWindow() {
   win.loadURL('app://game/index.html');
   // (Not in a smoke run that measures: its CLI runs would be in the numbers.)
   if (!SMOKE || process.env.CS2SIM_SMOKE === 'prepare') setTimeout(() => cs2.learnSignatures().catch((e) => console.warn('[cs2] learn signatures:', e.message)), 20000);
+  // The cache's first compression pass of the run, once the game has settled (what the last run exported, or all of it
+  // the first time: a minute or so, once).
+  setTimeout(() => compactor?.schedule('start'), 90000).unref?.();
   if (SMOKE) runSmokeTest(win);
 }
 
@@ -818,14 +849,17 @@ async function runMapsSmoke(win) {
 }
 
 // `CS2SIM_SMOKE=prepare` checks "Prepare all CS2 content": times loading a Play map (the first of CS2SIM_SMOKE_MAPS;
-// none for "none") twice, then runs Prepare all (CS2SIM_SMOKE_PREPARE=maps: Maps only) from Settings for
-// CS2SIM_SMOKE_SECONDS (default 60) logging its progress, screenshots the Settings row into userData/prepare-*.png and
-// stops it.
+// none for "none") twice, then runs Prepare all (CS2SIM_SMOKE_PREPARE=maps: Maps only, stopped as soon as it's
+// compressing a map, with CS2SIM_SMOKE_COMPACT=1, so it exports no other) from Settings for CS2SIM_SMOKE_SECONDS
+// (default 60) logging its progress, screenshots the Settings row into userData/prepare-*.png and stops it.
 async function runPrepareSmoke(win) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const js = (code) => win.webContents.executeJavaScript(code);
   const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `prepare-${name}.png`), (await win.webContents.capturePage()).toPNG());
-  const [id] = process.env.CS2SIM_SMOKE_MAPS === 'none' ? (await wait(3000), []) : await smokeMapIds(win);
+  const none = process.env.CS2SIM_SMOKE_MAPS === 'none';
+  // (CS2SIM_SMOKE_PREFS, e.g. {"map":"de_mirage"}: Maps only starts with your last map.)
+  if (none && process.env.CS2SIM_SMOKE_PREFS) { await wait(3000); await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, ...${process.env.CS2SIM_SMOKE_PREFS} })); })(); 1`); }
+  const [id] = none ? (await wait(3000), []) : await smokeMapIds(win);
   for (const run of id ? [1, 2] : []) {
     const t0 = Date.now();
     const ok = await smokeStartMap(win, id, 'prepare');
@@ -841,14 +875,16 @@ async function runPrepareSmoke(win) {
   await shot('idle');
   await js(`document.querySelector('[data-a=${process.env.CS2SIM_SMOKE_PREPARE === 'maps' ? 'prepare-maps' : 'prepare'}]').click(); 1`);
   const end = Date.now() + 1000 * (+process.env.CS2SIM_SMOKE_SECONDS || 60);
+  const until = process.env.CS2SIM_SMOKE_PREPARE === 'maps' ? / · compressing/ : null;
   let last = '';
   while (Date.now() < end) {
-    await wait(2000);
+    await wait(until ? 500 : 2000);
     const st = await js(`window.native.cs2PrepareStatus()`);
     const line = `${st.step}${st.detail ? ' · ' + st.detail : ''} ${Math.floor((100 * st.done) / (st.total || 1))}%`;
     if (line !== last) console.log('SMOKE prepare', ((end - Date.now()) / 1000).toFixed(0) + 's left', line, 'skipped', st.skipped);
     last = line;
     if (!st.running) break;
+    if (until?.test(st.step)) { console.log('SMOKE prepare compressing', JSON.stringify(await js('window.native.cs2CompactStatus()'))); break; }
   }
   await js(`document.querySelector('[data-prep]').scrollIntoView({ block: 'center' }); 1`);
   await wait(1200);
@@ -857,6 +893,65 @@ async function runPrepareSmoke(win) {
   await js(`window.native.cs2PrepareCancel()`);
   for (let i = 0; i < 300 && (await js(`window.native.cs2PrepareStatus()`)).running; i++) await wait(1000);
   console.log('SMOKE prepare stopped', JSON.stringify(await js(`window.native.cs2PrepareStatus()`)));
+  app.quit();
+}
+
+// `CS2SIM_SMOKE=compact` checks the CS2 cache's compression (with CS2SIM_SMOKE_COMPACT=1 and CS2SIM_CACHE at a copy of
+// a cache that has Mirage exported, or CS2SIM_SMOKE_MAP's map): loads the map's world (timed, twice) and reads its
+// world.glb through app://, turns "Compress the CS2 cache" off and on in Settings and logs the row as it compresses,
+// to "Saves …", then reads and loads it all again: the same bytes, and the load times compressed. Screenshots the row
+// into userData/compact-*.png.
+async function runCompactSmoke(win) {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  const shot = async (name) => fs.writeFileSync(path.join(app.getPath('userData'), `compact-${name}.png`), (await win.webContents.capturePage()).toPNG());
+  const id = process.env.CS2SIM_SMOKE_MAP || 'de_mirage', rel = `play/${id}/world.glb`;
+  const onDrive = () => { const st = fs.statSync(path.join(cs2Cache, 'play', id, 'world.glb')); return `${(st.size / 1e6).toFixed(1)} MB, ${(st.blocks * 512 / 1e6).toFixed(1)} MB on the drive`; };
+  const hash = () => js(`fetch('cs2cache/${rel}').then((r) => r.arrayBuffer()).then((b) => crypto.subtle.digest('SHA-256', b)).then((h) => [...new Uint8Array(h)].map((x) => x.toString(16).padStart(2, '0')).join(''))`);
+  // The map's world as a match loads it (geometry, textures, lightmap, probes, sky, 3D skybox), on a renderer of its own.
+  const load = () => js(`(async () => {
+    const THREE = await import('three'); const { loadWorld } = await import('./js/play/world.js');
+    const t0 = performance.now();
+    const map = await window.native.cs2Play('map', ${JSON.stringify(id)});
+    const renderer = new THREE.WebGLRenderer({ canvas: document.createElement('canvas') });
+    await fetch(map.collision).then((r) => r.arrayBuffer());
+    const world = await loadWorld(map, renderer, {});
+    const ms = Math.round(performance.now() - t0);
+    world.scene.traverse((o) => { o.geometry?.dispose?.(); for (const m of [].concat(o.material || [])) m.dispose?.(); });
+    renderer.dispose(); renderer.forceContextLoss();
+    return ms;
+  })()`);
+  await wait(4000);
+  const before = await hash();
+  console.log('SMOKE compact before:', rel, onDrive(), 'sha256', before.slice(0, 16));
+  for (const n of [1, 2]) console.log('SMOKE compact', id, 'world load', n, 'before:', await load(), 'ms');
+  await js(`document.querySelector('#topbar [data-page=stats]').click(); 1`);
+  for (let i = 0; i < 40 && !(await js(`!!document.querySelector('[data-compact]:not([hidden])')`)); i++) await wait(500);
+  await js(`document.querySelector('[data-compact]')?.scrollIntoView({ block: 'center' }); 1`);
+  await wait(6000);
+  const row = () => js(`document.querySelector('[data-compact]')?.innerText.replace(/\\n+/g, ' | ') || '(no row)'`);
+  const info = () => js(`document.querySelector('[data-compact-info]')?.textContent || ''`);
+  console.log('SMOKE compact row:', await row());
+  await shot('before');
+  const box = `document.querySelector('[data-s=compressCache]')`;
+  if (await js(`!!${box}?.checked`)) { await js(`${box}.click(); 1`); await wait(6000); console.log('SMOKE compact off:', await info()); }
+  await js(`${box}.click(); 1`);
+  const t0 = Date.now();
+  let last = '', shotTaken = false;
+  while (Date.now() - t0 < 600000) {
+    await wait(1000);
+    const t = await info(), st = await js('window.native.cs2CompactStatus()');
+    if (t !== last) console.log('SMOKE compact', ((Date.now() - t0) / 1000).toFixed(0) + 's:', t);
+    last = t;
+    if (st.running && !shotTaken) { await shot('running'); shotTaken = true; }
+    if (!st.running && /^Saves/.test(t)) break;
+  }
+  await shot('after');
+  console.log('SMOKE compact row:', await row());
+  console.log('SMOKE compact prepare row:', await js(`document.querySelector('[data-prep-info]')?.textContent || ''`));
+  const after = await hash();
+  console.log('SMOKE compact after:', rel, onDrive(), 'sha256', after.slice(0, 16), after === before ? '(the same bytes)' : '(DIFFERENT BYTES)');
+  for (const n of [1, 2]) console.log('SMOKE compact', id, 'world load', n, 'after:', await load(), 'ms');
   app.quit();
 }
 
@@ -3092,6 +3187,7 @@ function runSmokeTest(win) {
   if (process.env.CS2SIM_SMOKE === 'premier') { win.webContents.once('did-finish-load', () => runPremierSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'hitch') { win.webContents.once('did-finish-load', () => runHitchSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'prepare') { win.webContents.once('did-finish-load', () => runPrepareSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
+  if (process.env.CS2SIM_SMOKE === 'compact') { win.webContents.once('did-finish-load', () => runCompactSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'crate') { win.webContents.once('did-finish-load', () => runCrateSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'charms') { win.webContents.once('did-finish-load', () => runCharmSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
   if (process.env.CS2SIM_SMOKE === 'badges') { win.webContents.once('did-finish-load', () => runBadgeSmoke(win).catch((e) => { console.error('SMOKE failed', e); app.quit(); })); return; }
@@ -3170,4 +3266,4 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => app.quit());
-app.on('will-quit', () => cs2?.flush());
+app.on('will-quit', () => { cs2?.flush(); compactor?.stop(); }); // (a compact.exe left running only finishes the file it's on)

@@ -50,6 +50,11 @@ export const prepareStatus = () => (native() ? window.native.cs2PrepareStatus() 
 export const prepareCancel = () => window.native?.cs2PrepareCancel?.();
 export const cacheSize = () => (native() ? window.native.cs2CacheSize() : Promise.resolve(null));
 
+// The cache's compression (Settings → Compress the CS2 cache, cs2/compact.cjs): its state ({ off: true } where the game
+// has none), and the setting, sent to main at start and when it's changed.
+export const compactStatus = () => (window.native?.cs2CompactStatus ? window.native.cs2CompactStatus() : Promise.resolve({ off: true }));
+export const setCompress = (on) => window.native?.cs2Compact?.(!!on);
+
 // At start: once something has been prepared, a CS2 update gets the same again in the background (only what the update
 // changed is exported again): what was prepared last, everything or the maps only. Unless the player turned that off.
 export async function keepPrepared() {

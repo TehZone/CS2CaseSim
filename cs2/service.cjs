@@ -157,9 +157,12 @@ const MEDAL_ICON = (y, l) => `panorama/images/econ/status_icons/service_medal_${
 class CS2Service {
   // shrinkImages(files, maxSize): optional, makes backdrop textures smaller after export (Electron passes one).
   // customKits(): custom content's paint kits ({ fid: kit }, the custom data's `kits`), read when one is asked for.
-  constructor({ cacheDir, cliPath, cliEnv = {}, log = () => {}, shrinkImages = null, customKits = null }) {
+  // compactor: optional, compresses the cache with Windows' own compression (cs2/compact.cjs; Electron passes one).
+  constructor({ cacheDir, cliPath, cliEnv = {}, log = () => {}, shrinkImages = null, customKits = null, compactor = null }) {
     this.shrinkImages = shrinkImages;
     this.customKits = customKits;
+    this.compactor = compactor;
+    this.pendingJobs = new Set(); // Play jobs (playJob) still running
     this.customKitJobs = new Map();
     this.vanityJobs = new Map();
     this.crateJobs = new Map();
@@ -877,12 +880,18 @@ class CS2Service {
   // Shared one-time jobs (by key), dropped again if they fail so a retry runs them anew.
   playJob(key, fn) {
     if (!this.playJobs.has(key)) {
+      this.pendingJobs.add(key);
       const job = fn();
       this.playJobs.set(key, job);
       job.catch(() => this.playJobs.delete(key));
+      const over = () => this.pendingJobs.delete(key);
+      job.then(over, over);
     }
     return this.playJobs.get(key);
   }
+
+  // The cache folders being written now (the maps being exported): the cache's compression leaves them alone.
+  busyDirs() { return [...this.pendingJobs].filter((k) => k.startsWith('map:')).map((k) => 'play/' + k.slice(4)); }
 
   // Maps in this install that can be played: [{ id, name }].
   playMaps() {
@@ -931,6 +940,9 @@ class CS2Service {
         wingman: meta.wingman?.collision ? this.url(path.join(dir, 'wingman.bin')) : null,
       });
       const say = (m) => { this.progress.set('map:' + id, m); this.log(`[play ${id}] ${m}`); };
+      // (Before writing into the folder: the cache's compression may have a batch of its files in hand, and a write to a
+      // file it's on fails. It starts no other while this runs: busyDirs.)
+      const settle = () => this.compactor?.settle('play/' + id);
       try {
         let meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
         // A CS2 update rewrites the map's VPK (and so its time), mostly with nothing in it changed: the export is kept
@@ -948,16 +960,20 @@ class CS2Service {
         // it was, still playable, rather than exporting the whole map again.
         if (meta.stamp === stamp && meta.version >= 2) {
           const steps = { 2: 'upgradeMapLighting', 3: 'upgradeMapHidden', 4: 'upgradeMapLayers', 5: 'upgradeMapDoors', 6: 'upgradeMapSky3d', 7: 'upgradeMapTextureSizes', 8: 'upgradeMapBreakables', 9: 'upgradeMapBreakables2', 10: 'upgradeMapSoundscapes', 11: 'upgradeMapGlass', 12: 'upgradeMapBreakables3', 13: 'upgradeMapWingman' };
+          const was = meta;
           try {
+            if (steps[meta.version]) await settle();
             while (steps[meta.version]) meta = await this[steps[meta.version]](id, vpk, dir, meta, say);
-            if (await this.wingmanChanged(meta)) meta = await this.upgradeMapWingman(id, vpk, dir, meta, say);
-            if (!meta.sky && !meta.skyChecked) meta = await this.upgradeMapSky(id, vpk, dir, meta, say);
+            if (await this.wingmanChanged(meta)) { await settle(); meta = await this.upgradeMapWingman(id, vpk, dir, meta, say); }
+            if (!meta.sky && !meta.skyChecked) { await settle(); meta = await this.upgradeMapSky(id, vpk, dir, meta, say); }
           } catch (e) { this.log('map upgrade: ' + e.message); this.playJobs.delete('map:' + id); } // (the next load tries again)
           this.progress.delete('map:' + id);
+          if (meta !== was) this.compactor?.schedule('map'); // (what an upgrade rewrote is stored unpacked again)
           return result(meta);
         }
       } catch (e) { if (e?.code !== 'ENOENT') this.log('map cache: ' + e.message); }
-      fs.rmSync(dir, { recursive: true, force: true });
+      await settle();
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
       const tmp = path.join(dir, 'tmp');
       fs.mkdirSync(tmp, { recursive: true });
       const content = await cs2.vpkContent(vpk).catch(() => null);
@@ -1029,6 +1045,7 @@ class CS2Service {
       fs.writeFileSync(metaFile, JSON.stringify(meta));
       this.progress.delete('map:' + id);
       if (!wingman) this.playJobs.delete('map:' + id);
+      this.compactor?.schedule('map');
       return result(meta);
     });
   }
@@ -1501,6 +1518,7 @@ class CS2Service {
     try { current = JSON.parse(fs.readFileSync(file, 'utf8')).version === play.NAV_VERSION; } catch {}
     if (!current) {
       try {
+        await this.compactor?.settle('play/' + id); // (nav.json may be in a batch of the cache's compression: see playMap)
         const cs2 = this.ensureCS2();
         const tmp = path.join(dir, 'tmp-nav');
         await cs2.run(['-i', vpk, '-f', `maps/${id}.nav`, '-o', tmp]);
@@ -1841,6 +1859,7 @@ class CS2Service {
         state.step = state.stop ? 'Stopped' : state.error ? 'Failed: ' + state.error : 'Done';
         this.preparing = null;
         this.sizeJob = null;
+        this.compactor?.schedule('prepare'); // (what a stopped run made, once the game is idle)
       });
     return true;
   }
@@ -1855,7 +1874,8 @@ class CS2Service {
   }
 
   // The steps that make the maps: [label, items, weight, fn, room?] (see runSteps). Each map is made whole (its export,
-  // then its soundscapes' sounds); `room(id)` is the space a map's export may take on the way (its tmp files and its
+  // then its soundscapes' sounds), then compressed straight away when the cache is (so a nearly full drive keeps the
+  // 40% it saves for the next map); `room(id)` is the space a map's export may take on the way (its tmp files and its
   // textures before they're shrunk), none for one made already.
   mapSteps(state, ids) {
     const vpkSize = (id) => { try { return fs.statSync(path.join(this.gameDir, 'maps', id + '.vpk')).size; } catch { return 0; } };
@@ -1866,6 +1886,10 @@ class CS2Service {
         state.step += ': ' + nameOf(id);
         await this.playMap(id);
         await this.playMapSounds(id);
+        if (this.compactor?.active() && !state.stop) {
+          state.step += ' · compressing';
+          await this.compactor.run({ dirs: ['play/' + id], settledMs: 0, gated: false });
+        }
       }, (id) => (this.mapReady(id) ? 0 : 3e9 + 3 * vpkSize(id))],
       ['Map pictures', [1], 2, () => this.playMapImages()],
     ];
@@ -1890,9 +1914,11 @@ class CS2Service {
 
   // Runs a list of steps ([label, items, weight, fn(item), room?(item)]), counting each item's weight done as it goes
   // (the progress bar). It stops before the drive fills up: under 3 GB free (looked at every 15 s), and before each
-  // item of a step with `room`, when there's less than that item needs.
+  // item of a step with `room`, when there's less than that item needs. With the cache compressed, what the run made
+  // is compressed at its end (the sounds, models and lists; each map already was).
   async runSteps(steps, state) {
-    state.total = steps.reduce((s, [, items, w]) => s + items.length * w, 0) || 1;
+    const compress = !!this.compactor?.active(), COMPRESS = 10;
+    state.total = steps.reduce((s, [, items, w]) => s + items.length * w, 0) + (compress ? COMPRESS : 0) || 1;
     let spaceAt = 0;
     const free = async () => { const st = await fs.promises.statfs(this.cacheDir).catch(() => null); return st ? st.bavail * st.bsize : Infinity; };
     for (const [label, items, weight, fn, room] of steps) {
@@ -1911,6 +1937,13 @@ class CS2Service {
         try { await fn(items[i]); } catch (e) { state.skipped++; this.log(`prepare all: ${label}: ${e.message}`); }
         state.done += weight;
       }
+    }
+    // (Not held up by the 3 GB stop: it only frees space.)
+    if (compress && !state.stop) {
+      state.step = 'Compressing the cache';
+      state.map = null;
+      await this.compactor.run({ settledMs: 15000, gated: false });
+      state.done += COMPRESS;
     }
   }
 
@@ -1988,9 +2021,9 @@ class CS2Service {
   }
 
   // Play's maps made so far: { ready, total, need (about how much the rest would take on the drive: an export is 2 to 3
-  // times its VPK) }.
+  // times its VPK, 40% less compressed) }.
   mapsReady() {
-    const ids = this.bombMaps(), k = 2.6;
+    const ids = this.bombMaps(), k = this.compactor?.active() ? 2.6 * 0.6 : 2.6;
     let ready = 0, need = 0;
     for (const id of ids) {
       if (this.mapReady(id)) ready++;
@@ -2025,22 +2058,31 @@ class CS2Service {
     };
   }
 
-  // The cache's size on disk and the free space where it is: { bytes, free } (counted again a minute later).
+  // The cache's size and the free space where it is: { bytes (its files' sizes), disk (the room they take on the drive:
+  // less, compressed), free, backlog (bytes the cache's compression has yet to compress) } (counted again a minute
+  // later, or when a compression pass ends).
   cacheSize() {
     if (!this.sizeJob || Date.now() - this.sizeJob.at > 60000) {
+      const total = { bytes: 0, disk: 0, backlog: 0 }, compactor = this.compactor?.active() ? this.compactor : null;
       const walk = async (dir) => {
         let ents;
-        try { ents = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return 0; }
-        const sizes = await Promise.all(ents.map((e) => {
+        try { ents = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+        await Promise.all(ents.map(async (e) => {
           const p = path.join(dir, e.name);
-          return e.isDirectory() ? walk(p) : e.isFile() ? fs.promises.stat(p).then((st) => st.size, () => 0) : 0;
+          if (e.isDirectory()) return walk(p);
+          if (!e.isFile()) return;
+          let st;
+          try { st = await fs.promises.stat(p); } catch { return; }
+          total.bytes += st.size;
+          total.disk += st.blocks != null ? st.blocks * 512 : st.size;
+          if (compactor?.eligible(path.relative(this.cacheDir, p), st)) total.backlog += st.size;
         }));
-        return sizes.reduce((a, b) => a + b, 0);
       };
       const job = (async () => {
         let free = null;
         try { const st = await fs.promises.statfs(this.cacheDir); free = st.bavail * st.bsize; } catch {}
-        return { bytes: await walk(this.cacheDir), free };
+        await walk(this.cacheDir);
+        return { ...total, free };
       })();
       job.at = Date.now();
       this.sizeJob = job;

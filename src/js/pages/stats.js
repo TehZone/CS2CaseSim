@@ -8,7 +8,7 @@ import { autoSellLabel, autoSellModal } from '../autosell.js';
 import { sfx } from '../audio.js';
 import { cs2Status } from '../cs2/api.js';
 import { backgroundMaps, setMenuBackground } from '../menu.js';
-import { prepareAll, prepareMaps, prepareStatus, prepareCancel, cacheSize } from '../cs2/content.js';
+import { prepareAll, prepareMaps, prepareStatus, prepareCancel, cacheSize, compactStatus, setCompress } from '../cs2/content.js';
 import { rankInfo } from '../engine/ranks.js';
 import { loadRankArt, emblemHtml, rankKey } from '../rank.js';
 import { levelHtml } from '../profile.js';
@@ -81,6 +81,10 @@ function draw() {
           <button class="btn primary" data-a="prepare">Prepare all</button>
           <button class="btn ghost sm" data-a="prepare-maps">Maps only</button>
         </div></div>
+      <div class="setting prepare-all" data-compact hidden><div style="flex:1;min-width:0">Compress the CS2 cache
+        <p>Windows keeps the cache's map geometry, models, sounds and data compressed on the drive and unpacks them in memory as the game reads them: nothing is unpacked onto the drive while you play, and nothing has to be compressed again afterwards. It saves about a quarter of the cache (its textures are compressed already). New exports are compressed when the game is idle, and each map as soon as Prepare has exported it.</p>
+        <p data-compact-info></p></div>
+        <input type="checkbox" data-s="compressCache" ${S.settings.compressCache !== false ? 'checked' : ''}></div>
       <div class="setting"><div>Image cache<p>Skin images are cached on disk after the first download so the game works offline.</p></div><button class="btn" data-a="clearcache" ${window.native ? '' : 'disabled'}>Clear cache</button></div>
       <div class="setting"><div>Reset progress<p>Deletes your money, inventory, upgrades and stats.</p></div><button class="btn danger" data-a="reset" ${online() ? 'disabled title="Log out to reset your offline save"' : ''}>Reset save</button></div>
     </div>
@@ -100,6 +104,7 @@ function draw() {
     S.settings[k] = el.type === 'checkbox' ? el.checked : +el.value;
     save();
     if (k === 'volume') { emit('volume'); sfx.click(); }
+    if (k === 'compressCache') setCompress(el.checked);
   }));
   root.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', () => action(b.dataset.a, b)));
   const bgSel = root.querySelector('[data-menubg]');
@@ -148,16 +153,39 @@ function watchPrepare(r) {
     row.querySelector('[data-a="prepare"]').classList.toggle('primary', !st.running);
     const clear = r.querySelector('[data-a="cs2clear"]');
     if (clear) clear.disabled = st.running;
-    const size = await cacheSize().catch(() => null);
-    const parts = [];
-    if (size) parts.push(`Cache: ${gb(size.bytes)}${size.free != null ? ` · ${gb(size.free)} free on the drive` : ''}`);
+    const [size, packing] = await Promise.all([cacheSize().catch(() => null), compactStatus().catch(() => null)]);
+    const parts = [], disk = size?.disk ?? size?.bytes;
+    if (size) parts.push(`Cache: ${disk < size.bytes * 0.97 ? `${gb(disk)} (${gb(size.bytes)} uncompressed)` : gb(size.bytes)}${size.free != null ? ` · ${gb(size.free)} free on the drive` : ''}`);
     if (m?.total) parts.push(`Maps: ${m.ready} of ${m.total} ready${m.need && m.ready < m.total ? `, about ${gb(m.need)} more` : ''}`);
     const when = (rec, what) => `${what} ${new Date(rec.at).toLocaleString()}${rec.skipped ? ` (${rec.skipped} items weren't in your install)` : ''}${rec.outdated ? ' · CS2 has been updated since' : ''}`;
     parts.push(m?.last?.kind === 'maps' ? when(m.last, 'Maps last prepared') : st.last ? when(st.last, 'Last prepared') : 'Not prepared yet');
     row.querySelector('[data-prep-info]').textContent = parts.join(' · ');
-    setTimeout(tick, st.running ? 1000 : 5000);
+    showCompact(r, packing, size);
+    setTimeout(tick, st.running || packing?.running ? 1000 : 5000);
   };
   tick();
+}
+
+// The "Compress the CS2 cache" row: what compressing saves, or how far a pass has got (hidden where the game has no
+// compression: off Windows, or a development run).
+function showCompact(r, c, size) {
+  const row = r.querySelector('[data-compact]');
+  if (!row || !c || c.off) return;
+  row.hidden = false;
+  const box = row.querySelector('[data-s="compressCache"]'), saved = size ? size.bytes - (size.disk ?? size.bytes) : 0;
+  box.disabled = c.supported === false;
+  let text;
+  if (c.supported === false) text = 'Not available here: Windows can only compress files on an NTFS drive.';
+  else if (c.running && c.kind === 'compress') text = `Compressing… ${gb(c.done)} of ${gb(c.total)}`;
+  else if (c.running) text = `Unpacking… ${Math.floor((100 * c.done) / (c.total || 1))}%`;
+  else if (c.enabled === false) {
+    text = c.needFree ? `Off: unpacking needs ${gb(c.needFree)} free, so what's compressed stays compressed (it reads the same)`
+      : saved > 5e6 ? "Off: what's compressed is unpacked when the game is idle" : 'Off: the cache is stored uncompressed';
+  } else {
+    text = saved > 5e6 ? `Saves ${gb(saved)}` : 'Nothing compressed yet';
+    if (size?.backlog > 0) text += ` · ${gb(size.backlog)} waiting, compressed when the game is idle`;
+  }
+  row.querySelector('[data-compact-info]').textContent = text;
 }
 
 async function action(a, btn) {

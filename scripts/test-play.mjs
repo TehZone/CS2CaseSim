@@ -2968,6 +2968,25 @@ const shotAt = (p, from, elev, dist = 500) => {
   fs.promises.statfs = statfs;
   ok(calls.join() === 'wingman,de_b,de_a' && service.prepareStatus().step === 'Failed: the drive is almost full: 2 of 3 maps ready' && !record('prepared-maps.json'),
     "maps only: stops before a map there's no room for, saying how many are ready");
+
+  // With the cache compressed (cs2/compact.cjs): each map straight after it's made, the rest at the end.
+  const packs = [], scheduled = [];
+  service.compactor = { active: () => true, run: async (o) => { packs.push(o); }, schedule: (why) => scheduled.push(why) };
+  service.prepareMaps(['de_b']);
+  let sawStep = false;
+  while (service.preparing) { if (/· compressing/.test(service.prepareStatus().step)) sawStep = true; await new Promise((r) => setTimeout(r, 0)); }
+  ok(packs.map((o) => (o.dirs ? o.dirs.join() : 'all')).join() === 'play/de_b,play/de_a,play/de_test,all' && packs.every((o) => o.gated === false), 'maps only, compressed: each map as it is made (its folder), then the rest, without waiting for the game to be idle');
+  ok(sawStep && service.prepareStatus().step === 'Done' && scheduled.includes('prepare'), 'maps only, compressed: the step says so; a pass is asked for once the run is over');
+  packs.length = 0;
+  gate = { wait: new Promise((r) => { release = r; }) };
+  service.prepareMaps([]);
+  while (!service.prepareStatus().step?.startsWith('Maps')) await new Promise((r) => setTimeout(r, 5));
+  service.prepareCancel();
+  release();
+  await done();
+  gate = null;
+  ok(!packs.length, 'maps only, compressed: a stopped run compresses nothing more (a pass comes later, when the game is idle)');
+  service.compactor = null;
   fs.rmSync(root, { recursive: true, force: true });
 }
 

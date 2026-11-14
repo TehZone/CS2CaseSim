@@ -6,7 +6,7 @@ import { ownedWorth } from './stored.js';
 import { toast, topModal, openModal, installTooltips } from './ui.js';
 import { initMenu, initMoreMenu } from './menu.js';
 import { loadGameSounds } from './audio.js';
-import { keepPrepared } from './cs2/content.js';
+import { keepPrepared, setCompress } from './cs2/content.js';
 import { net } from './net/online.js';
 import * as cases from './pages/cases.js';
 import * as inventory from './pages/inventory.js';
@@ -214,6 +214,7 @@ async function boot() {
   setInterval(() => save(), 15000);
   updateAccount();
   net.resume();
+  setCompress(S.settings.compressCache !== false); // (the CS2 cache's compression: on unless turned off in Settings)
   setTimeout(keepPrepared, 10000); // after a CS2 update, everything prepared is brought up to date in the background
   if (retiredOnLoad?.n) {
     save();
