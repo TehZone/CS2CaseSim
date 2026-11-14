@@ -229,6 +229,7 @@ function registerIpc() {
   ipcMain.handle('cs2:badge', (_e, id) => cs2.badge(id));
   ipcMain.handle('cs2:play', (_e, fn, arg) => playCall(fn, arg));
   ipcMain.handle('cs2:prepareAll', (_e, content) => cs2.prepareAll(content));
+  ipcMain.handle('cs2:prepareMaps', (_e, order) => cs2.prepareMaps([].concat(order || []).filter((id) => typeof id === 'string' && /^de_[a-z0-9_]+$/.test(id))));
   ipcMain.handle('cs2:prepareStatus', () => cs2.prepareStatus());
   ipcMain.handle('cs2:prepareCancel', () => cs2.prepareCancel());
   ipcMain.handle('cs2:cacheSize', () => cs2.cacheSize());
@@ -817,8 +818,9 @@ async function runMapsSmoke(win) {
 }
 
 // `CS2SIM_SMOKE=prepare` checks "Prepare all CS2 content": times loading a Play map (the first of CS2SIM_SMOKE_MAPS;
-// none for "none") twice, then runs Prepare all from Settings for CS2SIM_SMOKE_SECONDS (default 60) logging its
-// progress, screenshots the Settings row into userData/prepare-*.png and stops it.
+// none for "none") twice, then runs Prepare all (CS2SIM_SMOKE_PREPARE=maps: Maps only) from Settings for
+// CS2SIM_SMOKE_SECONDS (default 60) logging its progress, screenshots the Settings row into userData/prepare-*.png and
+// stops it.
 async function runPrepareSmoke(win) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const js = (code) => win.webContents.executeJavaScript(code);
@@ -837,7 +839,7 @@ async function runPrepareSmoke(win) {
   await wait(6000);
   console.log('SMOKE prepare row', await js(`document.querySelector('[data-prep]')?.innerText.replace(/\\n+/g, ' | ')`));
   await shot('idle');
-  await js(`document.querySelector('[data-a=prepare]').click(); 1`);
+  await js(`document.querySelector('[data-a=${process.env.CS2SIM_SMOKE_PREPARE === 'maps' ? 'prepare-maps' : 'prepare'}]').click(); 1`);
   const end = Date.now() + 1000 * (+process.env.CS2SIM_SMOKE_SECONDS || 60);
   let last = '';
   while (Date.now() < end) {

@@ -7,7 +7,15 @@ import { toast } from '../ui.js';
 
 const native = () => window.native?.cs2PrepareAll;
 
-// { skins, stickers, crates, agents, anims, weapons } for CS2Service.prepareAll.
+// The maps to make first: your last Play map, your matchmaking maps, then Active Duty (CS2Service.bombMaps puts the rest
+// after them), so the maps you play are the ones done if the drive fills up.
+async function mapOrder() {
+  const [{ playPrefs }, { ACTIVE_DUTY }] = await Promise.all([import('../pages/play-settings.js'), import('../engine/premier.js')]);
+  const p = playPrefs();
+  return [...new Set([p.map, ...Object.values(p.pools || {}).flat(), ...ACTIVE_DUTY].filter((x) => typeof x === 'string'))];
+}
+
+// { skins, stickers, crates, agents, anims, weapons, maps } for CS2Service.prepareAll.
 async function prepareContent() {
   const { AGENTS, botClips } = await import('../play/bots.js');
   const stats = await cs2Play('stats').catch(() => ({}));
@@ -22,6 +30,7 @@ async function prepareContent() {
     agents: [...AGENTS.T, ...AGENTS.CT],
     anims: botClips(weapons, { gestures: true }),
     weapons,
+    maps: await mapOrder(),
   };
 }
 
@@ -31,17 +40,26 @@ export async function prepareAll() {
   return window.native.cs2PrepareAll(await prepareContent());
 }
 
+// Starts preparing just Play's maps (Maps only): false when a run is going already (or there's no CS2 install).
+export async function prepareMaps() {
+  if (!native() || !window.native.cs2PrepareMaps || !(await cs2Status()).available) return false;
+  return window.native.cs2PrepareMaps(await mapOrder());
+}
+
 export const prepareStatus = () => (native() ? window.native.cs2PrepareStatus() : Promise.resolve(null));
 export const prepareCancel = () => window.native?.cs2PrepareCancel?.();
 export const cacheSize = () => (native() ? window.native.cs2CacheSize() : Promise.resolve(null));
 
-// At start: once everything has been prepared, a CS2 update gets the same again in the background (only what the
-// update changed is exported again), unless the player turned that off.
+// At start: once something has been prepared, a CS2 update gets the same again in the background (only what the update
+// changed is exported again): what was prepared last, everything or the maps only. Unless the player turned that off.
 export async function keepPrepared() {
   if (!native() || S.settings.keepPrepared === false) return;
   try {
     const st = await prepareStatus();
-    if (!st?.last?.outdated || st.running) return;
-    if (await prepareAll()) toast('CS2 was updated: bringing its models, textures and maps up to date in the background.', 'gold');
+    if (!st?.keep || st.running) return;
+    const maps = st.keep === 'maps';
+    if (await (maps ? prepareMaps() : prepareAll())) {
+      toast(maps ? 'CS2 was updated: bringing its maps up to date in the background.' : 'CS2 was updated: bringing its models, textures and maps up to date in the background.', 'gold');
+    }
   } catch (e) { console.warn('keep prepared', e); }
 }

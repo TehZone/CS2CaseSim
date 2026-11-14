@@ -1817,10 +1817,23 @@ class CS2Service {
   // knows the game's items: { skins: [{ weapon, paint }], stickers: [materials], crates: [def ids], agents: [vmdls],
   // anims: [paths], weapons: [ids] }. False when it's already running.
   prepareAll(content = {}) {
+    return this.startPrepare('all', (state) => this.prepareSteps(content || {}, state));
+  }
+
+  // "Maps only" (Settings): the part of Prepare all a match waits for the first time on a map, for every map Play has:
+  // the maps (with their soundscapes' sounds), the Wingman list and the maps' pictures. `order`: the maps to make first
+  // (the renderer's: the player's last map, their matchmaking maps, then Active Duty), so if the drive fills up those
+  // are done. False when a run of either kind is going already.
+  prepareMaps(order = []) {
+    return this.startPrepare('maps', (state) => this.runSteps(this.mapSteps(state, this.bombMaps(order)), state));
+  }
+
+  // One run at a time, of either kind ('all' or 'maps'): fn(state) does the work, in the CLI's background lane.
+  startPrepare(kind, fn) {
     if (this.preparing) return false;
     const cs2 = this.ensureCS2();
-    const state = this.prepareState = { running: true, step: 'Starting…', done: 0, total: 1, skipped: 0, stop: false };
-    this.preparing = cs2.background(() => this.prepareSteps(content || {}, state))
+    const state = this.prepareState = { kind, running: true, step: 'Starting…', done: 0, total: 1, skipped: 0, stop: false };
+    this.preparing = cs2.background(() => fn(state))
       .then(() => { if (!state.stop) this.writePrepared(state); })
       .catch((e) => { state.error = e.message; this.log('prepare all: ' + e.message); })
       .finally(() => {
@@ -1833,6 +1846,73 @@ class CS2Service {
   }
 
   prepareCancel() { if (this.prepareState) this.prepareState.stop = true; return true; }
+
+  // The bomb defusal maps in this install (what Play and online matches offer; never the hostage maps), `order`'s first
+  // (those installed), then CS2's Wingman maps, then the rest as playMaps() lists them.
+  bombMaps(order = []) {
+    const ids = this.playMaps().map((m) => m.id).filter((id) => /^de_[a-z0-9_]+$/.test(id)), have = new Set(ids);
+    return [...new Set([...[].concat(order || []), ...play.WINGMAN_POOL, ...ids].filter((id) => have.has(id)))];
+  }
+
+  // The steps that make the maps: [label, items, weight, fn, room?] (see runSteps). Each map is made whole (its export,
+  // then its soundscapes' sounds); `room(id)` is the space a map's export may take on the way (its tmp files and its
+  // textures before they're shrunk), none for one made already.
+  mapSteps(state, ids) {
+    const vpkSize = (id) => { try { return fs.statSync(path.join(this.gameDir, 'maps', id + '.vpk')).size; } catch { return 0; } };
+    return [
+      ['Wingman maps', [1], 2, () => this.playWingmanMaps()],
+      ['Maps', ids, 60, async (id) => {
+        state.map = 'map:' + id;
+        state.step += ': ' + nameOf(id);
+        await this.playMap(id);
+        await this.playMapSounds(id);
+      }, (id) => (this.mapReady(id) ? 0 : 3e9 + 3 * vpkSize(id))],
+      ['Map pictures', [1], 2, () => this.playMapImages()],
+    ];
+  }
+
+  // Every sound a map's soundscapes play, extracted from the install (what a match on it loads first: Dust II's are 68
+  // MB), as Play's soundscapes load them: each soundscape's event and the events in it, three deep.
+  async playMapSounds(id) {
+    let list = [];
+    try { list = JSON.parse(fs.readFileSync(path.join(this.cacheDir, 'play', id, 'map.json'), 'utf8')).soundscapes || []; } catch {}
+    const all = new Set(list.filter((s) => s && !s.off && s.e).map((s) => s.e));
+    if (!all.size) return {};
+    const data = await this.playData();
+    let level = [...all];
+    for (let depth = 0; depth < 3 && level.length; depth++) {
+      const next = [];
+      for (const e of level) for (const k of data.soundInfo?.[this.soundName(data, e)]?.c || []) if (!all.has(k)) { all.add(k); next.push(k); }
+      level = next;
+    }
+    return this.playSounds([...all]);
+  }
+
+  // Runs a list of steps ([label, items, weight, fn(item), room?(item)]), counting each item's weight done as it goes
+  // (the progress bar). It stops before the drive fills up: under 3 GB free (looked at every 15 s), and before each
+  // item of a step with `room`, when there's less than that item needs.
+  async runSteps(steps, state) {
+    state.total = steps.reduce((s, [, items, w]) => s + items.length * w, 0) || 1;
+    let spaceAt = 0;
+    const free = async () => { const st = await fs.promises.statfs(this.cacheDir).catch(() => null); return st ? st.bavail * st.bsize : Infinity; };
+    for (const [label, items, weight, fn, room] of steps) {
+      for (let i = 0; i < items.length; i++) {
+        if (state.stop) return;
+        if (Date.now() - spaceAt > 15000) {
+          spaceAt = Date.now();
+          if (await free() < 3e9) throw new Error('the drive is almost full (less than 3 GB free)');
+        }
+        if (room && await free() < room(items[i])) {
+          const m = this.mapsReady();
+          throw new Error(`the drive is almost full: ${m.ready} of ${m.total} maps ready`);
+        }
+        state.step = items.length > 1 ? `${label} (${i + 1} of ${items.length})` : label;
+        state.map = null;
+        try { await fn(items[i]); } catch (e) { state.skipped++; this.log(`prepare all: ${label}: ${e.message}`); }
+        state.done += weight;
+      }
+    }
+  }
 
   async prepareSteps(content, state) {
     const uniq = (v) => [...new Set([].concat(v || []).filter((x) => x != null && x !== ''))];
@@ -1858,31 +1938,15 @@ class CS2Service {
       ['StatTrak counters', weapons.filter((w) => /^weapon_/.test(w)), 1, (w) => this.statTrak(w)],
       ['Glove animation', [1], 1, () => this.gloveClip()],
       ['Inspect backdrops', this.vanityMaps().map((v) => v.id), 6, (id) => this.vanity(id)],
-      ['Maps', this.playMaps().map((m) => m.id), 60, (id) => { state.map = 'map:' + id; state.step += ': ' + nameOf(id); return this.playMap(id); }],
-      ['Map pictures', [1], 2, () => this.playMapImages()],
+      // (The same maps as Maps only, in its order: Play's bomb maps, not the hostage ones it never offers.)
+      ...this.mapSteps(state, this.bombMaps(content.maps)),
       ['Play mode agents', uniq(content.agents), 4, (v) => this.playAgent(v)],
       ['Play mode animations', [uniq(content.anims)].filter((a) => a.length), 20, (a) => this.playAnims(a)],
       ['Play mode weapons', uniq(content.weapons).filter(playable), 2, (w) => this.playWeapon(w)],
       ['Play mode sounds', groups(Object.keys(data.sounds), 250), 8, (g) => this.playSounds(g)],
       ['Stickers', groups(uniq(content.stickers), 150), 25, (g) => this.settle(g.map((m) => this.sticker(m)), state)],
     ];
-    state.total = steps.reduce((s, [, items, w]) => s + items.length * w, 0) || 1;
-    let spaceAt = 0;
-    for (const [label, items, weight, fn] of steps) {
-      for (let i = 0; i < items.length; i++) {
-        if (state.stop) return;
-        // It stops before the drive fills up.
-        if (Date.now() - spaceAt > 15000) {
-          spaceAt = Date.now();
-          const st = await fs.promises.statfs(this.cacheDir).catch(() => null);
-          if (st && st.bavail * st.bsize < 3e9) throw new Error('the drive is almost full (less than 3 GB free)');
-        }
-        state.step = items.length > 1 ? `${label} (${i + 1} of ${items.length})` : label;
-        state.map = null;
-        try { await fn(items[i]); } catch (e) { state.skipped++; this.log(`prepare all: ${label}: ${e.message}`); }
-        state.done += weight;
-      }
-    }
+    return this.runSteps(steps, state);
   }
 
   // Waits for a group of jobs, counting the ones that failed (a sticker this install doesn't have...).
@@ -1897,28 +1961,67 @@ class CS2Service {
     try { const st = fs.statSync(path.join(this.gameDir, 'maps', id + '.vpk')); return `${st.size}-${Math.round(st.mtimeMs)}`; } catch { return null; }
   }
 
-  // prepared.json: when everything was last prepared, and on which game build (so a CS2 update can be noticed).
+  // prepared.json (Prepare all) or prepared-maps.json (Maps only): when it last ran to its end, and on which game build
+  // (so a CS2 update can be noticed). Both { at, stamp, maps: { id: the map VPK's stamp }, skipped }: an older build reads
+  // prepared.json as it always has.
   writePrepared(state) {
-    const maps = Object.fromEntries(this.playMaps().map(({ id }) => [id, this.mapStamp(id)]));
+    const maps = state.kind === 'maps';
+    const ids = maps ? this.bombMaps() : this.playMaps().map((m) => m.id);
+    const file = maps ? 'prepared-maps.json' : 'prepared.json';
     try {
-      fs.writeFileSync(path.join(this.cacheDir, 'prepared.json'), JSON.stringify({ at: Date.now(), stamp: this.cs2.vpkStamp(), maps, skipped: state.skipped }));
-    } catch (e) { this.log('prepared.json: ' + e.message); }
+      fs.writeFileSync(path.join(this.cacheDir, file), JSON.stringify({ at: Date.now(), stamp: this.cs2.vpkStamp(), maps: Object.fromEntries(ids.map((id) => [id, this.mapStamp(id)])), skipped: state.skipped }));
+    } catch (e) { this.log(file + ': ' + e.message); }
   }
 
-  // { running, step, detail (a map export's own progress), done, total, skipped, last: { at, skipped, outdated } | null }
-  // (outdated: CS2 was updated since).
-  prepareStatus() {
-    const s = this.prepareState;
-    let last = null;
-    try { last = JSON.parse(fs.readFileSync(path.join(this.cacheDir, 'prepared.json'), 'utf8')); } catch {}
-    let outdated = false;
-    if (last && this.status().available) {
-      try { outdated = last.stamp !== this.ensureCS2().vpkStamp() || this.playMaps().some(({ id }) => last.maps?.[id] !== this.mapStamp(id)); } catch {}
+  // Is a map exported for this install's VPK of it (a match on it starts without exporting it first; see playMap)?
+  // Kept by map.json's time, as Settings asks every second.
+  mapReady(id) {
+    const file = path.join(this.cacheDir, 'play', id, 'map.json'), stamp = this.mapStamp(id);
+    let mtime;
+    try { mtime = fs.statSync(file).mtimeMs; } catch { return false; }
+    const memo = (this.readyMemo ||= new Map()), hit = memo.get(id);
+    if (hit?.mtime === mtime && hit.stamp === stamp) return hit.ready;
+    let ready = false;
+    try { const meta = JSON.parse(fs.readFileSync(file, 'utf8')); ready = meta.version >= 2 && meta.stamp === stamp; } catch {}
+    memo.set(id, { mtime, stamp, ready });
+    return ready;
+  }
+
+  // Play's maps made so far: { ready, total, need (about how much the rest would take on the drive: an export is 2 to 3
+  // times its VPK) }.
+  mapsReady() {
+    const ids = this.bombMaps(), k = 2.6;
+    let ready = 0, need = 0;
+    for (const id of ids) {
+      if (this.mapReady(id)) ready++;
+      else { try { need += fs.statSync(path.join(this.gameDir, 'maps', id + '.vpk')).size * k; } catch {} }
     }
+    return { ready, total: ids.length, need: Math.round(need) };
+  }
+
+  // { kind ('all' | 'maps', while running), running, stopping, step, detail (a map export's own progress), done, total, skipped,
+  //   last: Prepare all's { at, skipped, kind, outdated } | null,
+  //   maps: { ready, total, need, last: the newer of the two records (a finished Prepare all made the maps too) },
+  //   keep: the kind to run again after a CS2 update (the newest record's, when it's outdated) | null }
+  // (outdated: CS2 was updated since, or a map was added or changed.)
+  prepareStatus() {
+    const s = this.prepareState, available = this.status().available;
+    const read = (name) => { try { return JSON.parse(fs.readFileSync(path.join(this.cacheDir, name), 'utf8')); } catch { return null; } };
+    let vpk = null, bomb = [];
+    if (available) { try { vpk = this.ensureCS2().vpkStamp(); bomb = this.bombMaps(); } catch {} }
+    const record = (r, kind) => r && {
+      at: r.at, skipped: r.skipped || 0, kind,
+      outdated: !!vpk && (r.stamp !== vpk || bomb.some((id) => r.maps?.[id] !== this.mapStamp(id))),
+    };
+    const last = record(read('prepared.json'), 'all'), lastMaps = record(read('prepared-maps.json'), 'maps');
+    const newest = [last, lastMaps].filter(Boolean).sort((a, b) => b.at - a.at)[0] || null;
     return {
-      running: !!s?.running, step: s?.step || null, detail: (s?.running && s.map && this.progress.get(s.map)) || null,
+      kind: (s?.running && s.kind) || null,
+      running: !!s?.running, stopping: !!(s?.running && s.stop), step: s?.step || null, detail: (s?.running && s.map && this.progress.get(s.map)) || null,
       done: s?.done || 0, total: s?.total || 0, skipped: s?.skipped || 0,
-      last: last && { at: last.at, skipped: last.skipped || 0, outdated },
+      last,
+      maps: available ? { ...this.mapsReady(), last: newest } : null,
+      keep: newest?.outdated ? newest.kind : null,
     };
   }
 

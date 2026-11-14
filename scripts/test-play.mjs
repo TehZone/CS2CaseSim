@@ -2882,6 +2882,95 @@ const shotAt = (p, from, elev, dist = 500) => {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
+// ---- Prepare's Maps only (service.cjs), on a pretend CS2: which maps, in what order, their sounds, what's recorded --------
+{
+  const { default: fs } = await import('node:fs'), { default: os } = await import('node:os'), { default: path } = await import('node:path');
+  const { CS2Service } = (await import('node:module')).createRequire(import.meta.url)('../cs2/service.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cs2sim-prepare-test-'));
+  const cache = path.join(root, 'cache'), game = path.join(root, 'game');
+  const put = (file, data) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data); };
+  const ids = ['de_a', 'de_b', 'cs_c', 'de_test'];
+  for (const id of ids) put(path.join(game, 'maps', id + '.vpk'), 'vpk');
+  const stampOf = (id) => { const st = fs.statSync(path.join(game, 'maps', id + '.vpk')); return `${st.size}-${Math.round(st.mtimeMs)}`; };
+  const pretend = { build: 'build', vpkStamp: () => pretend.build, background: (fn) => fn() };
+  // The maps' soundscapes: one off, and events in events four deep (Play loads three deep).
+  const scapes = [{ o: [0, 0, 0], r: 0, e: 'Map.Scape' }, { o: [0, 0, 0], r: 0, e: 'Map.Off', off: true }];
+  const data = {
+    sounds: Object.fromEntries(['Map.Scape', 'Map.Off', 'Map.Wind', 'Map.Birds', 'Map.Bird1', 'Map.Deep'].map((e) => [e, ['sounds/' + e + '.vsnd']])),
+    soundInfo: { 'Map.Scape': { c: ['map.wind'] }, 'Map.Wind': { c: ['Map.Birds'] }, 'Map.Birds': { c: ['Map.Bird1'] }, 'Map.Bird1': { c: ['Map.Deep'] }, 'Map.Off': { c: ['Map.Wind'] } },
+  };
+  const calls = [], sounds = [];
+  let gate = null;
+  const service = new CS2Service({ cacheDir: cache, log: () => {} });
+  Object.assign(service, {
+    gameDir: game, cs2: pretend, ensureCS2: () => pretend, status: () => ({ available: true, gameDir: game, cli: true }),
+    playMaps: () => ids.map((id) => ({ id, name: id })),
+    playWingmanMaps: async () => { calls.push('wingman'); return { pool: [], fixed: [] }; },
+    playMapImages: async () => { calls.push('pictures'); return {}; },
+    playMap: async (id) => {
+      calls.push(id);
+      if (gate) await gate.wait;
+      put(path.join(cache, 'play', id, 'map.json'), JSON.stringify({ version: 14, stamp: stampOf(id), id, soundscapes: scapes }));
+      return { id };
+    },
+    playData: async () => data,
+    playSounds: async (events) => { sounds.push(events); return {}; },
+  });
+  const done = async () => { while (service.preparing) await service.preparing; };
+  const record = (name) => { try { return JSON.parse(fs.readFileSync(path.join(cache, name), 'utf8')); } catch { return null; } };
+
+  ok(service.bombMaps(['de_b', 'cs_c', 'de_gone']).join() === 'de_b,de_a,de_test', 'maps only: the bomb maps, the ones asked for first (installed ones only), never the hostage maps');
+  ok(service.prepareMaps(['de_b']) === true && service.prepareStatus().kind === 'maps' && service.prepareStatus().running, 'maps only: starts, and says which kind is running');
+  await done();
+  ok(calls.join() === 'wingman,de_b,de_a,de_test,pictures', 'maps only: the Wingman list, the maps in that order, then their pictures');
+  const asked = new Set(sounds.flat());
+  ok(sounds.length === 3 && ['Map.Scape', 'map.wind', 'Map.Birds', 'Map.Bird1'].every((e) => asked.has(e)) && !asked.has('Map.Deep') && !asked.has('Map.Off'),
+    "maps only: each map's soundscape sounds, three deep as Play loads them, not the ones that start switched off");
+  let st = service.prepareStatus();
+  ok(record('prepared-maps.json')?.maps?.de_b === stampOf('de_b') && !record('prepared-maps.json').maps.cs_c && !record('prepared.json'), 'maps only: recorded in prepared-maps.json (never prepared.json)');
+  ok(st.step === 'Done' && st.maps.ready === 3 && st.maps.total === 3 && !st.maps.need && st.maps.last.kind === 'maps' && !st.maps.last.outdated && st.keep === null && st.last === null,
+    'maps only: status counts the maps made, the record is current, nothing to keep up to date');
+
+  // A CS2 update: the newest record's kind is what's run again.
+  pretend.build = 'build2';
+  st = service.prepareStatus();
+  ok(st.maps.last.outdated && st.keep === 'maps', 'maps only: after a CS2 update it is the one to run again');
+  put(path.join(cache, 'prepared.json'), JSON.stringify({ at: Date.now() + 1000, stamp: 'build', maps: {}, skipped: 0 }));
+  st = service.prepareStatus();
+  ok(st.keep === 'all' && st.maps.last.kind === 'all' && st.last.outdated, 'maps only: a newer Prepare all is the one run again');
+  fs.rmSync(path.join(cache, 'prepared.json'));
+  fs.rmSync(path.join(cache, 'play', 'de_a', 'map.json'));
+  st = service.prepareStatus();
+  ok(st.maps.ready === 2 && st.maps.need > 0, 'maps only: a map not made yet is counted, with about what it needs');
+
+  // One run at a time, and a stopped run records nothing.
+  fs.rmSync(path.join(cache, 'prepared-maps.json'));
+  let release;
+  gate = { wait: new Promise((r) => { release = r; }) };
+  calls.length = 0;
+  service.prepareMaps([]);
+  while (!calls.includes('de_a') && !calls.includes('de_b')) await new Promise((r) => setTimeout(r, 5));
+  ok(service.prepareAll({}) === false && service.prepareMaps([]) === false, 'maps only: Prepare all (or another) refuses while it runs');
+  service.prepareCancel();
+  ok(service.prepareStatus().stopping, 'maps only: stopping says so until the map in hand is done');
+  release();
+  await done();
+  gate = null;
+  ok(calls.length === 2 && !record('prepared-maps.json') && service.prepareStatus().step === 'Stopped', 'maps only: stopped after that map, and nothing recorded');
+
+  // The drive almost full: it stops before a map that may not fit (one made already needs no room).
+  const statfs = fs.promises.statfs;
+  fs.promises.statfs = async () => ({ bavail: 3e9 + 4, bsize: 1 }); // (over the 3 GB stop, under 3 GB and 3 times a VPK)
+  fs.rmSync(path.join(cache, 'play', 'de_test', 'map.json'));
+  calls.length = 0;
+  service.prepareMaps(['de_b']);
+  await done();
+  fs.promises.statfs = statfs;
+  ok(calls.join() === 'wingman,de_b,de_a' && service.prepareStatus().step === 'Failed: the drive is almost full: 2 of 3 maps ready' && !record('prepared-maps.json'),
+    "maps only: stops before a map there's no room for, saying how many are ready");
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 // ---- Wingman's bots (strats.js, setups.js): one site, A or B, and the positions on what's left of the map --------------
 {
   const { teamPlan } = await import('../src/js/play/strats.js');

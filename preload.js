@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('native', {
   cs2Prepare: (req) => ipcRenderer.invoke('cs2:prepare', req),
   cs2Clear: () => ipcRenderer.invoke('cs2:clear'),
   cs2PrepareAll: (content) => ipcRenderer.invoke('cs2:prepareAll', content),
+  cs2PrepareMaps: (order) => ipcRenderer.invoke('cs2:prepareMaps', order),
   cs2PrepareStatus: () => ipcRenderer.invoke('cs2:prepareStatus'),
   cs2PrepareCancel: () => ipcRenderer.invoke('cs2:prepareCancel'),
   cs2CacheSize: () => ipcRenderer.invoke('cs2:cacheSize'),
