@@ -334,7 +334,8 @@ function createWindow() {
   });
   win.loadURL('app://game/index.html');
   // (Not in a smoke run that measures: its CLI runs would be in the numbers.)
-  if (!SMOKE || process.env.CS2SIM_SMOKE === 'prepare') setTimeout(() => cs2.learnSignatures().catch((e) => console.warn('[cs2] learn signatures:', e.message)), 20000);
+  // (And the skies' EXRs left from older builds: once baked into their maps, never read again.)
+  if (!SMOKE || process.env.CS2SIM_SMOKE === 'prepare') setTimeout(() => cs2.learnSignatures().catch((e) => console.warn('[cs2] learn signatures:', e.message)).then(() => cs2.dropSkyExrs()), 20000);
   // The cache's first compression pass of the run, once the game has settled (what the last run exported, or all of it
   // the first time: a minute or so, once).
   setTimeout(() => compactor?.schedule('start'), 90000).unref?.();

@@ -32,7 +32,10 @@ memory as the game reads them, so nothing is unpacked onto the drive while you p
 after; the game reads the same bytes either way. It saves about a quarter of the cache (its PNG and EXR textures are
 compressed already), new exports are compressed once the game is idle (never during a match) and each map as soon as
 Prepare has made it, and turning it off unpacks everything again when there's room. It needs an NTFS drive; elsewhere
-the row says it isn't available. Gloves are shown as CS2's
+the row says it isn't available. Either way the textures the game shrinks (a map's, an agent's, a backdrop's) are saved
+as smaller lossless PNGs (each row predicted from its neighbours, RGB when there's no transparency: about a quarter
+smaller, the same pixels), and a map's sky EXR (El Dorado's is 250 MB) is deleted once it's baked into the map's
+sky.png. Gloves are shown as CS2's
 glove models (just the gloves, posed by CS2's own glove inspect animation), with the skin baked per hand by CS2's
 glove compositing shader (csgo_customglove), including the newest gloves' layered materials. Agents still use the
 icon-based 3D view. Without CS2 installed, everything falls back to that view.
@@ -571,7 +574,7 @@ npm run dev       # browser preview at http://localhost:5178
 npm run dist      # build dist/CS2-Case-Simulator-Setup.exe, dist/CS2-Case-Simulator.exe and dist/latest.json (a release: see DEPLOY.md)
 node scripts/test-engine.mjs            # game rule checks (odds, trade-ups, armory, gambling, NPCs)
 node scripts/test-play.mjs              # Play mode checks (traces, movement, ladders, rules, overtime, smoke, modes)
-node scripts/test-compact.mjs           # the CS2 cache's compression, on a pretend cache in the temp folder
+node scripts/test-compact.mjs           # the CS2 cache's compression, on a pretend cache in the temp folder, and the PNG encoder
 cd server && npm install && cd ..       # multiplayer server dependencies
 PGLITE_DIR=server/.data node server/index.mjs   # run the server locally (port 8787)
 node server/test.mjs                    # server checks (accounts, trading, live gambling, restarts)

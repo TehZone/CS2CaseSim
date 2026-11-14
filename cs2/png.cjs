@@ -55,12 +55,39 @@ function chunk(type, data) {
   const c = Buffer.alloc(4); c.writeUInt32BE(crc(td));
   return Buffer.concat([len, td, c]);
 }
-// 8-bit RGBA encoder (level: zlib's, 1 is fastest).
-function encodePNG(width, height, rgba, { level = 6 } = {}) {
+// 8-bit RGBA encoder, lossless. level: zlib's (1 is fastest); filter: 'paeth' predicts each byte from its neighbours
+// (the left, upper and upper-left pixels), which deflate packs far better than the pixels themselves ('none' doesn't);
+// reduce: an image that's opaque everywhere is written as RGB, the same pixels without the alpha. Together they make a
+// map's shrunk textures about a quarter smaller than level 1 unfiltered RGBA, for a few seconds more per map.
+function encodePNG(width, height, rgba, { level = 6, filter = 'paeth', reduce = true } = {}) {
+  const n = width * height;
+  let opaque = reduce;
+  for (let i = 3; opaque && i < n * 4; i += 4) if (rgba[i] !== 255) opaque = false;
+  const bpp = opaque ? 3 : 4, stride = width * bpp;
+  let px = rgba;
+  if (opaque) {
+    px = new Uint8Array(n * 3);
+    for (let i = 0, j = 0; j < px.length; i += 4, j += 3) { px[j] = rgba[i]; px[j + 1] = rgba[i + 1]; px[j + 2] = rgba[i + 2]; }
+  }
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4); ihdr[8] = 8; ihdr[9] = 6;
-  const raw = Buffer.alloc(height * (width * 4 + 1));
-  for (let y = 0; y < height; y++) Buffer.from(rgba.buffer, rgba.byteOffset + y * width * 4, width * 4).copy(raw, y * (width * 4 + 1) + 1);
+  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4); ihdr[8] = 8; ihdr[9] = opaque ? 2 : 6;
+  const raw = Buffer.alloc(height * (stride + 1));
+  for (let y = 0; y < height; y++) {
+    const o = y * (stride + 1) + 1, row = y * stride, up = row - stride;
+    if (filter !== 'paeth') { raw.set(px.subarray(row, row + stride), o); continue; }
+    raw[o - 1] = 4;
+    // (The first row has no row above: Paeth picks the left pixel. The first pixel of a row has none to its left: the one above.)
+    if (!y) {
+      for (let x = 0; x < stride; x++) raw[o + x] = px[row + x] - (x >= bpp ? px[row + x - bpp] : 0);
+      continue;
+    }
+    for (let x = 0; x < bpp; x++) raw[o + x] = px[row + x] - px[up + x];
+    for (let x = bpp; x < stride; x++) {
+      const a = px[row + x - bpp], b = px[up + x], c = px[up + x - bpp];
+      const p = a + b - c, pa = p > a ? p - a : a - p, pb = p > b ? p - b : b - p, pc = p > c ? p - c : c - p;
+      raw[o + x] = px[row + x] - (pa <= pb && pa <= pc ? a : pb <= pc ? b : c);
+    }
+  }
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw, { level })), chunk('IEND', Buffer.alloc(0))]);
 }
 
@@ -87,7 +114,7 @@ async function shrinkPNGs(files, max) {
         const p = (y * w + x) * 4;
         out[p] = (r + half) / n; out[p + 1] = (g + half) / n; out[p + 2] = (b + half) / n; out[p + 3] = (a + half) / n;
       }
-      fs.writeFileSync(f, encodePNG(w, h, out, { level: 1 }));
+      fs.writeFileSync(f, encodePNG(w, h, out));
     } catch {}
     await new Promise((r) => setImmediate(r));
   }

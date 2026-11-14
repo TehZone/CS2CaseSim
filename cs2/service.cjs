@@ -1157,8 +1157,33 @@ class CS2Service {
       }
       if (!local || !/\.exr$/i.test(local)) return false;
       play.bakeSky(local, path.join(dir, 'sky.png'));
+      // The EXR (El Dorado's is 250 MB) is read only here: once baked it goes, unless another map's export, which may
+      // share the sky, is under way. An export that wants it again extracts it again.
+      if (this.inFiles(local) && !this.otherMapJobs('map:' + id)) fs.rmSync(local, { force: true });
       return true;
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  inFiles(file) { const rel = path.relative(path.join(this.cacheDir, 'files'), file); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel); }
+  otherMapJobs(key) { return [...this.pendingJobs].some((k) => k.startsWith('map:') && k !== key); }
+
+  // Skies' EXRs extracted before playSky dropped them once baked (files/materials/skybox, 276 MB here): deleted when no
+  // map is being exported or prepared. Returns how many.
+  dropSkyExrs() {
+    if (this.preparing || this.otherMapJobs(null)) return 0;
+    let n = 0;
+    const walk = (d) => {
+      let ents;
+      try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+      for (const e of ents) {
+        const f = path.join(d, e.name);
+        if (e.isDirectory()) walk(f);
+        else if (e.isFile() && /\.exr$/i.test(e.name)) { try { fs.rmSync(f, { force: true }); n++; } catch {} }
+      }
+    };
+    walk(path.join(this.cacheDir, 'files', 'materials', 'skybox'));
+    if (n) this.log(`deleted ${n} sky EXRs, baked into their maps already`);
+    return n;
   }
 
   // An export that found no sky before the map's own files were looked in (Debris, a community map, came out with a
@@ -2118,4 +2143,4 @@ class CS2Service {
   flush() { this.cs2?.flush(); }
 }
 
-module.exports = { CS2Service };
+module.exports = { CS2Service, heightMap };

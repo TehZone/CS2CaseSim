@@ -1,5 +1,6 @@
 // Checks the CS2 cache's compression (cs2/compact.cjs: Windows' own, compact.exe) on a pretend cache in a folder of its
-// own under the temp folder (NTFS here), never the game's.
+// own under the temp folder (NTFS here), never the game's, and the PNG encoder that shrinks exported textures
+// (cs2/png.cjs: lossless, smaller files).
 //   node scripts/test-compact.mjs
 import fs from 'node:fs';
 import os from 'node:os';
@@ -38,6 +39,53 @@ const files = (run) => run.args.filter((a) => !a.startsWith('/'));
 const supportedAnyway = (c) => { c.ok = true; c.probe = Promise.resolve(true); return c; };
 
 try {
+  // ---- the PNG encoder: smaller, the same pixels ---------------------------------------------------------------------
+  {
+    const img = (w, h, f) => { const px = new Uint8Array(w * h * 4); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) px.set(f(x, y), (y * w + x) * 4); return px; };
+    const same = (dec, px) => { // decoded (any channel count) against RGBA
+      const n = dec.width * dec.height, ch = dec.channels;
+      for (let i = 0; i < n; i++) for (let c = 0; c < 4; c++) {
+        const v = ch >= 3 ? (c < 3 ? dec.data[i * ch + c] : ch === 4 ? dec.data[i * ch + 3] : 255) : (c < 3 ? dec.data[i * ch] : ch === 2 ? dec.data[i * ch + 1] : 255);
+        if (v !== px[i * 4 + c]) return false;
+      }
+      return true;
+    };
+    const cases = {
+      'RGBA with alpha': [37, 23, (x, y) => [x * 7, y * 11, (x * y) & 255, (x + y * 3) & 255]],
+      'opaque RGBA': [64, 40, (x, y) => [x * 4, 255 - y * 6, (x ^ y) * 3, 255]],
+      grey: [33, 17, (x, y) => { const g = (x * 5 + y * 9) & 255; return [g, g, g, 255]; }],
+      'alpha mask': [48, 48, (x, y) => [200, 120, 40, (x - 24) ** 2 + (y - 24) ** 2 < 400 ? 255 : 0]],
+      'one pixel': [1, 1, () => [10, 20, 30, 255]],
+      'one column': [1, 9, (x, y) => [y * 20, 5, 7, y * 25]],
+      noise: [50, 31, () => [...crypto.randomBytes(3), 255]],
+    };
+    for (const [name, [w, h, f]] of Object.entries(cases)) {
+      const px = img(w, h, f), dec = png.decodePNG(png.encodePNG(w, h, px));
+      const opaque = px.every((v, i) => i % 4 !== 3 || v === 255);
+      ok(dec.width === w && dec.height === h && same(dec, px), `png: ${name} decodes to the same pixels`);
+      ok(dec.channels === (opaque ? 3 : 4), `png: ${name} is ${opaque ? 'RGB (it is opaque)' : 'RGBA'}`);
+      const plain = png.decodePNG(png.encodePNG(w, h, px, { filter: 'none', reduce: false, level: 1 }));
+      ok(plain.channels === 4 && same(plain, px), `png: ${name} the old way (level 1, unfiltered RGBA) still reads back`);
+    }
+    // shrinkPNGs: what map exports write. Smaller than before (level 1, unfiltered, RGBA), the same pixels.
+    const tex = path.join(root, 'tex.png'), W = 512;
+    const src = img(W, W, (x, y) => [128 + 100 * Math.sin(x / 17) | 0, 128 + 90 * Math.cos(y / 23) | 0, (x * y / 97) & 255, 255]);
+    fs.writeFileSync(tex, png.encodePNG(W, W, src, { level: 1, filter: 'none', reduce: false }));
+    await png.shrinkPNGs([tex], 256);
+    const mine = fs.readFileSync(tex), dec = png.decodePNG(mine);
+    const old = png.encodePNG(dec.width, dec.height, (() => { const o = new Uint8Array(dec.width * dec.height * 4); for (let i = 0; i < dec.width * dec.height; i++) { o.set(dec.data.subarray(i * 3, i * 3 + 3), i * 4); o[i * 4 + 3] = 255; } return o; })(), { level: 1, filter: 'none', reduce: false });
+    ok(dec.width === 256 && dec.channels === 3 && mine.length < old.length * 0.9, `png: shrinkPNGs writes a smaller file than before (${mine.length} vs ${old.length} bytes)`);
+    ok(same(png.decodePNG(old), (() => { const o = new Uint8Array(256 * 256 * 4); for (let i = 0; i < 256 * 256; i++) { o.set(dec.data.subarray(i * 3, i * 3 + 3), i * 4); o[i * 4 + 3] = 255; } return o; })()), 'png: with the same pixels');
+    // The map's height maps (service.cjs heightMap): still opaque.
+    const { heightMap } = require('../cs2/service.cjs');
+    const hm = path.join(root, 'height.png');
+    fs.writeFileSync(hm, png.encodePNG(64, 64, img(64, 64, (x, y) => [x * 4, y * 4, 0, 0])));
+    await heightMap(hm);
+    const h = png.decodePNG(fs.readFileSync(hm));
+    ok(h.channels === 3 || (h.channels === 4 && h.data.every((v, i) => i % 4 !== 3 || v === 255)), 'png: a height map comes out opaque');
+    ok(h.data[(10 * 64 + 20) * h.channels] === 80 && h.data[(10 * 64 + 20) * h.channels + 1] === 40, 'png: with its height and tint mask');
+  }
+
   // ---- the batches compact.exe gets ---------------------------------------------------------------------------------
   {
     const st = (size) => ({ size });

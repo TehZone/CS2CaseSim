@@ -2987,6 +2987,26 @@ const shotAt = (p, from, elev, dist = 500) => {
   gate = null;
   ok(!packs.length, 'maps only, compressed: a stopped run compresses nothing more (a pass comes later, when the game is idle)');
   service.compactor = null;
+
+  // A map's sky (playSky): its EXR is read only to bake sky.png, so it goes once baked; kept while another map's export
+  // (which may share the sky) is under way; extracted again when an export wants it.
+  const play = (await import('node:module')).createRequire(import.meta.url)('../cs2/play.cjs');
+  const exr = path.join(cache, 'files', 'materials', 'skybox', 'sky_x_exr_1.exr'), vtex = 'materials/skybox/sky_x.vtex', mat = 'materials/skybox/sky_x.vmat';
+  let extracts = 0;
+  service.ensureCS2 = () => ({
+    materialParams: async () => ({ [mat]: { textures: { g_tSkyTexture: vtex } } }),
+    extract: async () => { if (!fs.existsSync(exr)) { extracts++; put(exr, 'exr'); } return { [vtex + '_c']: exr }; },
+  });
+  const bakeSky = play.bakeSky;
+  play.bakeSky = (from, to) => put(to, 'baked from ' + path.basename(from));
+  const skyDir = path.join(cache, 'play', 'de_a');
+  ok(await service.playSky('de_a', 'vpk', skyDir, mat) && fs.readFileSync(path.join(skyDir, 'sky.png'), 'utf8') === 'baked from sky_x_exr_1.exr' && !fs.existsSync(exr) && extracts === 1, "sky: the EXR is deleted once it's baked into the map");
+  service.pendingJobs.add('map:de_b');
+  ok(await service.playSky('de_a', 'vpk', skyDir, mat) && extracts === 2 && fs.existsSync(exr), 'sky: extracted again for the next export, and kept while another map is being exported');
+  ok(service.dropSkyExrs() === 0 && fs.existsSync(exr), "sky: the ones left aren't deleted while a map is being exported");
+  service.pendingJobs.delete('map:de_b');
+  ok(service.dropSkyExrs() === 1 && !fs.existsSync(exr), 'sky: and are once none is');
+  play.bakeSky = bakeSky;
   fs.rmSync(root, { recursive: true, force: true });
 }
 
