@@ -1,5 +1,10 @@
 * text=auto eol=lf
 *.png binary
 *.exe binary
+# The website's images, icon and fonts (website/)
+*.webp binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
 # The VPS kit runs on Linux and may be copied up from a Windows checkout (scp): always LF, whatever git decides.
 deploy/vps/** text eol=lf

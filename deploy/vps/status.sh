@@ -19,10 +19,10 @@ section "Services"
 for u in cs2-server.service caddy.service "postgresql@$PG_MAJOR-main.service"; do
   row "${u%.service}" "$(systemctl is-active "$u" 2>/dev/null) (since $(since "$u"))"
 done
-for t in cs2-deploy cs2-backup; do
+for t in cs2-deploy cs2-backup ${SITE_DOMAIN:+cs2-website}; do
   row "$t.timer" "$(systemctl is-active "$t.timer" 2>/dev/null); last run: $(systemctl show -p Result --value "$t.service" 2>/dev/null) at $(systemctl show -p ExecMainExitTimestamp --value "$t.service" 2>/dev/null)"
 done
-systemctl list-timers --all --no-pager cs2-deploy.timer cs2-backup.timer 2>/dev/null | sed -n '1,3p' | sed 's/^/    /'
+systemctl list-timers --all --no-pager cs2-deploy.timer cs2-backup.timer ${SITE_DOMAIN:+cs2-website.timer} 2>/dev/null | sed -n "1,$((${SITE_DOMAIN:+1} + 3))p" | sed 's/^/    /'
 
 section "The server (/health)"
 if body=$(health_local); then
@@ -39,6 +39,11 @@ fi
 section "Deploys (origin/main -> $CS2_REPO)"
 row "checked out" "$(commit_line HEAD) ($(git_cs2 log -1 --format=%cd --date=iso HEAD 2>/dev/null))"
 row "origin/main" "$(commit_line "refs/remotes/origin/$CS2_BRANCH")"
+# (main ahead of the server only in website/: left alone on purpose, deploy.sh restarts nothing for the website)
+if [ -s "$CS2_DEPLOYED" ] && ! git_cs2 diff --quiet "$(cat "$CS2_DEPLOYED")" "refs/remotes/origin/$CS2_BRANCH" -- website 2>/dev/null &&
+  git_cs2 diff --quiet "$(cat "$CS2_DEPLOYED")" "refs/remotes/origin/$CS2_BRANCH" -- . ':(exclude)website' 2>/dev/null; then
+  row "not deployed, on purpose" "main is ahead only in website/: the website's sync takes that, and the server isn't restarted for it"
+fi
 row "SERVER_COMMIT" "$(env_get "$CS2_COMMIT_ENV" SERVER_COMMIT | cut -c1-7)"
 if [ -s "$CS2_DEPLOYED" ]; then
   row "last seen working" "$(commit_line "$(cat "$CS2_DEPLOYED")")"
@@ -52,6 +57,16 @@ else
 fi
 [ ! -s "$CS2_STATE/failed" ] || row "FAILED, not retried" "$(commit_line "$(cat "$CS2_STATE/failed")") (sudo cs2-deploy --force retries it)"
 [ ! -e "$CS2_HOLD" ] || row "ON HOLD" "$(cat "$CS2_HOLD") (while $CS2_HOLD exists the server doesn't start, not even at boot, and the deploy and backups change nothing: finish that first)"
+
+if [ -n "${SITE_DOMAIN:-}" ]; then
+  section "The website ($SITE_DOMAIN: $CS2_WEB/website, cs2-website.timer)"
+  row "checked out" "$(git_web log -1 --format='%h %s (%cr)' 2>/dev/null || printf 'NOTHING (journalctl -u cs2-website -n 30)')"
+  [ -f "$CS2_WEB/website/index.html" ] || row "MISSING" "$CS2_WEB/website/index.html: the site answers 404"
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 "https://$SITE_DOMAIN/" 2>/dev/null) || code=''
+  row "https://$SITE_DOMAIN" "$([ "${code:-000}" = 000 ] && printf 'NO ANSWER over HTTPS (DNS, the certificate: journalctl -u caddy -n 50)' || printf 'answers (%s)' "$code")"
+  online=$(curl -fsS --max-time 8 "https://$SITE_DOMAIN/status" 2>/dev/null | json_get online) || online=''
+  row "/status (players online)" "${online:-NO ANSWER}"
+fi
 
 section "Backups ($CS2_BACKUPS)"
 newest=$(ls -1 "$CS2_BACKUPS"/cs2-*.dump 2>/dev/null | LC_ALL=C sort | tail -n 1)

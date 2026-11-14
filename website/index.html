@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CS2 Case Simulator: a free CS2 case opening game for Windows</title>
+  <meta name="description" content="Open CS2's cases with their real odds, chase rare floats and patterns, trade, and play real CS2 maps against bots or other players. Free for Windows, with no real money.">
+  <link rel="canonical" href="https://cs2casesim.lol/">
+  <meta name="theme-color" content="#0b0e12">
+  <meta name="color-scheme" content="dark">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="CS2 Case Simulator">
+  <meta property="og:title" content="CS2 Case Simulator: a free CS2 case opening game">
+  <meta property="og:description" content="Real odds, floats and rare patterns, trading, a player Market, and CS2 maps to play against bots or other players. Free for Windows, with no real money.">
+  <meta property="og:url" content="https://cs2casesim.lol/">
+  <meta property="og:image" content="https://cs2casesim.lol/img/og.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="CS2 Case Simulator: a StatTrak AK-47 Case Hardened Blue Gem in the game's 3D inspect">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="CS2 Case Simulator: a free CS2 case opening game">
+  <meta name="twitter:description" content="Real odds, floats and rare patterns, trading, a player Market, and CS2 maps to play against bots or other players. Free for Windows.">
+  <meta name="twitter:image" content="https://cs2casesim.lol/img/og.jpg">
+  <meta name="twitter:image:alt" content="CS2 Case Simulator: a StatTrak AK-47 Case Hardened Blue Gem in the game's 3D inspect">
+
+  <link rel="icon" href="/favicon.ico" sizes="32x32">
+  <link rel="icon" href="/img/icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="/img/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <link rel="preload" href="/fonts/saira-condensed-700.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/saira-semi-condensed-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/css/site.css">
+  <script src="/js/site.js" defer></script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "VideoGame",
+    "name": "CS2 Case Simulator",
+    "url": "https://cs2casesim.lol/",
+    "image": "https://cs2casesim.lol/img/og.jpg",
+    "description": "A free, fan-made CS2 case opening game for Windows: real odds, floats and rare patterns, trading, a player Market, and CS2 maps to play against bots or other players.",
+    "genre": ["Simulation", "Shooter"],
+    "gamePlatform": "PC",
+    "operatingSystem": "Windows 10, Windows 11",
+    "applicationCategory": "GameApplication",
+    "downloadUrl": "https://github.com/TehZone/CS2CaseSim/releases/latest/download/CS2-Case-Simulator-Setup.exe",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="/" aria-label="CS2 Case Simulator, home">
+        <img src="/img/icon-64.png" width="36" height="36" alt="">
+        <span>CS2 Case Simulator</span>
+      </a>
+      <nav class="nav" aria-label="Sections">
+        <a href="#features">Features</a>
+        <a href="#play">Play</a>
+        <a href="#screenshots">Screenshots</a>
+        <a href="#requirements">Requirements</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <div class="top-actions">
+        <a class="icon-link" href="#" data-discord data-discord-link hidden aria-label="Our Discord server">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.3 4.4A19.6 19.6 0 0 0 15.4 3l-.6 1.3a18.2 18.2 0 0 0-5.6 0L8.6 3a19.5 19.5 0 0 0-4.9 1.5C.6 9.1-.3 13.7.2 18.2a19.8 19.8 0 0 0 6 3l1.3-2a12.8 12.8 0 0 1-2-1l.5-.4a14.1 14.1 0 0 0 12 0l.5.4a12.7 12.7 0 0 1-2 1l1.3 2a19.7 19.7 0 0 0 6-3c.6-5.2-.8-9.8-3.5-13.8zM8 15.4c-1.2 0-2.2-1.1-2.2-2.4S6.8 10.6 8 10.6s2.2 1.1 2.2 2.4-1 2.4-2.2 2.4zm8 0c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4z"/></svg>
+        </a>
+        <a class="icon-link" href="https://github.com/TehZone/CS2CaseSim" aria-label="CS2 Case Simulator on GitHub">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.6 22.4c.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0C17 4.3 18 4.6 18 4.6c.6 1.6.2 2.8.1 3.1.7.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6A11.5 11.5 0 0 0 12 .5z"/></svg>
+        </a>
+        <a class="btn gold" href="https://github.com/TehZone/CS2CaseSim/releases/latest/download/CS2-Case-Simulator-Setup.exe">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3zM4 18h16v2H4z"/></svg>
+          <span>Download<span class="long"> free</span></span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- ======================================================================================================= hero -->
+    <div class="hero">
+      <div class="wrap">
+        <div>
+          <p class="eyebrow">Free for Windows</p>
+          <h1>CS2 Case<span class="accent">Simulator</span></h1>
+          <p class="tagline">Open CS2's cases with their real odds, chase rare floats and patterns, trade with friends, and play real CS2 maps against bots or other players. No real money, ever.</p>
+          <div class="cta">
+            <a class="btn gold big" href="https://github.com/TehZone/CS2CaseSim/releases/latest/download/CS2-Case-Simulator-Setup.exe">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16l-5.7-5.7 1.4-1.4 3.3 3.3zM4 18h16v2H4z"/></svg>
+              <span class="lbl">Download for Windows<span class="sub">Installer · Windows 10 and 11, 64-bit</span></span>
+            </a>
+            <a class="portable" href="https://github.com/TehZone/CS2CaseSim/releases/latest/download/CS2-Case-Simulator.exe">Portable .exe<small>No install, slower to start</small></a>
+          </div>
+          <p class="release-meta" data-release-meta hidden>
+            <span>Version <b data-version></b></span>
+            <span data-release-size></span>
+            <span data-release-date></span>
+          </p>
+          <p class="live" data-online hidden><span class="dot" aria-hidden="true"></span><span><b data-online-count>0</b> <span data-online-word>players</span> online now</span></p>
+          <ul class="chips" aria-label="At a glance">
+            <li>Free</li>
+            <li>Offline or online</li>
+            <li>Updates itself</li>
+            <li>No real money</li>
+          </ul>
+        </div>
+        <div class="shot-frame">
+          <img src="/img/shots/inspect-1600.webp" srcset="/img/shots/inspect-800.webp 800w, /img/shots/inspect-1600.webp 1600w"
+            sizes="(max-width: 880px) 100vw, 640px" width="1600" height="900" fetchpriority="high"
+            alt="CS2 Case Simulator's 3D inspect: a StatTrak AK-47 Case Hardened, the #1 Blue Gem, on CS2's own model with Dust II blurred behind it">
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================================================ what's new -->
+    <section class="whatsnew" aria-labelledby="news-title">
+      <div class="wrap">
+        <div class="panel news">
+          <div>
+            <span class="kicker">Latest release</span>
+            <h2 id="news-title">What's new in <span data-notes-version>1.1.8</span></h2>
+            <p class="when" data-notes-when>Play online against other players.</p>
+            <a class="btn ghost" href="https://github.com/TehZone/CS2CaseSim/releases/latest" data-notes-link>Release notes on GitHub</a>
+          </div>
+          <div class="notes" data-notes>
+            <ul>
+              <li><strong>Play:</strong> queue online for Competitive or Wingman against real players (Play → Online). A full lobby starts at once; after 2 minutes, everyone searching is split into two teams and bots fill the empty slots. The player with the best connection hosts the match.</li>
+              <li><strong>Play:</strong> online matches pay like bot matches: wins, kills, assists and MVPs.</li>
+              <li><strong>Play:</strong> if you drop out of an online match, a bot plays for you until you rejoin.</li>
+              <li><strong>Play:</strong> spectating after you die is first person only.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================================================== features -->
+    <section id="features" class="band" aria-labelledby="features-title">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="kicker">Features</span>
+          <h2 id="features-title">CS2's cases, skins and collectibles, and then some</h2>
+          <p>CS2's cases, skins, stickers, charms and agents, priced from the real marketplaces. Play offline on your own save, or online with everyone else.</p>
+        </div>
+        <div class="features">
+          <article class="panel feature">
+            <div class="ico" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M12.6 4.6h6.8v3.6h-1.8V6.4h-3.2v1.8h-1.8z"/><path fill-rule="evenodd" d="M4.8 8.2h22.4A1.8 1.8 0 0 1 29 10v15.4a1.8 1.8 0 0 1-1.8 1.8H4.8A1.8 1.8 0 0 1 3 25.4V10a1.8 1.8 0 0 1 1.8-1.8zM3 13.4h4.6v1.5H3zm6.4 0h13.2v1.5H9.4zm15 0H29v1.5h-4.6zM7.6 8.2h1.8v19H7.6zm15 0h1.8v19h-1.8zM16 16.4l3.2 3.2-3.2 3.2-3.2-3.2z"/></svg></div>
+            <h3>Cases with real odds</h3>
+            <p>CS2's weapon cases, souvenir packages, sticker and autograph capsules and more, with CS2's drop odds. With CS2 installed, weapon cases and recent souvenir packages drop in as their own 3D crate, land and unlock with the game's animations and sounds before the reel.</p>
+          </article>
+          <article class="panel feature">
+            <div class="ico" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M16 2.5l4 9.5 9.5 4-9.5 4-4 9.5-4-9.5-9.5-4 9.5-4z"/></svg></div>
+            <h3>Floats and rare patterns</h3>
+            <p>CS2's wear distribution and pattern seeds, with the rare ones: Blue Gems measured from CS2's own Case Hardened pattern, Fades by percentage, Doppler phases, Fire &amp; Ice and every rare pattern the CS.MONEY Wiki lists. Unboxed items get serial numbers.</p>
+          </article>
+          <article class="panel feature">
+            <div class="ico" aria-hidden="true"><svg viewBox="0 0 32 32"><path fill-rule="evenodd" d="M12 6h8a2 2 0 0 1 2 2v2h4.5a1.5 1.5 0 0 1 1.5 1.5v13a1.5 1.5 0 0 1-1.5 1.5h-21A1.5 1.5 0 0 1 4 24.5v-13A1.5 1.5 0 0 1 5.5 10H10V8a2 2 0 0 1 2-2zm0 2v2h8V8zM4 16h24v1.6H4z"/></svg></div>
+            <h3>Inventory and Storage Units</h3>
+            <p>Your inventory with its value, float ranks and a loadout for gloves, knife, agents and every gun. Place stickers anywhere, hang charms, and keep up to 1,000 items in each Storage Unit, like CS2's.</p>
+          </article>
+          <article class="panel feature">
+            <div class="ico" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M16 4l10 10h-6v5h-8v-5H6z"/><path d="M12 21h8v2.4h-8zM12 25.5h8v2.4h-8z"/></svg></div>
+            <h3>Trade-ups and the Armory</h3>
+            <p>Trade Up Contracts with CS2's rules: ten skins for one of the next rarity, StatTrak™ contracts, and five Coverts for a knife or gloves. Spend Armory Stars on featured collections that rotate every 10 to 15 minutes, and on all four charm collections.</p>
+          </article>
+          <article class="panel feature">
+            <div class="ico" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M21.5 3.5L28 10l-6.5 6.5V12H7.5V8h14zM10.5 15.5V20h14v4h-14v4.5L4 22z"/></svg></div>
+            <h3>Trading and friends</h3>
+            <p>Offline, 2,000 made-up players have inventories of their own, and their traders message you with offers: collectors chase Blue Gems and low floats, beginners misjudge prices, and you can haggle. Online, Steam-style friends, chat, profiles and trade offers with real players.</p>
+          </article>
+          <article class="panel feature">
+            <div class="ico" aria-hidden="true"><svg viewBox="0 0 32 32"><path fill-rule="evenodd" d="M4 4h11.2L28 16.8 16.8 28 4 15.2zm6 3.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg></div>
+            <h3>The Market and the Store</h3>
+            <p>The Market is where players list what they own and buy from each other, each listing with its float, pattern and stickers. The Store is the game's own limited stock, restocked every 10 minutes. Prices come from Skinport, CSFloat, Buff163 and YouPin.</p>
+          </article>
+          <article class="panel feature">
+            <div class="ico" aria-hidden="true"><svg viewBox="0 0 32 32"><ellipse cx="12.5" cy="8.5" rx="8" ry="3.4"/><path d="M4.5 11c1.5 1.7 4.5 2.7 8 2.7s6.5-1 8-2.7v3c0 1.9-3.6 3.4-8 3.4s-8-1.5-8-3.4z"/><path d="M4.5 16.6c1.5 1.7 4.5 2.7 8 2.7.6 0 1.2 0 1.8-.1v3.3c-.6.1-1.2.1-1.8.1-4.4 0-8-1.5-8-3.4z"/><ellipse cx="21" cy="20" rx="7.5" ry="3.2"/><path d="M13.5 22.4c1.4 1.6 4.2 2.6 7.5 2.6s6.1-1 7.5-2.6v2.9c0 1.8-3.4 3.2-7.5 3.2s-7.5-1.4-7.5-3.2z"/></svg></div>
+            <h3>Gambling games</h3>
+            <p>Case battles from 1v1 to 2v2, normal or crazy, plus coinflip and jackpot, against bots or other players online. Virtual money only, with no house edge and a button to check every result is provably fair.</p>
+          </article>
+          <article class="panel feature">
+            <div class="ico" aria-hidden="true"><svg viewBox="0 0 32 32"><path fill-rule="evenodd" d="M16 3a13 13 0 1 1 0 26 13 13 0 0 1 0-26zm0 2.6a10.4 10.4 0 1 0 0 20.8 10.4 10.4 0 0 0 0-20.8zM14.8 9h2.4v6.5l5 3-1.2 2-6.2-3.7z"/></svg></div>
+            <h3>Passive income and prestige</h3>
+            <p>$100 a minute while the game is open and while it's closed (up to 12 hours at a time), and $100 a minute more for every prestige. Level up to 40, then prestige for the next Service Medal: 69 of them, each with its badge.</p>
+          </article>
+          <article class="panel feature">
+            <div class="ico" aria-hidden="true"><svg viewBox="0 0 32 32"><circle cx="16" cy="11.5" r="5.6"/><path d="M5 29c1-6.4 5.4-9.6 11-9.6S26 22.6 27 29z"/></svg></div>
+            <h3>Badges, pins and profiles</h3>
+            <p>CS2's collectibles: pins from Pin Capsules that trade like stickers, and Service Medals from prestiging. Feature one on your profile picture, which can be your own image or any agent, with a CS2 map behind your profile and six items to show off.</p>
+          </article>
+          <article class="panel feature">
+            <div class="ico" aria-hidden="true"><svg viewBox="0 0 32 32"><path fill-rule="evenodd" d="M4.5 6h23v20h-23zm2 2v4h5V8zm7 0v4h12V8zm-7 6v4h5v-4zm7 0v4h12v-4zm-7 6v4h5v-4zm7 0v4h12v-4z"/></svg></div>
+            <h3>The Item Database</h3>
+            <p>Every skin, knife, glove, sticker, charm and agent in the game. Open one to see every copy that exists, who owns it, its float, pattern and float rank, and the lowest and highest floats of any skin.</p>
+          </article>
+          <article class="panel feature">
+            <div class="ico" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M16 2.8l11.5 6.6v13.2L16 29.2 4.5 22.6V9.4zm0 3L7.6 10.6 16 15.4l8.4-4.8zM6.6 12.4v9.2l8.4 4.8v-9.2zm18.8 0L17 17.2v9.2l8.4-4.8z"/></svg></div>
+            <h3>3D inspect</h3>
+            <p>With CS2 installed, guns and knives are inspected on their real CS2 models, with CS2's own skin shader baking each skin for its exact float and pattern. Put a CS2 map behind them, or inspect in first person with CS2's animations.</p>
+          </article>
+          <article class="panel feature">
+            <div class="ico" aria-hidden="true"><svg viewBox="0 0 32 32"><path fill-rule="evenodd" d="M6 4h16a4 4 0 0 1 4 4v18a2 2 0 0 1-2 2H8a4 4 0 0 1-4-4V6a2 2 0 0 1 2-2zm0 2v15.3c.6-.2 1.3-.3 2-.3h15V8a2 2 0 0 0-2-2zm2 17a1.5 1.5 0 0 0 0 3h15v-3z"/><path d="M14.5 8.5l1.5 3 3.3.5-2.4 2.3.6 3.3-3-1.6-3 1.6.6-3.3L9.7 12l3.3-.5z"/></svg></div>
+            <h3>The Index</h3>
+            <p>A lasting record of everything you've unboxed: when you first got it, how many, your lowest float and best pattern. Finish a case or a collection for XP and Armory Stars.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================================================== play -->
+    <section id="play" aria-labelledby="play-title">
+      <div class="wrap play">
+        <div class="shots">
+          <div class="shot-frame">
+            <img src="/img/shots/match-800.webp" srcset="/img/shots/match-800.webp 800w, /img/shots/match-1600.webp 1600w"
+              sizes="(max-width: 880px) 100vw, 620px" width="1600" height="900" loading="lazy"
+              alt="Play mode on Dust II: first person at CT spawn with two bot teammates, the radar and the HUD">
+          </div>
+        </div>
+        <div class="copy">
+          <span class="kicker">Play mode</span>
+          <h2 id="play-title">Play CS2's maps with your own skins</h2>
+          <p>With CS2 installed, Play loads any bomb defusal map from your own install, such as Dust II, Mirage, Inferno, Nuke, Ancient or Anubis, and puts you in with your equipped skins, gloves, knife and agent. The bots play as teams, with economy calls, real lineups and CS2's movement, weapons, grenades and sounds.</p>
+          <ul class="modes">
+            <li class="panel"><b>Premier</b><span>CS Rating, with CS2's pick and ban</span></li>
+            <li class="panel"><b>Competitive</b><span>MR12, Silver I to The Global Elite</span></li>
+            <li class="panel"><b>Wingman</b><span>2v2 on the real Wingman maps</span></li>
+            <li class="panel"><b>Deathmatch &amp; Arms Race</b><span>Free-for-all, or a new gun every kill</span></li>
+            <li class="panel online"><b>Online</b><span>Competitive and Wingman against real players. After 2 minutes in the queue, bots fill the empty slots.</span></li>
+            <li class="panel"><b>Private match</b><span>Your map, rules and bot ranks</span></li>
+          </ul>
+          <p class="pay">Every match pays into your wallet: $1,250 for a win or a draw, $500 for a loss, plus $100 a kill, $50 an assist and $250 for each round MVP.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- =========================================================================================== screenshots -->
+    <section id="screenshots" class="band" aria-labelledby="shots-title">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="kicker">Screenshots</span>
+          <h2 id="shots-title">From the game itself</h2>
+          <p>Taken in the game, version 1.1.8, with CS2 installed. The save in them was set up for the pictures, with some rare items added to it; a new save starts with $10. Select one to see it full size.</p>
+        </div>
+        <ul class="gallery">
+          <li><a href="/img/shots/inventory-1600.webp" data-caption="The inventory, with float ranks, Blue Gems, Souvenirs and the equipped knife and gloves">
+            <img src="/img/shots/inventory-800.webp" srcset="/img/shots/inventory-800.webp 800w, /img/shots/inventory-1600.webp 1600w" sizes="(max-width: 620px) 100vw, (max-width: 880px) 100vw, 780px" width="1600" height="900" loading="lazy" alt="The inventory page: a grid of skins with their floats, prices and badges such as #1 Blue Gem and #1 Low">
+            <span class="cap">Your inventory</span></a></li>
+          <li><a href="/img/shots/inspect-1600.webp" data-caption="3D inspect: a StatTrak™ AK-47 | Case Hardened Blue Gem on CS2's own model, with Dust II behind it">
+            <img src="/img/shots/inspect-800.webp" srcset="/img/shots/inspect-800.webp 800w, /img/shots/inspect-1600.webp 1600w" sizes="(max-width: 620px) 100vw, (max-width: 880px) 50vw, 390px" width="1600" height="900" loading="lazy" alt="The 3D inspect of a StatTrak AK-47 Case Hardened, pattern 661, on CS2's own model with a blurred Dust II backdrop">
+            <span class="cap">3D inspect on CS2's own models</span></a></li>
+          <li><a href="/img/shots/crate-1600.webp" data-caption="Opening a Fever Case: CS2's own 3D crate drops in and unlocks before the reel">
+            <img src="/img/shots/crate-800.webp" srcset="/img/shots/crate-800.webp 800w, /img/shots/crate-1600.webp 1600w" sizes="(max-width: 620px) 100vw, (max-width: 880px) 50vw, 390px" width="1600" height="900" loading="lazy" alt="The Fever Case's 3D crate, unlocked and open, its padlock beside it, before the reel">
+            <span class="cap">CS2's 3D crates</span></a></li>
+          <li><a href="/img/shots/match-1600.webp" data-caption="Freeze time at CT spawn on Dust II, with bot teammates and your own gloves on">
+            <img src="/img/shots/match-800.webp" srcset="/img/shots/match-800.webp 800w, /img/shots/match-1600.webp 1600w" sizes="(max-width: 620px) 100vw, (max-width: 880px) 50vw, 390px" width="1600" height="900" loading="lazy" alt="First person at CT spawn on Dust II in freeze time: two bot teammates, the radar, the players' pictures by the round clock, and the equipped Sport Gloves holding a USP-S">
+            <span class="cap">A match on Dust II</span></a></li>
+          <li><a href="/img/shots/lobby-1600.webp" data-caption="Play: matchmaking on the CS2 maps in your install, with CS2's own map pictures">
+            <img src="/img/shots/lobby-800.webp" srcset="/img/shots/lobby-800.webp 800w, /img/shots/lobby-1600.webp 1600w" sizes="(max-width: 620px) 100vw, (max-width: 880px) 50vw, 390px" width="1600" height="900" loading="lazy" alt="The Play page: map tiles from Ancient to Vertigo, and the Premier, Competitive, Wingman, Deathmatch and Arms Race modes">
+            <span class="cap">Play: pick your maps and mode</span></a></li>
+          <li><a href="/img/shots/market-1600.webp" data-caption="The Market: what players list, with each item's float, pattern and price against its reference">
+            <img src="/img/shots/market-800.webp" srcset="/img/shots/market-800.webp 800w, /img/shots/market-1600.webp 1600w" sizes="(max-width: 620px) 100vw, (max-width: 880px) 50vw, 390px" width="1600" height="900" loading="lazy" alt="The Market page: listings with prices, floats on a wear bar and Buy buttons, and filters for exterior, StatTrak, Souvenir and rarity">
+            <span class="cap">The Market</span></a></li>
+          <li><a href="/img/shots/store-1600.webp" data-caption="The Store: the game's own stock of knives, gloves and skins, restocked every 10 minutes">
+            <img src="/img/shots/store-800.webp" srcset="/img/shots/store-800.webp 800w, /img/shots/store-1600.webp 1600w" sizes="(max-width: 620px) 100vw, (max-width: 880px) 50vw, 390px" width="1600" height="900" loading="lazy" alt="The Store page with knives and gloves for sale, most expensive first">
+            <span class="cap">The Store</span></a></li>
+          <li><a href="/img/shots/trading-1600.webp" data-caption="Offline trading: a collector offers cash for your Blue Gem, and you can accept, decline or haggle">
+            <img src="/img/shots/trading-800.webp" srcset="/img/shots/trading-800.webp 800w, /img/shots/trading-1600.webp 1600w" sizes="(max-width: 620px) 100vw, (max-width: 880px) 50vw, 390px" width="1600" height="900" loading="lazy" alt="Friends and chat: a Blue Gem hunter's cash offer for a StatTrak AK-47 Case Hardened, with Accept, Haggle and Decline buttons">
+            <span class="cap">Trading and haggling</span></a></li>
+          <li><a href="/img/shots/tradeup-1600.webp" data-caption="A Trade Up Contract, with its expected value, profit chance and output float">
+            <img src="/img/shots/tradeup-800.webp" srcset="/img/shots/tradeup-800.webp 800w, /img/shots/tradeup-1600.webp 1600w" sizes="(max-width: 620px) 100vw, (max-width: 880px) 50vw, 390px" width="1600" height="900" loading="lazy" alt="The Trade Up page: ten skins in a contract, with its expected value and output float">
+            <span class="cap">Trade Up Contracts</span></a></li>
+          <li><a href="/img/shots/armory-1600.webp" data-caption="The Armory: featured collections that rotate every 10 to 15 minutes, and CS2's charms">
+            <img src="/img/shots/armory-800.webp" srcset="/img/shots/armory-800.webp 800w, /img/shots/armory-1600.webp 1600w" sizes="(max-width: 620px) 100vw, (max-width: 880px) 50vw, 390px" width="1600" height="900" loading="lazy" alt="The Armory page: Armory Stars, four featured collections and the charm collections">
+            <span class="cap">The Armory</span></a></li>
+          <li><a href="/img/shots/database-1600.webp" data-caption="The Item Database: every item in the game, every copy and who owns it">
+            <img src="/img/shots/database-800.webp" srcset="/img/shots/database-800.webp 800w, /img/shots/database-1600.webp 1600w" sizes="(max-width: 620px) 100vw, (max-width: 880px) 50vw, 390px" width="1600" height="900" loading="lazy" alt="The Item Database: a search over 14,005 items with how many copies of each exist">
+            <span class="cap">The Item Database</span></a></li>
+          <li><a href="/img/shots/battle-1600.webp" data-caption="A case battle against bots: virtual money, provably fair, no house edge">
+            <img src="/img/shots/battle-800.webp" srcset="/img/shots/battle-800.webp 800w, /img/shots/battle-1600.webp 1600w" sizes="(max-width: 620px) 100vw, (max-width: 880px) 50vw, 390px" width="1600" height="900" loading="lazy" alt="A case battle in progress between two teams, each opening the same cases">
+            <span class="cap">Case battles</span></a></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ========================================================================================== requirements -->
+    <section id="requirements" aria-labelledby="req-title">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="kicker">Requirements</span>
+          <h2 id="req-title">What you need</h2>
+        </div>
+        <div class="reqs">
+          <div class="panel">
+            <h3>To play</h3>
+            <ul>
+              <li>Windows 10 or 11, 64-bit.</li>
+              <li>An internet connection the first time each item is shown (its picture is downloaded once, then kept), for updates, and for online play.</li>
+              <li>Nothing to pay: the game is free, with no real money and no real items in it.</li>
+            </ul>
+          </div>
+          <div class="panel optional">
+            <h3>With Counter-Strike 2 installed</h3>
+            <ul>
+              <li>Play mode: matches on the maps in your install. Each map is prepared the first time you play it.</li>
+              <li>The real 3D models in the inspect, CS2's map backdrops and first-person inspects.</li>
+              <li>CS2's 3D crates when you open a case. Without CS2, all the rest works just the same.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================================================================================================== faq -->
+    <section id="faq" class="band" aria-labelledby="faq-title">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="kicker">FAQ</span>
+          <h2 id="faq-title">Questions</h2>
+        </div>
+        <div class="faq">
+          <details>
+            <summary>Is it free?</summary>
+            <div class="answer">
+              <p>Yes. The game is free to download and to play, offline and online. There's nothing to buy with real money: every case, key and item is paid for with the game's own virtual money, which you earn in the game, and nothing in it can be cashed out.</p>
+            </div>
+          </details>
+          <details>
+            <summary>Does it touch my Steam account or CS2?</summary>
+            <div class="answer">
+              <p>No. It never asks for your Steam login and has nothing to do with your Steam account or inventory: nothing you get in the game is a real item, and nothing real comes in.</p>
+              <p>If CS2 is installed, the game reads CS2's files on your disk to show its 3D models, maps and sounds, and keeps what it exports in its own folder. It only reads those files: it never changes them, and it never interacts with CS2 itself while CS2 is running. CS2's own files aren't in the download: its models, maps and sounds come from your install. Only a set of charm pictures, rendered from CS2's charms, ships with the game.</p>
+            </div>
+          </details>
+          <details>
+            <summary>Windows or my antivirus warns me about the download. Is it safe?</summary>
+            <div class="answer">
+              <p>The game's exe isn't code-signed, so Windows SmartScreen may say <em>Windows protected your PC</em> the first time you run it after downloading it in your browser. Choose <b>More info</b>, then <b>Run anyway</b>. Some antivirus programs are wary of new, unsigned programs in the same way. Updates the game downloads and installs itself don't normally ask.</p>
+              <p>Download it only from this site or from the <a href="https://github.com/TehZone/CS2CaseSim/releases/latest">releases on GitHub</a>, where every release lists the SHA-256 of each file, and so does its <code>latest.json</code>. Once it's installed, the game updates itself from the same place.</p>
+              <dl class="hashes" data-hashes hidden></dl>
+            </div>
+          </details>
+          <details>
+            <summary>Where are my saves?</summary>
+            <div class="answer">
+              <p>Your offline save is on your PC, in <code>%APPDATA%\CS2 Case Simulator\save.json</code>, next to the cache of what the game exports from CS2 (<code>cs2cache</code>). Paste <code>%APPDATA%\CS2 Case Simulator</code> into File Explorer's address bar to open the folder. The admin panel (More → Admin) can also take snapshots of your offline save, and export and import it.</p>
+              <p>An online account is saved on the game's server, apart from your offline save.</p>
+            </div>
+          </details>
+          <details>
+            <summary>How do online accounts work?</summary>
+            <div class="answer">
+              <p>Click <b>Offline</b> at the top right of the game, pick a username and a password, and choose <b>Create account</b>. An online account starts fresh with $10 and is kept on the server, so you can trade, chat, gamble and queue for matches with other players. Your offline save stays on your PC, and you can switch back to it any time: click your name, then <b>Log out</b>.</p>
+              <p>Only the latest version of the game plays online; it updates itself when a new one is out. Link your Discord account (click your name, then <b>Link Discord</b>) and you can get a code from our Discord server if you ever forget your password.</p>
+            </div>
+          </details>
+          <details>
+            <summary>Do I need CS2 to play?</summary>
+            <div class="answer">
+              <p>No. Cases, the inventory, trading, the Market and Store, trade-ups, the Armory and gambling all work without it, offline and with an online account. Play mode (matches against bots, and online matches against other players), the real 3D models, the inspect's backdrops and the 3D crates need Counter-Strike 2 installed through Steam, because they come from your own copy of the game.</p>
+            </div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================================================= community -->
+    <section aria-labelledby="community-title">
+      <div class="wrap">
+        <div class="panel community">
+          <span class="kicker">Community</span>
+          <h2 id="community-title">Stay in the loop</h2>
+          <p><span data-discord hidden>Join our Discord for release pings, rare drops from online play, and the people you'll be trading with. </span>Every release, with its notes, is on GitHub, and the game tells you itself when there's a new one.</p>
+          <div class="cta">
+            <a class="btn discord big" href="#" data-discord data-discord-link hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.3 4.4A19.6 19.6 0 0 0 15.4 3l-.6 1.3a18.2 18.2 0 0 0-5.6 0L8.6 3a19.5 19.5 0 0 0-4.9 1.5C.6 9.1-.3 13.7.2 18.2a19.8 19.8 0 0 0 6 3l1.3-2a12.8 12.8 0 0 1-2-1l.5-.4a14.1 14.1 0 0 0 12 0l.5.4a12.7 12.7 0 0 1-2 1l1.3 2a19.7 19.7 0 0 0 6-3c.6-5.2-.8-9.8-3.5-13.8zM8 15.4c-1.2 0-2.2-1.1-2.2-2.4S6.8 10.6 8 10.6s2.2 1.1 2.2 2.4-1 2.4-2.2 2.4zm8 0c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4z"/></svg>
+              <span>Join our Discord</span>
+            </a>
+            <a class="btn ghost big" href="https://github.com/TehZone/CS2CaseSim">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.6 22.4c.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0C17 4.3 18 4.6 18 4.6c.6 1.6.2 2.8.1 3.1.7.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6A11.5 11.5 0 0 0 12 .5z"/></svg>
+              <span>GitHub</span>
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <div class="foot-top">
+        <a class="brand" href="/" aria-label="CS2 Case Simulator, home"><img src="/img/icon-64.png" width="32" height="32" alt=""><span>CS2 Case Simulator</span></a>
+        <nav class="foot-links" aria-label="More">
+          <a href="https://github.com/TehZone/CS2CaseSim/releases/latest">Releases</a>
+          <a href="https://github.com/TehZone/CS2CaseSim">GitHub</a>
+          <a href="#" data-discord data-discord-link hidden>Discord</a>
+          <a href="#faq">FAQ</a>
+        </nav>
+      </div>
+      <p class="disclaimer">CS2 Case Simulator is a free, fan-made game. It is not affiliated with or endorsed by Valve Corporation. Counter-Strike, Counter-Strike 2 and CS2 are trademarks of Valve Corporation. No real money and no real items: everything in the game is virtual, and nothing can be bought with real money or cashed out.</p>
+    </div>
+  </footer>
+
+  <dialog class="lightbox" aria-label="Screenshot">
+    <div class="lb-top">
+      <span class="lb-count" data-lb-count></span>
+      <button class="lb-btn" type="button" data-lb-close aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4z"/></svg>
+      </button>
+    </div>
+    <div class="lb-stage" data-lb-stage>
+      <img data-lb-img alt="">
+      <button class="lb-btn lb-prev" type="button" data-lb-prev aria-label="Previous screenshot">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 5.4 14 4l-8 8 8 8 1.4-1.4L8.8 12z"/></svg>
+      </button>
+      <button class="lb-btn lb-next" type="button" data-lb-next aria-label="Next screenshot">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.6 5.4 10 4l8 8-8 8-1.4-1.4 6.6-6.6z"/></svg>
+      </button>
+    </div>
+    <p class="lb-cap" data-lb-cap aria-live="polite"></p>
+  </dialog>
+</body>
+</html>

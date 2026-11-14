@@ -1,0 +1,13 @@
+{
+  "name": "CS2 Case Simulator",
+  "short_name": "CS2 Case Sim",
+  "description": "A free CS2 case opening game for Windows.",
+  "start_url": "/",
+  "display": "browser",
+  "background_color": "#0b0e12",
+  "theme_color": "#0b0e12",
+  "icons": [
+    { "src": "/img/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/img/icon-256.png", "sizes": "256x256", "type": "image/png" }
+  ]
+}

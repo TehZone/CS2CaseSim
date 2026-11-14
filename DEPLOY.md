@@ -115,6 +115,8 @@ showing them, and they never land on a command line, in a log or in the shell's 
   `main` moves on (`sudo cs2-deploy --force` retries it). A deploy cut short (a reboot in the middle of one, say) is
   finished, or gone back from, by the next run a minute later. Pausing the auto-deploy:
   `sudo systemctl stop cs2-deploy.timer` (`start` resumes it). Like Render's auto-deploy, it runs whatever is on `main`.
+  A commit that changes only `website/` isn't deployed to the server (the website has its own sync, below), so
+  `/health` reports the newest commit that changed something else.
 - **A hold:** if the move from Neon or a restore stops halfway, it leaves `/var/lib/cs2-deploy/hold`. While it's there
   the server doesn't start, not even after a reboot, and the deploy and the nightly backup do nothing, because the
   database may be half replaced. Running the same script again to the end removes it; `sudo cs2-status` shows it.
@@ -142,6 +144,41 @@ Where everything is:
 | The last deploy, the commit last seen working, a failed commit, a hold | `/var/lib/cs2-deploy` |
 | Backups and the dump of Neon | `/var/backups/cs2-server` |
 | Caddy's settings | `/etc/caddy/Caddyfile` |
+| The website's clone (only `website/` checked out, owned by the `cs2web` user) | `/opt/cs2-website` |
+
+### The website (cs2casesim.lol)
+
+The game's website is `website/` in this repository: plain HTML, CSS and a little JavaScript, with no build step. The
+VPS serves it with Caddy at the website's domain, with HTTPS, and `www.` redirects to it.
+
+- **DNS:** an A record for the domain itself and one for `www`, both with the VPS's address, and no other A, ALIAS or
+  CNAME record for either (a registrar's parking page is one: on Porkbun, an ALIAS record on the bare domain). Caddy
+  gets both certificates by itself once they point at the VPS.
+- **Setting it up**, once (or to change its domain):
+  `sudo bash /opt/cs2-server/deploy/vps/setup.sh --website cs2casesim.lol`. That does only the website's part: the
+  `cs2web` user, its own sparse clone in `/opt/cs2-website`, `cs2-website.timer`, and the site in the Caddyfile. The
+  server, its deploys and everything else are left as they are. Caddy reloads when its file changed, which closes open
+  WebSockets for a moment: the game reconnects by itself, and online matches pause until their players are back. The
+  whole setup takes the website's domain as its second argument and keeps it from then on; `--website none` takes the
+  site away.
+- **Updates:** push `main`. Within about a minute `cs2-website.timer` checks out the new `website/`, without touching
+  the game server. The server's deploy leaves a push that changes only `website/` alone: nothing restarts, and
+  `/health` keeps reporting the commit the server runs, while `sudo cs2-status` says main is ahead only in `website/`.
+  A push that also changes anything outside `website/` deploys the server as usual. `journalctl -u cs2-website` shows
+  what changed, `sudo cs2-website-sync` runs it now, and `sudo cs2-status` shows the commit the site is on.
+- **What the page reads:** the latest release's version, size and notes come from GitHub's API in each visitor's
+  browser (60 requests an hour per visitor; the answer is kept 15 minutes). When that fails, the page shows the notes
+  written in `index.html`, so update those with a release when you think of it. The download buttons always point at
+  the latest release. Players online come from `/status` on the website, which Caddy passes to the server's `/health`;
+  the page shows only the number, and nothing at all when the server doesn't answer.
+- **The Discord button:** set `DISCORD_INVITE` at the top of `website/js/site.js` to the invite link
+  (`https://discord.gg/...`). While it's empty, every Discord button and link on the site stays hidden.
+- **Caching:** pages are checked on every visit, CSS, JavaScript and images are kept 10 minutes to an hour (a changed
+  image shows for everyone within the hour), and fonts a week. The screenshots are in `website/img/shots/`, as WebP,
+  1600 and 800 pixels wide.
+- **Trying it locally:** any static file server for `website/`, for example `python -m http.server -d website 8000`
+  (the page's links start with `/`, so open it from a server, not as a file). `/status` doesn't answer there, so the
+  players online stay hidden.
 
 ## Play online
 
@@ -267,8 +304,9 @@ every four hours and offers it (`shared/updater.cjs`, `src/js/update.js`). Only 
 2. `npm run dist`. `dist/` then holds the three files of the release: `CS2-Case-Simulator-Setup.exe`,
    `CS2-Case-Simulator.exe` and `latest.json` (the version, the notes, and each exe's size and SHA-256).
 3. Push `main` and wait until `https://<domain>/health` reports the pushed commit: its `commit` is what
-   `git rev-parse HEAD` prints. The VPS deploys within about a minute. If it doesn't show up after a few minutes,
-   `sudo cs2-status` on the VPS says why (a commit that doesn't come up is rolled back, and `journalctl -u cs2-deploy`
+   `git rev-parse HEAD` prints (or, when the newest commits change only `website/`, the newest one before them that
+   changes something else: those aren't deployed to the server). The VPS deploys within about a minute. If it doesn't
+   show up after a few minutes, `sudo cs2-status` on the VPS says why (a commit that doesn't come up is rolled back, and `journalctl -u cs2-deploy`
    has its log). Nobody is locked out by this: the server goes by the published release.
 4. On GitHub: **Releases → Draft a new release**, tag `v<version>`, attach those three files, **Publish release**. A draft
    or a prerelease changes nothing: only publishing does, and only with `latest.json` attached.

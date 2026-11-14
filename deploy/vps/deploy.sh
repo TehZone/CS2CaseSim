@@ -5,7 +5,9 @@
 # it goes back to the commit before and restarts that, so players are never left on a broken server, and it doesn't try
 # the failed commit again until main moves on. It goes by the commit last seen answering /health, not by what's checked
 # out, so a run cut short on the way (a reboot, an npm ci the timeout ended) is finished by the next one. It prints
-# nothing when there's nothing to do; the timer's runs log to the journal (journalctl -u cs2-deploy).
+# nothing when there's nothing to do; the timer's runs log to the journal (journalctl -u cs2-deploy). A main that changed
+# only website/ since the commit running isn't deployed: the website has its own sync (website-sync.sh), and the server
+# isn't restarted for it.
 #   sudo systemctl start cs2-deploy     (a run now, logged like the timer's)
 #   sudo cs2-deploy --force             (in the terminal: also retries a commit that failed)
 # Pulling main runs whatever is on main: the same trust as Render's autoDeploy.
@@ -49,8 +51,17 @@ fi
 # What should run: main, unless main is the commit that failed (then the one before stays).
 target=$new
 if [ "$new" = "$failed" ] && [ "$force" = 0 ]; then target=$prev; fi
+# A main that differs from the commit running only in website/ is left alone: the website's own sync (website-sync.sh,
+# cs2-website.timer) takes that, and restarting the server would only drop everyone onto the same code. /health keeps
+# the commit running, and the next commit that changes anything else deploys as usual (with the website's changes too).
+site_only=0
+if [ "$unfinished" = 0 ] && [ "$target" != "$prev" ] &&
+  git_cs2 diff --quiet "$prev" "$target" -- . ':(exclude)website' 2>/dev/null; then
+  site_only=1
+  rm -f "$CS2_STATE/failed"   # (outside website/, main is the commit running: a commit that failed is behind it)
+fi
 
-if [ "$unfinished" = 0 ] && [ "$target" = "$prev" ]; then
+if [ "$unfinished" = 0 ] && { [ "$target" = "$prev" ] || [ "$site_only" = 1 ]; }; then
   # Nothing to deploy (a failed commit was said when it failed; cs2-status shows it). An install that stopped halfway is
   # redone here: the running server has its modules loaded already, so it needs no restart.
   if npm_needed; then
@@ -63,7 +74,11 @@ if [ "$unfinished" = 0 ] && [ "$target" = "$prev" ]; then
     say "cs2-server had failed and systemd wasn't restarting it: starting $(commit_line "$prev") again"
     server_up start
   fi
-  [ "$force" = 0 ] || say "main is at $(commit_line "$new"); deployed: $(commit_line "$prev")"
+  if [ "$force" = 1 ]; then
+    note=''
+    [ "$site_only" = 0 ] || note=' (only website/ changed since: the website syncs that itself, and the server stays)'
+    say "main is at $(commit_line "$new"); deployed: $(commit_line "$prev")$note"
+  fi
   [ "$fetched" = 1 ] || exit 1   # (the run shows as failed while GitHub can't be reached)
   exit 0
 fi

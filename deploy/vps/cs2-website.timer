@@ -1,0 +1,13 @@
+# cs2-website.timer: runs cs2-website.service a minute after it starts (at boot, or when setup.sh enables it), then a
+# minute after each run ends, so two runs never overlap. setup.sh installs and enables it with the website's domain.
+#   systemctl list-timers cs2-website.timer     sudo systemctl stop cs2-website.timer   (pauses the website's updates)
+[Unit]
+Description=CS2 Case Simulator website: look for changes on main about every minute
+
+[Timer]
+OnActiveSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

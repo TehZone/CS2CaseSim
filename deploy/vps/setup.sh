@@ -5,6 +5,12 @@
 #   sudo bash ~/vps/setup.sh server.example.com
 # It's safe to run again (the database, its password and your settings are kept), for example with a newer copy of the
 # kit: sudo bash /opt/cs2-server/deploy/vps/setup.sh server.example.com. See "Your own server (OVH VPS)" in DEPLOY.md.
+# The game's website (website/ in the repo) comes with a second domain, kept from then on (none takes it away):
+#   sudo bash ~/vps/setup.sh server.example.com example.com     (www.example.com redirects to it)
+# --website sets up only that: its clone and timer (cs2-website, apart from the server's deploys), Caddy's site and its
+# DNS check, with the server's domain from the last setup. The server, PostgreSQL and everything else are left as they
+# are; Caddy reloads only when its file changed:
+#   sudo bash /opt/cs2-server/deploy/vps/setup.sh --website example.com
 set -Eeuo pipefail
 KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib.sh
@@ -15,15 +21,32 @@ NODE_MAJOR=22   # server/package.json: node >= 22 (render.yaml pins 22.12.0)
 PG_NEW=18       # a new install: the newest major apt.postgresql.org ships for noble (19 is only a release candidate there)
 PGDG_FPR=B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8   # PostgreSQL Debian Repository (postgresql.org/download/linux/ubuntu)
 CADDY_FPR=65760C51EDEA2017CEA2CA15155B6D79CA56EA34  # Caddy Web Server (dl.cloudsmith.io/public/caddy/stable/gpg.key)
-KIT_FILES='lib.sh setup.sh deploy.sh backup.sh status.sh migrate-from-neon.sh restore-backup.sh set-discord.sh Caddyfile
-  cs2-server.service cs2-deploy.service cs2-deploy.timer cs2-backup.service cs2-backup.timer'
-COMMANDS='deploy backup status migrate-from-neon restore-backup set-discord'
+KIT_FILES='lib.sh setup.sh deploy.sh backup.sh status.sh migrate-from-neon.sh restore-backup.sh set-discord.sh website-sync.sh
+  Caddyfile cs2-server.service cs2-deploy.service cs2-deploy.timer cs2-backup.service cs2-backup.timer cs2-website.service
+  cs2-website.timer'
+COMMANDS='deploy backup status migrate-from-neon restore-backup set-discord website-sync'
 UNITS='cs2-server.service cs2-deploy.service cs2-deploy.timer cs2-backup.service cs2-backup.timer'
+WEB_UNITS='cs2-website.service cs2-website.timer'   # (installed apart: a change to them never restarts the server)
 
 need_root
+# --website <domain>: only the website's part, with the server's domain from the last setup (kit.conf).
+WEB_ONLY=0
+if [ "${1:-}" = --website ]; then
+  WEB_ONLY=1
+  [ -n "${2:-}" ] || die "Usage: sudo bash $0 --website <the website's domain, for example example.com, or none>"
+  [ -r "$CS2_KIT_CONF" ] || die "$CS2_KIT_CONF is missing: run the whole setup first (sudo bash $0 <domain> $2)."
+  set -- "$(. "$CS2_KIT_CONF" && printf '%s' "${DOMAIN:-}")" "$2"
+fi
+DOMAIN_RE='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,63}|xn--[a-z0-9-]{1,59})$'
 DOMAIN=$(printf '%s' "${1:-}" | tr 'A-Z' 'a-z')
-[[ $DOMAIN =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,63}|xn--[a-z0-9-]{1,59})$ ]] ||
-  die "Usage: sudo bash $0 <domain>   (the server's address, for example server.example.com)"
+[[ $DOMAIN =~ $DOMAIN_RE ]] ||
+  die "Usage: sudo bash $0 <domain> [<website domain>]   (the server's address, for example server.example.com; the website's, for example example.com)"
+SITE_ARG=$(printf '%s' "${2:-}" | tr 'A-Z' 'a-z')
+case $SITE_ARG in
+  '' | none) ;;
+  *) [[ $SITE_ARG =~ $DOMAIN_RE ]] && [ "$SITE_ARG" != "$DOMAIN" ] && [ "www.$SITE_ARG" != "$DOMAIN" ] ||
+       die "The website's domain ($SITE_ARG) must be a domain name other than the server's ($DOMAIN), for example example.com." ;;
+esac
 
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a LC_ALL=C.UTF-8
 cd /
@@ -50,6 +73,145 @@ check_key() {
 }
 restart_needed=0
 
+# What the kit's other scripts need to know.
+write_kit_conf() {
+  put_text "$CS2_KIT_CONF" 0644 "# Written by deploy/vps/setup.sh: what the kit's other scripts need to know.
+DOMAIN=$DOMAIN
+PG_MAJOR=$PG_MAJOR
+SITE_DOMAIN=$SITE
+" || true
+}
+
+# The kit's scripts in $CS2_LIB and its cs2-* commands (copies: nothing restarts for them).
+install_kit() {
+  local f mode c
+  for f in $KIT_FILES; do
+    case $f in *.sh) mode=0755 ;; *) mode=0644 ;; esac
+    put_file "$KIT/$f" "$CS2_LIB/$f" "$mode" || true
+  done
+  for c in $COMMANDS; do ln -sfn "$CS2_LIB/$c.sh" "/usr/local/sbin/cs2-$c"; done
+}
+
+# /etc/caddy/Caddyfile from the kit's template: the server's site, and the website's (between #website{ and #website})
+# when there is one.
+caddyfile() {
+  if [ -n "$SITE" ]; then
+    sed -e '/^#website[{}]$/d' -e "s/__DOMAIN__/$DOMAIN/g" -e "s/__SITE__/$SITE/g" -e "s|__WEBROOT__|$CS2_WEB/website|g" "$KIT/Caddyfile"
+  else
+    sed -e '/^#website{$/,/^#website}$/d' -e "s/__DOMAIN__/$DOMAIN/g" "$KIT/Caddyfile"
+  fi
+}
+
+# Writes the Caddyfile, has Caddy check it, and reloads Caddy only when it changed (a reload closes open WebSockets for
+# a moment: the game reconnects by itself, and online matches pause until their players are back).
+caddy_up() {
+  local changed=0
+  # (Checked before it's written: a file Caddy refuses would stop it at its next restart, an update's say.)
+  caddyfile > "$tmpd/Caddyfile"
+  caddy validate --adapter caddyfile --config "$tmpd/Caddyfile" >"$tmpd/caddy.log" 2>&1 ||
+    { sed 's/^/    | /' "$tmpd/caddy.log" >&2; die "Caddy refuses the new Caddyfile (above): /etc/caddy/Caddyfile is left as it was."; }
+  if put_text /etc/caddy/Caddyfile 0644 "$(cat "$tmpd/Caddyfile")"$'\n'; then changed=1; fi
+  systemctl enable --quiet caddy.service
+  if ! systemctl is-active --quiet caddy.service; then
+    systemctl start caddy.service
+  elif [ "$changed" = 1 ]; then
+    say "reloading Caddy: its file changed (open WebSockets close for a moment, and the game reconnects by itself)"
+    systemctl reload caddy.service
+  fi
+  say "$(caddy version | cut -d' ' -f1) running, /etc/caddy/Caddyfile: $DOMAIN { reverse_proxy 127.0.0.1:$CS2_PORT }${SITE:+, $SITE (the website, from $CS2_WEB/website) and www.$SITE (redirecting to it)}"
+}
+
+# The website: cs2web's clone of website/ (website-sync.sh) and its timer. Nothing here touches the server.
+website_step() {
+  local u changed=0
+  if [ -z "$SITE" ]; then
+    step "The website: none"
+    if systemctl is-enabled --quiet cs2-website.timer 2>/dev/null; then
+      systemctl disable --quiet --now cs2-website.timer
+      say "turned off: cs2-website.timer is stopped, and Caddy no longer serves it ($CS2_WEB is left as it is)"
+    else
+      say "not set up (sudo bash $KIT/setup.sh --website <domain> adds it)"
+    fi
+    return 0
+  fi
+  step "The website ($SITE: website/ from $CS2_BRANCH, in $CS2_WEB, kept up to date by cs2-website.timer)"
+  if ! id "$CS2_WEB_USER" >/dev/null 2>&1; then
+    useradd --system --user-group --home-dir "$CS2_WEB_HOME" --create-home --shell /usr/sbin/nologin "$CS2_WEB_USER"
+    say "created the system user $CS2_WEB_USER (no login shell)"
+  fi
+  install -d -m 0750 -o "$CS2_WEB_USER" -g "$CS2_WEB_USER" "$CS2_WEB_HOME"
+  install -d -m 0755 -o "$CS2_WEB_USER" -g "$CS2_WEB_USER" "$CS2_WEB"
+  for u in $WEB_UNITS; do
+    if put_file "$KIT/$u" "/etc/systemd/system/$u" 0644; then changed=1; fi
+  done
+  [ "$changed" = 0 ] || systemctl daemon-reload
+  # A first run now (the clone, or main's latest), then the timer's every minute.
+  systemctl reset-failed cs2-website.service 2>/dev/null || true
+  if systemctl start cs2-website.service; then
+    say "checked out: $(git_web log -1 --format='%h %s' 2>/dev/null || printf 'nothing yet')"
+  else
+    warn "the first run failed (journalctl -u cs2-website -n 30): the timer tries again every minute"
+  fi
+  [ -f "$CS2_WEB/website/index.html" ] || warn "$CS2_WEB/website/index.html isn't there: the site answers 404 until main has website/."
+  systemctl enable --quiet --now cs2-website.timer
+  [ "$changed" = 0 ] || systemctl restart cs2-website.timer
+  say "cs2-website.timer on: about every minute (journalctl -u cs2-website; sudo cs2-website-sync runs it now)"
+}
+
+# Whether name $1 points at this machine and only here (A; AAAA only if it's this machine's too): Caddy needs that to
+# get its certificate. Warns and fails when it doesn't.
+points_here() {
+  local mine4 mine6 dns4 dns6 other
+  mine4=$(ip -4 -o addr show scope global | awk '{ split($4, a, "/"); print a[1] }' | sort -u)
+  mine6=$(ip -6 -o addr show scope global | awk '{ split($4, a, "/"); print a[1] }' | sort -u)
+  dns4=$( (getent ahostsv4 "$1" || true) | awk '{ print $1 }' | sort -u)
+  dns6=$( (getent ahostsv6 "$1" || true) | awk '$1 !~ /^::ffff:/ { print $1 }' | sort -u)
+  if [ -z "$dns4" ]; then
+    warn "$1 has no A record yet: add one pointing at $(printf '%s\n' "$mine4" | head -n 1) (DNS only, no proxy)."
+    return 1
+  fi
+  other=$(printf '%s\n' "$dns4" | grep -vxF -f <(printf '%s\n' "$mine4") || true)
+  if [ -n "$other" ]; then
+    warn "$1 points at $(printf '%s ' $dns4)instead of only at this server: it needs one A record, $(printf '%s\n' "$mine4" | head -n 1), and no other A, ALIAS or CNAME record (a registrar's parking page is one)."
+    return 1
+  fi
+  other=$(printf '%s\n' "$dns6" | grep -vxF -f <(printf '%s\n' "${mine6:-none}") || true)
+  if [ -n "$dns6" ] && [ -n "$other" ]; then
+    warn "$1 also has an AAAA record ($(printf '%s ' $other)) that isn't this server: remove it, or Let's Encrypt may check the wrong machine."
+    return 1
+  fi
+  say "$1: $(printf '%s ' $dns4 $dns6)(this server)"
+}
+
+# The website's names in DNS, then its HTTPS (the certificates come by themselves once DNS points here).
+site_dns_step() {
+  local ok=1 code loc online
+  [ -n "$SITE" ] || return 0
+  step "DNS and HTTPS for the website ($SITE and www.$SITE)"
+  points_here "$SITE" || ok=0
+  points_here "www.$SITE" || ok=0
+  if [ "$ok" = 0 ]; then
+    warn "Caddy gets the website's certificates by itself once DNS points here, retrying less and less often: after fixing DNS, sudo systemctl reload caddy makes it try at once."
+    return 0
+  fi
+  say "waiting for Caddy's certificates (up to 2 minutes)..."
+  code=''
+  for _ in $(seq 1 24); do
+    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 --resolve "$SITE:443:127.0.0.1" "https://$SITE/" 2>/dev/null) || code=''
+    [ -z "$code" ] || [ "$code" = 000 ] || break
+    sleep 5
+  done
+  if [ -z "$code" ] || [ "$code" = 000 ]; then
+    warn "https://$SITE/ doesn't answer yet: see journalctl -u caddy -n 50."
+    return 0
+  fi
+  say "https://$SITE/ answers ($code), with a valid certificate"
+  loc=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 8 --resolve "www.$SITE:443:127.0.0.1" "https://www.$SITE/" 2>/dev/null) || loc='no answer'
+  say "https://www.$SITE/: $loc"
+  online=$(curl -fsS --max-time 8 --resolve "$SITE:443:127.0.0.1" "https://$SITE/status" 2>/dev/null | json_get online) || online=''
+  say "https://$SITE/status: ${online:-NO ANSWER} players online"
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 step "Checking this machine and the kit"
 os=$(. /etc/os-release && printf '%s %s' "${ID:-}" "${VERSION_CODENAME:-}")
@@ -64,10 +226,33 @@ for f in $KIT_FILES; do
   ! grep -q $'\r' "$KIT/$f" || die "$KIT/$f has Windows line endings: fix them with  sed -i 's/\r\$//' $KIT/*  and run this again."
 done
 say "Ubuntu 24.04 ($(dpkg --print-architecture)), domain $DOMAIN, kit in $KIT"
+SITE_KEPT=''
 if [ -r "$CS2_KIT_CONF" ]; then
   PG_MAJOR=$(. "$CS2_KIT_CONF" && printf '%s' "${PG_MAJOR:-}")
+  SITE_KEPT=$(. "$CS2_KIT_CONF" && printf '%s' "${SITE_DOMAIN:-}")
 fi
 PG_MAJOR=${PG_MAJOR:-$PG_NEW}
+# The website's domain: the one given, else the last setup's (none takes it away).
+case $SITE_ARG in '') SITE=$SITE_KEPT ;; none) SITE='' ;; *) SITE=$SITE_ARG ;; esac
+say "the website: ${SITE:-none}"
+
+if [ "$WEB_ONLY" = 1 ]; then
+  # Only the website: Caddy and the rest are already set up (by the whole setup), and nothing else changes here.
+  command -v caddy >/dev/null 2>&1 && [ -d "$CS2_LIB" ] || die "Caddy or $CS2_LIB is missing: run the whole setup first (sudo bash $0 $DOMAIN ${SITE:-none})."
+  write_kit_conf
+  step "The kit's scripts ($CS2_LIB, commands cs2-*)"
+  install_kit
+  say "commands: $(for c in $COMMANDS; do printf 'cs2-%s ' "$c"; done)"
+  website_step
+  step "Caddy (HTTPS for $DOMAIN, passing everything on to 127.0.0.1:$CS2_PORT${SITE:+, and the website})"
+  caddy_up
+  site_dns_step
+  step "Done: the website only (the server, its deploys and everything else are as they were)"
+  if [ -n "$SITE" ]; then
+    say "https://$SITE/ (www.$SITE redirects to it). Updates: within a minute of a push to main (journalctl -u cs2-website)."
+  fi
+  exit 0
+fi
 
 if command -v cloud-init >/dev/null 2>&1; then
   step "Waiting for the first-boot setup (cloud-init) to finish"
@@ -268,18 +453,11 @@ unset db_pw
 [ "$(sha256sum < "$CS2_ENV")" = "$env_before" ] || restart_needed=1
 say "NODE_ENV=production HOST=127.0.0.1 PORT=$CS2_PORT TRUST_PROXY=1 DATABASE_URL=postgres://cs2:***@127.0.0.1:$pg_port/$CS2_DB"
 say "players in the database: $(local_players)"
-put_text "$CS2_KIT_CONF" 0644 "# Written by deploy/vps/setup.sh: what the kit's other scripts need to know.
-DOMAIN=$DOMAIN
-PG_MAJOR=$PG_MAJOR
-" || true
+write_kit_conf
 
 # ---------------------------------------------------------------------------------------------------------------------
 step "The kit's scripts ($CS2_LIB, commands cs2-*) and systemd units"
-for f in $KIT_FILES; do
-  case $f in *.sh) mode=0755 ;; *) mode=0644 ;; esac
-  put_file "$KIT/$f" "$CS2_LIB/$f" "$mode" || true
-done
-for c in $COMMANDS; do ln -sfn "$CS2_LIB/$c.sh" "/usr/local/sbin/cs2-$c"; done
+install_kit
 units_changed=0
 for u in $UNITS; do
   if put_file "$KIT/$u" "/etc/systemd/system/$u" 0644; then units_changed=1; fi
@@ -333,20 +511,12 @@ else
   warn "the first backup failed: journalctl -u cs2-backup -n 30"
 fi
 
+website_step
+
 # ---------------------------------------------------------------------------------------------------------------------
-step "Caddy (HTTPS for $DOMAIN, passing everything on to 127.0.0.1:$CS2_PORT)"
+step "Caddy (HTTPS for $DOMAIN, passing everything on to 127.0.0.1:$CS2_PORT${SITE:+, and the website})"
 apt_get install caddy
-caddy_changed=0
-if put_text /etc/caddy/Caddyfile 0644 "$(sed "s/__DOMAIN__/$DOMAIN/g" "$KIT/Caddyfile")"$'\n'; then caddy_changed=1; fi
-caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile >"$tmpd/caddy.log" 2>&1 ||
-  { sed 's/^/    | /' "$tmpd/caddy.log" >&2; die "Caddy refuses /etc/caddy/Caddyfile (above)."; }
-systemctl enable --quiet caddy.service
-if ! systemctl is-active --quiet caddy.service; then
-  systemctl start caddy.service
-elif [ "$caddy_changed" = 1 ]; then
-  systemctl reload caddy.service
-fi
-say "$(caddy version | cut -d' ' -f1) running, /etc/caddy/Caddyfile: $DOMAIN { reverse_proxy 127.0.0.1:$CS2_PORT }"
+caddy_up
 
 step "DNS and HTTPS for $DOMAIN"
 mine4=$(ip -4 -o addr show scope global | awk '{ split($4, a, "/"); print a[1] }' | sort -u)
@@ -387,6 +557,7 @@ if [ "$https_ok" = 1 ]; then
 else
   warn "https://$DOMAIN/health doesn't answer yet. Once DNS points here Caddy gets the certificate by itself; see journalctl -u caddy -n 50."
 fi
+site_dns_step
 
 # ---------------------------------------------------------------------------------------------------------------------
 step "SSH: keys only, no root login"
@@ -436,3 +607,4 @@ Setup finished. Next (DEPLOY.md, "The move from Render and Neon"):
   - Suspend the Render service, then:  sudo cs2-migrate-from-neon   and   sudo cs2-set-discord
   - Any time:  sudo cs2-status    Logs:  journalctl -u cs2-server -f    Deploys:  journalctl -u cs2-deploy
 EOF
+[ -z "$SITE" ] || say "The website: https://$SITE/ (www.$SITE redirects to it), up to date within a minute of a push to main: journalctl -u cs2-website"

@@ -22,6 +22,10 @@ CS2_LOCK=/run/lock/cs2-server.lock    # one job at a time: a deploy, a backup, t
 CS2_PORT=8787
 CS2_DB=cs2
 CS2_PATH=/usr/local/bin:/usr/bin:/bin
+# The website (website/ in the repo; website-sync.sh), apart from the server: its own clone, user and timer.
+CS2_WEB=/opt/cs2-website              # a sparse clone with only website/ checked out (owned by cs2web); Caddy serves its website/
+CS2_WEB_HOME=/var/lib/cs2-website     # the cs2web user's home: the sync's lock
+CS2_WEB_USER=cs2web
 
 # ---- output and errors -----------------------------------------------------------------------------------------------
 CS2_STEP='starting'
@@ -66,6 +70,11 @@ as_cs2_in() { local dir=$1; shift; runuser -u cs2 -- env -C "$dir" HOME="$CS2_HO
 git_cs2() { as_cs2_in "$CS2_REPO" git "$@"; }
 # "abc1234 subject" of a commit.
 commit_line() { git_cs2 log -1 --format='%h %s' "$1" 2>/dev/null || printf '%s' "${1:0:7}"; }
+# git in the website's clone as cs2web (from root, or as cs2web itself: website-sync.sh under its timer).
+git_web() {
+  if [ "$(id -un)" = "$CS2_WEB_USER" ]; then git -C "$CS2_WEB" "$@"; return; fi
+  runuser -u "$CS2_WEB_USER" -- env -C "$CS2_WEB" HOME="$CS2_WEB_HOME" PATH="$CS2_PATH" git "$@"
+}
 
 # npm ci --omit=dev in server/ (as on Render) when server/package.json or package-lock.json changed since the last
 # install that finished, or nothing is installed. NPM_RAN=1 when it ran.
