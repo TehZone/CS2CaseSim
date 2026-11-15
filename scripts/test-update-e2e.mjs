@@ -307,7 +307,11 @@ async function run() {
   await seed.close();
   const badgesFile = path.join(ROOT, 'src', 'data', 'badges.json');
   const badges = fs.existsSync(badgesFile) ? { ...JSON.parse(fs.readFileSync(badgesFile, 'utf8')), app: NEW } : false;
-  game = await startServer({ port: 0, db: { dataDir: dbDir }, badges, log: () => {}, priceRefresh: false, discord: false, admins: ['e2e_staff'], release: { feed: `http://127.0.0.1:${feed.address().port}/latest.json`, every: 3600000 } });
+  // (Custom content the same way, since 1.1.10 ships some: server/index.mjs customGate runs it once the version it's
+  // stamped with is out, and the builds carry it.)
+  const customFile = path.join(ROOT, 'src', 'data', 'custom.json');
+  const custom = fs.existsSync(customFile) ? { ...JSON.parse(fs.readFileSync(customFile, 'utf8')), app: NEW } : null;
+  game = await startServer({ port: 0, db: { dataDir: dbDir }, badges, custom, log: () => {}, priceRefresh: false, discord: false, admins: ['e2e_staff'], release: { feed: `http://127.0.0.1:${feed.address().port}/latest.json`, every: 3600000 } });
   await until(() => game.srv.release.required === NEW, 15000, 'the server to read the release');
   await clearData();
   try {
