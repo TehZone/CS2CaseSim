@@ -1,0 +1,44 @@
+{
+  "name": "★ Huntsman Knife | Reactor",
+  "float": [
+    0,
+    0.08
+  ],
+  "prices": {
+    "FN": 737.31,
+    "MW": 892.99
+  },
+  "pricesStatTrak": {
+    "FN": 905.87,
+    "MW": 922.93
+  },
+  "finish": {
+    "style": "Anodized Multicolored",
+    "colors": [
+      "#033300",
+      "#084200",
+      "#2c6100",
+      "#66ff00"
+    ],
+    "scale": 1.9,
+    "rotation": [
+      0,
+      90
+    ],
+    "offset": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ],
+    "ignoreWeaponSize": true,
+    "roughness": 0.25,
+    "pearlescence": 0.15
+  },
+  "iconSeed": 161,
+  "iconFloat": 0
+}

@@ -1,0 +1,49 @@
+{
+  "name": "★ Gut Knife | Toxic Waste",
+  "float": [
+    0,
+    1
+  ],
+  "prices": {
+    "FN": 1536.45,
+    "MW": 831.26,
+    "FT": 660,
+    "WW": 630.67,
+    "BS": 589.78
+  },
+  "pricesStatTrak": {
+    "FN": 4317.72,
+    "MW": 1173.91,
+    "FT": 791.34,
+    "WW": 894.97,
+    "BS": 804.49
+  },
+  "finish": {
+    "style": "Patina",
+    "colors": [
+      "#c9ced3",
+      "#8ea0b6",
+      "#b49a62",
+      "#2b2a28"
+    ],
+    "rotation": [
+      0,
+      360
+    ],
+    "offset": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ],
+    "roughness": 0,
+    "scale": 2.5,
+    "pearlescence": 0.6
+  },
+  "iconSeed": 0,
+  "iconFloat": 0.01
+}

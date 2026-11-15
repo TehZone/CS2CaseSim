@@ -1,0 +1,41 @@
+{
+  "name": "P250 | Toxic Drip",
+  "rarity": "Mil-Spec",
+  "float": [
+    0,
+    0.08
+  ],
+  "prices": {
+    "FN": 45,
+    "MW": 22
+  },
+  "patternRule": "Fade",
+  "finish": {
+    "style": "Anodized Airbrushed",
+    "colors": [
+      "#252524",
+      "#700000",
+      "#77b300",
+      "#296600"
+    ],
+    "scale": 1,
+    "rotation": [
+      -55,
+      -65
+    ],
+    "offset": [
+      [
+        0.1,
+        0.2
+      ],
+      [
+        0.1,
+        0.2
+      ]
+    ],
+    "ignoreWeaponSize": true,
+    "roughness": 0.25
+  },
+  "iconSeed": 201,
+  "iconFloat": 0
+}

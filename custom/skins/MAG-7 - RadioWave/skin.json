@@ -1,0 +1,27 @@
+{
+  "name": "MAG-7 | RadioWave",
+  "rarity": "Mil-Spec",
+  "float": [
+    0,
+    1
+  ],
+  "prices": {
+    "FN": 23,
+    "MW": 17,
+    "FT": 12,
+    "WW": 8,
+    "BS": 4
+  },
+  "finish": {
+    "style": "Hydrographic",
+    "colors": [
+      "#363e37",
+      "#32a22a",
+      "#3e7e52",
+      "#83af83"
+    ],
+    "scale": 1.5
+  },
+  "iconSeed": 201,
+  "iconFloat": 0
+}

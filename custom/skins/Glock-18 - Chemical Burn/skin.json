@@ -1,0 +1,28 @@
+{
+  "name": "Glock-18 | Chemical Burn",
+  "rarity": "Classified",
+  "float": [
+    0,
+    1
+  ],
+  "prices": {
+    "FN": 263,
+    "MW": 158,
+    "FT": 94,
+    "WW": 74,
+    "BS": 32
+  },
+  "finish": {
+    "style": "Hydrographic",
+    "colors": [
+      "#009e1a",
+      "#0a3d00",
+      "#497000",
+      "#102301"
+    ],
+    "scale": 5,
+    "pearlescence": 0.4
+  },
+  "iconSeed": 201,
+  "iconFloat": 0
+}

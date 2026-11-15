@@ -1,0 +1,26 @@
+{
+  "name": "MAC-10 | Corrosion",
+  "rarity": "Mil-Spec",
+  "float": [
+    0,
+    1
+  ],
+  "prices": {
+    "FN": 24,
+    "MW": 18,
+    "FT": 13,
+    "WW": 9,
+    "BS": 0.34
+  },
+  "finish": {
+    "style": "Hydrographic",
+    "colors": [
+      "#513d2d",
+      "#624b39",
+      "#5f5a51",
+      "#765942"
+    ]
+  },
+  "iconSeed": 161,
+  "iconFloat": 0
+}

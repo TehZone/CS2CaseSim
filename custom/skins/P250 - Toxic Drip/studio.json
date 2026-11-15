@@ -1,0 +1,10 @@
+{
+  "about": "CS2 Skin Studio's notes on this item (the build ignores this file).",
+  "preset": "fade",
+  "textures": {
+    "color": {
+      "ai": true
+    }
+  },
+  "sharedTextures": true
+}

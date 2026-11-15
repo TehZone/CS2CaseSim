@@ -1,0 +1,45 @@
+{
+  "name": "★ Bayonet | Radioactive Doppler",
+  "float": [
+    0,
+    0.08
+  ],
+  "prices": {
+    "FN": 6762.06,
+    "MW": 6875.36
+  },
+  "pricesStatTrak": {
+    "FN": 7024.67,
+    "MW": 8182.9
+  },
+  "phase": "Ruby",
+  "finish": {
+    "style": "Anodized Multicolored",
+    "colors": [
+      "#1a0a0a",
+      "#772222",
+      "#9e6161",
+      "#ff0000"
+    ],
+    "rotation": [
+      0,
+      360
+    ],
+    "offset": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ],
+    "ignoreWeaponSize": true,
+    "roughness": 0.2,
+    "pearlescence": 0.2,
+    "scale": 2
+  },
+  "iconSeed": 0,
+  "iconFloat": 0.01
+}

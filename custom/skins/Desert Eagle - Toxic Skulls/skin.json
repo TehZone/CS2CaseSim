@@ -1,0 +1,28 @@
+{
+  "name": "Desert Eagle | Toxic Skulls",
+  "rarity": "Classified",
+  "float": [
+    0,
+    1
+  ],
+  "prices": {
+    "FN": 215,
+    "MW": 134,
+    "FT": 75,
+    "WW": 43,
+    "BS": 22
+  },
+  "finish": {
+    "style": "Hydrographic",
+    "colors": [
+      "#242320",
+      "#0e3300",
+      "#065c00",
+      "#0a9400"
+    ],
+    "scale": 4.5,
+    "pearlescence": 1
+  },
+  "iconSeed": 201,
+  "iconFloat": 0
+}

@@ -1,0 +1,28 @@
+{
+  "name": "M4A1-S | Reactor Meltdown",
+  "rarity": "Covert",
+  "float": [
+    0,
+    1
+  ],
+  "prices": {
+    "FN": 752,
+    "MW": 451,
+    "FT": 215,
+    "WW": 208.91,
+    "BS": 206.87
+  },
+  "finish": {
+    "style": "Hydrographic",
+    "colors": [
+      "#3b352d",
+      "#55d35f",
+      "#129900",
+      "#114d00"
+    ],
+    "scale": 4.45,
+    "pearlescence": 0.5
+  },
+  "iconSeed": 201,
+  "iconFloat": 0
+}

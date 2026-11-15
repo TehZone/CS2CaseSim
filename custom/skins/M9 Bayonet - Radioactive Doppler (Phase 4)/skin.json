@@ -1,0 +1,45 @@
+{
+  "name": "★ M9 Bayonet | Radioactive Doppler",
+  "float": [
+    0,
+    0.08
+  ],
+  "prices": {
+    "FN": 1141.35,
+    "MW": 1255.5
+  },
+  "pricesStatTrak": {
+    "FN": 1170.62,
+    "MW": 1232.55
+  },
+  "phase": "Phase 4",
+  "finish": {
+    "style": "Anodized Multicolored",
+    "colors": [
+      "#1a120a",
+      "#774b22",
+      "#9e3f00",
+      "#dc592e"
+    ],
+    "rotation": [
+      -50,
+      -70
+    ],
+    "offset": [
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        1
+      ]
+    ],
+    "ignoreWeaponSize": true,
+    "roughness": 0.24,
+    "pearlescence": 0.15,
+    "scale": 2
+  },
+  "iconSeed": 0,
+  "iconFloat": 0.01
+}

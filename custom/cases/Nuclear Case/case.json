@@ -1,0 +1,61 @@
+{
+  "name": "Nuclear Case",
+  "price": 30,
+  "key": true,
+  "date": "2026-11-15",
+  "collection": "The Nuclear Collection",
+  "items": {
+    "Mil-Spec": [
+      "AK-47 | Radiation",
+      "MAC-10 | Corrosion",
+      "P250 | Toxic Drip",
+      "MAG-7 | RadioWave"
+    ],
+    "Restricted": [
+      "Five-SeveN | Toxic Crystal",
+      "AWP | Toxic Bacteria"
+    ],
+    "Covert": [
+      "USP-S | Radiated Gas",
+      "M4A1-S | Reactor Meltdown"
+    ],
+    "Classified": [
+      "Desert Eagle | Toxic Skulls",
+      "Glock-18 | Chemical Burn"
+    ]
+  },
+  "rare": [
+    "★ Bayonet | Magma",
+    "★ Butterfly Knife | Magma",
+    "★ Flip Knife | Magma",
+    "★ Gut Knife | Magma",
+    "★ Huntsman Knife | Magma",
+    "★ Karambit | Magma",
+    "★ M9 Bayonet | Magma",
+    "★ Bayonet | Toxic Waste",
+    "★ Butterfly Knife | Toxic Waste",
+    "★ Flip Knife | Toxic Waste",
+    "★ Gut Knife | Toxic Waste",
+    "★ Huntsman Knife | Toxic Waste",
+    "★ Karambit | Toxic Waste",
+    "★ M9 Bayonet | Toxic Waste",
+    "★ Bayonet | Reactor",
+    "★ Flip Knife | Reactor",
+    "★ Huntsman Knife | Reactor",
+    "★ M9 Bayonet | Reactor",
+    "★ Butterfly Knife | Reactor",
+    "★ Gut Knife | Reactor",
+    "★ Karambit | Reactor",
+    "★ Bayonet | Radioactive Doppler",
+    "★ Flip Knife | Radioactive Doppler",
+    "★ Huntsman Knife | Radioactive Doppler",
+    "★ M9 Bayonet | Radioactive Doppler",
+    "★ Butterfly Knife | Radioactive Doppler",
+    "★ Gut Knife | Radioactive Doppler",
+    "★ Karambit | Radioactive Doppler"
+  ],
+  "crate": {
+    "base": "Fever Case"
+  },
+  "levelDrops": true
+}

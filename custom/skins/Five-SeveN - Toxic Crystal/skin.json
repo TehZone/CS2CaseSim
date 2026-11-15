@@ -1,0 +1,41 @@
+{
+  "name": "Five-SeveN | Toxic Crystal",
+  "rarity": "Restricted",
+  "float": [
+    0,
+    1
+  ],
+  "prices": {
+    "FN": 58,
+    "MW": 31,
+    "FT": 17,
+    "WW": 9,
+    "BS": 4
+  },
+  "finish": {
+    "style": "Spray-Paint",
+    "colors": [
+      "#37ff00",
+      "#0f2108",
+      "#16530e",
+      "#022204"
+    ],
+    "offset": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ],
+    "rotation": [
+      0,
+      0
+    ],
+    "scale": 2
+  },
+  "iconSeed": 161,
+  "iconFloat": 0
+}

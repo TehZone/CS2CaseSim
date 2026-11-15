@@ -1,0 +1,26 @@
+{
+  "about": "CS2 Skin Studio's notes on this item (the build ignores this file).",
+  "preset": "caseHardened",
+  "textures": {
+    "color": {
+      "gen": "mottled",
+      "params": {
+        "seed": 7,
+        "scale": 4,
+        "detail": 6,
+        "amount": 0.44,
+        "softness": 0.17,
+        "warp": 1.65
+      },
+      "size": 2048,
+      "mode": "color",
+      "colors": [
+        "#0a9400",
+        "#016003",
+        "#0ba800",
+        "#033300"
+      ]
+    }
+  },
+  "sharedTextures": true
+}

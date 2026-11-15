@@ -1,0 +1,22 @@
+{
+  "about": "CS2 Skin Studio's notes on this item (the build ignores this file).",
+  "preset": "marbleFade",
+  "textures": {
+    "color": {
+      "gen": "smoke",
+      "params": {
+        "seed": 916,
+        "scale": 6,
+        "detail": 7,
+        "warp": 2,
+        "coverage": 0.28,
+        "softness": 0.17,
+        "intensity": 1,
+        "wisps": 0
+      },
+      "size": 2048,
+      "mode": "mask"
+    }
+  },
+  "sharedTextures": true
+}

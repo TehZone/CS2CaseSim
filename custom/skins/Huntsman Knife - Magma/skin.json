@@ -1,0 +1,44 @@
+{
+  "name": "★ Huntsman Knife | Magma",
+  "float": [
+    0,
+    0.08
+  ],
+  "prices": {
+    "FN": 922.11,
+    "MW": 1134.67
+  },
+  "pricesStatTrak": {
+    "FN": 1065.43,
+    "MW": 1494.64
+  },
+  "finish": {
+    "style": "Anodized Multicolored",
+    "colors": [
+      "#343131",
+      "#ff0000",
+      "#db4335",
+      "#520000"
+    ],
+    "scale": 0.8,
+    "rotation": [
+      -50,
+      -70
+    ],
+    "offset": [
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ]
+    ],
+    "ignoreWeaponSize": true,
+    "roughness": 0,
+    "pearlescence": 0.25
+  },
+  "iconSeed": 0,
+  "iconFloat": 0
+}

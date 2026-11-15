@@ -1,0 +1,26 @@
+{
+  "name": "AK-47 | Radiation",
+  "rarity": "Mil-Spec",
+  "float": [
+    0,
+    1
+  ],
+  "prices": {
+    "FN": 28,
+    "MW": 21,
+    "FT": 16,
+    "WW": 11,
+    "BS": 7
+  },
+  "finish": {
+    "style": "Hydrographic",
+    "colors": [
+      "#314b1a",
+      "#507631",
+      "#7d9d3a",
+      "#b6ce3f"
+    ]
+  },
+  "iconSeed": 161,
+  "iconFloat": 0
+}

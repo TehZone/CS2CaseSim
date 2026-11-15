@@ -1,0 +1,45 @@
+{
+  "name": "★ Gut Knife | Radioactive Doppler",
+  "float": [
+    0,
+    0.08
+  ],
+  "prices": {
+    "FN": 4096.58,
+    "MW": 4483.93
+  },
+  "pricesStatTrak": {
+    "FN": 4684.53,
+    "MW": 6248.76
+  },
+  "phase": "Sapphire",
+  "finish": {
+    "style": "Anodized Multicolored",
+    "colors": [
+      "#0a111a",
+      "#224377",
+      "#61709e",
+      "#002aff"
+    ],
+    "rotation": [
+      0,
+      360
+    ],
+    "offset": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ],
+    "ignoreWeaponSize": true,
+    "roughness": 0.2,
+    "pearlescence": -0.2,
+    "scale": 2
+  },
+  "iconSeed": 0,
+  "iconFloat": 0.01
+}

@@ -1,0 +1,28 @@
+{
+  "name": "USP-S | Radiated Gas",
+  "rarity": "Covert",
+  "float": [
+    0,
+    1
+  ],
+  "prices": {
+    "FN": 754,
+    "MW": 453,
+    "FT": 275,
+    "WW": 208.91,
+    "BS": 206.87
+  },
+  "finish": {
+    "style": "Spray-Paint",
+    "colors": [
+      "#000000",
+      "#229103",
+      "#7fc22e",
+      "#8ca880"
+    ],
+    "pearlescence": 1,
+    "scale": 0.9,
+    "roughness": 0.3
+  },
+  "iconSeed": 182
+}
