@@ -1,6 +1,8 @@
 // The item database (like CSFloat's): every item in the game, every copy of it players hold, and the float ranks among
 // those copies. Pure: the page (pages/database.js) and the server (its db.* requests) share it.
 
+import { nameColor } from './items.js';
+
 // The kinds of item it covers, as inventory items' t.
 export const DB_TYPES = ['skin', 'sticker', 'charm', 'agent', 'tool', 'badge'];
 export const itemKey = (item) => item.t + ':' + item.id;
@@ -104,7 +106,9 @@ export function byPattern(a, b) {
 }
 
 // What the database shows of a copy (and the server sends): the item without what's only its owner's business.
+// (nc: its name's colour, see namecolor.js, as items.js nameColor reads it: only a colour, and only with the name it goes
+// with, so a copy without one stays as it always was.)
 export function publicCopy(item) {
-  const { uid, t, id, fl, sd, stt, sv, stk, kills, sn, at, name } = item;
-  return { uid, t, id, fl, sd, stt, sv, stk, kills, sn, at, name };
+  const { uid, t, id, fl, sd, stt, sv, stk, kills, sn, at, name } = item, nc = nameColor(item);
+  return { uid, t, id, fl, sd, stt, sv, stk, kills, sn, at, name, ...(nc ? { nc } : {}) };
 }

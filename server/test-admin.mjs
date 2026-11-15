@@ -1110,9 +1110,9 @@ try {
     const [s1, s2, s3] = nc.st.inv.filter((i) => i.t === 'skin');
     const unit = nc.st.inv.find((i) => i.t === 'unit');
     const name = '@everyone **hi**';
-    await nc.act('tools.name', { uid: s1.uid, name });
+    await nc.act('tools.name', { uid: s1.uid, name, nc: 'ff5c5c' });
     await nc.act('tools.name', { uid: s2.uid, name: 'in a unit' });
-    await nc.act('tools.name', { uid: s3.uid, name: 'in an offer' });
+    await nc.act('tools.name', { uid: s3.uid, name: 'in an offer', nc: '5cd6ff' });
     await nc.act('storage.name', { unit: unit.uid, name: 'box' });
     await nc.act('storage.deposit', { unit: unit.uid, uids: [s2.uid] });
     const offer = await nc.rpc('trade', 'offer', { to: 'tradepal', give: { uids: [s3.uid], money: 0 }, get: { uids: [], money: 0 } });
@@ -1128,6 +1128,8 @@ try {
     const log = await lastAudit('items.unname');
     check('panel: a moderator clears a bad name: it\'s gone from memory, the database and the player\'s game', cleared.cleared === name && !(await server.store.load(nid)).st.inv.find((i) => i.uid === s1.uid).name
       && !(await dbState(nid)).inv.find((i) => i.uid === s1.uid).name && !('name' in nc.st.inv.find((i) => i.uid === s1.uid)));
+    check('panel: and the name\'s colour goes with it, everywhere', !('nc' in (await server.store.load(nid)).st.inv.find((i) => i.uid === s1.uid)) && !('nc' in (await dbState(nid)).inv.find((i) => i.uid === s1.uid))
+      && !('nc' in nc.st.inv.find((i) => i.uid === s1.uid)));
     check('panel: and it\'s in the audit log, name and all', log?.actor === 'tidymod' && log.target_name === 'namer' && log.detail.name === name && log.detail.uid === s1.uid && log.detail.item === sk.n, JSON.stringify(log?.detail));
     await until(() => mock.messages.some((m) => m.channel === mock.modLogChannel && m.body.embeds?.[0]?.title === 'Item name cleared'));
     const posted = mock.messages.find((m) => m.channel === mock.modLogChannel && m.body.embeds?.[0]?.title === 'Item name cleared');
@@ -1146,6 +1148,7 @@ try {
     const pushed = await pal.waitFor((m) => m.t === 'trades' && m.trades.some((t) => t.id === offer.id && !t.give.items[0].name));
     const { rows: [tr] } = await server.db.query('SELECT offer FROM trades WHERE id = $1', [offer.id]);
     check('panel: and off an item in an open offer: the other player stops seeing it, and the offer stays open', !!pushed && !json(tr.offer).giveItems[0].name && server.srv.trades.open.has(offer.id));
+    check('panel: its colour too', !('nc' in json(tr.offer).giveItems[0]) && !('nc' in pushed.trades.find((t) => t.id === offer.id).give.items[0]) && !('nc' in (await server.store.load(nid)).st.inv.find((i) => i.uid === s3.uid)));
 
     // A closed offer keeps a copy of what was in it, shown in Recent trades: that goes too.
     await nc.act('tools.name', { uid: s1.uid, name: 'closed offer' });
@@ -1172,14 +1175,15 @@ try {
     check('panel: a clear is audited even if its offers can\'t be reached', onRecord?.detail.name === 'copies fail' && onRecord.detail.uid === s1.uid && !(await server.store.load(nid)).st.inv.find((i) => i.uid === s1.uid).name, JSON.stringify(onRecord?.detail));
     // Going back to before a clear doesn't bring the name back.
     await nc.rpc('trade', 'cancel', { id: offer.id });
-    await nc.act('tools.name', { uid: s1.uid, name: 'bad again' });
-    await nc.act('tools.name', { uid: s3.uid, name: 'fine name' });
+    await nc.act('tools.name', { uid: s1.uid, name: 'bad again', nc: 'e55cf0' });
+    await nc.act('tools.name', { uid: s3.uid, name: 'fine name', nc: 'a67cff' });
     const before = await boss.admin('snapshot.save', { id: nid, label: 'before the clear' });
     await boss.admin('items.unname', { id: nid, uid: s1.uid });
     await nc.act('tools.name', { uid: s1.uid, name: 'its new name' });
     await boss.admin('snapshot.restore', { snap: before.id });
     const back = (await server.store.load(nid)).st;
     check('panel: restoring a snapshot leaves a cleared name cleared, and every other name as it was', !back.inv.find((i) => i.uid === s1.uid).name && back.inv.find((i) => i.uid === s3.uid).name === 'fine name', JSON.stringify(back.inv.filter((i) => i.t === 'skin').map((i) => i.name)));
+    check('panel: and the colours with them', !('nc' in back.inv.find((i) => i.uid === s1.uid)) && back.inv.find((i) => i.uid === s3.uid).nc === 'a67cff');
     await until(() => !nc.st.inv.find((i) => i.uid === s1.uid)?.name);
 
     const raw = await refused(boss.admin('edit.raw', { id: nid, base: (await boss.admin('player', { id: nid })).rev, state: { inv: [] } }));

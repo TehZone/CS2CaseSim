@@ -15,6 +15,8 @@ import { addCharm } from './charm.js';
 import { weaponMarkup, souvenirSlots, slotUv } from './markup.js';
 import { stickerBase, TEXTURE_FILL, artSide } from '../composite.js';
 import { D } from '../data.js';
+import { nameColor } from '../engine/items.js';
+import { readableColor } from '../engine/namecolor.js';
 
 const BAKE_SIZE = 2048;
 
@@ -445,7 +447,7 @@ async function buildGloveModel(item, def, renderer) {
 
 // Returns a THREE.Group with the item on its real model, centred, barrel along +X, or null if unsupported.
 // statTrak: false leaves a StatTrak™ item's counter off (the sticker editor's side view). A named item (item.name) carries
-// CS2's name plate. quick: framed by its meshes'
+// CS2's name plate, the name in its colour (item.nc). quick: framed by its meshes'
 // bind-pose bounds, not by every vertex where the bones put it (Play mode's guns, built mid-match: that took tens of ms
 // for a gun and the framing is the inspect's).
 export async function buildCS2Model(item, def, renderer, { statTrak = true, quick = false } = {}) {
@@ -557,7 +559,7 @@ export async function buildCS2Model(item, def, renderer, { statTrak = true, quic
   }
   // The plate goes on last: a sticker is placed on the gun itself, and the plate sits over one like it does in CS2.
   if (item.name) {
-    try { wrap.userData.namePlate = await addNamePlate(root, wid, prep, item.name); } catch (e) { console.warn('Name plate failed', e); }
+    try { wrap.userData.namePlate = await addNamePlate(root, wid, prep, item.name, nameColor(item)); } catch (e) { console.warn('Name plate failed', e); }
   }
   return wrap;
 }
@@ -630,10 +632,12 @@ async function addStatTrak(root, wid, prep, kills) {
 // ---------------------------------------------------------------------------------------------
 // Name tags: CS2's name plate, one model for every gun and knife, at the model's "nametag" attachment. CS2 writes the name
 // into a copy of the plate's colour texture (the composite material nametag_default.vcompmat), so it's done the same way
-// here: any character the player's fonts have, not a fixed character set.
+// here: any character the player's fonts have, not a fixed character set. A name with a colour (item.nc, see
+// engine/namecolor.js) is written in it, lightened as the pages draw it when it's too dark to read; without one it's CS2's ink.
 // ---------------------------------------------------------------------------------------------
 const PLATE_SIZE = 512, PLATE_X = 0.04 * PLATE_SIZE, PLATE_Y = 0.038 * PLATE_SIZE; // the composite's resolution and text position
 const PLATE_INK = 'rgb(241, 241, 241)';
+const plateInk = (nc) => { const c = readableColor(nc); return c ? '#' + c : PLATE_INK; };
 // CS2 makes its font 64 tall (line height, about 1.15 em) and draws it at 90% of that, a name wider than the texture
 // shrunk to fit it first. (Its weight is 900, which on Arial Narrow is bold, its heaviest; on Arial it would be Arial Black.)
 const PLATE_EM = 64 / 1.15, PLATE_FIT = 0.9;
@@ -650,13 +654,13 @@ function plateFont(ctx) {
   return plateFace;
 }
 
-function drawPlate(ctx, base, name) {
+function drawPlate(ctx, base, name, nc = null) {
   const { family, squeeze } = plateFont(ctx);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.drawImage(base, 0, 0, PLATE_SIZE, PLATE_SIZE);
   ctx.font = `bold ${PLATE_EM}px ${family}`;
   ctx.textBaseline = 'top';
-  ctx.fillStyle = PLATE_INK;
+  ctx.fillStyle = plateInk(nc);
   const width = ctx.measureText(name).width * squeeze;
   const scale = (width > PLATE_SIZE ? PLATE_SIZE / width : 1) * PLATE_FIT;
   ctx.setTransform(scale * squeeze, 0, 0, scale, PLATE_X, PLATE_Y);
@@ -664,8 +668,8 @@ function drawPlate(ctx, base, name) {
 }
 
 // Puts the plate on its bone in a weapon model's scene (it rides along in first person, see assembleViewmodel). Returns
-// { set(name) } for writing another name on it, or null when the model has no plate attachment.
-async function addNamePlate(root, wid, prep, name) {
+// { set(name, nc) } for writing another name (in another colour) on it, or null when the model has no plate attachment.
+async function addNamePlate(root, wid, prep, name, nc = null) {
   const st = await cs2StatTrak(wid);
   const at = (/legacy/.test(prep.mesh) && st.nametagLegacy) || st.nametag;
   if (!at || !st.plate) return null;
@@ -700,13 +704,13 @@ async function addNamePlate(root, wid, prep, name) {
   holder.quaternion.set(...at.rotation).multiply(GLTF_TO_BONE);
   holder.add(plate);
   bone.add(holder);
-  const set = (text) => { drawPlate(ctx, base.image, String(text)); map.needsUpdate = true; };
-  set(name);
+  const set = (text, color = null) => { drawPlate(ctx, base.image, String(text), color); map.needsUpdate = true; };
+  set(name, nc);
   return { set };
 }
 
 // The plate's face on its own, for the window a name is typed in (CS2 shows it there, the name going on as it's typed).
-// → { canvas, set(name) }, or null when there's no plate model.
+// → { canvas, set(name, nc) }, or null when there's no plate model.
 const PLATE_FACE = 106; // (the top of the texture, in pixels)
 export async function namePlatePreview() {
   const { plate } = await cs2StatTrak('weapon_ak47'); // (every weapon's is the same model)
@@ -719,7 +723,7 @@ export async function namePlatePreview() {
   canvas.width = PLATE_SIZE;
   canvas.height = PLATE_FACE;
   const ctx = canvas.getContext('2d');
-  return { canvas, set: (text) => drawPlate(ctx, base, String(text)) };
+  return { canvas, set: (text, nc = null) => drawPlate(ctx, base, String(text), nc) };
 }
 
 // ---------------------------------------------------------------------------------------------

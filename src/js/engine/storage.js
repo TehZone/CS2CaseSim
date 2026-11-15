@@ -2,10 +2,11 @@
 // or sold, labelled when you start using it, holding up to 1,000 items you move in and out one at a time or in bulk. An
 // empty one can be deleted, for no refund. Other Storage Units can't go inside.
 //
-// A unit is one item in your inventory (t: 'unit', with `name` and `mod`, when it last changed). What's in it is in
-// st.stored, each item with `su` (its unit's uid) and `sat` (when it went in). Stored items aren't in st.inv, so nothing that
-// works on the inventory can reach them: every trade, sale, stake, contract, sticker and equip refuses them without
-// having to ask. They're still yours, though: ownedItems() is what net worth and the item database read.
+// A unit is one item in your inventory (t: 'unit', with `name`, its label's colour `nc` (see namecolor.js) and `mod`, when
+// it last changed). What's in it is in st.stored, each item with `su` (its unit's uid) and `sat` (when it went in). Stored
+// items aren't in st.inv, so nothing that works on the inventory can reach them: every trade, sale, stake, contract, sticker
+// and equip refuses them without having to ask. They're still yours, though: ownedItems() is what net worth and the item
+// database read.
 // Pure: the client, the server and the admin panels share it. The actions themselves are in actions.js (storage.*).
 import * as I from './items.js';
 import { round2 } from './util.js';
@@ -95,6 +96,9 @@ export function repairStorage(st) {
   st.stored = kept;
   if (back.length) st.inv = [...back, ...st.inv];
   for (const it of st.inv) if (I.isUnit(it) && it.name != null) { const name = cleanName(it.name); if (name) it.name = name; else delete it.name; }
+  // A name's colour (a unit's label's, a Name Tag's: namecolor.js), as the game keeps one and only with its name. (One a
+  // server from before colours left behind, on an item whose tag it took off, goes here.)
+  for (const it of ownedItems(st)) if (it && it.nc !== undefined) { const nc = I.nameColor(it); if (nc) it.nc = nc; else delete it.nc; }
   if (kept.length && st.loadout) {
     const inside = new Set(kept.map((it) => it.uid));
     st.loadout = Object.fromEntries(Object.entries(st.loadout).filter(([, u]) => !inside.has(u)));

@@ -122,7 +122,7 @@ try {
   // Through the game's backend, offline (as cases.js does it).
   state.S.money = 1000;
   const viaGame = await act('case.open', { id: C.id, n: 2, buy: true });
-  check('offline, through the game: one action buys and opens, and the save has the drops and none of the cases', can('buyOpen') && viaGame.bought?.cases === 2 && viaGame.items.length === 2
+  check('offline, through the game: one action buys and opens, and the save has the drops and none of the cases', can('buyOpen') && can('nameColor') && viaGame.bought?.cases === 2 && viaGame.items.length === 2
     && Math.abs(state.S.money - (1000 - viaGame.bought.cost)) < 0.005 && !state.S.inv.some((it) => it.t === 'crate' || it.t === 'key') && viaGame.items.every((it) => state.S.inv.includes(it)));
   check('offline: the Storage Unit helpers are engine/storage.js\'s (no sums offline)', !state.storedPart() && stored.unitLoaded('anything') && stored.ownedWorth() === ownedValue(state.S) && stored.storedTotals().n === 0);
   // 100 units (the most there can be bought), through the game: what each one's card reads is the engine's count and value,
@@ -164,7 +164,7 @@ try {
   let sock = sockets.at(-1);
   sock.open();
   const hello = sock.sent[0];
-  check('the hello announces lean1 (and the Market\'s p2p1, and players\' faces, face1, and online matches, pvp1)', hello?.t === 'hello' && same(hello.caps, ['lean1', 'p2p1', 'face1', 'pvp1']) && hello.v === 1 && hello.token === 'tok', JSON.stringify(hello));
+  check('the hello announces lean1 (and the Market\'s p2p1, and players\' faces, face1, online matches, pvp1, and name colours, nc1)', hello?.t === 'hello' && same(hello.caps, ['lean1', 'p2p1', 'face1', 'pvp1', 'nc1']) && hello.v === 1 && hello.token === 'tok', JSON.stringify(hello));
   gamblePage.open();
   sock.deliver(welcome({ lobbies: { battles: [], flips: [{ id: 'f' }], jackpot: null } }));
   await settle();
@@ -373,11 +373,15 @@ try {
   check('set.stored: all of it is here, as offline', !state.storedPart() && stored.unitLoaded('uB') && stored.unitCount('uB') === 3);
   offInv();
 
-  // ---- what the backend can do: case.open's buy only on a lean1 server -----------------------------------------------------
+  // ---- what the backend can do: case.open's buy only on a lean1 server, a name's colour only on an nc1 one ---------------------
   check('online with lean1: case.open\'s buy is used', can('buyOpen'));
+  check('online on a server whose welcome doesn\'t name nc1: no name colours (it would take the Name Tag and leave the colour off)', !can('nameColor'));
+  sock.deliver(welcome({ caps: ['lean1', 'nc1'] }));
+  await settle();
+  check('online on a server whose welcome names nc1: name colours', can('nameColor') && can('buyOpen'));
   sock.deliver(welcome({}));
   await settle();
-  check('online with a server without lean1: not (that server would refuse an opening it\'s short for), and no sums', !can('buyOpen') && !state.storedPart());
+  check('online with a server without lean1: not (that server would refuse an opening it\'s short for), and no sums', !can('buyOpen') && !can('nameColor') && !state.storedPart());
 
   // ---- prices: the last patch is kept, and a welcome with its pricedAt takes it from there ---------------------------------
   const bundled = D.pricedAt, sid = Object.values(D.skins).find((s) => s !== skinDef && s.p).id, bundledP = D.skins[sid].p;

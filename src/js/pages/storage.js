@@ -5,10 +5,12 @@
 import { esc, money, timeAgo, debounce } from '../util.js';
 import * as I from '../items.js';
 import { S, on } from '../state.js';
+import { can } from '../backend.js';
 import { sfx } from '../audio.js';
 import { openModal, toast, tryAct, confirmDialog, itemCard, openInspect, canInspect, contextMenu, chooseItem } from '../ui.js';
 import * as SU from '../engine/storage.js';
 import { unitContents, unitCount, unitValue, unitWatch } from '../stored.js';
+import { colorPicker } from '../namecolor.js';
 
 const PAGE = 150;
 const plural = (n) => `${n.toLocaleString('en-US')} item${n === 1 ? '' : 's'}`;
@@ -23,27 +25,33 @@ export async function buyUnit() {
   return r.items[0];
 }
 
-// The label window: the first time starts using the unit, later ones change it. Resolves whether it was set.
+// The label window: the first time starts using the unit, later ones change it; the label's colour is picked here too (free,
+// like the label, and it can be all that changes; not on a server from before colours, backend.js can). Resolves whether it
+// was set.
 export function labelUnit(unit) {
   return new Promise((resolve) => {
     let done = false;
     const first = !unit.name;
+    const pick = can('nameColor') ? colorPicker({ value: I.nameColor(unit), look: 'label', text: () => SU.cleanName(input?.value) }) : null;
     const m = openModal({
       title: first ? 'Personalize Your Storage Unit' : 'Change Label',
-      body: `<p class="muted" style="margin-top:0;line-height:1.5">${first ? 'Enter a descriptive label for your personal Storage Unit and start using it for storing items.' : 'Enter a new descriptive label for this Storage Unit.'}</p>
-        <input class="input" data-label maxlength="${SU.UNIT_NAME_MAX}" value="${esc(unit.name || '')}" placeholder="Label" style="width:100%">`,
+      body: `<p class="muted" style="margin-top:0;line-height:1.5">${first ? 'Enter a descriptive label for your personal Storage Unit and start using it for storing items.' : 'Enter a new descriptive label for this Storage Unit.'}${pick ? ' Pick a colour for the label too, if you like: you can change it at any time.' : ''}</p>
+        <input class="input" data-label maxlength="${SU.UNIT_NAME_MAX}" value="${esc(unit.name || '')}" placeholder="Label" style="width:100%">
+        ${pick?.html ?? ''}`,
       foot: `<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-ok>${first ? 'Personalize' : 'Save'}</button>`,
       onClose: () => resolve(done),
     });
     const input = m.el.querySelector('[data-label]');
+    pick?.mount(m.el);
     const go = async () => {
       if (!SU.cleanName(input.value)) { toast('Enter a label for it first', 'bad'); input.focus(); return; }
-      if (!(await tryAct('storage.name', { unit: unit.uid, name: input.value }))) return;
+      if (!(await tryAct('storage.name', { unit: unit.uid, name: input.value, ...(pick ? { nc: pick.value() } : {}) }))) return;
       done = true;
       m.close();
     };
     m.el.querySelector('[data-ok]').addEventListener('click', go);
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    if (pick) input.addEventListener('input', pick.refresh);
     input.focus();
     input.select();
   });
@@ -112,7 +120,7 @@ export async function openUnit(unit, mode = 'contents') {
     const hadFocus = document.activeElement?.matches?.('[data-q]');
     box.innerHTML = `<div class="su-head">
         <img src="${I.itemImage(u, 'm')}" alt="">
-        <div class="su-who"><h3>${esc(u.name)}</h3><div class="muted">${esc(modifiedText(u))}</div></div>
+        <div class="su-who"><h3>${I.unitLabelHtml(u)}</h3><div class="muted">${esc(modifiedText(u))}</div></div>
         <div class="su-fill"><div><b>${n.toLocaleString('en-US')}</b> / ${SU.UNIT_CAP.toLocaleString('en-US')} items</div><div class="su-bar"><i style="width:${(n / SU.UNIT_CAP) * 100}%"></i></div></div>
         <div class="su-worth"><span class="muted">Value inside</span><b class="green">${money(unitValue(uid))}</b></div>
         <div class="su-btns"><button class="btn sm" data-a="label">Change Label</button>${n ? '' : '<button class="btn sm danger" data-a="delete">Delete</button>'}</div>
@@ -202,6 +210,6 @@ export async function moveToUnit(items) {
   const r = await tryAct('storage.deposit', { unit: unit.uid, uids: items.map((it) => it.uid) });
   if (!r) return false;
   sfx.buy();
-  toast(`Moved ${plural(r.n)} to <b>${esc(unit.name)}</b>`, 'good');
+  toast(`Moved ${plural(r.n)} to <b>${I.unitLabelHtml(unit)}</b>`, 'good');
   return true;
 }

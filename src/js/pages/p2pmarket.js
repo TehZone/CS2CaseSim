@@ -347,6 +347,8 @@ function buyBtn(l, cls = '') {
   if (M.isMine(l)) return `<button class="pm-buy mine ${cls}" data-editmine="${esc(l.lid)}">Your listing</button>`;
   return `<button class="pm-buy ${cls}" data-buy="${esc(l.lid)}" data-p="${l.price}">${ICON.cart}<span>Buy</span></button>`;
 }
+// A Name Tag's name, under the item's own, in its colour ('' with none).
+const tagNameHtml = (it) => (I.customName(it) ? `<div class="pm-tagname"${I.nameStyle(it)}>"<bdi>${esc(I.customName(it))}</bdi>"</div>` : '');
 function cardHtml(l) {
   const it = l.item, f = P.factsOf(l), b = nameBits(it), r = I.rarityInfo(it);
   return `<div class="pm-card ${M.isMine(l) ? 'mine' : ''}" data-lid="${esc(l.lid)}" style="--rc:${r.c}">
@@ -356,7 +358,7 @@ function cardHtml(l) {
     <div class="pm-ref">Reference price ${money(f.ref)}</div>
     <div class="pm-kind"><i></i>${esc(b.kind)}</div>
     <div class="pm-name" title="${esc(I.itemName(it))}">${esc(b.name)}${patHtml(f)}</div>
-    ${I.customName(it) ? `<div class="pm-tagname">"<bdi>${esc(I.customName(it))}</bdi>"</div>` : ''}
+    ${tagNameHtml(it)}
     <div class="pm-sub">${esc(b.sub)}</div>
     ${floatHtml(it)}
     <div class="pm-act">${buyBtn(l)}<button class="pm-more" data-more title="More">${ICON.dots}</button></div>
@@ -366,7 +368,7 @@ function rowHtml(l) {
   const it = l.item, f = P.factsOf(l), b = nameBits(it), r = I.rarityInfo(it);
   return `<div class="pm-row ${M.isMine(l) ? 'mine' : ''}" data-lid="${esc(l.lid)}" style="--rc:${r.c}">
     <div class="pm-rimg" data-open><img loading="lazy" src="${esc(I.itemImage(it, 's'))}" alt=""></div>
-    <div class="pm-rname"><div class="pm-kind"><i></i>${esc(b.kind)}</div><div class="pm-name">${esc(b.name)}${patHtml(f)}</div><div class="pm-sub">${esc(b.sub)}${it.sn ? ` · #${+it.sn}` : ''}</div></div>
+    <div class="pm-rname"><div class="pm-kind"><i></i>${esc(b.kind)}</div><div class="pm-name">${esc(b.name)}${patHtml(f)}</div>${tagNameHtml(it)}<div class="pm-sub">${esc(b.sub)}${it.sn ? ` · #${+it.sn}` : ''}</div></div>
     <div class="pm-rfl">${floatHtml(it)}${it.t === 'skin' && it.sd != null ? `<div class="pm-seed">Pattern <b>${+it.sd}</b>${f.label ? ` · ${esc(f.label)}` : ''}</div>` : ''}</div>
     <div class="pm-rthumbs">${thumbs(it)}</div>
     <div class="pm-rseller">${sellerHtml(l)}<span class="pm-age">${esc(timeAgo(l.at))}</span></div>
@@ -621,7 +623,7 @@ async function drawMine(main) {
       const it = l.item, f = P.factsOf(l), b = nameBits(it), r = I.rarityInfo(it);
       return `<div class="pm-row" data-lid="${esc(l.lid)}" style="--rc:${r.c}">
         <div class="pm-rimg" data-open><img loading="lazy" src="${esc(I.itemImage(it, 's'))}" alt=""></div>
-        <div class="pm-rname"><div class="pm-kind"><i></i>${esc(b.kind)}</div><div class="pm-name">${esc(b.name)}${patHtml(f)}</div><div class="pm-sub">${esc(b.sub)}</div></div>
+        <div class="pm-rname"><div class="pm-kind"><i></i>${esc(b.kind)}</div><div class="pm-name">${esc(b.name)}${patHtml(f)}</div>${tagNameHtml(it)}<div class="pm-sub">${esc(b.sub)}</div></div>
         <div class="pm-rfl">${floatHtml(it)}</div>
         <div class="pm-rseller"><span class="pm-age">Listed ${esc(timeAgo(l.at))}</span><span class="muted">Reference ${money(f.ref)}</span></div>
         <div class="pm-reprice"><span class="pm-dollar">$</span><input class="input" data-newprice value="${l.price.toFixed(2)}" inputmode="decimal"><button class="btn sm" data-save disabled>Save</button></div>

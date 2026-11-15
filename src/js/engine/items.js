@@ -4,6 +4,7 @@ import { D, WEARS, WEAR_BY_KEY, wearOf, RARITY, rarityColor, caseTiers, phaseWei
 import { analyzePattern } from './patterns.js';
 import { BREED, chickenValue, chickenName } from './chickens.js';
 import { rand, pick, pickWeighted, round2, uid } from './util.js';
+import { cleanColor } from './namecolor.js';
 
 export const MAX_STICKERS = 5;
 const STICKER_CATS = new Set(['rifle', 'smg', 'pistol', 'heavy']);
@@ -74,6 +75,9 @@ export const makeToolItem = (id, src = '') => ({ uid: uid(), t: 'tool', id, at: 
 export const isTool = (item) => item.t === 'tool';
 // The name a Name Tag gave an item ('' if none). (A Storage Unit's label is in `name` too, but it's no Name Tag's.)
 export const customName = (item) => (item.t === 'skin' && item.name) || '';
+// The colour of the name a player gave an item, a Name Tag's or a Storage Unit's label (six hex digits, see namecolor.js), or
+// null for the default look: an item with no such name has none.
+export const nameColor = (item) => ((customName(item) || (item.t === 'unit' && item.name)) ? cleanColor(item.nc) : null);
 
 // ---- charms ----------------------------------------------------------------------------------
 // A charm hangs off a gun's keychain point. Each copy has a pattern (1-100,000, like CS2's): which way it hangs and turns.

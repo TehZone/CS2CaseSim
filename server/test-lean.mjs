@@ -146,8 +146,8 @@ const prices = (ae) => new Promise((resolve, reject) => {
 
 try {
   // (p2p1, the Market's, is another: server/test-market.mjs; face1, players' pictures and badges, the third: server/test-social.mjs;
-  // pvp1, online PvP matches, the fourth: server/test-pvp.mjs)
-  check('lean1 is a capability, and its name; p2p1, face1 and pvp1 the only others', LEAN === 'lean1' && CAPS.size === 4 && CAPS.has('lean1') && CAPS.has('p2p1') && CAPS.has('face1') && CAPS.has('pvp1'));
+  // pvp1, online PvP matches, the fourth: server/test-pvp.mjs; nc1, name colours, the fifth: server/test.mjs)
+  check('lean1 is a capability, and its name; p2p1, face1, pvp1 and nc1 the only others', LEAN === 'lean1' && CAPS.size === 5 && CAPS.has('lean1') && CAPS.has('p2p1') && CAPS.has('face1') && CAPS.has('pvp1') && CAPS.has('nc1'));
   const tok = {};
   for (const n of ['olga', 'leo', 'erik', 'pia', 'quin', 'gabe', 'boss']) tok[n] = await register(n);
 

@@ -590,7 +590,7 @@ async function unitWindow(p, unit) {
   const options = (pairs, on) => pairs.map(([k, t]) => `<option value="${k}" ${on === k ? 'selected' : ''}>${esc(t)}</option>`).join('');
   box.innerHTML = `<div class="su-head">
       <img src="${I.itemImage(unit, 'm')}" alt="">
-      <div class="su-who"><h3>${esc(unit.name || 'Not labelled yet')}</h3></div>
+      <div class="su-who"><h3>${I.unitLabelHtml(unit, 'Not labelled yet')}</h3></div>
       <div class="su-fill"><div><b>${all.length.toLocaleString('en-US')}</b> / ${UNIT_CAP.toLocaleString('en-US')} items</div><div class="su-bar"><i style="width:${(all.length / UNIT_CAP) * 100}%"></i></div></div>
       <div class="su-worth"><span class="muted">Value inside</span><b class="green">${money(value)}</b></div>
     </div>

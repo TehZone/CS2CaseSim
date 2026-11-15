@@ -78,9 +78,13 @@ const PROTOCOL = 1;
 //          connections), tagged pings while queued (a ping's payload [0x70][f64], which the game's socket answers by itself: the
 //          round trip that picks a match's host), the /match socket, and the admin panel's 'pvp.live' and 'pvp.end'. A game
 //          without it is sent none of these.
+//   nc1:   name colours (src/js/engine/namecolor.js): storage.name and tools.name take `nc`, the colour of a Storage Unit's label
+//          or a Name Tag's name. A game shows its colour picker only on a server whose welcome names nc1 (an older one would
+//          take the tag and leave the colour off). Items carry `nc` to every game, as a game from before colours doesn't read it.
 export const LEAN = 'lean1';
 export const FACE = 'face1';
-export const CAPS = new Set([LEAN, P2P, FACE, PVP]);
+export const NC = 'nc1';
+export const CAPS = new Set([LEAN, P2P, FACE, PVP, NC]);
 // A profile picture's upload: its base64 in JSON, with the login's token (64 KB of picture, engine/picture.js). A body
 // past the limit is read to its end (up to BODY_DRAIN, then the connection is cut) so the 413 reaches the game.
 const PIC_BODY = 96 * 1024, BODY_DRAIN = 1024 * 1024;

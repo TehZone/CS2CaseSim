@@ -1,6 +1,7 @@
 // Client side of items: the shared engine rules plus item images.
-import { itemDef, itemName, realName, customName, UNIT_ID, NAME_TAG, SWAP_TOOL } from './engine/items.js';
+import { itemDef, itemName, realName, customName, nameColor, UNIT_ID, NAME_TAG, SWAP_TOOL } from './engine/items.js';
 import { D } from './engine/data.js';
+import { readableColor } from './engine/namecolor.js';
 import { esc, imgUrl, loadImage } from './util.js';
 import { charmPicture } from './charmpics.js';
 
@@ -19,16 +20,37 @@ export function itemImage(item, size = 'm') {
   return imgUrl(d.img, size);
 }
 
-// A Name Tag's name as CS2's tiles show it, under the item's own: in quotes and italics ('' if it has none).
-export function nameTagHtml(item) {
-  const name = customName(item);
-  return name ? `<div class="tag-name" title="${esc(name)}">"<bdi>${esc(name)}</bdi>"</div>` : '';
+// The colour a player gave an item's name (a Name Tag's, a Storage Unit's label) as a page draws it: '#rrggbb', lightened
+// if it's too dark to read (engine/namecolor.js), or '' for the default look. Only ever six hex digits, so it can go in a
+// style attribute as it is.
+export function nameColorCss(item) {
+  const c = readableColor(nameColor(item));
+  return c ? '#' + c : '';
+}
+// ` style="color:…"` for an element holding that name ('' for the default look). data-nc: its tooltip in the colour too.
+export function nameStyle(item) {
+  const c = nameColorCss(item);
+  return c ? ` style="color:${c}" data-nc="${c}"` : '';
 }
 
-// An item's whole name for a page: a Name Tag's name is kept apart, so right-to-left text can't run into the item's own.
-export function nameHtml(item) {
+// A Name Tag's name as CS2's tiles show it, under the item's own: in quotes and italics, in its colour ('' if it has none).
+export function nameTagHtml(item) {
   const name = customName(item);
-  return name ? `${esc(realName(item))} "<bdi>${esc(name)}</bdi>"` : esc(itemName(item));
+  return name ? `<div class="tag-name"${nameStyle(item)} title="${esc(name)}">"<bdi>${esc(name)}</bdi>"</div>` : '';
+}
+
+// An item's whole name for a page: a Name Tag's name (or a Storage Unit's label) is kept apart, so right-to-left text can't
+// run into the item's own, and is in its colour.
+export function nameHtml(item) {
+  const name = customName(item) || (item.t === 'unit' && item.name) || '';
+  if (!name) return esc(itemName(item));
+  const c = nameColorCss(item), quoted = `"<bdi>${esc(name)}</bdi>"`;
+  return `${esc(realName(item))} ${c ? `<span class="nc-name" style="color:${c}">${quoted}</span>` : quoted}`;
+}
+
+// A Storage Unit's label on its own, in its colour (fallback: what an unlabelled one shows instead).
+export function unitLabelHtml(unit, fallback = '') {
+  return unit.name ? `<bdi${nameStyle(unit)}>${esc(unit.name)}</bdi>` : esc(fallback);
 }
 
 // A Sticker Slab's picture: its sticker cropped to the artwork (Steam's sticker icons are mostly margin), filling the case

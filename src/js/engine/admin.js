@@ -14,6 +14,7 @@ import { repairStorage, storedOf } from './storage.js';
 import { featuredBadge } from './badges.js';
 import { dataUrlProblem } from './picture.js';
 import { MAX_KILLS, nameable, nameProblem } from './tools.js';
+import { cleanColor } from './namecolor.js';
 import { round2 } from './util.js';
 
 export const MAX_JSON = 48 * 1024, KEEP_AUTO = 20, MAX_MANUAL = 50, PAGE = 50;
@@ -244,7 +245,8 @@ export function restoreMerge(cur, next, { elsewhere = new Set(), keepRewards = f
 // blocked trader's open offers cancelled. A snapshot's download ({ state, config }) is taken too. The one text left as it
 // is is the Name Tag name of a skin in one of the save's item lists, which may hold those characters: it has to pass a Name
 // Tag's rules instead, and a counter a counter's (on a skin with a StatTrak™ version), so a file can't put on an item what the
-// tools wouldn't have. → the save (a copy)
+// tools wouldn't have; a name's colour is one as the game keeps it (namecolor.js), on an item with a name (one left on an item
+// with none, as a server from before colours could leave it, just goes). → the save (a copy)
 const TOKEN = /^[A-Za-z0-9_-]{1,64}$/;
 const isToken = (v) => typeof v === 'string' && TOKEN.test(v);
 const cleanText = (s) => s.replace(/[<>]/g, '').replaceAll('"', "'");
@@ -276,8 +278,10 @@ export function saveFile(file, now = Date.now()) {
     if (isObj(d)) for (const [f, x] of Object.entries(d)) if (st[k][f] !== undefined && !sameType(x, st[k][f])) bad(`${k}.${f}`);
   }
   const item = (it, what) => {
+    if (isObj(it) && it.name == null) delete it.nc;
     if (!isObj(it) || !isToken(it.uid) || !isObj(defOf(it)) || !['fl', 'sd', 'sn', 'pat', 'at', 'mod', 'sat'].every((f) => optNum(it[f]))
       || (it.name != null && !(I.isUnit(it) ? typeof it.name === 'string' : nameable(it) && !nameProblem(it.name)))
+      || (it.nc != null && cleanColor(it.nc) !== it.nc)
       || (it.stt && !(it.t === 'skin' && defOf(it).stt && defOf(it).cat !== 'gloves' && !it.sv))
       || (it.kills != null && !(Number.isInteger(it.kills) && it.kills >= 0 && it.kills <= MAX_KILLS && (it.stt || !it.kills)))
       || (it.stk != null && !(Array.isArray(it.stk) && it.stk.every((s) => isObj(s) && isObj(D.stickers[s.id]))))

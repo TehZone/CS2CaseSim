@@ -45,6 +45,7 @@ export async function tryAct(name, args) {
 // ---- tooltips (Panorama's) -------------------------------------------------------------------
 // Anything with a title or data-tip shows its text in a styled box under it (above near the bottom of the window). A
 // title moves to data-tip on hover so the browser's own tooltip stays away; code that sets the title again just updates it.
+// data-nc: the text in that colour (a player's name for an item: items.js nameStyle).
 let tipEl = null, tipFor = null, tipTimer = 0;
 export function installTooltips() {
   tipEl = document.createElement('div');
@@ -71,6 +72,7 @@ export function installTooltips() {
 function showTip(t) {
   if (!t.isConnected) return hideTip();
   tipEl.textContent = t.dataset.tip;
+  tipEl.style.color = /^#[0-9a-f]{6}$/.test(t.dataset.nc || '') ? t.dataset.nc : '';
   tipEl.classList.add('show');
   const r = t.getBoundingClientRect(), w = tipEl.offsetWidth, h = tipEl.offsetHeight;
   let y = r.bottom + 8;
@@ -207,7 +209,7 @@ function unitCard(item, { extra = '' } = {}) {
     <div class="unit-fill"><i style="width:${(n / UNIT_CAP) * 100}%"></i></div>
     <div class="meta">
       <div class="n1">${esc(np.top)}</div>
-      <div class="n2">${esc(np.bottom)}</div>
+      <div class="n2"${I.nameStyle(item)}>${item.name ? `<bdi>${esc(np.bottom)}</bdi>` : esc(np.bottom)}</div>
       <div class="row"><span class="wear">${n.toLocaleString('en-US')} / ${UNIT_CAP.toLocaleString('en-US')} items</span><span class="val">${money(item.value ?? unitValue(item.uid))}</span></div>
       <div class="row unit-mod"><span>${item.mod ? 'Modified ' + timeAgo(item.mod) : 'Not used yet'}</span></div>
     </div>
@@ -446,7 +448,7 @@ function detailBody(item) {
     kv.push(['Finish style', d.st || '—']);
     for (const [k, v] of vb.pat.info) kv.push([k, v]);
     if (item.stt) kv.push(['StatTrak™ kills', item.kills || 0]);
-    if (I.customName(item)) kv.push(['Name Tag', `"<bdi>${esc(item.name)}</bdi>"`]);
+    if (I.customName(item)) kv.push(['Name Tag', `<span${I.nameStyle(item)}>"<bdi>${esc(item.name)}</bdi>"</span>`]);
     if (item.kc) { const c = I.attachedCharm(item); kv.push(['Charm', `${charmBadge(c)} ${esc(I.itemName(c))} <span class="muted">· Pattern #${c.pat.toLocaleString()}</span>`]); }
   } else if (item.t === 'charm') {
     for (const [k, v] of vb.pat.info) kv.push([k, v]);

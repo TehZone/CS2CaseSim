@@ -16,6 +16,7 @@ import * as L from './levels.js';
 import * as N from './npcs.js';
 import * as SU from './storage.js';
 import * as T from './tools.js';
+import { cleanColor, colorArg } from './namecolor.js';
 import * as IX from './itemindex.js';
 import { featuredBadge, grantMedals } from './badges.js';
 import { dataUrlProblem } from './picture.js';
@@ -207,6 +208,7 @@ export function clearNameForStaff(ctx, uid) {
   const name = I.customName(item);
   if (!name) fail(`${I.itemName(item)} has no custom name`);
   delete item.name;
+  delete item.nc; // (its colour was the name's)
   if (stored) { ctx.sto.del.push(uid); ctx.sto.add.push(item); } else touch(ctx, item);
   return { item, name };
 }
@@ -383,6 +385,14 @@ function unitChanged(ctx, unit) {
   unit.mod = ctx.now;
   touch(ctx, unit);
 }
+// A colour from a client (see namecolor.js): null for the default look; anything that isn't a colour is refused.
+function nameColorArg(v) {
+  const c = colorArg(v);
+  if (c === undefined) fail('That isn\'t a colour', 'color');
+  return c;
+}
+// An item's name colour set (null: back to the default look).
+const setColor = (item, c) => { if (c) item.nc = c; else delete item.nc; };
 
 // ---- tools (see tools.js) ---------------------------------------------------------------------------
 // In a trade offer that's still open: one you made (reserved) or were sent (asked) online, a trader's offline.
@@ -479,11 +489,14 @@ export const ACTIONS = {
     ctx.add.push(...items);
     return { items, cost };
   },
-  // Its label: set when you start using it, changed for free at any time.
-  'storage.name'(ctx, { unit, name }) {
+  // Its label and the label's colour (nc, see namecolor.js; null: the default look): set when you start using it, changed
+  // for free at any time, the colour on its own too. No nc at all (a game from before colours): the colour stays as it is.
+  'storage.name'(ctx, { unit, name, nc }) {
     const u = ownedUnit(ctx, unit), label = SU.cleanName(name);
     if (!label) fail('Enter a label for it first');
+    const color = nc === undefined ? cleanColor(u.nc) : nameColorArg(nc);
     u.name = label;
+    setColor(u, color);
     unitChanged(ctx, u);
     return { item: u };
   },
@@ -530,25 +543,29 @@ export const ACTIONS = {
     give(ctx, items);
     return { items, cost };
   },
-  // A Name Tag on an item: the name goes on, the tag is used up (a new name takes a new tag). A refused name costs nothing.
-  'tools.name'(ctx, { uid, tool = null, name }) {
+  // A Name Tag on an item: the name goes on in its colour (nc, see namecolor.js; none: the default look), and the tag is used
+  // up. The colour is the tag's: a new name or a new colour takes a new tag. A refused name or colour costs nothing.
+  'tools.name'(ctx, { uid, tool = null, name, nc = null }) {
     const item = findOwned(ctx, String(uid));
     if (!T.nameable(item)) fail(`${I.itemName(item)} can't take a Name Tag`, 'nameable');
     usable(ctx, item);
     const why = T.nameProblem(name);
     if (why) fail(why, 'name');
-    if (item.name === name) fail('It already has that name', 'name');
+    const color = nameColorArg(nc);
+    if (item.name === name && cleanColor(item.nc) === color) fail('It already has that name', 'name');
     take(ctx, [toolToUse(ctx, I.NAME_TAG, tool).uid]);
     item.name = name;
+    setColor(item, color);
     touch(ctx, item);
     return { item };
   },
-  // CS2's Remove Name Tag: free, needs no tag, and the old tag is gone for good.
+  // CS2's Remove Name Tag: free, needs no tag, and the old tag (its colour too) is gone for good.
   'tools.unname'(ctx, { uid }) {
     const item = findOwned(ctx, String(uid));
     if (!I.customName(item)) fail(`${I.itemName(item)} has no Name Tag`, 'nameable');
     usable(ctx, item);
     delete item.name;
+    delete item.nc;
     touch(ctx, item);
     return { item };
   },

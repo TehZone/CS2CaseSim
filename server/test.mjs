@@ -31,7 +31,7 @@ async function post(p, body) {
 }
 
 // A game client: WebSocket + rpc + a mirror of the state built from welcome + deltas.
-async function client(token) {
+async function client(token, caps = null) {
   const ws = new WebSocket(base().replace('http', 'ws') + '/ws');
   const c = { ws, st: null, events: [], pending: new Map(), seq: 0 };
   await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
@@ -45,7 +45,7 @@ async function client(token) {
       c.events.push(m);
     });
   });
-  ws.send(JSON.stringify({ t: 'hello', token, data: D.lock, v: 1 }));
+  ws.send(JSON.stringify({ t: 'hello', token, data: D.lock, v: 1, ...(caps ? { caps } : {}) }));
   c.welcome = await welcome;
   c.rpc = (ns, m, args) => new Promise((res, rej) => { const id = ++c.seq; c.pending.set(id, { res, rej }); ws.send(JSON.stringify({ t: 'rpc', id, ns, m, args })); });
   c.act = (m, a) => c.rpc('act', m, a);
@@ -531,6 +531,82 @@ try {
     const toolCopies = await A.rpc('social', 'db.item', { t: 'tool', id: 'nametag' });
     check('tools: and counts tools', toolCopies.copies.length >= 1 && typeof idx.counts === 'object');
     T1.close(); T2.close();
+    await wait(50);
+  }
+
+  // ---- name colours on the server: a Storage Unit's label and a Name Tag's name (item.nc), on every path an item takes ----
+  {
+    const skin = () => makeSkinItem(skinDef, { stt: false, src: 'test' });
+    const BAD = ['red', 'fff', '#ff5c5c00', 'gggggg', '<b>x</b>', 'ff5c5c" onload="x', 'ff5c5c;color:red', 12, true, { c: 'ff5c5c' }, ['ff5c5c']];
+    await give(A.user.id, 5000); await give(B.user.id, 5000);
+    const row = async (id, uid) => { const s = await dbState(id); return s.inv.find((i) => i.uid === uid) || s.stored.find((i) => i.uid === uid) || null; };
+    const mem = async (id, uid) => (await serverState(id)).inv.find((i) => i.uid === uid) || null;
+    // A unit's label colour: free, the colour on its own too; refused when it isn't one; kept by a game from before colours.
+    // (A label isn't written in a transaction of its own: the database has it at the next write, store.flush here.)
+    const box = await newUnit(B, 'colours');
+    await B.act('storage.name', { unit: box.uid, name: 'colours', nc: '#FF5C5C' });
+    check('colours: a unit\'s label colour is on the server when the answer arrives, and in the mirror', (await mem(B.user.id, box.uid))?.nc === 'ff5c5c' && B.st.inv.find((i) => i.uid === box.uid)?.nc === 'ff5c5c');
+    await server.store.flush();
+    check('colours: and in the database', (await row(B.user.id, box.uid))?.nc === 'ff5c5c');
+    const refusedUnit = [];
+    for (const bad of BAD) refusedUnit.push(await code(B.act('storage.name', { unit: box.uid, name: 'changed', nc: bad })));
+    check('colours: the server refuses a unit colour that isn\'t one, and nothing changes', refusedUnit.every((c) => c === 'color') && (await mem(B.user.id, box.uid)).name === 'colours' && (await mem(B.user.id, box.uid)).nc === 'ff5c5c', refusedUnit.join());
+    await B.act('storage.name', { unit: box.uid, name: 'renamed' }); // (as a 1.1.8 game sends it: no nc)
+    check('colours: a game from before colours relabels a unit and the colour stays', (await mem(B.user.id, box.uid)).name === 'renamed' && (await mem(B.user.id, box.uid)).nc === 'ff5c5c');
+    const fresh = await client(rb.body.token);
+    check('colours: a new connection\'s welcome has the unit\'s colour', fresh.st.inv.find((i) => i.uid === box.uid)?.nc === 'ff5c5c');
+    const ncGame = await client(rb.body.token, ['nc1', 'nope9']);
+    check('colours: nc1 is a capability: named back to a game that announced it (and no caps to one that sent none)', JSON.stringify(ncGame.welcome.caps) === '["nc1"]' && !('caps' in fresh.welcome));
+    fresh.close(); ncGame.close();
+
+    // A Name Tag's colour: part of the tag.
+    const [g] = await grant(B, 1, skin);
+    await B.act('tools.buy', { id: 'nametag', n: 2 });
+    const tagsLeft = async () => (await serverState(B.user.id)).inv.filter((i) => i.t === 'tool' && i.id === 'nametag').length;
+    const tags0 = await tagsLeft(), refusedTag = [];
+    for (const bad of BAD) refusedTag.push(await code(B.act('tools.name', { uid: g.uid, name: 'coloured', nc: bad })));
+    check('colours: the server refuses a Name Tag colour that isn\'t one, the tag kept and no name put on', refusedTag.every((c) => c === 'color') && await tagsLeft() === tags0 && !(await row(B.user.id, g.uid)).name, refusedTag.join());
+    const tagged = await B.act('tools.name', { uid: g.uid, name: 'coloured', nc: 'A67CFF' });
+    check('colours: a Name Tag goes on in its colour: the database, the answer and the mirror', (await row(B.user.id, g.uid)).nc === 'a67cff' && (await row(B.user.id, g.uid)).name === 'coloured' && tagged.item.nc === 'a67cff'
+      && B.st.inv.find((i) => i.uid === g.uid)?.nc === 'a67cff' && await tagsLeft() === tags0 - 1);
+    check('colours: the same name in the same colour is refused, the tag kept', await code(B.act('tools.name', { uid: g.uid, name: 'coloured', nc: 'a67cff' })) === 'name' && await tagsLeft() === tags0 - 1);
+
+    // Deposit and withdraw.
+    await B.act('storage.deposit', { unit: box.uid, uids: [g.uid] });
+    check('colours: stored in a unit with its colour, in the database and the mirror', (await dbState(B.user.id)).stored.find((i) => i.uid === g.uid)?.nc === 'a67cff' && B.st.stored.find((i) => i.uid === g.uid)?.nc === 'a67cff');
+    const seenInside = await A.rpc('social', 'unit', { id: B.user.id, uid: box.uid });
+    check('colours: another player looking inside the unit sees it', seenInside.items.find((i) => i.uid === g.uid)?.nc === 'a67cff');
+    const profile = await A.rpc('social', 'profile', { id: B.user.id });
+    check('colours: and the unit\'s label colour on the profile', profile.units.find((u) => u.uid === box.uid)?.nc === 'ff5c5c' && profile.units.find((u) => u.uid === box.uid)?.name === 'renamed');
+    await B.act('storage.retrieve', { unit: box.uid, uids: [g.uid] });
+    check('colours: and withdrawn with it', (await dbState(B.user.id)).inv.find((i) => i.uid === g.uid)?.nc === 'a67cff' && B.st.inv.find((i) => i.uid === g.uid)?.nc === 'a67cff');
+    const { copies } = await A.rpc('social', 'db.item', { t: 'skin', id: skinDef.id });
+    check('colours: the item database shows it to everyone', copies.find((c) => c.item.uid === g.uid)?.item.nc === 'a67cff');
+
+    // A trade.
+    const offered = await A.rpc('trade', 'inventory', { name: 'Bob_2' });
+    check('colours: another player sees it in your inventory to trade for', offered.items.find((i) => i.uid === g.uid)?.nc === 'a67cff');
+    const deal = await B.rpc('trade', 'offer', { to: 'alice', give: { uids: [g.uid], money: 0 }, get: { uids: [], money: 1 } });
+    const shownOffer = (await A.waitFor((m) => m.t === 'trades' && m.trades.some((t) => t.id === deal.id)))?.trades.find((t) => t.id === deal.id);
+    check('colours: the offer shows it', shownOffer?.give.items.find((i) => i.uid === g.uid)?.nc === 'a67cff');
+    await A.rpc('trade', 'accept', { id: deal.id });
+    check('colours: a traded item keeps its coloured name', (await row(A.user.id, g.uid))?.nc === 'a67cff' && (await row(A.user.id, g.uid))?.name === 'coloured' && A.st.inv.find((i) => i.uid === g.uid)?.nc === 'a67cff');
+
+    // The Market: listed, shown, bought.
+    const listed = await A.rpc('p2p', 'list', { uid: g.uid, price: 1 });
+    check('colours: listed on the Market with it', (await serverState(A.user.id)).listed.find((i) => i.uid === g.uid)?.nc === 'a67cff');
+    const found = await B.rpc('p2p', 'browse', { text: skinDef.n, sort: 'new' });
+    check('colours: the Market shows it to buyers', found.rows.find((x) => x.lid === listed.lid)?.item.nc === 'a67cff', JSON.stringify(found.rows.find((x) => x.lid === listed.lid)?.item));
+    await B.rpc('p2p', 'buy', { lid: listed.lid, price: 1 });
+    check('colours: and bought with it', (await row(B.user.id, g.uid))?.nc === 'a67cff' && (await row(B.user.id, g.uid))?.name === 'coloured' && await (async () => { for (let i = 0; i < 80 && !B.st.inv.find((x) => x.uid === g.uid); i++) await wait(25); return B.st.inv.find((x) => x.uid === g.uid)?.nc === 'a67cff'; })());
+
+    // A new colour is a new tag; removing the tag removes its colour.
+    await B.act('tools.name', { uid: g.uid, name: 'coloured', nc: null });
+    check('colours: the same name in the default look is a new tag, and no colour is kept', !('nc' in (await row(B.user.id, g.uid))) && await tagsLeft() === tags0 - 2);
+    await B.act('tools.buy', { id: 'nametag' });
+    await B.act('tools.name', { uid: g.uid, name: 'again', nc: 'e55cf0' });
+    const removed = await B.act('tools.unname', { uid: g.uid });
+    check('colours: removing the Name Tag removes its colour, on the server and in the mirror', !('nc' in (await row(B.user.id, g.uid))) && !('nc' in removed.item) && !('nc' in B.st.inv.find((i) => i.uid === g.uid)));
     await wait(50);
   }
   }

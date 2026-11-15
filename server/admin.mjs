@@ -676,12 +676,13 @@ export class Admin {
     return { id: s.id, user: { id: s.user_id, name: s.name }, label: s.label, kind: s.kind, by: s.by_name, created: num(s.created), state: parse(s.state), config: parse(s.config) ?? null };
   }
 
-  // A name staff cleared stays cleared when a snapshot from before that comes back (the audit log has the item and the name).
+  // A name staff cleared stays cleared when a snapshot from before that comes back (the audit log has the item and the name),
+  // and its colour with it.
   async keepNamesCleared(st) {
     const named = ownedItems(st).filter(customName);
     if (!named.length) return;
     const { rows } = await this.db.query("SELECT detail->>'uid' AS uid, detail->>'name' AS name FROM audit WHERE action = 'items.unname' AND detail->>'uid' = ANY($1::text[])", [named.map((it) => it.uid)]);
-    for (const it of named) if (rows.some((r) => r.uid === it.uid && r.name === it.name)) delete it.name;
+    for (const it of named) if (rows.some((r) => r.uid === it.uid && r.name === it.name)) { delete it.name; delete it.nc; }
   }
 
   async snapRestore(actor, a) {

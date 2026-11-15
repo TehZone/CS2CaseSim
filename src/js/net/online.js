@@ -76,7 +76,10 @@ const FACE = 'face1';
 // address), then the server's JSON and the game's binary frames (play/net-codec.js). A server whose welcome doesn't name pvp1
 // has no online matches (net.hasPvp()).
 const PVP = 'pvp1';
-const CAPS = [LEAN, P2P, FACE, PVP];
+// nc1: name colours (engine/namecolor.js): storage.name and tools.name take nc, a Storage Unit's label's or a Name Tag's
+// colour. A server whose welcome doesn't name it is from before colours: the pages pick none there (backend.js can('nameColor')).
+const NC = 'nc1';
+const CAPS = [LEAN, P2P, FACE, PVP, NC];
 let caps = new Set();
 const TRADES_SHOWN = 30; // (the server's MAX_LIST: a trades.d keeps the list to the 30 latest)
 // The one server the game plays on, and the only place its address is written: changing it is this one line, and only
@@ -531,6 +534,7 @@ const remoteBackend = {
   act(name, args) {
     return rpc('act', name, args);
   },
-  // What this connection's server can do that an older one can't (backend.js can): 'buyOpen', case.open's buy, came with lean1.
-  can: (what) => what === 'buyOpen' && net.lean(),
+  // What this connection's server can do that an older one can't (backend.js can): 'buyOpen', case.open's buy, came with lean1;
+  // 'nameColor', a colour with a unit's label or a Name Tag (nc1).
+  can: (what) => (what === 'buyOpen' && net.lean()) || (what === 'nameColor' && caps.has(NC)),
 };

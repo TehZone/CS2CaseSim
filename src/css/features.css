@@ -548,6 +548,35 @@ a.db-owner:hover { text-decoration: underline; }
 .nt-entry .input { flex: 1; min-width: 0; }
 .nt-msg { min-height: 18px; margin-top: 6px; font-size: 12px; color: var(--red); }
 .nt-warn { margin: 4px 0 0; font-size: 12px; line-height: 1.5; }
+/* The colour of a player's name for an item (namecolor.js): the palette as swatches (radios: the arrow keys move through
+   them), the custom colour in a rainbow ring, the name as it will look, and a note when a colour is lightened to be read */
+.nc-pick { min-width: 0; margin: 12px 0 0; padding: 0; border: 0; }
+.nc-pick legend { margin-bottom: 6px; padding: 0; font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.nc-row { display: flex; align-items: flex-start; gap: 5px; }
+.nc-swatches { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.nc-sw { position: relative; display: block; flex: none; width: 22px; height: 22px; cursor: pointer; }
+.nc-sw input[type=radio] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.nc-sw span { display: block; width: 100%; height: 100%; border-radius: var(--radius); background: var(--sw); border: 1px solid rgba(0, 0, 0, .55); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .14); transition: transform .1s; }
+.nc-sw:hover span { transform: scale(1.1); }
+.nc-sw.def span { background: linear-gradient(135deg, transparent calc(50% - 1.5px), var(--red) calc(50% - 1.5px) calc(50% + 1.5px), transparent calc(50% + 1.5px)), var(--text); }
+.nc-sw input:checked + span, .nc-custom.on { outline: 2px solid #fff; outline-offset: 2px; }
+.nc-sw input:focus-visible + span, .nc-custom:has(input:focus-visible) { box-shadow: 0 0 0 4px rgba(245, 207, 107, .55); }
+.nc-custom { padding: 3px; border-radius: var(--radius); background: conic-gradient(#ff5c5c, #ffe566, #8ad064, #5cd6ff, #6f87ff, #e55cf0, #ff5c5c); }
+.nc-custom input[type=color] { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: pointer; -webkit-appearance: none; appearance: none; }
+.nc-custom input[type=color]::-webkit-color-swatch-wrapper { padding: 0; }
+.nc-custom input[type=color]::-webkit-color-swatch { border: 1px solid rgba(0, 0, 0, .6); border-radius: 1px; }
+.nc-sample { margin-top: 10px; padding: 6px 10px; font-size: 14px; color: var(--text); background: rgba(0, 0, 0, .3); border: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nc-sample.nc-tag { font-style: italic; }
+.nc-sample.nc-label { font-weight: 600; color: var(--hi); }
+.nc-note { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.nc-note:empty { display: none; }
+/* The Name Tag window: the plate shows the name in its colour as it's typed, so the sample is for when there's no plate; and
+   in a short window the item and the plate are smaller, so the colours are in view above the buttons */
+.nt-plate:not([hidden]) ~ .nc-pick .nc-sample { display: none; }
+@media (max-height: 820px) {
+  .nt-card { width: 180px; margin-bottom: 8px; }
+  .nt-plate { max-width: 300px; margin-bottom: 8px; }
+}
 .st-modal { width: min(640px, 94vw); }
 .st-desc { margin: 0 0 12px; text-align: center; }
 .st-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }

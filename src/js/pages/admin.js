@@ -203,6 +203,7 @@ function banStatus(b) {
 // Items as the server keeps them: one this build's game data doesn't know mustn't break the page.
 const safe = (fn, fallback) => (i) => { try { return fn(i); } catch { return fallback; } };
 const itemName = safe((i) => I.itemName(i), 'Unknown item');
+const nameHtml = safe((i) => I.nameHtml(i), 'Unknown item'); // (a player's name for it in its colour)
 const itemValue = safe((i) => I.itemValue(i), 0);
 const itemImg = safe((i) => I.itemImage(i, 's'), '');
 const itemColor = safe((i) => I.rarityInfo(i).c, '#b0c3d9');
@@ -1045,8 +1046,8 @@ function reservedUids(p) {
   return s;
 }
 const INSPECTABLE = new Set(['skin', 'sticker', 'agent', 'charm']);
-// Where an item is: in the inventory, or in which Storage Unit (their labels, for the filter and the rows).
-const unitLabel = (p, uid) => unitsOf(p.state || {}).find((u) => u.uid === uid)?.name || 'Unlabelled unit';
+// Where an item is: in the inventory, or in which Storage Unit (their labels, for the filter, and in their colours the rows).
+const unitLabelHtml = (p, uid) => I.unitLabelHtml(unitsOf(p.state || {}).find((u) => u.uid === uid) || {}, 'Unlabelled unit');
 function drawInventory(el, p) {
   const edit = canChange(p.user), v = view.inv, units = unitsOf(p.state || {}), counts = unitCounts(p.state || {}); // (one pass for up to 100 units)
   if (v.where !== 'all' && v.where !== 'inv' && !units.some((u) => u.uid === v.where)) v.where = 'all';
@@ -1095,12 +1096,12 @@ function drawInvList(el, p) {
       i.sn && `<span class="tag sn" title="Serial number">#${+i.sn}</span>`, i.kc && '<span class="tag" title="A charm is attached">Charm</span>',
       i.stk?.length && `<span class="tag" title="Stickers">${+i.stk.length} stk</span>`, reserved.has(i.uid) && '<span class="tag pat" title="In an open trade offer">In trade</span>',
       i.lid && `<span class="tag pat" title="Listed on the Market for ${money(+i.lp || 0)}: take it down in the Market tab to change it">Listed</span>`,
-      i.su && `<span class="tag" title="In this Storage Unit">In ${esc(unitLabel(p, i.su))}</span>`,
+      i.su && `<span class="tag" title="In this Storage Unit">In ${unitLabelHtml(p, i.su)}</span>`,
       i.t === 'unit' && `<span class="tag" title="Items in it">${(counts.get(i.uid) || 0).toLocaleString()} items</span>`].filter(Boolean).join('');
     return `<tr style="--rc:${esc(itemColor(i))}" class="${v.sel.has(i.uid) ? 'sel' : ''}">
       ${edit ? `<td class="cb"><input type="checkbox" data-uid="${esc(i.uid)}" ${v.sel.has(i.uid) ? 'checked' : ''} ${res ? `disabled title="${i.lid ? 'Listed on the Market' : 'In an open trade offer'}"` : ''}></td>` : ''}
       <td class="adm-thumb"><img loading="lazy" src="${esc(itemImg(i))}" alt=""></td>
-      <td><div class="adm-iname ${i.stt ? 'stt' : i.sv ? 'sv' : ''}">${esc(itemName(i))}</div><div class="adm-uid">${esc(i.uid)}</div></td>
+      <td><div class="adm-iname ${i.stt ? 'stt' : i.sv ? 'sv' : ''}">${nameHtml(i)}</div><div class="adm-uid">${esc(i.uid)}</div></td>
       <td class="nw">${wk ? `<b class="wk" style="--wc:${WEAR_BY_KEY[wk].c}">${wk}</b>${(+i.fl).toFixed(6)}` : '<span class="dim">—</span>'}</td>
       <td class="nw">${i.sd != null ? +i.sd : i.pat != null ? '#' + (+i.pat) : '<span class="dim">—</span>'}</td>
       <td class="num green">${money(itemValue(i))}</td><td class="adm-tags">${tags}</td>
@@ -1127,7 +1128,7 @@ function drawInvList(el, p) {
 // A name that shouldn't be there comes off (moderators can too; the item stays, and it's logged).
 async function clearItemName(p, item, btn) {
   const u = p.user, own = !online() && isSelf(u), real = esc(I.realName(item));
-  if (!(await confirmDialog(`Clear the name "<b><bdi>${esc(I.customName(item))}</bdi></b>" from ${own ? 'your' : `<b>${esc(u.name)}</b>'s`} ${real}? The item stays as it is, and this goes in the audit log.`, { ok: 'Clear name', danger: true }))) return;
+  if (!(await confirmDialog(`Clear the name <b${I.nameStyle(item)}>"<bdi>${esc(I.customName(item))}</bdi>"</b> from ${own ? 'your' : `<b>${esc(u.name)}</b>'s`} ${real}? The item stays as it is, and this goes in the audit log.`, { ok: 'Clear name', danger: true }))) return;
   if (await run(btn, 'items.unname', { id: u.id, uid: item.uid }, `Cleared the name on ${real}`)) afterChange();
 }
 async function removeItems(p, btn) {

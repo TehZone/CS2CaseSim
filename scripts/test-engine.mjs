@@ -1910,6 +1910,171 @@ function tierFreq(box, n) {
   }
 }
 
+// ---- name colours: a Storage Unit's label and a Name Tag's name, in a colour (item.nc) -------------------------------------
+{
+  const NC = await E('namecolor');
+  const SU = await E('storage');
+  const N = await E('npcs');
+  const DBE = await E('database');
+  const ADM = await E('admin');
+  const P2 = await E('p2p');
+  const { upgradeState } = await E('economy');
+  const ak = Object.values(D.skins).find((s) => s.w === 'AK-47' && !s.v && s.stt);
+  const setup = () => {
+    const st = { ...freshState(), money: 1000 };
+    const run = (name, args, o) => { const c = ACT.makeCtx(st, { rng, ...o }); const r = ACT.runAction(c, name, args); return { r, d: ACT.delta(c) }; };
+    const gun = (x = {}) => { const it = { ...I.makeSkinItem(ak, { stt: false, r: rng, src: 'test' }), ...x }; st.inv.unshift(it); return it; };
+    const tag = () => run('tools.buy', { id: I.NAME_TAG }).r.items[0];
+    const unit = (name = 'stash', nc) => { const u = run('storage.buy', {}).r.items[0]; run('storage.name', { unit: u.uid, name, ...(nc !== undefined ? { nc } : {}) }); return u; };
+    return { st, run, gun, tag, unit };
+  };
+  const code = (fn) => { try { fn(); } catch (e) { return e instanceof ACT.GameError ? e.code : 'crash: ' + e.message; } return null; };
+  const tags = (st) => st.inv.filter((i) => i.t === 'tool' && i.id === I.NAME_TAG).length;
+  const BAD = ['red', 'ff00', 'fff', 'ff5c5cff', 'gggggg', '#12345', 'rgb(255,0,0)', '<b>', 'ff5c5c" onload="x', 'ff5c5c;background:url(x)', '\u0000ff5c5c', 'x'.repeat(5000), 123, 0xff5c5c, true, {}, ['ff5c5c']];
+
+  // The validator
+  check('colours: six hex digits, kept lowercase with no #', NC.cleanColor('ff5c5c') === 'ff5c5c' && NC.cleanColor('#FF5C5C') === 'ff5c5c' && NC.cleanColor(' a67cff ') === 'a67cff' && NC.cleanColor('000000') === '000000');
+  check('colours: anything else isn\'t one', BAD.every((v) => NC.cleanColor(v) === null) && [null, undefined, ''].every((v) => NC.cleanColor(v) === null), BAD.filter((v) => NC.cleanColor(v) !== null).map(String).join(' | '));
+  check('colours: an action takes none (the default look) or a colour, and nothing else', [null, undefined, '', false].every((v) => NC.colorArg(v) === null) && NC.colorArg('#E55CF0') === 'e55cf0' && BAD.every((v) => NC.colorArg(v) === undefined));
+  const palette = NC.NAME_COLORS.map(([c]) => c);
+  check('colours: a palette of 12 to 16, the default look first, each one different', palette.length >= 12 && palette.length <= 16 && palette[0] === null && new Set(palette).size === palette.length
+    && palette.slice(1).every((c) => NC.cleanColor(c) === c) && NC.NAME_COLORS.every(([, n]) => typeof n === 'string' && n));
+  check('colours: every one of the palette reads as it is on the dark UI', palette.slice(1).every((c) => NC.readableColor(c) === c), palette.slice(1).filter((c) => NC.readableColor(c) !== c).join());
+  // (none looks like the default look, a Name Tag's #e6e9ec or a label's #f2f4f6: a tag for a colour that looks the same would be for nothing)
+  const rgbOf = (h) => [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)), apart = (a, b) => Math.hypot(...rgbOf(a).map((x, i) => x - rgbOf(b)[i]));
+  check('colours: none of the palette looks like the default look (no white)', !palette.includes('ffffff') && palette.slice(1).every((c) => apart(c, 'e6e9ec') >= 60 && apart(c, 'f2f4f6') >= 60),
+    palette.slice(1).filter((c) => apart(c, 'e6e9ec') < 60 || apart(c, 'f2f4f6') < 60).join());
+  const dark = ['000000', '0000ff', '1c2229', '330000', '202020', '4b0082'];
+  check('colours: one too dark to read is lightened until it reads (4.5:1 on the panels), and no further', dark.every((c) => NC.readableColor(c) !== c && NC.contrast(NC.readableColor(c), '1c2229') >= 4.5 && NC.contrast(NC.readableColor(c), '1c2229') < 4.8),
+    dark.map((c) => `${c}->${NC.readableColor(c)}`).join(' '));
+  const blue = NC.readableColor('0000ff');
+  check('colours: and keeps its hue (blue stays blue)', parseInt(blue.slice(4, 6), 16) === 255 && parseInt(blue.slice(0, 2), 16) === parseInt(blue.slice(2, 4), 16), blue);
+  check('colours: what isn\'t a colour has nothing to draw', NC.readableColor('nope') === null && NC.readableColor(null) === null);
+
+  // Storage Units: the label's colour, picked with the label, free
+  {
+    const { st, run, unit, gun } = setup();
+    const u = unit('stash', '#FF5C5C');
+    check('Storage Unit colour: set with the label, kept as six lowercase digits', u.name === 'stash' && u.nc === 'ff5c5c' && I.nameColor(u) === 'ff5c5c' && I.itemName(u) === 'Storage Unit "stash"');
+    const money = st.money, at = u.mod;
+    const { d } = run('storage.name', { unit: u.uid, name: 'stash', nc: '6f87ff' }, { now: at + 1000 });
+    check('Storage Unit colour: the colour alone can change, for free, as a change to the unit', u.name === 'stash' && u.nc === '6f87ff' && st.money === money && u.mod === at + 1000 && d.upd.some((i) => i.uid === u.uid && i.nc === '6f87ff'));
+    run('storage.name', { unit: u.uid, name: 'renamed' });
+    check('Storage Unit colour: a game from before colours renames it and the colour stays', u.name === 'renamed' && u.nc === '6f87ff');
+    run('storage.name', { unit: u.uid, name: 'renamed', nc: null });
+    check('Storage Unit colour: back to the default look (no colour kept at all)', !('nc' in u) && I.nameColor(u) === null);
+    run('storage.name', { unit: u.uid, name: 'renamed', nc: 'a67cff' });
+    const refused = BAD.map((nc) => [nc, code(() => run('storage.name', { unit: u.uid, name: 'other', nc }))]);
+    check('Storage Unit colour: what isn\'t a colour is refused, and nothing changes', refused.every(([, c]) => c === 'color') && u.name === 'renamed' && u.nc === 'a67cff', refused.filter(([, c]) => c !== 'color').map(([v, c]) => `${String(v).slice(0, 20)}:${c}`).join(' '));
+    check('Storage Unit colour: a blank label is still refused first', code(() => run('storage.name', { unit: u.uid, name: ' ', nc: 'ff0000' })) === 'bad' && u.nc === 'a67cff');
+    const g = gun();
+    run('storage.deposit', { unit: u.uid, uids: [g.uid] });
+    run('storage.retrieve', { unit: u.uid, uids: [g.uid] });
+    check('Storage Unit colour: deposits and retrievals leave it as it is', u.nc === 'a67cff' && u.name === 'renamed');
+    check('Storage Unit colour: the item database and profiles show it', DBE.publicCopy(u).nc === 'a67cff' && !('nc' in DBE.publicCopy(g)));
+    const back = upgradeState(JSON.parse(JSON.stringify(st)));
+    check('Storage Unit colour: saved and loaded with the unit', back.inv.find((i) => i.uid === u.uid).nc === 'a67cff');
+    const junk = upgradeState({ money: 1, stats: {}, inv: [{ ...I.makeUnitItem(), name: 'a', nc: '<b>' }, { ...I.makeUnitItem(), name: 'b', nc: '#A67CFF' }, { ...I.makeUnitItem(), nc: 'ff0000' }] });
+    check('Storage Unit colour: a save\'s broken colour is dropped as it loads, one with no label too', !('nc' in junk.inv[0]) && junk.inv[1].nc === 'a67cff' && !('nc' in junk.inv[2]));
+    check('Storage Unit colour: an unlabelled unit has none to show', I.nameColor({ ...I.makeUnitItem(), nc: 'ff0000' }) === null);
+  }
+
+  // Name Tags: the colour is part of the tag
+  {
+    const { st, run, gun, tag } = setup();
+    const g = gun({ stt: true, kills: 3 }), worth = I.itemValue(g);
+    tag();
+    check('Name Tag colour: a bad colour is refused and costs nothing', BAD.every((nc) => code(() => run('tools.name', { uid: g.uid, name: 'x', nc })) === 'color') && tags(st) === 1 && !g.name && !('nc' in g));
+    const { d } = run('tools.name', { uid: g.uid, name: 'Crimson', nc: '#FF5C5C' });
+    check('Name Tag colour: applied with the name, the tag used up', g.name === 'Crimson' && g.nc === 'ff5c5c' && tags(st) === 0 && d.upd.some((i) => i.uid === g.uid && i.nc === 'ff5c5c'));
+    check('Name Tag colour: the name reads the same, and it adds no value', I.itemName(g).endsWith('"Crimson"') && I.nameColor(g) === 'ff5c5c' && I.itemValue(g) === worth);
+    tag();
+    check('Name Tag colour: the same name in the same colour is refused, tag kept', code(() => run('tools.name', { uid: g.uid, name: 'Crimson', nc: 'ff5c5c' })) === 'name' && tags(st) === 1);
+    run('tools.name', { uid: g.uid, name: 'Crimson', nc: '5cd6ff' });
+    check('Name Tag colour: a new colour for the same name is a new tag', g.name === 'Crimson' && g.nc === '5cd6ff' && tags(st) === 0);
+    check('Name Tag colour: and without one it can\'t change', code(() => run('tools.name', { uid: g.uid, name: 'Crimson', nc: 'ff0000' })) === 'notool' && g.nc === '5cd6ff');
+    tag();
+    run('tools.name', { uid: g.uid, name: 'Plain' });
+    check('Name Tag colour: a tag with no colour (and a game from before colours) gives the default look', g.name === 'Plain' && !('nc' in g) && I.nameColor(g) === null);
+    tag();
+    run('tools.name', { uid: g.uid, name: 'Again', nc: 'a67cff' });
+    const removed = run('tools.unname', { uid: g.uid });
+    check('Name Tag colour: removing the tag removes its colour', !('name' in g) && !('nc' in g) && !('nc' in removed.d.upd[0]) && I.nameColor(g) === null);
+    check('Name Tag colour: an item with a colour but no name shows none', I.nameColor({ ...g, nc: 'ff0000' }) === null);
+  }
+
+  // A coloured name travels with the item
+  {
+    const { st, run, gun, tag, unit } = setup();
+    const g = gun();
+    tag();
+    run('tools.name', { uid: g.uid, name: 'travels', nc: 'e55cf0' });
+    const u = unit('box', 'ffe566');
+    run('storage.deposit', { unit: u.uid, uids: [g.uid] });
+    check('Name Tag colour: stored with the item', SU.storedItem(st, g.uid).nc === 'e55cf0');
+    run('storage.retrieve', { unit: u.uid, uids: [g.uid] });
+    const back = st.inv.find((i) => i.uid === g.uid);
+    check('Name Tag colour: retrieved with it', back.nc === 'e55cf0' && back.name === 'travels');
+    check('Name Tag colour: saved and loaded with it', upgradeState(JSON.parse(JSON.stringify(st))).inv.find((i) => i.uid === g.uid).nc === 'e55cf0');
+    check('Name Tag colour: the item database (and so profiles, the Market and matches) shows it', DBE.publicCopy(back).nc === 'e55cf0' && DBE.publicCopy(back).name === 'travels');
+    const listed = P2.toListed(back, { lid: 'l1', price: 5, at: 1 });
+    check('Name Tag colour: listed on the Market and back with it', listed.nc === 'e55cf0' && P2.fromListed(listed).nc === 'e55cf0');
+    run('npc.tick');
+    const npc = N.crowd(st.social.seed).find((n) => n.type === 'collector');
+    N.npcState(st.social, npc.id).money = 1e6;
+    const r = run('npc.offer', { npc: npc.id, give: { uids: [back.uid] }, get: { money: 0.01 } }).r;
+    check('Name Tag colour: traded to an NPC with it', r.result === 'accepted' && st.social.npcs[npc.id].inv.find((i) => i.uid === g.uid)?.nc === 'e55cf0');
+  }
+
+  // A colour with no name to go with, or a broken one (a server from before colours could leave one when it took a tag off):
+  // never sent to anyone, and gone when the save loads, wherever the item is
+  {
+    const { st, run, gun, tag, unit } = setup();
+    const named = gun(), bare = gun({ nc: 'ff0000' }), broken = gun({ name: 'odd', nc: 'red;background:url(x)' }), sticker = { ...I.makeSkinItem(ak, { stt: false, r: rng, src: 'test' }), t: 'sticker', name: 'x', nc: 'ff0000' };
+    tag();
+    run('tools.name', { uid: named.uid, name: 'kept', nc: 'A67CFF' });
+    check('publicCopy: only a colour, and only with its name', DBE.publicCopy(named).nc === 'a67cff' && !('nc' in DBE.publicCopy(bare)) && !('nc' in DBE.publicCopy(broken)) && !('nc' in DBE.publicCopy(sticker))
+      && !('nc' in DBE.publicCopy({ ...I.makeUnitItem(), nc: 'ff0000' })));
+    const u = unit('box');
+    const inUnit = gun({ nc: '00ff00' }), onMarket = { ...gun({ nc: '0000ff' }), lid: 'l9', lp: 5, lat: 1 };
+    run('storage.deposit', { unit: u.uid, uids: [inUnit.uid] });
+    st.inv = st.inv.filter((i) => i.uid !== onMarket.uid);
+    st.listed = [onMarket];
+    const back = upgradeState(JSON.parse(JSON.stringify(st))), find = (uid) => [...back.inv, ...back.stored, ...back.listed].find((i) => i.uid === uid);
+    check('colours: a save\'s colour with no name goes as it loads (inventory, Storage Units, the Market), a broken one too, and a good one stays',
+      !('nc' in find(bare.uid)) && !('nc' in find(inUnit.uid)) && !('nc' in find(onMarket.uid)) && !('nc' in find(broken.uid)) && find(broken.uid).name === 'odd' && find(named.uid).nc === 'a67cff');
+  }
+
+  // Staff taking a bad name off take its colour too
+  {
+    const { st, gun, tag, run } = setup();
+    const g = gun();
+    tag();
+    run('tools.name', { uid: g.uid, name: 'rude one', nc: 'ff5c5c' });
+    const out = ACT.clearNameForStaff(ACT.makeCtx(st), g.uid);
+    check('Name Tag colour: a name staff clear goes with its colour', out.name === 'rude one' && !('name' in g) && !('nc' in g));
+  }
+
+  // A save file: a colour as the game keeps one, on an item with a name
+  {
+    const { st, gun, tag, run, unit } = setup();
+    const g = gun();
+    tag();
+    run('tools.name', { uid: g.uid, name: 'filed', nc: '8ad064' });
+    unit('labelled', 'c6f04f');
+    const good = ADM.saveFile(JSON.parse(JSON.stringify(st)));
+    check('save file: a coloured name and label come through as they are', good.inv.find((i) => i.uid === g.uid).nc === '8ad064' && good.inv.find((i) => i.t === 'unit').nc === 'c6f04f');
+    const refused = (fn) => { const v = JSON.parse(JSON.stringify(st)); fn(v.inv.find((i) => i.uid === g.uid)); try { ADM.saveFile(v); return false; } catch (e) { return e instanceof ACT.GameError; } };
+    check('save file: a colour the game doesn\'t keep is refused (written another way, or none at all)', refused((it) => { it.nc = '#8AD064'; }) && refused((it) => { it.nc = 'red'; }) && refused((it) => { it.nc = 5; }) && refused((it) => { it.nc = { a: 1 }; }));
+    const left = JSON.parse(JSON.stringify(st)), leftG = left.inv.find((i) => i.uid === g.uid);
+    delete leftG.name;
+    check('save file: a colour left on an item with no name (a server from before colours took the tag off) just goes', !('nc' in ADM.saveFile(left).inv.find((i) => i.uid === g.uid)));
+    const leftBroken = JSON.parse(JSON.stringify(left));
+    leftBroken.inv.find((i) => i.uid === g.uid).nc = 'red;<b>';
+    check('save file: a broken one there goes too (with no name it shows nowhere), and a broken one on a name is refused', !('nc' in ADM.saveFile(leftBroken).inv.find((i) => i.uid === g.uid)) && refused((it) => { it.nc = 'red'; }));
+  }
+}
+
 // ---- a save holding what the game no longer has: worth nothing, and nothing else stops working ---------------------------------
 {
   const { ownedValue } = await E('storage');

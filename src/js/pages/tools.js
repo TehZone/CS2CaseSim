@@ -5,12 +5,13 @@
 import { esc, money } from '../util.js';
 import * as I from '../items.js';
 import { S } from '../state.js';
-import { online } from '../backend.js';
+import { online, can } from '../backend.js';
 import { sfx } from '../audio.js';
 import { openModal, toast, tryAct, confirmDialog, itemCard, openInspect, canInspect, chooseItem } from '../ui.js';
 import { net } from '../net/online.js';
 import * as T from '../engine/tools.js';
 import { namePlatePreview } from '../cs2/skin.js';
+import { colorPicker } from '../namecolor.js';
 
 const pad = (n) => String(n).padStart(6, '0'); // (how CS2's popup writes a counter)
 // What an open trade offer holds: neither it nor a tool in it can be used. (The server and the save have the last word.)
@@ -37,10 +38,14 @@ export async function buyTool(id, n = 1) {
 
 // CS2's Name Tag window: the plate shows what's typed as it's typed; press the tick to preview it on the item (the text locks;
 // the cross starts over), then apply it. With no tag there's no tick, as in CS2. `tool`: the tag to use (else your oldest). An
-// item with a name can have it removed here, with no tag needed.
+// item with a name can have it removed here, with no tag needed. The name's colour is picked here too (it's part of the tag,
+// so it changes with a new one), and shows at once on the plate (or, with no plate, the sample) and the previewed item. A
+// server from before colours takes none, so there's no picker on one (backend.js can).
 export function openNameTag(item, { tool = null, onDone } = {}) {
   let name = null, plate = null; // (the name being previewed; the plate on show)
   const have = tool || freeTools(I.NAME_TAG)[0] || null;
+  const pick = can('nameColor') ? colorPicker({ value: I.nameColor(item), look: 'tag', text: () => input?.value, onChange: () => recolor() }) : null;
+  const color = () => pick?.value() ?? null; // (the colour picked: null, the default look)
   const m = openModal({
     title: 'Use Name Tag', cls: 'nt-modal',
     body: `<div class="nt-card" data-card></div>
@@ -51,21 +56,26 @@ export function openNameTag(item, { tool = null, onDone } = {}) {
         <button class="btn" data-tick title="Preview Name Tag" ${have ? '' : 'hidden'}>Preview</button>
         <button class="btn ghost" data-clear title="Start over." hidden>&times;</button>
       </div>
+      ${pick?.html ?? ''}
       <div class="nt-msg" data-msg></div>
-      <p class="muted nt-warn">${have ? 'A Name Tag can only be used once' : 'You need a <b>Name Tag</b> to rename this item. They\'re in the store, on the Cases page\'s Tools tab.'}</p>`,
+      <p class="muted nt-warn">${have ? `A Name Tag can only be used once${pick ? ': a new name or a new colour takes a new one' : ''}` : 'You need a <b>Name Tag</b> to rename this item. They\'re in the store, on the Cases page\'s Tools tab.'}</p>`,
     foot: `${I.customName(item) ? '<button class="btn danger" data-remove title="Remove the name tag from this item, restoring its original name.">Remove Name Tag</button><span class="spacer"></span>' : ''}
       <button class="btn ghost" data-close>Close</button><button class="btn gold" data-ok disabled>Apply Name Tag</button>`,
   });
   const $ = (s) => m.el.querySelector(s);
   const input = $('[data-name]'), msg = $('[data-msg]'), ok = $('[data-ok]');
+  // (the item as the tag would leave it: the name previewed, in the colour picked)
+  const tagged = () => ({ ...item, name, nc: color() ?? undefined });
+  // Nothing would change: the name it has, in the colour it has.
+  const same = (text = name) => text === item.name && color() === I.nameColor(item);
   const card = () => {
-    $('[data-card]').innerHTML = itemCard(name == null ? item : { ...item, name });
+    $('[data-card]').innerHTML = itemCard(name == null ? item : tagged());
     if (name != null && canInspect(item)) {
       const b = document.createElement('button');
       b.className = 'btn sm';
       b.textContent = 'Inspect';
       b.title = 'See it on the item';
-      b.addEventListener('click', () => openInspect({ ...item, uid: 'preview-' + item.uid, name }, { preview: true }));
+      b.addEventListener('click', () => openInspect({ ...tagged(), uid: 'preview-' + item.uid }, { preview: true }));
       $('[data-card]').appendChild(b);
     }
   };
@@ -75,10 +85,19 @@ export function openNameTag(item, { tool = null, onDone } = {}) {
     $('[data-clear]').hidden = !on;
     ok.disabled = !(on && have);
   };
+  // A colour picked: on the plate at once, and on the item if it's being previewed (where the same name in the same colour
+  // can't be applied: it would change nothing).
+  const recolor = () => {
+    plate?.set(input.value, color());
+    if (name == null) { if (msg.textContent === 'It already has that name') msg.textContent = ''; return; }
+    msg.textContent = same() ? 'It already has that name' : '';
+    ok.disabled = !have || same();
+    card();
+  };
   const preview = () => {
     if (!have) return;
     const why = T.nameProblem(input.value);
-    if (!why && input.value === item.name) { msg.textContent = 'It already has that name'; return; }
+    if (!why && same(input.value)) { msg.textContent = 'It already has that name'; return; }
     msg.textContent = why;
     if (why) { input.focus(); return; }
     name = input.value;
@@ -94,16 +113,17 @@ export function openNameTag(item, { tool = null, onDone } = {}) {
   const startOver = () => {
     msg.textContent = '';
     input.value = '';
-    plate?.set('');
+    plate?.set('', color());
+    pick?.refresh();
     unlock();
   };
   const apply = async () => {
     if (name == null || ok.disabled) return;
     ok.disabled = true;
-    const r = await tryAct('tools.name', { uid: item.uid, tool: tool?.uid ?? null, name });
+    const r = await tryAct('tools.name', { uid: item.uid, tool: tool?.uid ?? null, name, ...(pick ? { nc: color() } : {}) });
     if (!r) { unlock(); return; }
     sfx.buy();
-    toast(`<b>Name Tag Applied</b> · ${esc(I.itemName(r.item))}`, 'good');
+    toast(`<b>Name Tag Applied</b> · ${I.nameHtml(r.item)}`, 'good');
     m.close();
     onDone?.();
   };
@@ -112,11 +132,12 @@ export function openNameTag(item, { tool = null, onDone } = {}) {
   ok.addEventListener('click', apply);
   $('[data-remove]')?.addEventListener('click', async () => { if (await removeNameTag(item)) { m.close(); onDone?.(); } });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') preview(); });
-  input.addEventListener('input', () => plate?.set(input.value));
+  input.addEventListener('input', () => { plate?.set(input.value, color()); pick?.refresh(); });
+  pick?.mount(m.el);
   namePlatePreview().then((p) => {
     if (!p || !m.el.isConnected) return;
     plate = p;
-    plate.set(input.value);
+    plate.set(input.value, color());
     $('[data-plate]').append(plate.canvas);
     $('[data-plate]').hidden = false;
   }).catch(() => {}); // (no CS2 install: no plate)
