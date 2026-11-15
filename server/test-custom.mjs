@@ -18,6 +18,7 @@ const { badgeLock } = await import('../src/js/engine/badgedata.js');
 const { compareVersions } = createRequire(import.meta.url)('../shared/release.cjs');
 const { itemValue, makeSkinItem } = await import('../src/js/engine/items.js');
 const { buildCustom, writeBuild } = await import('../scripts/build-custom.mjs');
+const CX = await import('../src/js/engine/custom.js');
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'cs2sim-test-custom-'));
 let failed = 0, passed = 0;
@@ -64,10 +65,14 @@ const refused = async (p) => { try { await p; return null; } catch (e) { return 
 
 try {
   // ---- no custom content: exactly as before -----------------------------------------------------------------------------------
-  check('src/data/custom.json isn\'t there, so a deployed server reads none', readCustom(path.join(ROOT, 'src', 'data', 'custom.json')) === null);
+  // (What a deployed server reads is src/data/custom.json, the build of custom/: since 1.1.10 the Nuclear Case. A server
+  // without custom content, as an empty custom/ builds, is started here with custom: null.)
+  const shipped = readCustom(path.join(ROOT, 'src', 'data', 'custom.json'));
+  const liveBuild = buildCustom({ src: path.join(ROOT, 'custom') });
+  check('a deployed server reads src/data/custom.json, the build of custom/ (the same lock)', liveBuild.ok && CX.customLock(shipped) === CX.customLock(liveBuild.custom), `${CX.customLock(shipped)} / ${CX.customLock(liveBuild.custom)}`);
   // (Every server here runs without badges, the lock's other part: custom content is checked on its own. The badges'
   // own gate is checked at the end.)
-  server = await startServer({ port: 0, db: { dataDir: path.join(TMP, 'db1') }, log: quiet, priceRefresh: false, discord: false, release: false, badges: false });
+  server = await startServer({ port: 0, db: { dataDir: path.join(TMP, 'db1') }, log: quiet, priceRefresh: false, discord: false, release: false, custom: null, badges: false });
   const h0 = await (await fetch(base() + '/health')).json();
   check('without custom content /health\'s data is the game data\'s generatedAt, exactly as 1.1.3\'s', h0.data === GENERATED && D.lock === GENERATED, h0.data);
   const t0 = (await post('/api/register', { name: 'oldgame', password: 'secret123' })).body.token;

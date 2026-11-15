@@ -22,7 +22,7 @@ const { dropPool } = await E('levels');
 const { freshState } = await E('economy');
 const { mulberry32 } = await E('util');
 const { analyzePattern } = await E('patterns');
-const { buildCustom, writeBuild, skinId, caseId, norm } = await import('./build-custom.mjs');
+const { buildCustom, writeBuild, builtDiffers, skinId, caseId, norm } = await import('./build-custom.mjs');
 const { imgUrl } = await import('../src/js/util.js');
 const { rareDrop, dropEmbed, customPicture } = await import('../server/drops.mjs');
 const pricing = require('../shared/pricing.cjs');
@@ -52,9 +52,11 @@ try {
   // ---- with no custom content, nothing changes --------------------------------------------------------------------------------
   {
     const game = readGame();
-    check('the game ships no custom content today: no src/data/custom.json, no src/custom/', !fs.existsSync(path.join(DATA, 'custom.json')) && !fs.existsSync(path.join(ROOT, 'src', 'custom')));
+    // (What the game ships is whatever custom/ holds: since 1.1.10 the Nuclear Case. The example lives in docs/custom-example.)
     const live = buildCustom({ src: path.join(ROOT, 'custom') });
-    check('the live custom/ folder has no items (the example lives in docs/custom-example)', live.ok && live.custom === null && live.lock === null);
+    check('the live custom/ folder builds, with no errors', live.ok, live.errors.join(' | '));
+    const differs = builtDiffers(live);
+    check('what the game ships is the build of custom/: src/data/custom.json and src/custom/ are what building it writes', differs === null, differs || '');
     initData(readGame(), { keys });
     check('without custom content the data lock is the game data\'s own generatedAt, exactly', D.lock === game.generatedAt && D.lock === '2026-10-25T01:46:47.726Z' && D.cx === null, D.lock);
     initData(readGame(), { keys, custom: null });
@@ -442,8 +444,10 @@ try {
   {
     const { spawnSync } = await import('node:child_process');
     const run = (...a) => spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'build-custom.mjs'), ...a], { cwd: ROOT, encoding: 'utf8' });
+    const shipped = () => (fs.existsSync(path.join(DATA, 'custom.json')) ? fs.readFileSync(path.join(DATA, 'custom.json'), 'utf8') : null);
+    const before = shipped();
     const a = run('--src', 'docs/custom-example');
-    check('the CLI builds only custom/ into the game: another folder is refused there (it would replace every custom item)', a.status === 1 && /only custom\/ is built into the game/.test(a.stdout) && !fs.existsSync(path.join(DATA, 'custom.json')));
+    check('the CLI builds only custom/ into the game: another folder is refused there (it would replace every custom item)', a.status === 1 && /only custom\/ is built into the game/.test(a.stdout) && shipped() === before);
     const b = run('--src', 'docs/custom-example', '--out', '%TEMP%\\cx-example');
     check('a path with a shell variable left in it is refused (PowerShell leaves %TEMP% as it is)', b.status === 1 && /variable your shell didn't fill in/.test(b.stdout) && !fs.existsSync(path.join(ROOT, '%TEMP%\\cx-example')));
     const c = run('--src', 'docs/custom-example', '--check');

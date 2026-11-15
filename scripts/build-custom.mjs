@@ -742,6 +742,26 @@ export function writeBuild(result, { out = path.join(ROOT, 'src'), history = nul
   }
 }
 
+// What's built into the game (src/data/custom.json and src/custom/) against what writeBuild would write for this result:
+// null when they're the same, or what differs. The checks use it: what the game ships must be the build of custom/. (The
+// version a build is stamped with, custom.json's "app", is the release it shipped in, so any one is the same build.)
+export function builtDiffers(result, { out = path.join(ROOT, 'src') } = {}) {
+  const dataFile = path.join(out, 'data', 'custom.json'), dir = path.join(out, 'custom');
+  const onDisk = fs.existsSync(dir) ? fs.readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile())
+    .map((e) => path.relative(out, path.join(e.parentPath, e.name)).split(path.sep).join('/')).sort() : [];
+  if (!result.custom) return fs.existsSync(dataFile) ? 'src/data/custom.json is there, but custom/ builds nothing' : onDisk.length ? `src/custom/ has ${onDisk.length} files, but custom/ builds nothing` : null;
+  if (!fs.existsSync(dataFile)) return 'there\'s no src/data/custom.json';
+  const text = fs.readFileSync(dataFile, 'utf8');
+  let app = null;
+  try { app = JSON.parse(text).app ?? null; } catch { return 'src/data/custom.json can\'t be read'; }
+  if (text !== JSON.stringify(app == null ? result.custom : { ...result.custom, app }) + '\n') return 'src/data/custom.json isn\'t this build\'s (run npm run custom)';
+  const want = [...result.files.keys()].sort();
+  const missing = want.filter((p) => !onDisk.includes(p)), extra = onDisk.filter((p) => !result.files.has(p));
+  if (missing.length || extra.length) return `src/custom/ has ${extra.length} files the build doesn't write and lacks ${missing.length} it does (run npm run custom)`;
+  const changed = want.filter((p) => !fs.readFileSync(path.join(out, ...p.split('/'))).equals(result.files.get(p)));
+  return changed.length ? `${changed.length} files in src/custom/ aren't this build's, ${changed[0]} first (run npm run custom)` : null;
+}
+
 // ---- command line -----------------------------------------------------------------------------------------------------------
 // A try-out build's folder (--try): the same one every time, so the commands it prints stay the same.
 export const TRY_DIR = path.join(os.tmpdir(), 'cs2sim-custom-try');

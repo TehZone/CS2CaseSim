@@ -30,6 +30,12 @@ const keys = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'data', 'keys.jso
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'cs2sim-wsimport-'));
 const LIVE = path.join(ROOT, 'custom');
 const liveBefore = fs.existsSync(LIVE) ? fs.readdirSync(LIVE, { recursive: true }).sort().join('|') : null;
+// What the game ships (src/data/custom.json and src/custom/, the build of custom/), as it is before the checks.
+const shippedNow = () => {
+  const f = path.join(ROOT, 'src', 'data', 'custom.json'), d = path.join(ROOT, 'src', 'custom');
+  return JSON.stringify([fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null, fs.existsSync(d) ? fs.readdirSync(d, { recursive: true }).sort() : null]);
+};
+const shippedBefore = shippedNow();
 
 // ---- making a creator's files -------------------------------------------------------------------------------------------
 function picture(w, h, fn) {
@@ -405,10 +411,11 @@ try {
   // ---- nothing reaches the game -----------------------------------------------------------------------------------------------------
   const liveAfter = fs.existsSync(LIVE) ? fs.readdirSync(LIVE, { recursive: true }).sort().join('|') : null;
   check('custom/ is as it was', liveAfter === liveBefore);
-  check('the game still ships no custom content (no src/data/custom.json, no src/custom/)', !fs.existsSync(path.join(ROOT, 'src', 'data', 'custom.json')) && !fs.existsSync(path.join(ROOT, 'src', 'custom')));
+  check('what the game ships is as it was (src/data/custom.json, src/custom/)', shippedNow() === shippedBefore);
   const liveBuild = buildCustom({ src: LIVE });
-  initData(JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'data', 'game-data.json'), 'utf8')), { keys });
-  check('and the data lock is the game data\'s own generatedAt, exactly', liveBuild.ok && liveBuild.custom === null && D.lock === game.generatedAt && D.lock === '2026-10-25T01:46:47.726Z');
+  const shippedFile = path.join(ROOT, 'src', 'data', 'custom.json');
+  initData(JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'data', 'game-data.json'), 'utf8')), { keys, custom: fs.existsSync(shippedFile) ? JSON.parse(fs.readFileSync(shippedFile, 'utf8')) : null });
+  check('and the data lock is the one custom/ builds, on the game data\'s own generatedAt', liveBuild.ok && D.lock === CX.dataLock(game.generatedAt, liveBuild.custom) && CX.lockBase(D.lock) === '2026-10-25T01:46:47.726Z', D.lock);
   check('custom-staging/ is ignored by git', /^custom-staging\/$/m.test(fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8')));
 } catch (e) {
   failed++;
