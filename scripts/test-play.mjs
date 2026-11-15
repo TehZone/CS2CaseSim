@@ -5,7 +5,7 @@ import { CollisionWorld, FLAG_PLAYER, FLAG_BULLET, FLAG_GRENADE } from '../src/j
 import { PlayerMovement, MOVE } from '../src/js/play/movement.js';
 import { Game } from '../src/js/play/game.js';
 import { Match, Combatant, SHORT_RULES } from '../src/js/play/match.js';
-import { SmokeField } from '../src/js/play/smoke.js';
+import { SmokeField, SmokeSystem, VOX, NX, NY, NZ, SLOTS } from '../src/js/play/smoke.js';
 import { Deathmatch, ARMS_RACE } from '../src/js/play/modes.js';
 import * as THREE from 'three';
 import { flameAtlas, GroundFire, FireArt } from '../src/js/play/fire.js';
@@ -534,6 +534,202 @@ function fakeGame() {
   for (let i = 0; i < 40; i++) f.heal(0.05);
   ok(f.thickness([-100, 0, 60], [100, 0, 60], 3) > 30, 'the tunnel closes again');
   ok(f.densityAt([0, 0, 60], 18.5) < 0.6 && f.densityAt([0, 0, 60], 21) === 0, 'fades out after 18 seconds');
+}
+
+// ---- smoke's shape: on open ground a round dome, wider than tall (not a diamond with a pyramid's slopes); popped on or
+// near an edge (a ledge, a box, a roof, stairs) the dome carries on out over the edge and the smoke under it pours down
+// to the ground below, none of it left hanging in the air; never through a wall ----
+{
+  const L = NX * NY, ALL = FLAG_PLAYER | FLAG_BULLET;
+  const grow = (w, pos) => { const f = new SmokeField(w, pos, 0, 0); f.ticks = 1; f.fill(); while (!f.done && f.ticks < 500) { f.fill(); f.ticks++; } return f; };
+  const at = (f, k) => [f.min[0] + ((k % NX) + 0.5) * VOX, f.min[1] + ((Math.floor(k / NX) % NY) + 0.5) * VOX, f.min[2] + (Math.floor(k / L) + 0.5) * VOX];
+  const solidAt = (w, p) => w.boxOverlap([p[0] - 8.5, p[1] - 8.5, p[2] - 8.5], [p[0] + 8.5, p[1] + 8.5, p[2] + 8.5], FLAG_BULLET);
+  const resting = (w, f, k) => { const p = at(f, k); return solidAt(w, [p[0], p[1], p[2] - VOX]); };
+  // Smoke hanging in the air: a cell of it with open air that isn't smoke anywhere between it and the ground under it
+  // (the world's ground, below the grid too).
+  const hanging = (w, f, keep = () => true) => f.cells.filter((k) => {
+    if (!keep(k)) return false;
+    const p = at(f, k);
+    for (let j = k - L, z = p[2] - VOX; z > p[2] - 40 * VOX; j -= L, z -= VOX) {
+      if (solidAt(w, [p[0], p[1], z])) return false;
+      if (j < 0 || f.state[j] !== 2) return true;
+    }
+    return true;
+  }).length;
+  const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+  const slow = [];
+  const timely = (f, what) => { if (f.ticks > 45) slow.push(`${what} ${f.ticks}`); return f; };
+
+  // Open ground: how far it reaches along the floor in 16 directions, and how tall its columns stand by how far out.
+  const FLAT = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL]]);
+  const axis = [], diag = [], centre = [], half = [], tall = [], radius = [], cells = [];
+  for (let i = 0; i < 6; i++) {
+    const pos = [8 + i * 5, 8 - i * 3, 2], f = timely(grow(FLAT, pos), 'open ground');
+    const reach = (deg) => {
+      const dx = Math.cos((deg * Math.PI) / 180), dy = Math.sin((deg * Math.PI) / 180);
+      let r = 0;
+      for (let d = 0; d < 400; d += 2) {
+        const x = Math.floor((pos[0] + dx * d - f.min[0]) / VOX), y = Math.floor((pos[1] + dy * d - f.min[1]) / VOX);
+        if (f.state[x + NX * (y + NY * f.startZ)] === 2) r = d; else if (d > 8) break;
+      }
+      return r;
+    };
+    const all = Array.from({ length: 16 }, (_, j) => reach(j * 22.5)), R = mean(all);
+    axis.push(mean([0, 4, 8, 12].map((j) => all[j]))); diag.push(mean([2, 6, 10, 14].map((j) => all[j]))); radius.push(R); cells.push(f.cells.length);
+    const top = new Map();
+    for (const k of f.cells) { const c = k % L; top.set(c, Math.max(top.get(c) ?? 0, Math.floor(k / L) - f.startZ + 1)); }
+    const ring = (r0) => mean([...top].filter(([c]) => Math.abs(Math.hypot(f.min[0] + ((c % NX) + 0.5) * VOX - pos[0], f.min[1] + (Math.floor(c / NX) + 0.5) * VOX - pos[1]) - r0) < 12).map(([, h]) => h));
+    centre.push(ring(0)); half.push(ring(R / 2)); tall.push(Math.max(...top.values()) * VOX);
+  }
+  const round = mean(diag) / mean(axis), dome = mean(half) / mean(centre);
+  ok(Math.abs(round - 1) < 0.1, `smoke on open ground is round: it reaches ${mean(axis).toFixed(0)} along the axes, ${mean(diag).toFixed(0)} along the diagonals (${round.toFixed(2)}; a diamond's 0.71)`);
+  ok(dome > 0.75, `smoke on open ground is a dome: half way out it stands ${(dome * 100).toFixed(0)}% of its height in the middle (a pyramid's 50%)`);
+  ok(mean(radius) > mean(tall) * 1.15 && mean(radius) > 150 && mean(radius) < 230 && cells.every((n) => n === 2300),
+    `and it's wider than tall, the same size as it was: ${mean(radius).toFixed(0)} out, ${mean(tall).toFixed(0)} high, ${mean(cells)} cells`);
+
+  // Ledges, popped at the edge and a little in from it: it pours down to the floor below and spreads there.
+  const ledges = [];
+  for (const H of [48, 96, 160, 200]) {
+    for (const inset of [4, 40]) {
+      const w = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[-3000, -3000, 0], [0, 3000, H], ALL]]);
+      const f = timely(grow(w, [-inset, 8, H + 2]), `ledge ${H}`), beyond = (k) => at(f, k)[0] > 0;
+      const floor = f.cells.filter((k) => beyond(k) && at(f, k)[2] < H && resting(w, f, k));
+      const out = Math.max(0, ...floor.map((k) => at(f, k)[0])), up = f.cells.filter((k) => !beyond(k)).length;
+      // (One dome over the edge, not a tower standing on the ledge: of the cloud 2 cells and more above the ledge, the
+      // share out over the drop.)
+      const high = f.cells.filter((k) => Math.floor(k / L) >= f.startZ + 2), over = high.filter((k) => at(f, k)[0] > 16).length / high.length;
+      ledges.push({ H, inset, floor: floor.length, out, hang: hanging(w, f, beyond), up, over });
+    }
+  }
+  ok(ledges.every((l) => l.floor >= 40 && l.out >= 96 && l.hang === 0 && l.up >= 400 && l.over >= (l.inset > 8 ? 0.15 : 0.28)),
+    'smoke popped on or near a ledge (48, 96, 160, 200 high) is a dome out over the edge, the smoke under it poured down to the floor below, none of it hanging out over the drop (on the floor below, how far out, hanging, still up top, share of the dome over the drop): '
+    + ledges.map((l) => `${l.H}${l.inset > 8 ? ' in' : ''} ${l.floor}/${l.out}/${l.hang}/${l.up}/${l.over.toFixed(2)}`).join(', '));
+  // Roofs and pillars: down to the ground below them (in reach, 320 down), none hanging; too high for the grid (480),
+  // cut off at the edge, none hanging out over the drop, with its full height up top.
+  {
+    const ground = (w, f) => f.cells.filter((k) => at(f, k)[2] < 32 && resting(w, f, k)).length;
+    const cases = [['the edge of a roof 320 high', [[-3000, -3000, 0], [0, 3000, 320]], [-4, 8, 322]], ['a 160 x 160 roof 320 high', [[-80, -80, 0], [80, 80, 320]], [3, -2, 322]],
+      ['a 32 x 32 pillar 235 high', [[-16, -16, 0], [16, 16, 235]], [1, 2, 237]]];
+    const res = cases.map(([what, box, p]) => { const w = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [...box, ALL]]), f = timely(grow(w, p), what); return { what, hang: hanging(w, f), ground: ground(w, f) }; });
+    ok(res.every((r) => r.hang === 0 && r.ground >= 40), 'smoke on a high roof or a pillar pours down to the ground (resting on it, hanging): ' + res.map((r) => `${r.what} ${r.ground}/${r.hang}`).join(', '));
+    const w = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[-3000, -3000, 0], [0, 3000, 480], ALL]]), f = timely(grow(w, [-4, 8, 482]), 'roof 480');
+    const rise = Math.max(...f.cells.map((k) => Math.floor(k / L))) - f.startZ, over = f.cells.filter((k) => at(f, k)[0] > 16).length;
+    const pillar = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[-16, -16, 0], [16, 16, 480], ALL]]), g = timely(grow(pillar, [1, 2, 482]), 'pillar 480');
+    ok(hanging(w, f) === 0 && over === 0 && rise >= 7 && hanging(pillar, g) === 0,
+      `smoke at the edge of a roof too high to reach the ground from: none hanging over the drop (${hanging(w, f)}, ${over} out over it), its full height up top (${rise} cells); none hanging off a pillar that high either (${hanging(pillar, g)})`);
+  }
+
+  // Popped on top of a box: on the box, and down to the ground on every side of it.
+  {
+    const w = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[-64, -64, 0], [64, 64, 64], ALL]]);
+    const f = timely(grow(w, [0, 0, 66]), 'box'), ground = f.cells.filter((k) => at(f, k)[2] < 64 && resting(w, f, k)).map((k) => at(f, k));
+    const sides = [ground.filter((p) => p[0] > 64).length, ground.filter((p) => p[0] < -64).length, ground.filter((p) => p[1] > 64).length, ground.filter((p) => p[1] < -64).length];
+    const onTop = f.cells.filter((k) => { const p = at(f, k); return Math.abs(p[0]) < 64 && Math.abs(p[1]) < 64 && p[2] > 64; }).length;
+    // One dome centred on the grenade, not a narrow pile on the box over a skirt on the floor: of the cloud 2 cells and
+    // more above the box, the share out past its edges (averaged over a few clouds).
+    const past = [];
+    for (let i = 0; i < 4; i++) {
+      const g = grow(w, [i * 3 - 5, 4 - i * 2, 66]), high = g.cells.filter((k) => Math.floor(k / L) >= g.startZ + 2);
+      past.push(high.filter((k) => { const p = at(g, k); return Math.max(Math.abs(p[0]), Math.abs(p[1])) > 72; }).length / high.length);
+    }
+    ok(sides.every((n) => n >= 10) && hanging(w, f) === 0 && onTop >= 100 && mean(past) > 0.4,
+      `smoke popped on a box: one dome over it and out past its edges (${mean(past).toFixed(2)} of it), on it (${onTop}) and down to the ground all round it (${sides.join(', ')}), none hanging (${hanging(w, f)})`);
+  }
+
+  // Down stairs: from a platform 128 high down 8 steps of 16, resting on step after step.
+  {
+    const boxes = [[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[-3000, -3000, 0], [0, 3000, 128], ALL]];
+    for (let s = 0; s < 8; s++) boxes.push([[s * 32, -3000, 0], [(s + 1) * 32, 3000, 128 - (s + 1) * 16], ALL]);
+    const w = world(boxes), f = timely(grow(w, [-24, 8, 130]), 'stairs');
+    const steps = new Set(f.cells.filter((k) => at(f, k)[0] > 0 && resting(w, f, k)).map((k) => Math.floor(at(f, k)[0] / 32)));
+    ok(steps.size >= 4 && hanging(w, f) === 0, `smoke at the top of stairs flows down them: resting on ${steps.size} steps, none hanging (${hanging(w, f)})`);
+  }
+
+  // Never through a wall: along a corridor (96 wide, roofed, closed at one end) and none outside it; none into a closed
+  // room beside it; none over a wall taller than it.
+  {
+    const w = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[-80, -3000, 0], [3000, -48, 128], ALL], [[-80, 48, 0], [3000, 3000, 128], ALL],
+      [[-80, -48, 128], [3000, 48, 160], ALL], [[-80, -48, 0], [-64, 48, 128], ALL]]);
+    const f = timely(grow(w, [0, 0, 2]), 'corridor'), ps = f.cells.map((k) => at(f, k));
+    const outside = ps.filter((p) => Math.abs(p[1]) > 48 || p[2] > 128 || p[0] < -64).length, far = Math.max(...ps.map((p) => p[0]));
+    const room = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[100, -100, 0], [116, 100, 128], ALL], [[300, -100, 0], [316, 100, 128], ALL],
+      [[100, -100, 0], [316, -84, 128], ALL], [[100, 84, 0], [316, 100, 128], ALL], [[100, -100, 128], [316, 100, 144], ALL]]);
+    const g = timely(grow(room, [0, 0, 2]), 'room'), inRoom = g.cells.map((k) => at(g, k)).filter((p) => p[0] > 116 && p[0] < 300 && Math.abs(p[1]) < 84 && p[2] < 128).length;
+    const wall = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[64, -3000, 0], [80, 3000, 300], ALL]]);
+    const h = timely(grow(wall, [0, 0, 2]), 'wall'), over = h.cells.filter((k) => at(h, k)[0] > 80).length;
+    ok(outside === 0 && far > 200 && inRoom === 0 && over === 0, `smoke never goes through a wall: down a corridor ${far.toFixed(0)} and none outside it (${outside}), none into a closed room (${inRoom}), none over a wall taller than it (${over})`);
+  }
+
+  ok(!slow.length, 'the flood fill is done well before the bloom (45 ticks; the bloom takes 96): ' + (slow.join(', ') || 'all are'));
+
+  // The bounds it's drawn and its sight lines clipped by hold all of it; a cloud's arrays, given to the next (release),
+  // keep nothing of the last.
+  {
+    const f = grow(FLAT, [8, 8, 2]);
+    const inside = f.cells.every((k) => { const p = at(f, k); return [0, 1, 2].every((i) => p[i] - 8 >= f.lo[i] && p[i] + 8 <= f.hi[i]); });
+    f.release();
+    const g = grow(FLAT, [8, 8, 2]);
+    let filled = 0;
+    for (let k = 0; k < g.state.length; k++) if (g.state[k] === 2) filled++;
+    ok(inside && filled === g.cells.length && g.cells.length === 2300 && g.thickness([-150, 8, 40], [150, 8, 40], 3) > 30, `smoke's bounds hold all of it (${inside}); a cloud made with another's arrays starts clean (${filled} filled, ${g.cells.length} its own)`);
+    // The one gone, still held on to, reads as empty (not the arrays it gave away), and a bullet through it carves nothing.
+    f.carve([-150, 8, 40], [1, 0, 0], 300);
+    ok(f.densityAt([8, 8, 40], 3) === 0 && f.thickness([-150, 8, 40], [150, 8, 40], 3) === 0 && !g.holes && g.densityAt([8, 8, 40], 3) > 0.9,
+      'a smoke gone (its arrays reused) reads as empty and leaves the new one alone');
+  }
+
+  // Where it starts: on the floor beside a bench the grenade rolled under (not up on the bench), and on the grenade's
+  // side of a thin wall it rests against.
+  {
+    const bench = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[-200, -8, 24], [200, 8, 32], ALL]]), f = grow(bench, [0, 0, 2]);
+    const wall = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[6, -3000, 0], [10, 3000, 200], ALL]]), g = grow(wall, [3, 0, 2]);
+    const fz = at(f, f.start)[2], gx = at(g, g.start)[0], beyond = g.cells.filter((k) => at(g, k)[0] > 10).length;
+    ok(fz < 32 && gx < 6 && beyond === 0, `smoke starts where the grenade is: under a bench, on the floor (${fz}); against a thin wall, on its side (${gx}, ${beyond} past the wall)`);
+  }
+
+  // The bloom: smoke poured off a ledge is seen falling (the bottom of it later than the top), and every cell's in by the
+  // time the bloom reaches it.
+  {
+    const w = world([[[-3000, -3000, -64], [3000, 3000, 0], ALL], [[-3000, -3000, 0], [0, 3000, 160], ALL]]);
+    const f = new SmokeField(w, [-4, 8, 162], 0, 0), when = new Map();
+    for (let t = 1; !f.done && t < 500; t++) { const n = f.cells.length; f.fill(); for (let j = n; j < f.cells.length; j++) when.set(f.cells[j], t / 64); }
+    const z = (k) => Math.floor(k / L), first = (keep) => Math.min(...f.cells.filter(keep).map((k) => f.reach(k)));
+    const top = first((k) => z(k) === f.startZ && at(f, k)[0] > 0), bottom = first((k) => z(k) === Math.min(...f.cells.map(z)));
+    const late = f.cells.filter((k) => when.get(k) > f.reach(k)).length;
+    ok(bottom - top > 0.25 && late === 0 && f.bloomed > 1.5, `smoke poured off a ledge falls: over the edge at ${top.toFixed(2)} s, on the floor at ${bottom.toFixed(2)} s; none filled late (${late})`);
+  }
+}
+
+// ---- the smokes together: several popping at once share the flood fill's work a tick (and none comes in late); only
+// the texture slots that changed go to the GPU ----
+{
+  const ALL = FLAG_PLAYER | FLAG_BULLET, game = { collision: world([[[-3000, -3000, -64], [3000, 3000, 0], ALL]]), now: 0 };
+  const sys = new SmokeSystem(game), when = new Map();
+  for (let i = 0; i < SLOTS; i++) sys.add([i * 500 - 1250, 40, 2]);
+  const empty = sys.fields.every((f) => f.cells.length === 0);
+  let ticks = 0;
+  for (; ticks < 200 && sys.fields.some((f) => !f.done); ticks++) {
+    game.now += 1 / 64;
+    const n = sys.fields.map((f) => f.cells.length);
+    sys.tick(1 / 64);
+    sys.fields.forEach((f, i) => { for (let j = n[i]; j < f.cells.length; j++) when.set(`${i} ${f.cells[j]}`, game.now); });
+  }
+  const late = sys.fields.reduce((s, f, i) => s + f.cells.filter((k) => when.get(`${i} ${k}`) > f.reach(k)).length, 0);
+  ok(empty && ticks < 70 && late === 0 && sys.fields.every((f) => f.cells.length === 2300), `six smokes popping together: filled from the tick after (${empty}), all done in ${ticks} ticks, none late (${late})`);
+  // A renderer that only records what it's sent.
+  const sent = [], r = { copyTextureToTexture: (src, dst, region, at) => sent.push([region.min.z, region.max.z, at.z, src.image.data === dst.image.data]) };
+  const v0 = sys.tex.version;
+  sys.update(); sys.upload(r);
+  const full = sys.tex.version > v0 && !sent.length;
+  game.now = 30; // (past their bloom, not yet fading)
+  for (const f of sys.fields) { f.born = 25; f.until = 43; }
+  sys.update(); sys.upload(r); sent.length = 0;
+  sys.fields[2].carve([-300, -200, 40], [0, 1, 0], 500); // (a bullet through the third)
+  sys.update(); sys.upload(r);
+  const v1 = sys.tex.version, slot = sys.fields[2].slot;
+  ok(full && sent.length === 1 && sent[0][0] === slot * NZ && sent[0][1] === (slot + 1) * NZ && sent[0][2] === slot * NZ && sent[0][3] && sys.tex.version === v1,
+    'smokes on the GPU: all of it the first time, then only the slot that changed: ' + JSON.stringify(sent));
+  sys.dispose();
 }
 
 // ---- Deathmatch and Arms Race scoring ----

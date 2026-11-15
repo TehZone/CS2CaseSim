@@ -22,6 +22,8 @@ uniform sampler3D tSmoke;
 uniform sampler3D tSmokeNoise;
 uniform int smokeCount;
 uniform vec3 smokeMin[${SLOTS}];
+uniform vec3 smokeLo[${SLOTS}]; // (each cloud's bounds, a cell round it: all of it there is to march through)
+uniform vec3 smokeHi[${SLOTS}];
 uniform float smokeSlot[${SLOTS}];
 uniform float smokeLife[${SLOTS}];
 uniform float smokeTime;
@@ -64,7 +66,7 @@ void main() {
   float jitter = hash12(gl_FragCoord.xy + fract(smokeTime) * 61.0);
   for (int i = 0; i < ${SLOTS}; i++) {
     if (i >= smokeCount) break;
-    vec3 bmin = smokeMin[i] + VOX, bmax = smokeMin[i] + (DIM - 1.0) * VOX;
+    vec3 bmin = smokeLo[i], bmax = smokeHi[i];
     vec3 inv = 1.0 / rd;
     vec3 t0 = (bmin - camPos) * inv, t1 = (bmax - camPos) * inv;
     vec3 tn = min(t0, t1), tf = max(t0, t1);
@@ -357,6 +359,7 @@ export class Post {
       su.projInv.value.copy(camera.projectionMatrixInverse);
       su.camWorld.value.copy(camera.matrixWorld);
       su.camPos.value.set(camPos[0], camPos[1], camPos[2]);
+      this.smoke.upload(r); // (the clouds that changed since the last frame)
       r.setRenderTarget(this.smokeRT);
       r.render(this.smokeScene, this.cam);
     }
