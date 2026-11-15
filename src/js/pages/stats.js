@@ -104,7 +104,7 @@ function draw() {
     S.settings[k] = el.type === 'checkbox' ? el.checked : +el.value;
     save();
     if (k === 'volume') { emit('volume'); sfx.click(); }
-    if (k === 'compressCache') setCompress(el.checked);
+    if (k === 'compressCache') Promise.resolve(setCompress(el.checked)).finally(refreshPrepare);
   }));
   root.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', () => action(b.dataset.a, b)));
   const bgSel = root.querySelector('[data-menubg]');
@@ -128,17 +128,25 @@ function draw() {
 const gb = (b) => (b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.round(b / 1e6) + ' MB');
 
 // The "Prepare all" row, kept up to date while the page is open: its progress, the cache's size, how many of Play's maps
-// are made and when it last ran. Its two buttons start their kind of run; while one runs, its button stops it.
+// are made and when it last ran. Its two buttons start their kind of run; while one runs, its button stops it. One
+// timer for the page (a redraw starts it again); refreshPrepare() updates it now (a button or the setting changed).
+let prepTimer = null, prepTick = null, prepSeq = 0;
+const refreshPrepare = () => prepTick?.();
 function watchPrepare(r) {
   const tick = async () => {
-    if (root !== r || !r.isConnected) return;
+    clearTimeout(prepTimer);
+    prepTimer = null;
+    const n = ++prepSeq, stale = () => n !== prepSeq || root !== r || !r.isConnected; // (a newer look is under way)
+    if (stale()) return;
     const st = await prepareStatus().catch(() => null);
     const row = r.querySelector('[data-prep]');
-    if (!st || !row) return;
+    if (stale()) return;
+    if (!st || !row) { prepTimer = setTimeout(tick, 5000); return; } // (main didn't answer: again in a while)
     const bar = row.querySelector('[data-prep-bar]'), m = st.maps;
     bar.hidden = !st.running;
     bar.firstElementChild.style.width = `${Math.min(100, (100 * st.done) / (st.total || 1)).toFixed(1)}%`;
-    row.querySelector('[data-prep-step]').textContent = st.running ? `${st.step}${st.detail ? ' · ' + st.detail : ''} · ${Math.floor((100 * st.done) / (st.total || 1))}%`
+    const stopping = st.stopping ? (st.kind === 'maps' ? ' · stopping after this map' : ' · stopping') : '';
+    row.querySelector('[data-prep-step]').textContent = st.running ? `${st.step}${st.detail ? ' · ' + st.detail : ''} · ${Math.floor((100 * st.done) / (st.total || 1))}%${stopping}`
       : st.step && st.step !== 'Done' ? st.step : '';
     const idle = {
       all: st.last && !st.last.outdated ? 'Check again' : 'Prepare all',
@@ -146,7 +154,7 @@ function watchPrepare(r) {
     };
     for (const [kind, sel] of [['all', 'prepare'], ['maps', 'prepare-maps']]) {
       const btn = row.querySelector(`[data-a="${sel}"]`), mine = st.running && st.kind === kind, other = st.running && !mine;
-      btn.textContent = !mine ? idle[kind] : !st.stopping ? 'Stop' : kind === 'maps' ? 'Stopping after this map…' : 'Stopping…';
+      btn.textContent = !mine ? idle[kind] : st.stopping ? 'Stopping…' : 'Stop';
       btn.disabled = other;
       btn.title = other ? 'Stop the one that’s running first' : '';
     }
@@ -154,15 +162,25 @@ function watchPrepare(r) {
     const clear = r.querySelector('[data-a="cs2clear"]');
     if (clear) clear.disabled = st.running;
     const [size, packing] = await Promise.all([cacheSize().catch(() => null), compactStatus().catch(() => null)]);
+    if (stale()) return;
     const parts = [], disk = size?.disk ?? size?.bytes;
     if (size) parts.push(`Cache: ${disk < size.bytes * 0.97 ? `${gb(disk)} (${gb(size.bytes)} uncompressed)` : gb(size.bytes)}${size.free != null ? ` · ${gb(size.free)} free on the drive` : ''}`);
-    if (m?.total) parts.push(`Maps: ${m.ready} of ${m.total} ready${m.need && m.ready < m.total ? `, about ${gb(m.need)} more` : ''}`);
-    const when = (rec, what) => `${what} ${new Date(rec.at).toLocaleString()}${rec.skipped ? ` (${rec.skipped} items weren't in your install)` : ''}${rec.outdated ? ' · CS2 has been updated since' : ''}`;
+    if (m?.total) {
+      parts.push(`Maps: ${m.ready} of ${m.total} ready${m.check ? `, ${m.check} to check after a CS2 update` : ''}${m.need && m.ready + (m.check || 0) < m.total ? `, about ${gb(m.need)} more` : ''}`);
+    }
+    // (What a run couldn't do: for Prepare all, items this install doesn't have; for Maps only, a map whose export failed.)
+    const skipped = (rec) => {
+      const k = rec.kind === 'maps' ? rec.failed ?? rec.skipped : rec.skipped;
+      if (!k) return '';
+      return rec.kind === 'maps' ? ` (${k === 1 ? "1 map couldn't" : `${k} maps couldn't`} be made)` : ` (${k === 1 ? "1 item wasn't" : `${k} items weren't`} in your install)`;
+    };
+    const when = (rec, what) => `${what} ${new Date(rec.at).toLocaleString()}${skipped(rec)}${rec.outdated ? ' · CS2 has been updated since' : ''}`;
     parts.push(m?.last?.kind === 'maps' ? when(m.last, 'Maps last prepared') : st.last ? when(st.last, 'Last prepared') : 'Not prepared yet');
     row.querySelector('[data-prep-info]').textContent = parts.join(' · ');
     showCompact(r, packing, size);
-    setTimeout(tick, st.running || packing?.running ? 1000 : 5000);
+    prepTimer = setTimeout(tick, st.running || packing?.running ? 1000 : 5000);
   };
+  prepTick = tick;
   tick();
 }
 
@@ -174,6 +192,7 @@ function showCompact(r, c, size) {
   row.hidden = false;
   const box = row.querySelector('[data-s="compressCache"]'), saved = size ? size.bytes - (size.disk ?? size.bytes) : 0;
   box.disabled = c.supported === false;
+  if (c.supported === false) box.checked = false; // (shown off where it can't be; the setting is kept as it is)
   let text;
   if (c.supported === false) text = 'Not available here: Windows can only compress files on an NTFS drive.';
   else if (c.running && c.kind === 'compress') text = `Compressing… ${gb(c.done)} of ${gb(c.total)}`;
@@ -201,19 +220,28 @@ async function action(a, btn) {
     const st = await prepareStatus();
     if (st?.running) {
       // (A map being exported is made to its end: the run stops after it.)
-      if (st.kind === (maps ? 'maps' : 'all')) { prepareCancel(); btn.textContent = maps ? 'Stopping after this map…' : 'Stopping…'; }
+      if (st.kind === (maps ? 'maps' : 'all')) { await prepareCancel(); btn.textContent = 'Stopping…'; refreshPrepare(); }
       return;
     }
     btn.disabled = true;
+    let started = false;
     try {
-      if (await (maps ? prepareMaps() : prepareAll())) toast(maps ? 'Preparing the maps in the background. You can keep playing.' : 'Preparing all CS2 content in the background. You can keep playing.', 'good');
+      started = await (maps ? prepareMaps() : prepareAll());
+      if (started) toast(maps ? 'Preparing the maps in the background. You can keep playing.' : 'Preparing all CS2 content in the background. You can keep playing.', 'good');
     } catch (e) { toast('Could not start: ' + e.message, 'bad'); }
+    if (started) btn.textContent = 'Stop'; // (until the row's next look, at once)
     btn.disabled = false;
+    refreshPrepare();
   }
   if (a === 'cs2clear') {
     if (!(await confirmDialog('Delete the extracted CS2 models and textures? They are re-extracted from your CS2 install as needed.', { ok: 'Rebuild' }))) return;
-    await window.native.cs2Clear();
-    toast('CS2 cache cleared. Restart the game to rebuild it.', 'good');
+    btn.disabled = true;
+    try {
+      await window.native.cs2Clear();
+      toast('CS2 cache cleared. Restart the game to rebuild it.', 'good');
+    } catch (e) { toast('Could not clear the CS2 cache: ' + e.message, 'bad'); }
+    btn.disabled = false;
+    refreshPrepare();
   }
   if (a === 'clearcache') {
     await window.native.clearImageCache();

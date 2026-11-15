@@ -5,6 +5,7 @@
 // left a ranked one.
 import { esc, money } from '../util.js';
 import { cs2Play } from '../cs2/api.js';
+import { prepareStatus } from '../cs2/content.js';
 import { MODES } from '../play/modes.js';
 import { S } from '../state.js';
 import { settingsHtml, bindSettings, playPrefs, savePlayPrefs, privateRanks, matchSettings } from './play-settings.js';
@@ -31,6 +32,7 @@ const KEYS = 'WASD move · Space jump · Ctrl crouch · Shift walk · W into a l
 let mapList = null, mapImages = null; // the installed maps, and CS2's screenshot of each ({ id: url })
 let wingmanMaps = null; // CS2's Wingman maps among them (matchmaking.js mapsFor)
 let rankAsked = false;
+let readyMaps = new Set(), readyAt = 0; // the maps made already (Settings → Prepare, or a match on them), looked at every 5 s at most
 let root = null, unsub = null, unsubPvp = null, ticker = null;
 const nameOf = (id) => mapList?.find((m) => m.id === id)?.name || id;
 const shareMaps = () => mm.setMaps({ maps: mapList, images: mapImages, nameOf, wingman: wingmanMaps });
@@ -49,6 +51,15 @@ export function render(r) {
   if (!mapImages) {
     mapImages = {};
     cs2Play('mapImages').then((imgs) => { mapImages = imgs || {}; shareMaps(); if (root === r) render(r); }).catch(() => {});
+  }
+  if (Date.now() - readyAt > 5000) {
+    readyAt = Date.now();
+    prepareStatus().then((st) => {
+      const ids = st?.maps?.ids || [];
+      if (ids.length === readyMaps.size && ids.every((id) => readyMaps.has(id))) return;
+      readyMaps = new Set(ids);
+      if (root === r) render(r);
+    }).catch(() => {});
   }
   shareMaps();
   unsub ||= mm.onMatchmaking(() => { if (root) render(root); });
@@ -109,7 +120,7 @@ function lobbyHtml(r) {
   const map = priv ? mm.privateMap(p, mode) : null;
   const tiles = (premier ? mapList.filter((m) => ACTIVE_DUTY.includes(m.id)) : mm.mapsFor(mode)).map(({ id, name }) => {
     const on = priv ? id === map : !premier && pool.includes(id);
-    const sub = premier ? 'Active Duty: picked by banning' : priv ? (id === 'de_dust2' ? 'Recommended' : 'The first match prepares the map (a couple of minutes)')
+    const sub = premier ? 'Active Duty: picked by banning' : priv ? (id === 'de_dust2' ? 'Recommended' : readyMaps.has(id) ? 'Ready to play' : 'The first match prepares the map (a couple of minutes)')
       : on ? 'In your search' : 'Click to add to your search';
     return `<button class="play-map ${on ? 'active' : ''} ${priv ? '' : 'pick'}" data-map="${id}" style="${tileStyle(id)}" ${premier || (busy && !priv) ? 'disabled' : ''}>
       <span>${esc(name)}</span><small>${sub}</small></button>`;

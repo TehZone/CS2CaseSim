@@ -2969,13 +2969,54 @@ const shotAt = (p, from, elev, dist = 500) => {
   ok(calls.join() === 'wingman,de_b,de_a' && service.prepareStatus().step === 'Failed: the drive is almost full: 2 of 3 maps ready' && !record('prepared-maps.json'),
     "maps only: stops before a map there's no room for, saying how many are ready");
 
+  // After a CS2 update that rewrote the maps' VPKs (most with nothing in them changed): exports made for the VPK before
+  // are 'to check', kept when the content is the same; the drive check doesn't stop on one that's kept.
+  {
+    const meta = (id, extra) => put(path.join(cache, 'play', id, 'map.json'), JSON.stringify({ version: 14, stamp: 'old-' + id, id, soundscapes: scapes, ...extra }));
+    meta('de_a', { content: 'same' });
+    meta('de_b', { content: 'changed' });
+    meta('de_test', { content: 'same' });
+    service.readyMemo = null;
+    let m = service.mapsReady();
+    ok(m.ready === 0 && m.check === 3 && m.need === 0, `after an update: the maps to check are counted apart, nothing more needed for them (${JSON.stringify(m)})`);
+    // (Online's map list noted de_b's new content: it changed.)
+    put(path.join(cache, 'play', 'content.json'), JSON.stringify({ de_a: { stamp: stampOf('de_a'), c: 'same' }, de_b: { stamp: stampOf('de_b'), c: 'new' } }));
+    m = service.mapsReady();
+    ok(service.mapState('de_a') === 'same' && service.mapState('de_b') === 'missing' && service.mapState('de_test') === 'check' && m.ready === 1 && m.check === 1 && m.need > 0 && m.ids.join() === 'de_a',
+      'after an update: one noted as unchanged is ready, one noted as changed is to export');
+    let listed = 0;
+    pretend.vpkContent = async () => { listed++; return 'same'; };
+    fs.promises.statfs = async () => ({ bavail: 3e9 + 4, bsize: 1 });
+    calls.length = 0;
+    service.prepareMaps(['de_test']);
+    await done();
+    fs.promises.statfs = statfs;
+    ok(calls.join() === 'wingman,de_test,de_a' && listed === 1 && /drive is almost full/.test(service.prepareStatus().step),
+      `after an update, the drive nearly full: a map to check that's unchanged goes ahead, one that changed doesn't (${calls.join()} · ${service.prepareStatus().step})`);
+    delete pretend.vpkContent;
+    fs.rmSync(path.join(cache, 'play', 'content.json'));
+    for (const id of ['de_a', 'de_b', 'de_test']) put(path.join(cache, 'play', id, 'map.json'), JSON.stringify({ version: 14, stamp: stampOf(id), id, soundscapes: scapes }));
+    service.readyMemo = null;
+  }
+
+  // A map that failed is counted apart in the record (Settings: "1 map couldn't be made").
+  {
+    const playMap = service.playMap;
+    service.playMap = async (id) => { if (id === 'de_a') throw new Error('export failed'); return playMap(id); };
+    service.prepareMaps([]);
+    await done();
+    service.playMap = playMap;
+    ok(record('prepared-maps.json')?.failed === 1 && service.prepareStatus().maps.last.failed === 1, 'maps only: a map that failed is recorded as such');
+  }
+
   // With the cache compressed (cs2/compact.cjs): each map straight after it's made, the rest at the end.
   const packs = [], scheduled = [];
   service.compactor = { active: () => true, run: async (o) => { packs.push(o); }, schedule: (why) => scheduled.push(why) };
   service.prepareMaps(['de_b']);
   let sawStep = false;
   while (service.preparing) { if (/· compressing/.test(service.prepareStatus().step)) sawStep = true; await new Promise((r) => setTimeout(r, 0)); }
-  ok(packs.map((o) => (o.dirs ? o.dirs.join() : 'all')).join() === 'play/de_b,play/de_a,play/de_test,all' && packs.every((o) => o.gated === false), 'maps only, compressed: each map as it is made (its folder), then the rest, without waiting for the game to be idle');
+  ok(packs.map((o) => (o.dirs ? o.dirs.join() : 'all')).join() === 'play/de_b,play/de_a,play/de_test,all' && packs.every((o) => o.gate === 'hold' && typeof o.stopped === 'function' && !o.stopped()),
+    'maps only, compressed: each map as it is made (its folder), then the rest, without waiting for the game to be idle (but not during a match), stopped with the run');
   ok(sawStep && service.prepareStatus().step === 'Done' && scheduled.includes('prepare'), 'maps only, compressed: the step says so; a pass is asked for once the run is over');
   packs.length = 0;
   gate = { wait: new Promise((r) => { release = r; }) };
@@ -3000,12 +3041,21 @@ const shotAt = (p, from, elev, dist = 500) => {
   const bakeSky = play.bakeSky;
   play.bakeSky = (from, to) => put(to, 'baked from ' + path.basename(from));
   const skyDir = path.join(cache, 'play', 'de_a');
-  ok(await service.playSky('de_a', 'vpk', skyDir, mat) && fs.readFileSync(path.join(skyDir, 'sky.png'), 'utf8') === 'baked from sky_x_exr_1.exr' && !fs.existsSync(exr) && extracts === 1, "sky: the EXR is deleted once it's baked into the map");
+  // (Not where the cache mustn't be tidied: a development run on the player's own cache, see main.js.)
+  ok(await service.playSky('de_a', 'vpk', skyDir, mat) && fs.existsSync(exr) && extracts === 1 && service.dropSkyExrs() === 0 && fs.existsSync(exr), "sky: nothing deleted where the cache isn't to be tidied");
+  fs.rmSync(exr);
+  service.tidy = true;
+  ok(await service.playSky('de_a', 'vpk', skyDir, mat) && fs.readFileSync(path.join(skyDir, 'sky.png'), 'utf8') === 'baked from sky_x_exr_1.exr' && !fs.existsSync(exr) && extracts === 2, "sky: the EXR is deleted once it's baked into the map");
   service.pendingJobs.add('map:de_b');
-  ok(await service.playSky('de_a', 'vpk', skyDir, mat) && extracts === 2 && fs.existsSync(exr), 'sky: extracted again for the next export, and kept while another map is being exported');
+  ok(await service.playSky('de_a', 'vpk', skyDir, mat) && extracts === 3 && fs.existsSync(exr), 'sky: extracted again for the next export, and kept while another map is being exported');
   ok(service.dropSkyExrs() === 0 && fs.existsSync(exr), "sky: the ones left aren't deleted while a map is being exported");
+  // The hostage maps' exports an older Prepare all made: deleted the same way (Play never offers them).
+  put(path.join(cache, 'play', 'cs_c', 'world.glb'), 'glb');
+  ok(!service.dropHostageMaps().length && fs.existsSync(path.join(cache, 'play', 'cs_c')), "hostage maps: not while a map is being exported");
   service.pendingJobs.delete('map:de_b');
   ok(service.dropSkyExrs() === 1 && !fs.existsSync(exr), 'sky: and are once none is');
+  ok(service.dropHostageMaps().join() === 'cs_c' && !fs.existsSync(path.join(cache, 'play', 'cs_c')) && fs.existsSync(path.join(cache, 'play', 'de_a', 'map.json')), "hostage maps: their exports deleted, the bomb maps' kept");
+  service.tidy = false;
   play.bakeSky = bakeSky;
   fs.rmSync(root, { recursive: true, force: true });
 }

@@ -158,10 +158,13 @@ class CS2Service {
   // shrinkImages(files, maxSize): optional, makes backdrop textures smaller after export (Electron passes one).
   // customKits(): custom content's paint kits ({ fid: kit }, the custom data's `kits`), read when one is asked for.
   // compactor: optional, compresses the cache with Windows' own compression (cs2/compact.cjs; Electron passes one).
-  constructor({ cacheDir, cliPath, cliEnv = {}, log = () => {}, shrinkImages = null, customKits = null, compactor = null }) {
+  // tidy: may it delete what the cache keeps but nothing reads any more (skies' EXRs once baked, the hostage maps'
+  // exports)? The game's own run does; a development run on the player's real cache doesn't (main.js).
+  constructor({ cacheDir, cliPath, cliEnv = {}, log = () => {}, shrinkImages = null, customKits = null, compactor = null, tidy = false }) {
     this.shrinkImages = shrinkImages;
     this.customKits = customKits;
     this.compactor = compactor;
+    this.tidy = tidy;
     this.pendingJobs = new Set(); // Play jobs (playJob) still running
     this.customKitJobs = new Map();
     this.vanityJobs = new Map();
@@ -972,8 +975,8 @@ class CS2Service {
           return result(meta);
         }
       } catch (e) { if (e?.code !== 'ENOENT') this.log('map cache: ' + e.message); }
-      await settle();
-      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+      // (Deleting works even with compact.exe on a file in it; should it not, once it's done with the folder.)
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); } catch { await settle(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); }
       const tmp = path.join(dir, 'tmp');
       fs.mkdirSync(tmp, { recursive: true });
       const content = await cs2.vpkContent(vpk).catch(() => null);
@@ -1159,7 +1162,7 @@ class CS2Service {
       play.bakeSky(local, path.join(dir, 'sky.png'));
       // The EXR (El Dorado's is 250 MB) is read only here: once baked it goes, unless another map's export, which may
       // share the sky, is under way. An export that wants it again extracts it again.
-      if (this.inFiles(local) && !this.otherMapJobs('map:' + id)) fs.rmSync(local, { force: true });
+      if (this.tidy && this.inFiles(local) && !this.otherMapJobs('map:' + id)) fs.rmSync(local, { force: true });
       return true;
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
@@ -1170,7 +1173,7 @@ class CS2Service {
   // Skies' EXRs extracted before playSky dropped them once baked (files/materials/skybox, 276 MB here): deleted when no
   // map is being exported or prepared. Returns how many.
   dropSkyExrs() {
-    if (this.preparing || this.otherMapJobs(null)) return 0;
+    if (!this.tidy || this.preparing || this.otherMapJobs(null)) return 0;
     let n = 0;
     const walk = (d) => {
       let ents;
@@ -1184,6 +1187,21 @@ class CS2Service {
     walk(path.join(this.cacheDir, 'files', 'materials', 'skybox'));
     if (n) this.log(`deleted ${n} sky EXRs, baked into their maps already`);
     return n;
+  }
+
+  // The hostage maps' exports (play/cs_*: about a GB each) an older Prepare all made: Play never offers them, and Prepare
+  // no longer makes them. Deleted when no map is being exported or prepared (made again should one be asked for).
+  // Returns the ids.
+  dropHostageMaps() {
+    if (!this.tidy || this.preparing || this.otherMapJobs(null)) return [];
+    let ids = [];
+    try { ids = fs.readdirSync(path.join(this.cacheDir, 'play'), { withFileTypes: true }).filter((e) => e.isDirectory() && /^cs_[a-z0-9_]+$/i.test(e.name)).map((e) => e.name); } catch {}
+    const gone = ids.filter((id) => {
+      this.playJobs.delete('map:' + id);
+      try { fs.rmSync(path.join(this.cacheDir, 'play', id), { recursive: true, force: true, maxRetries: 3, retryDelay: 500 }); return true; } catch { return false; }
+    });
+    if (gone.length) this.log(`deleted the hostage maps' exports Play doesn't use: ${gone.join(', ')}`);
+    return gone;
   }
 
   // An export that found no sky before the map's own files were looked in (Debris, a community map, came out with a
@@ -1900,8 +1918,9 @@ class CS2Service {
 
   // The steps that make the maps: [label, items, weight, fn, room?] (see runSteps). Each map is made whole (its export,
   // then its soundscapes' sounds), then compressed straight away when the cache is (so a nearly full drive keeps the
-  // 40% it saves for the next map); `room(id)` is the space a map's export may take on the way (its tmp files and its
-  // textures before they're shrunk), none for one made already.
+  // 40% it saves for the next map; not while a match is on: the pass after it does that). `room(id, free)` is the space
+  // a map's export may take on the way (its tmp files and its textures before they're shrunk): none for one made
+  // already, or one CS2 rewrote with nothing in it changed (looked at only when the drive is that full: a CLI run).
   mapSteps(state, ids) {
     const vpkSize = (id) => { try { return fs.statSync(path.join(this.gameDir, 'maps', id + '.vpk')).size; } catch { return 0; } };
     return [
@@ -1909,13 +1928,17 @@ class CS2Service {
       ['Maps', ids, 60, async (id) => {
         state.map = 'map:' + id;
         state.step += ': ' + nameOf(id);
-        await this.playMap(id);
+        try { await this.playMap(id); } catch (e) { state.failed = (state.failed || 0) + 1; throw e; } // (the maps that could not be made)
         await this.playMapSounds(id);
         if (this.compactor?.active() && !state.stop) {
           state.step += ' · compressing';
-          await this.compactor.run({ dirs: ['play/' + id], settledMs: 0, gated: false });
+          await this.compactor.run({ dirs: ['play/' + id], settledMs: 0, gate: 'hold', stopped: () => state.stop });
         }
-      }, (id) => (this.mapReady(id) ? 0 : 3e9 + 3 * vpkSize(id))],
+      }, async (id, free) => {
+        const st = this.mapState(id), need = 3e9 + 3 * vpkSize(id);
+        if (st === 'ready' || st === 'same' || free >= need) return st === 'ready' || st === 'same' ? 0 : need;
+        return st === 'check' && (await this.mapUnchanged(id)) ? 0 : need;
+      }],
       ['Map pictures', [1], 2, () => this.playMapImages()],
     ];
   }
@@ -1953,9 +1976,12 @@ class CS2Service {
           spaceAt = Date.now();
           if (await free() < 3e9) throw new Error('the drive is almost full (less than 3 GB free)');
         }
-        if (room && await free() < room(items[i])) {
-          const m = this.mapsReady();
-          throw new Error(`the drive is almost full: ${m.ready} of ${m.total} maps ready`);
+        if (room) {
+          const f = await free();
+          if (f < await room(items[i], f)) {
+            const m = this.mapsReady();
+            throw new Error(`the drive is almost full: ${m.ready} of ${m.total} maps ready`);
+          }
         }
         state.step = items.length > 1 ? `${label} (${i + 1} of ${items.length})` : label;
         state.map = null;
@@ -1963,11 +1989,11 @@ class CS2Service {
         state.done += weight;
       }
     }
-    // (Not held up by the 3 GB stop: it only frees space.)
+    // (Not held up by the 3 GB stop: it only frees space. Not while a match is on: the pass after it does it.)
     if (compress && !state.stop) {
       state.step = 'Compressing the cache';
       state.map = null;
-      await this.compactor.run({ settledMs: 15000, gated: false });
+      await this.compactor.run({ settledMs: 15000, gate: 'hold', stopped: () => state.stop });
       state.done += COMPRESS;
     }
   }
@@ -2020,46 +2046,77 @@ class CS2Service {
   }
 
   // prepared.json (Prepare all) or prepared-maps.json (Maps only): when it last ran to its end, and on which game build
-  // (so a CS2 update can be noticed). Both { at, stamp, maps: { id: the map VPK's stamp }, skipped }: an older build reads
+  // (so a CS2 update can be noticed). Both { at, stamp, maps: { id: the map VPK's stamp }, skipped (what failed), failed (the maps) }: an older build reads
   // prepared.json as it always has.
   writePrepared(state) {
     const maps = state.kind === 'maps';
     const ids = maps ? this.bombMaps() : this.playMaps().map((m) => m.id);
     const file = maps ? 'prepared-maps.json' : 'prepared.json';
     try {
-      fs.writeFileSync(path.join(this.cacheDir, file), JSON.stringify({ at: Date.now(), stamp: this.cs2.vpkStamp(), maps: Object.fromEntries(ids.map((id) => [id, this.mapStamp(id)])), skipped: state.skipped }));
+      fs.writeFileSync(path.join(this.cacheDir, file), JSON.stringify({ at: Date.now(), stamp: this.cs2.vpkStamp(), maps: Object.fromEntries(ids.map((id) => [id, this.mapStamp(id)])), skipped: state.skipped, failed: state.failed || 0 }));
     } catch (e) { this.log(file + ': ' + e.message); }
   }
 
-  // Is a map exported for this install's VPK of it (a match on it starts without exporting it first; see playMap)?
-  // Kept by map.json's time, as Settings asks every second.
-  mapReady(id) {
+  // A map's export against this install's VPK of it (see playMap): 'ready' (made from it: a match on it starts without
+  // exporting it first), 'same' (made from the one before a CS2 update that rewrote it with nothing in it changed, as
+  // play/content.json knows: the first load keeps it), 'check' (the same, not looked at yet: most are kept), or
+  // 'missing' (none, too old, or the map changed). Kept by the files' times, as Settings asks every second.
+  mapState(id) {
     const file = path.join(this.cacheDir, 'play', id, 'map.json'), stamp = this.mapStamp(id);
     let mtime;
-    try { mtime = fs.statSync(file).mtimeMs; } catch { return false; }
+    try { mtime = fs.statSync(file).mtimeMs; } catch { return 'missing'; }
+    const kept = this.mapContents()[id], known = kept?.stamp === stamp ? kept.c : null;
     const memo = (this.readyMemo ||= new Map()), hit = memo.get(id);
-    if (hit?.mtime === mtime && hit.stamp === stamp) return hit.ready;
-    let ready = false;
-    try { const meta = JSON.parse(fs.readFileSync(file, 'utf8')); ready = meta.version >= 2 && meta.stamp === stamp; } catch {}
-    memo.set(id, { mtime, stamp, ready });
-    return ready;
+    if (hit?.mtime === mtime && hit.stamp === stamp && hit.known === known) return hit.state;
+    let state = 'missing';
+    try {
+      const meta = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (meta.version >= 2) state = meta.stamp === stamp ? 'ready' : !meta.content ? 'missing' : !known ? 'check' : known === meta.content ? 'same' : 'missing';
+    } catch {}
+    memo.set(id, { mtime, stamp, known, state });
+    return state;
+  }
+  mapReady(id) { const s = this.mapState(id); return s === 'ready' || s === 'same'; }
+  // (play/content.json: the maps' content signatures by VPK stamp, see playMapContent.)
+  mapContents() {
+    const file = path.join(this.cacheDir, 'play', 'content.json');
+    let mtime = 0;
+    try { mtime = fs.statSync(file).mtimeMs; } catch {}
+    if (this.contentsMemo?.mtime !== mtime) {
+      let c = {};
+      try { c = (mtime && JSON.parse(fs.readFileSync(file, 'utf8'))) || {}; } catch {}
+      this.contentsMemo = { mtime, c };
+    }
+    return this.contentsMemo.c;
+  }
+  // Did CS2 rewrite a map's VPK with nothing in it changed, so its export is kept (a CLI run: its listing)?
+  async mapUnchanged(id) {
+    let meta = null;
+    try { meta = JSON.parse(fs.readFileSync(path.join(this.cacheDir, 'play', id, 'map.json'), 'utf8')); } catch {}
+    if (!(meta?.version >= 2) || !meta.content) return false;
+    let c = null;
+    try { c = await this.ensureCS2().vpkContent(path.join(this.gameDir, 'maps', id + '.vpk')); } catch (e) { this.log('map check: ' + e.message); }
+    return !!c && c === meta.content;
   }
 
-  // Play's maps made so far: { ready, total, need (about how much the rest would take on the drive: an export is 2 to 3
+  // Play's maps made so far: { ready, ids (those ready), total, check (exported for the VPK before a CS2 update rewrote
+  // it: most are kept, after a quick look), need (about how much the rest would take on the drive: an export is 2 to 3
   // times its VPK, 40% less compressed) }.
   mapsReady() {
-    const ids = this.bombMaps(), k = this.compactor?.active() ? 2.6 * 0.6 : 2.6;
-    let ready = 0, need = 0;
-    for (const id of ids) {
-      if (this.mapReady(id)) ready++;
+    const all = this.bombMaps(), k = this.compactor?.active() ? 2.6 * 0.6 : 2.6, ids = [];
+    let check = 0, need = 0;
+    for (const id of all) {
+      const s = this.mapState(id);
+      if (s === 'ready' || s === 'same') ids.push(id);
+      else if (s === 'check') check++;
       else { try { need += fs.statSync(path.join(this.gameDir, 'maps', id + '.vpk')).size * k; } catch {} }
     }
-    return { ready, total: ids.length, need: Math.round(need) };
+    return { ready: ids.length, ids, total: all.length, check, need: Math.round(need) };
   }
 
   // { kind ('all' | 'maps', while running), running, stopping, step, detail (a map export's own progress), done, total, skipped,
-  //   last: Prepare all's { at, skipped, kind, outdated } | null,
-  //   maps: { ready, total, need, last: the newer of the two records (a finished Prepare all made the maps too) },
+  //   last: Prepare all's { at, skipped, failed, kind, outdated } | null,
+  //   maps: { ready, ids, total, check, need (see mapsReady), last: the newer of the two records (a finished Prepare all made the maps too) },
   //   keep: the kind to run again after a CS2 update (the newest record's, when it's outdated) | null }
   // (outdated: CS2 was updated since, or a map was added or changed.)
   prepareStatus() {
@@ -2068,7 +2125,7 @@ class CS2Service {
     let vpk = null, bomb = [];
     if (available) { try { vpk = this.ensureCS2().vpkStamp(); bomb = this.bombMaps(); } catch {} }
     const record = (r, kind) => r && {
-      at: r.at, skipped: r.skipped || 0, kind,
+      at: r.at, skipped: r.skipped || 0, failed: r.failed, kind,
       outdated: !!vpk && (r.stamp !== vpk || bomb.some((id) => r.maps?.[id] !== this.mapStamp(id))),
     };
     const last = record(read('prepared.json'), 'all'), lastMaps = record(read('prepared-maps.json'), 'maps');

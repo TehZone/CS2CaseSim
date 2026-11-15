@@ -29,13 +29,14 @@ to date at the next start.
 **Settings → Compress the CS2 cache** (on by default) has Windows keep the cache's map geometry, models, sounds and data
 compressed on the drive with its own file compression (LZX, what `compact /c /exe:lzx` sets): Windows unpacks them in
 memory as the game reads them, so nothing is unpacked onto the drive while you play and nothing needs compressing again
-after; the game reads the same bytes either way. It saves about a quarter of the cache (its PNG and EXR textures are
-compressed already), new exports are compressed once the game is idle (never during a match) and each map as soon as
-Prepare has made it, and turning it off unpacks everything again when there's room. It needs an NTFS drive; elsewhere
-the row says it isn't available. Either way the textures the game shrinks (a map's, an agent's, a backdrop's) are saved
-as smaller lossless PNGs (each row predicted from its neighbours, RGB when there's no transparency: about a quarter
-smaller, the same pixels), and a map's sky EXR (El Dorado's is 250 MB) is deleted once it's baked into the map's
-sky.png. Gloves are shown as CS2's
+after; the game reads the same bytes either way (the first load of a big map after a restart, read from the drive
+rather than memory, can take a second or so longer). It saves about a quarter of the cache (its PNG and EXR textures
+are compressed already), new exports are compressed once the game is idle (never during a match) and each map as soon
+as Prepare has made it, and turning it off unpacks everything again once the game is idle, when there's room. It needs
+an NTFS drive; elsewhere the row says it isn't available. Either way the textures the game shrinks (a map's, an
+agent's, a backdrop's) are saved as smaller lossless PNGs (each row predicted from its neighbours, RGB when there's no
+transparency: about a quarter smaller, the same pixels), a map's sky EXR (El Dorado's is 250 MB) is deleted once it's
+baked into the map's sky.png, and the hostage maps' exports an older Prepare all made are deleted. Gloves are shown as CS2's
 glove models (just the gloves, posed by CS2's own glove inspect animation), with the skin baked per hand by CS2's
 glove compositing shader (csgo_customglove), including the newest gloves' layered materials. Agents still use the
 icon-based 3D view. Without CS2 installed, everything falls back to that view.
@@ -583,9 +584,11 @@ node scripts/cs2/dev-index.cjs           # build the CS2 index from your install
 node scripts/cs2/dev-prepare.cjs weapon_ak47 aq_oiled   # extract one skin's assets (dev)
 ```
 Game rules live in `src/js/engine` and are shared by the game and the server (`server/`), so offline and online
-play follow the same code. The CS2 cache's compression runs only in the installed game: `npm start`, a test build (a
-patched package `name`) and smoke runs use the player's real `%APPDATA%/CS2 Case Simulator` (from `productName`), so
-there it's off unless `CS2SIM_COMPACT=1` (a smoke run: `CS2SIM_SMOKE_COMPACT=1`), and both want `CS2SIM_CACHE` pointed
-at a copy of the cache; `CS2SIM_COMPACT=0` turns it off anywhere. `CS2SIM_SMOKE=compact` turns it off and on in
-Settings and checks the map reads the same and loads as fast. `tools/s2v` holds the patched Source 2 Viewer CLI (adds GLSL ES output with combined samplers so CS2's
+play follow the same code. The CS2 cache's compression runs only in the installed game: `npm start` and a test build
+(a patched package `name`) use the player's real `%APPDATA%/CS2 Case Simulator` (from `productName`), so there it's off
+unless `CS2SIM_COMPACT=1` (a smoke run, which has a folder of its own: `CS2SIM_SMOKE_COMPACT=1`), and even then never on
+the player's own cache: point `CS2SIM_CACHE` at a copy (`CS2SIM_COMPACT=real` compresses it anyway).
+`CS2SIM_COMPACT=0` turns it off anywhere. Deleting the sky EXRs and the hostage maps' exports likewise happens only in
+the installed game or on a cache of the run's own. `CS2SIM_SMOKE=compact` turns it off and on in Settings and checks the
+map reads the same, timing its load before and after. `tools/s2v` holds the patched Source 2 Viewer CLI (adds GLSL ES output with combined samplers so CS2's
 shaders run in WebGL); rebuild it from the ValveResourceFormat sources with `tools/vrf-glsl-es.patch` applied (the exe is not in git).

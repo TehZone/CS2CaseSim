@@ -42,7 +42,17 @@ function writeAtomic(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, text);
-  fs.renameSync(tmp, file);
+  try { fs.renameSync(tmp, file); } catch (e) { try { fs.rmSync(tmp, { force: true }); } catch {} throw e; }
+}
+// The same, tried again for a while when the file is in use: the cache's compression (cs2/compact.cjs) may be on it
+// (a batch takes seconds), and Windows won't replace a file while it is.
+async function writeAtomicSoon(file, text, tries = 40) {
+  for (let i = 1; ; i++) {
+    try { return writeAtomic(file, text); } catch (e) {
+      if (i >= tries || !['EBUSY', 'EPERM', 'EACCES'].includes(e.code)) throw e;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
 }
 // Parameters a weapon's composite_inputs material provides to the paint shader.
 const WEAPON_KEYS = ['g_tAmbientOcclusion', 'g_tColor', 'g_tMasks', 'g_tMetalness', 'g_tPosition', 'g_tSurface',
@@ -277,7 +287,7 @@ class CS2 {
           }
           if (!lines.length) throw new Error('Could not list the files in CS2');
           text = lines.join('\n');
-          writeAtomic(file, stamp + '\n' + text);
+          await writeAtomicSoon(file, stamp + '\n' + text).catch((e) => this.log('listing.txt: ' + e.message)); // (listed again next start)
         }
         const files = new Map();
         for (const l of text.split('\n')) { const t = l.indexOf('\t'); if (t > 0) files.set(l.slice(0, t), l.slice(t + 1)); }
@@ -320,22 +330,30 @@ class CS2 {
     if (c.stamp !== stamp) this.log(`CS2 was updated, but not the files ${path.relative(this.cacheDir, file)} is made from: kept`);
     c.stamp = stamp;
     c.sig = now;
-    writeAtomic(file, JSON.stringify(c));
+    // (Only a stamp: should it not be written, the next start looks again.)
+    await writeAtomicSoon(file, JSON.stringify(c)).catch((e) => this.log('cache stamp: ' + e.message));
     return c;
   }
 
   async save(file, data, inputs) {
     const c = { ...data, stamp: this.vpkStamp(), sig: await this.signature(inputs).catch(() => undefined) };
-    writeAtomic(file, JSON.stringify(c));
+    await writeAtomicSoon(file, JSON.stringify(c));
     return c;
   }
 
   // A map's (or any single VPK's) content signature: its files' CRCs. Steam rewrites every map's VPK in some CS2
   // updates, most with nothing in them changed.
+  // (Kept for the VPK as it is, its size and time: Prepare's disk check and the map's load that follows it ask in turn.)
   async vpkContent(vpk) {
+    let key = null;
+    try { const st = fs.statSync(vpk); key = `${vpk}|${st.size}|${st.mtimeMs}`; } catch {}
+    const memo = (this.contentMemo ||= new Map());
+    if (key && memo.has(key)) return memo.get(key);
     const lines = (await this.run(['-i', vpk, '-l'])).split(/\r?\n/).filter((l) => / CRC:/.test(l)).sort();
     if (!lines.length) throw new Error('Could not list ' + path.basename(vpk));
-    return crypto.createHash('sha1').update(lines.join('\n')).digest('hex');
+    const c = crypto.createHash('sha1').update(lines.join('\n')).digest('hex');
+    if (key) memo.set(key, c);
+    return c;
   }
 
   async dump(filter, ext, vpk = this.vpk) {

@@ -24,16 +24,34 @@ const MIME = {
 
 let userDir, imgDir, savePath, refreshedDataPath, cs2Cache, cs2, compactor = null;
 
+// The installed game itself (not a development run, nor a test build: those have another package name).
+const isGame = () => app.isPackaged && require('./package.json').name === 'cs2-case-sim';
+// Is the cache the player's own, the one the installed game uses (%APPDATA%/CS2 Case Simulator/cs2cache, from
+// productName)? A development run (npm start) and a test build use it too, unless CS2SIM_CACHE points elsewhere; a
+// smoke run has a folder of its own.
+function playersCache() {
+  const real = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+  const mine = path.join(app.getPath('appData'), require('./package.json').productName, 'cs2cache');
+  return real(cs2Cache).toLowerCase() === real(mine).toLowerCase();
+}
+
 // The CS2 cache's compression (cs2/compact.cjs; Settings → Compress the CS2 cache), on Windows. Only in the game itself
-// by default: a development run (npm start), a test build (another package name) and a smoke run share the player's
-// real cache, so there it's on only when asked for (CS2SIM_COMPACT=1; in a smoke run CS2SIM_SMOKE_COMPACT=1, with
-// CS2SIM_CACHE at a copy). CS2SIM_COMPACT=0 turns it off anywhere.
+// by default; elsewhere it's on only when asked for (CS2SIM_COMPACT=1; in a smoke run CS2SIM_SMOKE_COMPACT=1), and
+// never on the player's own cache (point CS2SIM_CACHE at a copy) unless that's what's asked for (CS2SIM_COMPACT=real).
+// CS2SIM_COMPACT=0 turns it off anywhere.
 function makeCompactor() {
   const env = process.env;
   if (process.platform !== 'win32' || env.CS2SIM_COMPACT === '0') return null;
-  if (SMOKE ? env.CS2SIM_SMOKE_COMPACT !== '1' : !(env.CS2SIM_COMPACT === '1' || (app.isPackaged && require('./package.json').name === 'cs2-case-sim'))) {
-    if (app.isPackaged && !SMOKE) console.warn('[compact] off in this test build (CS2SIM_COMPACT=1 turns it on: point CS2SIM_CACHE at a copy of the cache first)');
-    return null;
+  if (!isGame()) {
+    const asked = SMOKE ? env.CS2SIM_SMOKE_COMPACT === '1' : env.CS2SIM_COMPACT === '1' || env.CS2SIM_COMPACT === 'real';
+    if (!asked) {
+      if (app.isPackaged && !SMOKE) console.warn('[compact] off in this test build (CS2SIM_COMPACT=1 turns it on, with CS2SIM_CACHE at a copy of the cache)');
+      return null;
+    }
+    if (playersCache() && env.CS2SIM_COMPACT !== 'real') {
+      console.warn(`[compact] off: ${cs2Cache} is the player's own cache (point CS2SIM_CACHE at a copy; CS2SIM_COMPACT=real compresses it anyway)`);
+      return null;
+    }
   }
   return new Compactor({
     dir: cs2Cache, log: (m) => console.log('[compact]', m),
@@ -56,10 +74,13 @@ function initPaths() {
     ? path.join(process.resourcesPath, 's2v', 'Source2Viewer-CLI.exe')
     : process.env.CS2SIM_CLI || path.join(__dirname, 'tools', 's2v', 'Source2Viewer-CLI.exe');
   compactor = makeCompactor();
+  // (Deleting what the cache keeps but nothing reads any more: the game's own run, or one on a cache of its own.)
+  tidyCache = isGame() || !playersCache();
   cs2 = makeCS2(cli);
 }
+let tidyCache = false;
 // (One place for its options: Settings' clear makes a new one, which must read custom content's paint kits too.)
-const makeCS2 = (cliPath) => new CS2Service({ cacheDir: cs2Cache, cliPath, log: (m) => console.log('[cs2]', m), shrinkImages, customKits, compactor });
+const makeCS2 = (cliPath) => new CS2Service({ cacheDir: cs2Cache, cliPath, log: (m) => console.log('[cs2]', m), shrinkImages, customKits, compactor, tidy: tidyCache });
 
 // Play mode calls from the renderer (one channel, whitelisted).
 const PLAY_CALLS = {
@@ -256,14 +277,19 @@ function registerIpc() {
   ipcMain.handle('cs2:cacheSize', () => cs2.cacheSize());
   // The cache's compression: its state for Settings ({ off: true } where there's none: the row stays hidden), the
   // setting, and a match holding passes off while it loads and plays (Game.load / dispose).
-  ipcMain.handle('cs2:compactStatus', async () => (compactor ? { ...compactor.status(), supported: await compactor.supported() } : { supported: false, off: true }));
+  // (Its first look at whether the drive can, a compact.exe run, isn't waited for long: Settings polls.)
+  ipcMain.handle('cs2:compactStatus', async () => (compactor
+    ? { ...compactor.status(), supported: compactor.ok ?? await Promise.race([compactor.supported(), new Promise((r) => setTimeout(() => r(compactor.ok), 3000))]) }
+    : { supported: false, off: true }));
   ipcMain.handle('cs2:compact', (_e, on) => { compactor?.setEnabled(!!on); return true; });
   ipcMain.handle('cs2:hold', (_e, on) => { compactor?.hold(!!on); return true; });
   ipcMain.handle('cs2:clear', async () => {
     cs2.prepareCancel();
-    await Promise.race([compactor?.stop(), new Promise((r) => setTimeout(r, 20000))]); // (compact.exe off the files first)
+    // (compact.exe off the files first: it finishes the file it's on, up to a minute on the biggest. The folder can be
+    // deleted while it does, as it runs outside it, so it isn't waited for longer.)
+    await Promise.race([compactor?.stop(), new Promise((r) => setTimeout(r, 30000))]);
     cs2.flush(); // nothing left to write into the folder once it's gone
-    fs.rmSync(cs2Cache, { recursive: true, force: true, maxRetries: 3 });
+    fs.rmSync(cs2Cache, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
     cs2 = makeCS2(cs2.cliPath);
     compactor?.reset();
     return true;
@@ -334,10 +360,13 @@ function createWindow() {
   });
   win.loadURL('app://game/index.html');
   // (Not in a smoke run that measures: its CLI runs would be in the numbers.)
-  // (And the skies' EXRs left from older builds: once baked into their maps, never read again.)
-  if (!SMOKE || process.env.CS2SIM_SMOKE === 'prepare') setTimeout(() => cs2.learnSignatures().catch((e) => console.warn('[cs2] learn signatures:', e.message)).then(() => cs2.dropSkyExrs()), 20000);
+  // (And what older builds left in the cache that nothing reads any more: the skies' EXRs, once baked into their maps,
+  // and the hostage maps' exports. Only where the cache may be tidied: see initPaths.)
+  if (!SMOKE || process.env.CS2SIM_SMOKE === 'prepare') {
+    setTimeout(() => cs2.learnSignatures().catch((e) => console.warn('[cs2] learn signatures:', e.message)).then(() => { cs2.dropSkyExrs(); cs2.dropHostageMaps(); }), 20000);
+  }
   // The cache's first compression pass of the run, once the game has settled (what the last run exported, or all of it
-  // the first time: a minute or so, once).
+  // the first time: a minute or two, once).
   setTimeout(() => compactor?.schedule('start'), 90000).unref?.();
   if (SMOKE) runSmokeTest(win);
 }
@@ -891,9 +920,18 @@ async function runPrepareSmoke(win) {
   await wait(1200);
   await shot('running');
   console.log('SMOKE prepare row', await js(`document.querySelector('[data-prep]')?.innerText.replace(/\\n+/g, ' | ')`));
-  await js(`window.native.cs2PrepareCancel()`);
-  for (let i = 0; i < 300 && (await js(`window.native.cs2PrepareStatus()`)).running; i++) await wait(1000);
-  console.log('SMOKE prepare stopped', JSON.stringify(await js(`window.native.cs2PrepareStatus()`)));
+  // Stopped from its own button, as the player would (it says so until the map in hand, and its compressing, is done).
+  const kind = process.env.CS2SIM_SMOKE_PREPARE === 'maps' ? 'prepare-maps' : 'prepare';
+  await js(`document.querySelector('[data-a=${kind}]').click(); 1`);
+  await wait(800);
+  await shot('stopping');
+  console.log('SMOKE prepare stopping', await js(`document.querySelector('[data-prep]')?.innerText.replace(/\\n+/g, ' | ')`));
+  const t0 = Date.now();
+  for (let i = 0; i < 300 && (await js(`window.native.cs2PrepareStatus()`)).running; i++) await wait(500);
+  console.log('SMOKE prepare stopped after', Date.now() - t0, 'ms', JSON.stringify(await js(`window.native.cs2PrepareStatus()`)));
+  console.log('SMOKE prepare compress status', JSON.stringify(await js('window.native.cs2CompactStatus()')));
+  await wait(6000);
+  await shot('stopped');
   app.quit();
 }
 
@@ -953,6 +991,12 @@ async function runCompactSmoke(win) {
   const after = await hash();
   console.log('SMOKE compact after:', rel, onDrive(), 'sha256', after.slice(0, 16), after === before ? '(the same bytes)' : '(DIFFERENT BYTES)');
   for (const n of [1, 2]) console.log('SMOKE compact', id, 'world load', n, 'after:', await load(), 'ms');
+  // What was too new for that pass (the sounds the game extracted as it started) is compressed by one once it's settled,
+  // not left waiting for the next export.
+  const t1 = Date.now();
+  while (Date.now() - t1 < 300000 && / waiting/.test(await info())) await wait(2000);
+  console.log('SMOKE compact', ((Date.now() - t1) / 1000).toFixed(0) + 's later:', await info());
+  await shot('settled');
   app.quit();
 }
 
