@@ -24,7 +24,11 @@
       "Smoke test: wait for a fresh frame before each screenshot"
     ],
     "the same update twice": [
-      "Merge CS2's weapon icons (buy menu and kill feed)"
+      "Merge CS2's weapon icons (buy menu and kill feed)",
+      "CS2 cache: compression waits for matches, Maps only after CS2 updates, clearer Settings"
+    ],
+    "the website, not the game": [
+      "Website: cs2casesim.lol, with the download, features, screenshots, FAQ and players online"
     ]
   },
   "rewrite": {
