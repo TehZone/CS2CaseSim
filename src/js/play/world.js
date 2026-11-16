@@ -794,10 +794,17 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
   gltf.scene.updateMatrixWorld(true);
   // The second layers' textures, next to the map's glTF.
   const base = map.world.replace(/[^/]*$/, ''), layerTextures = new Map(), layerLoads = [], aniso = Math.min(anisotropy, renderer.capabilities.getMaxAnisotropy());
+  // As the glTF's own are (GLTFLoader): image bitmaps, decoded off the main thread as they load. (As <img>s, each was
+  // decoded on the main thread when it went to the GPU: Inferno's 291, 177 MB of PNGs, seconds of its load.)
+  const bitmaps = typeof createImageBitmap === 'function' ? new THREE.ImageBitmapLoader().setOptions({ premultiplyAlpha: 'none' }) : null;
   const loadLayer = (file, srgb) => {
     if (!layerTextures.has(file)) {
       let t;
-      layerLoads.push(new Promise((done) => { t = new THREE.TextureLoader().load(base + encodeURIComponent(file), done, undefined, done); }));
+      const url = base + encodeURIComponent(file);
+      if (bitmaps) {
+        t = new THREE.Texture();
+        layerLoads.push(new Promise((done) => bitmaps.load(url, (bmp) => { t.image = bmp; t.needsUpdate = true; done(); }, undefined, done)));
+      } else layerLoads.push(new Promise((done) => { t = new THREE.TextureLoader().load(url, done, undefined, done); }));
       t.flipY = false; // glTF's texture convention
       t.wrapS = t.wrapT = THREE.RepeatWrapping;
       t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
