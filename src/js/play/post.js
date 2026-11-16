@@ -307,7 +307,7 @@ export class Post {
     const r = this.renderer, au = this.adaptMat.uniforms, prev = this.expRT[this.expCur], next = this.expRT[1 - this.expCur];
     r.setRenderTarget(this.lumRT);
     r.render(this.lumScene, this.cam);
-    au.tPrev.value = prev.texture; au.dt.value = Math.min(dt, 0.25);
+    au.tPrev.value = prev.texture; au.dt.value = Math.min(Math.max(dt, 0), 0.25); // (never back: a negative step overshoots without end)
     r.setRenderTarget(next);
     r.render(this.adaptScene, this.cam);
     au.init.value = false;

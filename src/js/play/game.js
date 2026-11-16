@@ -1411,6 +1411,11 @@ export class Game {
     const frame = (now) => {
       if (this.disposed) return;
       this.raf = requestAnimationFrame(frame);
+      // (A frame's time is when the browser began it, which can be before this started: the first one after a map's
+      // load, its last long task, came seconds "before" `last`. That negative step sent the auto exposure far below zero,
+      // a white or black screen, then washed out, for the match's first five to seven seconds, and held the ticks back as
+      // long.)
+      now = Math.max(now, this.last);
       if (this.cv.fps_max > 0 && now - this.last < 1000 / this.cv.fps_max - 1) return; // fps_max
       this.frameMs = now - this.last; // (for the frame-time graph: as it was, a stutter not cut short)
       const dt = Math.min(0.1, (now - this.last) / 1000);

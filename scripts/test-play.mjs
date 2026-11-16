@@ -3519,5 +3519,26 @@ const shotAt = (p, from, elev, dist = 500) => {
   ok(v.own && v.eye.join() === '0,0,64' && !v.bot, 'spectating: with no teammate left, your own eyes where you fell');
 }
 
+// ---- the frame loop (game.js start): the first frame after a long load is timed before it started --------------------
+// (Its timestamp is when the browser began it: seconds before start() ran, after the load's last long task. That negative
+// step sent the auto exposure far below zero, a white or black screen for the match's first seconds.)
+{
+  const { Game } = await import('../src/js/play/game.js');
+  const was = globalThis.requestAnimationFrame;
+  let cb = null;
+  globalThis.requestAnimationFrame = (f) => { cb = f; return 1; };
+  const steps = [];
+  const g = Object.assign(Object.create(Game.prototype), { disposed: false, cv: { fps_max: 0 }, cheatsAllowed: true, console: { noCheats() {} }, setQuiet() {}, frame(dt) { steps.push(dt); } });
+  g.start();
+  const t = g.last;
+  cb(t - 3500); cb(t + 16);
+  ok(steps.length === 2 && steps[0] === 0 && Math.abs(steps[1] - 0.016) < 1e-9 && g.frameMs === 16, `frame loop: a first frame timed 3.5 s before the start is a step of 0, the next one 16 ms on (${steps.join(', ')})`);
+  g.cv.fps_max = 60; steps.length = 0; const t2 = g.last;
+  cb(t2 - 5000); cb(t2 + 17);
+  ok(steps.length === 1 && Math.abs(steps[0] - 0.017) < 1e-9, `frame loop: with fps_max, one timed before the last isn't held back for seconds (${steps.join(', ')})`);
+  g.disposed = true;
+  globalThis.requestAnimationFrame = was;
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
