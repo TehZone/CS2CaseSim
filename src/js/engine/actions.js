@@ -1001,7 +1001,8 @@ export const ACTIONS = {
   // ---- NPC players (offline only, see engine/npcs.js) ----
   // Time passing for the NPCs: offers expire, they buy from the market, message you about your rare items, add you as a
   // friend and chat (each only while the admin panel's rule for it is on, and never a blocked NPC: see npcs.js). Returns
-  // the messages they sent { events: [{ npc, text }] }.
+  // the messages they sent { events: [{ npc, text, offer, request }] } (offer: the trade offer's id when that's what it
+  // is; request: a friend request's).
   'npc.tick'(ctx) {
     const so = social(ctx), r = ctx.rng, now = ctx.now;
     const dt = clamp(now - (so.at || now), 0, 6 * 3600e3);
@@ -1010,7 +1011,7 @@ export const ACTIONS = {
     const free = (id) => !N.isBlocked(so, id, now);
     const chat = N.ruleOn(so, 'chat');
     const events = [];
-    const said = (id) => { const t = so.threads[id]; if (t?.length) events.push({ npc: id, text: t[t.length - 1].text }); };
+    const said = (id) => { const t = so.threads[id]; if (t?.length) { const m = t[t.length - 1]; events.push({ npc: id, text: m.text, offer: m.offer || null, request: !!m.request }); } };
     const rolls = (perMin, cap) => { const x = (dt / 60000) * perMin; return Math.min(cap, Math.floor(x) + (r() < x % 1 ? 1 : 0)); };
     for (const o of so.offers) {
       if (o.status !== 'open') continue;

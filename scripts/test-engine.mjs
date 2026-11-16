@@ -1244,6 +1244,26 @@ function tierFreq(box, n) {
   const offer = st.social.offers.find((o) => o.want.uids.includes('ruby'));
   check('NPCs: owning a rare item brings offers, with a message', !!offer && st.social.threads[offer.npc].some((m) => m.offer === offer.id) && st.social.unread[offer.npc] > 0,
     offer ? `${N.npcOf(st.social.seed, offer.npc).name}: ${st.social.threads[offer.npc].at(-1).text}` : 'none');
+  // The friends chat switched off (Settings: Chat): of their unread messages only the trade offers count, and a tick says
+  // which of the messages it brought are offers or friend requests (the only pop-ups then). (On a copy of the save, with a
+  // clock and rolls of its own: the haggling below goes on with the offer as it is.)
+  {
+    const st2 = structuredClone(st), rng2 = mulberry32(777);
+    let now2 = now;
+    const run2 = (name, args) => ACT.runAction(ACT.makeCtx(st2, { rng: rng2, now: now2 }), name, args);
+    const so = st2.social, id = offer.npc, t = so.threads[id], n = so.unread[id];
+    const offers = t.slice(-n).filter((m) => m.offer).length;
+    N.post(so, id, 'npc', 'how are you doing?', {}, now2);
+    check('NPCs: with the friends chat off, only unread trade offers count (not their small talk)', N.unreadOf(so, id) === n + 1 && N.unreadOf(so, id, false) === offers && offers >= 1
+      && N.unreadOf(so, 'nobody', false) === 0 && N.unreadOf(null, id, false) === 0, `${N.unreadOf(so, id)} unread, ${N.unreadOf(so, id, false)} offers`);
+    let kinds = [];
+    for (let k = 0; k < 40 && !(kinds.some((e) => e.offer) && kinds.some((e) => !e.offer)); k++) { now2 += 10 * 60e3; kinds = kinds.concat(run2('npc.tick').events || []); }
+    const live = st2.social; // (an action works on its own copy of the save: the one it leaves)
+    const shaped = kinds.length && kinds.every((e) => typeof e.request === 'boolean' && (e.offer === null || live.offers.some((o) => o.id === e.offer)));
+    const offerEv = kinds.find((e) => e.offer);
+    check('NPCs: a tick tells its offers (and friend requests) from their other messages', shaped && !!offerEv && live.threads[offerEv.npc].some((m) => m.offer === offerEv.offer && m.text === offerEv.text),
+      kinds.map((e) => (e.offer ? 'offer' : e.request ? 'request' : 'chat')).join(', '));
+  }
   const bought = Object.values(st.market || {}).flat().length;
   check('NPCs: they buy listings from the market (gone for you too)', bought > 0 && st.social.feed.length > 0, st.social.feed[0]?.text);
 

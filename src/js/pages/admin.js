@@ -9,7 +9,7 @@ import { esc, money, timeAgo, debounce } from '../util.js';
 import { D, WEAR_BY_KEY, wearOf } from '../data.js';
 import * as I from '../items.js';
 import { online } from '../backend.js';
-import { S, save as saveState } from '../state.js';
+import { S, save as saveState, emit } from '../state.js';
 import { sfx } from '../audio.js';
 import { toast, openModal, confirmDialog as askUser, openInspect } from '../ui.js';
 import { levelIconHtml } from '../profile.js';
@@ -1307,6 +1307,7 @@ function gameHtml(g) {
     volume: ['Sound volume', (v) => rangeHtml(v, [0, 1], pct)], fast: ['Fast open', yesNo], caseIntro: ['Case drop animation', (v) => yesNo(v !== false)],
     confirmSellAbove: ['Confirm sales above', (v) => money(+v || 0)], showOdds: ['Show odds', yesNo], menuBg: ['Menu background', valHtml], keepPrepared: ['Keep CS2 content prepared', yesNo],
     compressCache: ['Compress the CS2 cache', (v) => yesNo(v !== false)],
+    matchChat: ['Match chat', (v) => yesNo(v !== false)], friendsChat: ['Friends chat', (v) => yesNo(v !== false)],
     autoSell: ['Auto-sell', (a) => (a?.on ? `On${a.below ? ` · below ${money(+a.below || 0)}` : ''}${a.ranks?.length ? ` · ${plural(a.ranks.length, 'rarity', 'rarities')}` : ''}` : 'Off')],
   };
   // (Own keys only: a config can name one every object has, toString or __proto__.)
@@ -1394,7 +1395,7 @@ const ADOPT = {
 const mapId = (v) => (typeof v === 'string' && /^[\w.-]{1,64}$/.test(v) ? v : undefined);
 const ADOPT_GAME = {
   volume: clampTo([0, 1]), fast: isBool, caseIntro: isBool, confirmSellAbove: clampTo([0, 1e9]), showOdds: isBool, keepPrepared: isBool, compressCache: isBool,
-  menuBg: mapId, inspectBg: mapId,
+  matchChat: isBool, friendsChat: isBool, menuBg: mapId, inspectBg: mapId,
   autoSell: {
     on: isBool, below: clampTo([0, 1e9]), keepStt: isBool, keepRare: isBool, keepBlue: isBool, keepFloat: isBool,
     ranks: (v) => (Array.isArray(v) && v.length <= 6 && v.every((x) => Number.isInteger(x) && x >= 0 && x <= 5) ? [...new Set(v)] : undefined),
@@ -1410,13 +1411,16 @@ function adoptOne(rule, mine, v) {
 }
 function adoptGame(theirs) {
   let n = 0;
+  const chats = [];
   for (const [k, v] of Object.entries(theirs)) {
     const out = Object.hasOwn(ADOPT_GAME, k) ? adoptOne(ADOPT_GAME[k], S.settings[k], v) : undefined;
     if (out === undefined) continue;
+    if ((k === 'matchChat' || k === 'friendsChat') && (S.settings[k] !== false) !== out) chats.push(k);
     S.settings[k] = out;
     n++;
   }
   if (n) saveState();
+  for (const k of chats) emit('chatPrefs', k); // (as Settings: Chat does: the message count at the top and an open page follow)
   return n;
 }
 function cleanBinds(b) {

@@ -42,7 +42,8 @@ import { MODES, WINGMAN_RULES, matchWorld, Deathmatch, ARMS_RACE, PROTECT } from
 import { act } from '../backend.js';
 import { matchRewardHtml } from '../profile.js';
 import { esc } from '../util.js';
-import { S } from '../state.js';
+import { S, on } from '../state.js';
+import { matchChatOn } from '../chatprefs.js';
 import { rankInfo, SKILL_GROUPS } from '../engine/ranks.js';
 import { rankPictures, rankArt, emblemHtml, rankKey, ratingHtml } from '../rank.js';
 import { botIdentities, pickIdentities } from './identity.js';
@@ -224,6 +225,13 @@ export class Game {
     this.input.onCommand = (c) => this.command(c);
     this.baseSensitivity = sensitivity;
     this.hud = new Hud(this.screen);
+    // The match chat switch (Settings: Chat; the match's settings too): typed messages hidden and the Say line shut while
+    // it's off, the ones already on screen going with it.
+    this.hud.saidShown(matchChatOn());
+    this.offChatPrefs = on('chatPrefs', () => {
+      this.hud.saidShown(matchChatOn());
+      if (!matchChatOn() && this.chatOpen) this.hud.onChatSend?.(null);
+    });
     this.hud.setCrosshairStyle(settings.crosshair);
     this.buyMenu = new BuyMenu(this.screen, this);
     // The developer console (~) and the console variables the game reads (set there).
@@ -761,23 +769,32 @@ export class Game {
     this.buyMenu.open();
     this.input.unlock();
   }
-// Text chat (Y all, U team): typing takes your keys (the mouse still looks around); Enter sends, Esc closes.
+// Text chat (Y all, U team): typing takes your keys (the mouse still looks around); Enter sends, Esc closes. With the
+  // match chat off, a note instead (Settings: Chat).
   openChat(teamOnly) {
+    if (!matchChatOn()) { this.hud.message('Text chat is off: turn it on in the settings (Esc)', 2500); return; }
     this.input.keys.clear(); this.input.buttons = 0;
     this.chatOpen = true;
     this.hud.chatInput(!!teamOnly && !this.ffa, (text) => {
       this.chatOpen = false;
       this.hud.chatInput(null);
-      if (text != null && text.trim()) this.say(this.me, text.trim().slice(0, 127), !!teamOnly && !this.ffa);
+      if (text != null && text.trim()) this.sendChat(text.trim().slice(0, 127), !!teamOnly);
     });
   }
+  // Your message (the Say line, the console's say and say_team): here it's said at once; online the server takes it and
+  // it comes back like anyone's (net-match.js serverChat). Nothing with the match chat off.
+  sendChat(text, teamOnly = false) {
+    if (!matchChatOn()) return;
+    this.say(this.me, text, !!teamOnly && !this.ffa);
+  }
   // A chat message from someone: team messages only reach their team, and like CS2's competitive the dead only talk
-  // among the dead (you see the living's and, while dead yourself, the dead's).
+  // among the dead (you see the living's and, while dead yourself, the dead's). Anyone else's not with the match chat off.
   say(c, text, teamOnly = false) {
     const me = this.me;
+    if (c !== me && !matchChatOn()) return;
     if (teamOnly && c.team !== me.team) return;
     if (!c.alive && c !== me && me.alive && !this.respawnMode) return;
-    this.hud.chatLine({ name: c === me ? c.name || 'You' : c.name, team: c.team, text, teamOnly, dead: !c.alive && !this.respawnMode, place: teamOnly ? this.placeOf?.(c) || '' : '' });
+    this.hud.chatLine({ name: c === me ? c.name || 'You' : c.name, team: c.team, text, teamOnly, dead: !c.alive && !this.respawnMode, place: teamOnly ? this.placeOf?.(c) || '' : '', said: true });
   }
 
   // The console takes your keys and shows the cursor while it's open; the match keeps running.
@@ -2656,6 +2673,7 @@ export class Game {
 
   dispose() {
     this.disposed = true;
+    this.offChatPrefs?.();
     if (this.compactHold) { this.compactHold = false; window.native?.cs2Hold?.(false); }
     if (this.log) { this.log.save().catch(() => {}); this.log.stop(); } // (leaving: net_graph 2's log so far)
     this.console?.dispose();

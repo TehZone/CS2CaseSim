@@ -3540,5 +3540,35 @@ const shotAt = (p, from, elev, dist = 500) => {
   globalThis.requestAnimationFrame = was;
 }
 
+// ---- the match chat switch (Settings: Chat; chatprefs.js): typed messages hidden and none sent while it's off ----------
+{
+  const { Game } = await import('../src/js/play/game.js');
+  const { serverChat } = await import('../src/js/play/net-match.js');
+  const { commands } = await import('../src/js/play/console.js');
+  const { S } = await import('../src/js/state.js');
+  const lines = [], notes = [], printed = [];
+  const me = { name: 'You', team: 'CT', alive: true }, foe = { name: 'BOT Ace', team: 'T', alive: true }, mate = { name: 'BOT Mate', team: 'CT', alive: true };
+  const hud = { chatLine: (l) => lines.push(l), message: (m) => notes.push(m), chatInput: () => {}, saidShown() {} };
+  const g = Object.assign(Object.create(Game.prototype), { me, hud, ffa: false, respawnMode: false, input: { keys: new Set(), buttons: 0 }, cv: {}, placeOf: () => 'BombsiteA' });
+  const con = { print: (t, k) => printed.push([t, k]) }, cmds = commands(g, con);
+  const was = S.settings.matchChat;
+  S.settings.matchChat = undefined; // (on unless turned off: a save from before the switch)
+  g.say(foe, 'gg'); g.sendChat('hi'); cmds.say.run(['nice', 'shot']); cmds.say_team.run(['rotate']);
+  ok(lines.length === 4 && lines.every((l) => l.said) && lines[1].name === 'You' && lines[2].text === 'nice shot' && lines[3].teamOnly && !notes.length,
+    `match chat on: anyone's message shows, typed lines tagged; yours from the Say line and the console's say / say_team (${lines.map((l) => l.text).join(' / ')})`);
+  S.settings.matchChat = false; lines.length = 0;
+  g.say(foe, 'gg'); g.say(mate, 'rush b', true); g.sendChat('hi'); cmds.say.run(['hello']); g.openChat(false);
+  ok(!lines.length && notes.length === 1 && !g.chatOpen && printed.length === 1 && printed[0][1] === 'err',
+    "match chat off: nobody's message shows, you can't send one (the console says so) and Y opens a note, not the Say line");
+  const sent = [];
+  serverChat(g, (m) => sent.push(m));
+  g.sendChat('hi', true); cmds.say.run(['still', 'off']);
+  S.settings.matchChat = true;
+  g.sendChat('hello', true); cmds.say.run(['gl', 'hf']);
+  ok(sent.length === 2 && sent[0].t === 'chat' && sent[0].team === true && sent[0].text === 'hello' && sent[1].text === 'gl hf' && sent[1].team === false && !lines.length,
+    `match chat online: your message goes to the server (the console's say too), none while it's off (${JSON.stringify(sent)})`);
+  S.settings.matchChat = was;
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

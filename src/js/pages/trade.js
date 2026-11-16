@@ -9,6 +9,7 @@ import { online } from '../backend.js';
 import { mountPicker } from '../picker.js';
 import { net } from '../net/online.js';
 import { playerAvatar } from '../faces.js';
+import { friendsChatOn } from '../chatprefs.js';
 
 const view = { with: null, theirInv: [], mine: new Set(), theirs: new Set(), myMoney: 0, theirMoney: 0, msg: '', q: '', loading: false };
 let root = null, offs = [], startWith = null;
@@ -114,7 +115,7 @@ function drawCompose() {
         <label class="check" style="margin-bottom:8px">Money <input class="input" type="number" min="0" step="0.01" data-thm value="${view.theirMoney}" style="width:110px"></label><div data-thpick></div></div>
     </div>
     <div class="open-row" style="margin-top:12px">
-      <input class="input" data-msg placeholder="Message (optional)" maxlength="140" value="${esc(view.msg)}" style="flex:1">
+      ${friendsChatOn() ? `<input class="input" data-msg placeholder="Message (optional)" maxlength="140" value="${esc(view.msg)}" style="flex:1">` : '<span style="flex:1"></span>'}
       <button class="btn gold" data-send>Send offer</button>
     </div></div>`;
   pickers = {
@@ -124,7 +125,7 @@ function drawCompose() {
   const amount = (e, k) => { view[k] = Math.max(0, +e.target.value || 0); if (+e.target.value !== view[k]) e.target.value = view[k]; totals(); };
   el.querySelector('[data-mym]').addEventListener('change', (e) => amount(e, 'myMoney'));
   el.querySelector('[data-thm]').addEventListener('change', (e) => amount(e, 'theirMoney'));
-  el.querySelector('[data-msg]').addEventListener('input', (e) => { view.msg = e.target.value; });
+  el.querySelector('[data-msg]')?.addEventListener('input', (e) => { view.msg = e.target.value; });
   el.querySelector('[data-send]').addEventListener('click', send);
 }
 
@@ -132,7 +133,7 @@ async function send() {
   if (!view.mine.size && !view.theirs.size && !view.myMoney && !view.theirMoney) return toast('Add something to the offer', 'bad');
   try {
     await net.trade('offer', {
-      to: view.with, give: { uids: [...view.mine], money: +view.myMoney || 0 }, get: { uids: [...view.theirs], money: +view.theirMoney || 0 }, msg: view.msg,
+      to: view.with, give: { uids: [...view.mine], money: +view.myMoney || 0 }, get: { uids: [...view.theirs], money: +view.theirMoney || 0 }, msg: friendsChatOn() ? view.msg : '', // (a note is a message: none with the friends chat off)
       counterOf: view.counterOf || null,
     });
     view.counterOf = null;
@@ -169,7 +170,7 @@ function drawOffers() {
       <div style="display:flex;gap:10px;align-items:center"><span class="chip ${incoming ? 'gold' : ''}">${incoming ? 'Incoming' : 'Sent'}</span>
         ${playerAvatar({ id: otherOne.id, name: other }, 28)}<b>${esc(other)}</b><span class="muted" style="font-size:12px">${timeAgo(t.created)}</span>
         ${t.status !== 'open' ? `<span class="chip ${t.status === 'accepted' ? 'green' : 'red'}">${esc(t.status)}</span>` : ''}
-        ${t.msg ? `<span class="muted" style="font-size:12px">“${esc(t.msg)}”</span>` : ''}</div>
+        ${t.msg && friendsChatOn() ? `<span class="muted" style="font-size:12px">“${esc(t.msg)}”</span>` : ''}</div>
       <div class="offer-sides">${sideHTML(mineSide, 'You give')}${sideHTML(theirSide, 'You get')}</div>
       ${t.status === 'open' ? `<div class="open-row">${incoming ? `<button class="btn primary" data-accept="${t.id}" data-v="${t.version}">Accept</button><button class="btn" data-counter="${t.id}">Counter</button><button class="btn ghost" data-decline="${t.id}">Decline</button>` : `<button class="btn ghost" data-cancel="${t.id}">Cancel offer</button>`}</div>` : ''}
     </div>`;

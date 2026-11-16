@@ -9,6 +9,7 @@
 import { esc, money, timeAgo, debounce } from '../util.js';
 import * as I from '../items.js';
 import { S, on, calmly } from '../state.js';
+import { friendsChatOn, setChat } from '../chatprefs.js';
 import { sfx } from '../audio.js';
 import { toast, openModal, itemCard, openInspect, canInspect, showItemDetail, confirmDialog } from '../ui.js';
 import { medalOf } from '../engine/levels.js';
@@ -67,7 +68,8 @@ function remember(p) {
 }
 
 // Unread messages and friend requests, for the pill at the top. (A blocked player's old messages have no row to read them on.)
-export const unreadCount = () => (home ? home.chats.reduce((t, c) => t + (isBlocked(c.with.id) ? 0 : +c.unread || 0), 0) + home.requests.length : 0);
+// With the friends chat off (Settings: Chat), only the requests.
+export const unreadCount = () => (home ? (friendsChatOn() ? home.chats.reduce((t, c) => t + (isBlocked(c.with.id) ? 0 : +c.unread || 0), 0) : 0) + home.requests.length : 0);
 const announce = () => window.dispatchEvent(new Event('app:unread'));
 
 // ---- what comes in, on this page or not ---------------------------------------------------------------------------------
@@ -164,6 +166,7 @@ function onChat({ msg, who } = {}) {
   if (reading) net.social('chat.read', { id }).catch(() => {});
   if (mine || reading) return;
   announce();
+  if (!friendsChatOn()) return; // (kept for when it's back on: no pop-up, no sound)
   sfx.buy();
   const text = [...String(msg.text)];
   const el = toast(`${named(people.get(id) || { name: 'Someone' })}: <bdi>${esc(text.length > 120 ? text.slice(0, 117).join('') + '…' : text.join(''))}</bdi>`, 'msg link');
@@ -174,7 +177,9 @@ function onChat({ msg, who } = {}) {
 export function render(r) {
   root = r;
   offs.forEach((o) => o());
-  offs = [on('inv', () => { if (view.who === 'me' && home) ownAgain.ask(); })];
+  offs = [on('inv', () => { if (view.who === 'me' && home) ownAgain.ask(); }),
+    // (The friends chat switched in Settings, or with Turn chat on here: the page drawn again for it.)
+    on('chatPrefs', (k) => { if (k === 'friendsChat') { if (!friendsChatOn() && view.pane === 'chat') view.pane = 'profile'; drawAll(); } })];
   cards.clear();
   homeDrawn = false;
   root.innerHTML = '<div class="page community live"><div class="cm-grid"><aside class="fr-panel" data-list></aside><section class="cm-main" data-main></section></div></div>';
@@ -217,7 +222,7 @@ function drawLive() {
 function pick(id, pane) {
   if (id === meId()) id = 'me';
   view.who = id;
-  view.pane = id === 'me' ? 'profile' : pane || (chatOf(id) || relationOf(id) === 1 ? 'chat' : 'profile');
+  view.pane = id === 'me' ? 'profile' : pane || (friendsChatOn() && (chatOf(id) || relationOf(id) === 1) ? 'chat' : 'profile');
   view.tab = 'showcase';
   if (view.pane === 'profile') cards.delete(shownId());
   drawAll();
@@ -249,7 +254,7 @@ function drawMe() {
   el.innerHTML = `<div class="fr-me ${view.who === 'me' ? 'on' : ''}">${avatar(me, 40, 'online')}<div class="fr-txt"><div class="fr-name">${esc(me.name)}</div><div class="fr-st">${levelIconHtml(S.prof.level, 16)} Level ${S.prof.level} · View profile</div></div></div>`;
 }
 function rowHtml(p, kind) {
-  const st = statusOf(p), un = unreadOf(p.id), last = kind === 'chat' ? chatOf(p.id)?.last : null;
+  const talk = friendsChatOn(), st = statusOf(p), un = talk ? unreadOf(p.id) : 0, last = talk && kind === 'chat' ? chatOf(p.id)?.last : null;
   return `<div class="fr-row ${view.who === p.id ? 'on' : ''} st-${st.s}" data-who="${esc(p.id)}">${avatar(p, 34, st.s)}
     <div class="fr-txt"><div class="fr-name">${esc(p.name)}</div><div class="fr-st"><span class="fr-line">${esc(kind === 'blocked' ? 'Blocked' : last ? last.text : st.label)}</span></div></div>
     ${un && kind !== 'blocked' ? `<span class="pill">${un}</span>` : ''}${kind === 'req' ? `<button class="btn sm primary" data-acc="${esc(p.id)}">Accept</button>` : ''}</div>`;
@@ -266,7 +271,7 @@ function drawRows() {
     ['Online friends', friends.filter(isHere)],
     ['Offline friends', friends.filter((p) => !isHere(p))],
     ['Requests sent', home.sent.filter(hit)],
-    ['Recent chats', home.chats.map((c) => c.with).filter((p) => hit(p) && !relationOf(p.id) && !isBlocked(p.id)), 'chat'],
+    ['Recent chats', friendsChatOn() ? home.chats.map((c) => c.with).filter((p) => hit(p) && !relationOf(p.id) && !isBlocked(p.id)) : [], 'chat'],
     ['Blocked', home.blocked.filter(hit), 'blocked'],
   ].filter(([, rows]) => rows.length);
   el.innerHTML = groups.length ? groups.map(([t, rows, kind]) => `<div class="fr-group"><div class="fr-gh">${t} <span>(${rows.length})</span></div>${rows.map((p) => rowHtml(p, kind)).join('')}</div>`).join('')
@@ -316,7 +321,7 @@ function drawMain() {
   homeDrawn = true;
   // The first time here: where there's something to read, or else your own profile.
   if (view.who == null) {
-    const c = home.chats.find((x) => +x.unread && !isBlocked(x.with.id)) || home.chats.find((x) => !isBlocked(x.with.id));
+    const talk = friendsChatOn(), c = talk && (home.chats.find((x) => +x.unread && !isBlocked(x.with.id)) || home.chats.find((x) => !isBlocked(x.with.id)));
     view.who = c ? c.with.id : 'me';
     view.pane = c ? 'chat' : 'profile';
     drawMe(); drawRows();
@@ -334,7 +339,7 @@ function headHtml(p) {
   const st = statusOf(p), rel = relationOf(p.id), blocked = isBlocked(p.id);
   return `${avatar(p, 44, st.s)}
     <div class="grow"><div class="ch-name">${cc(p.country)}${esc(p.name)}</div><div class="fr-st st-${st.s}">${esc(st.label)}</div></div>
-    <button class="btn sm ${view.pane === 'chat' ? 'primary' : ''}" data-pane="chat">Chat</button>
+    ${friendsChatOn() ? `<button class="btn sm ${view.pane === 'chat' ? 'primary' : ''}" data-pane="chat">Chat</button>` : ''}
     <button class="btn sm ${view.pane === 'profile' ? 'primary' : ''}" data-pane="profile">Profile</button>
     <button class="btn sm gold" data-offer>Make offer</button>
     ${blocked ? '' : rel === 1 ? '<button class="btn sm ghost" data-unfriend>Remove friend</button>'
@@ -412,6 +417,13 @@ const msgHtml = (m, p) => {
 };
 
 function drawChat(el, p) {
+  if (!friendsChatOn()) {
+    el.innerHTML = `<div class="ch-head" data-head></div><div class="empty">Chat is off, so messages aren't shown and you can't send any. Messages sent to you are kept.
+      <br><button class="btn sm primary" data-chat-on style="margin-top:10px">Turn chat on</button></div>`;
+    drawHead();
+    el.querySelector('[data-chat-on]').addEventListener('click', () => setChat('friendsChat', true));
+    return;
+  }
   const blocked = isBlocked(p.id);
   el.innerHTML = `<div class="ch-head" data-head></div><div class="msgs" data-msgs data-with="${esc(p.id)}"></div>
     ${blocked ? '<div class="composer muted">You blocked this player. Unblock them to chat.</div>'
@@ -556,7 +568,7 @@ function drawProfile(el, who) {
         ${!mine && stored?.count ? `<div class="sp-stat"><span>In storage</span><b>${(+stored.count).toLocaleString('en-US')} · ${money(+stored.value || 0)}</b></div>` : ''}
         <div class="sp-stat"><span>Friends</span><b>${+p.friends || 0}</b></div>
         <div class="sp-stat"><span>Passive income</span><b class="green">${passiveText(+p.medals || 0)}</b></div>
-        ${mine ? '' : `<button class="btn primary" data-msg ${isBlocked(id) ? 'disabled' : ''}>Message</button><button class="btn gold" data-offer3>Make offer</button>`}
+        ${mine ? '' : `${friendsChatOn() ? `<button class="btn primary" data-msg ${isBlocked(id) ? 'disabled' : ''}>Message</button>` : ''}<button class="btn gold" data-offer3>Make offer</button>`}
       </div>
     </div></div>`;
   drawHead();

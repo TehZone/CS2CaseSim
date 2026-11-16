@@ -5,6 +5,7 @@ import { modeOf, squadOfSlot, slotsOf, otherSquad, NET } from '../engine/pvp.js'
 import { itemDef } from '../items.js';
 import { LOCAL } from './drops.js';
 import { esc } from '../util.js';
+import { matchChatOn } from '../chatprefs.js';
 
 export const TICK = NET.TICK;
 
@@ -111,16 +112,12 @@ export function playersOnBoard(game, slots, { picUrl, ping, bot }) {
   return d;
 }
 
-// Chat (Y all, U team) through the server: what's sent comes back like anyone's (the server filters it and stamps the name).
+// Chat (Y all, U team, the console's say and say_team) through the server: what's sent comes back like anyone's (the
+// server filters it and stamps the name). Nothing with the match chat off (game.js sendChat).
 export function serverChat(game, send) {
-  game.openChat = function (teamOnly) {
-    this.input.keys.clear(); this.input.buttons = 0;
-    this.chatOpen = true;
-    this.hud.chatInput(!!teamOnly, (text) => {
-      this.chatOpen = false;
-      this.hud.chatInput(null);
-      if (text != null && text.trim()) send({ t: 'chat', text: text.trim().slice(0, 127), team: !!teamOnly });
-    });
+  game.sendChat = function (text, teamOnly = false) {
+    if (!matchChatOn()) return;
+    send({ t: 'chat', text, team: !!teamOnly });
   };
 }
 

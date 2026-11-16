@@ -317,6 +317,7 @@ body.match-menu #menu-bg { visibility: hidden; }
 .play-hud .chat .chat-lines { display: flex; flex-direction: column; gap: 3px; }
 .play-hud .chat .chat-lines div { background: rgba(0, 0, 0, .45); padding: 3px 9px; font-size: 13px; transition: opacity .8s; }
 .play-hud .chat .chat-lines div.old { opacity: 0; }
+.play-hud .chat.no-said .chat-lines div.said { display: none; }
 .play-hud .chat.open .chat-lines div.old { opacity: .85; transition: none; }
 .play-hud .chat em { font-style: normal; font-weight: 600; }
 .play-hud .chat em.dead { color: #c8c8c8; }

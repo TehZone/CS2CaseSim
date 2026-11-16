@@ -31,6 +31,7 @@ import { initProfile } from './profile.js';
 import { initAccount, discordSection, bindDiscordSection, openResetModal } from './account.js';
 import { initUpdates } from './update.js';
 import { initPassive } from './passive.js';
+import { friendsChatOn } from './chatprefs.js';
 import { PAY, PASSIVE } from './engine/levels.js';
 
 // (market: the Store, the game's own stock; p2p: the Market, players' listings)
@@ -79,9 +80,12 @@ function startNpcLoop() {
     if (online() || document.querySelector('.play-canvas, .opening')) return;
     let r;
     try { r = await act('npc.tick'); } catch { return; }
-    for (const e of (r.events || []).slice(0, 2)) {
+    // (With the friends chat off, only their trade offers and friend requests, said plainly: Settings: Chat.)
+    const talk = friendsChatOn();
+    for (const e of (r.events || []).filter((x) => talk || x.offer || x.request).slice(0, 2)) {
       if ((currentName === 'community' && document.querySelector(`.fr-row.on[data-who="${e.npc}"]`))) continue;
       const name = S.social ? npcOf(S.social.seed, e.npc)?.name : '';
+      if (!talk) { toast(`<b>${esc(name || 'Someone')}</b> sent you ${e.offer ? 'a trade offer' : 'a friend request'}`, 'msg'); continue; }
       toast(`<b>${esc(name || 'Someone')}</b>: ${esc(e.text.length > 120 ? e.text.slice(0, 117) + '…' : e.text)}`, 'msg');
     }
   };
@@ -183,6 +187,7 @@ async function boot() {
   on('inv', updateInv);
   on('stars', updateStars);
   on('social', updateMessages);
+  on('chatPrefs', updateMessages); // (the friends chat switched: its messages counted or not)
   window.addEventListener('app:unread', updateMessages);
   on('reset', () => { lastMoney = S.money; updateBalance(); updateInv(); updateStars(); updateMessages(); go(currentName); });
   net.on('status', updateAccount);

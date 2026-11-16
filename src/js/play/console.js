@@ -6,6 +6,9 @@ import { MOVE } from './movement.js';
 
 import { ITEM_NAMES } from './match.js';
 import { DEFAULT_BINDS, isKeyName } from './input.js';
+import { matchChatOn } from '../chatprefs.js';
+
+const CHAT_OFF = 'Text chat is off (Settings: Chat, or the match settings under Esc)';
 
 const MOVE_DEFAULTS = { ...MOVE };
 const BOT_TIERS_BY_LEVEL = ['silver', 'gold', 'eagle', 'global'];
@@ -127,8 +130,8 @@ export function commands(g, con) {
     kill: { help: 'Kills you', run: () => { if (me().alive) g.kill(me(), null, { name: 'World' }, false); } },
     explode: { help: 'Kills you', run: () => { if (me().alive) g.kill(me(), null, { name: 'World' }, false); } },
     buy: { help: 'Buys an item if you can: buy weapon_ak47', run: ([id]) => { if (id) g.buy(id.startsWith('weapon_') || ITEM_NAMES[id] ? id : 'weapon_' + id); } },
-    say: { help: 'Says something to everyone in the chat: say <text>', run: (a) => { if (a.length) g.say(me(), a.join(' ').slice(0, 127)); } },
-    say_team: { help: 'Says something to your team in the chat: say_team <text>', run: (a) => { if (a.length) g.say(me(), a.join(' ').slice(0, 127), !g.ffa); } },
+    say: { help: 'Says something to everyone in the chat: say <text>', run: (a) => { if (!a.length) return; if (!matchChatOn()) con.print(CHAT_OFF, 'err'); else g.sendChat(a.join(' ').slice(0, 127), false); } },
+    say_team: { help: 'Says something to your team in the chat: say_team <text>', run: (a) => { if (!a.length) return; if (!matchChatOn()) con.print(CHAT_OFF, 'err'); else g.sendChat(a.join(' ').slice(0, 127), true); } },
     messagemode: { help: 'Opens the chat (Y)', run: () => { g.toggleConsole(false); g.openChat(false); } },
     messagemode2: { help: 'Opens the team chat (U)', run: () => { g.toggleConsole(false); g.openChat(true); } },
     disconnect: { help: 'Leaves the match', run: () => g.root.querySelector('[data-leave]')?.click() },

@@ -275,9 +275,11 @@ export class Hud {
   chat(name, place, text, team) { this.chatLine({ name, team, text, place, radio: true }); }
   // A chat line like CS2's: *DEAD* and (Terrorist) / (Counter-Terrorist) for team messages, the name in its side's
   // colour, @ place on team messages, then the text; or a system line. Lines fade after 10 s; all of the recent ones
-  // show while you're typing.
-  chatLine({ name = '', team = null, text, teamOnly = false, dead = false, place = '', system = false, radio = false }) {
+  // show while you're typing. said: a message someone typed (not a radio call or the game's own line), which the match
+  // chat switch hides (see saidShown).
+  chatLine({ name = '', team = null, text, teamOnly = false, dead = false, place = '', system = false, radio = false, said = false }) {
     const row = document.createElement('div');
+    if (said) row.className = 'said';
     const side = team === 'CT' ? 'ct' : 't';
     const where = place ? ` <small>@ ${esc(place.replace(/([a-z])([A-Z])/g, '$1 $2'))}</small>` : '';
     row.innerHTML = system ? `<span class="sys">${esc(text)}</span>`
@@ -287,6 +289,8 @@ export class Hud {
     while (box.children.length > 16) box.firstChild.remove();
     setTimeout(() => row.classList.add('old'), 10000);
   }
+  // Typed messages shown or not (Settings: Chat, match chat): the ones already there go with the switch.
+  saidShown(on) { this.q('[data-chat]').classList.toggle('no-said', !on); }
   // The Say line (Y: all chat, U: team chat); onSend(text) gets what you typed. Closed with null.
   chatInput(teamOnly, onSend) {
     const form = this.q('[data-chat-say]'), input = form.querySelector('input'), box = this.q('[data-chat]');

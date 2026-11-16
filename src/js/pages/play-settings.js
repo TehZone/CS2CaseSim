@@ -3,6 +3,7 @@
 // other Play preferences; a match reads them when it starts (and from the match's menu, at once).
 import { esc } from '../util.js';
 import { S, save, emit } from '../state.js';
+import { matchChatOn, setChat } from '../chatprefs.js';
 import { CROSSHAIR, crosshairHtml } from '../play/hud.js';
 import { ACTIONS, BINDS_VERSION, COMMANDS, bindTable, keyName, keyLabel } from '../play/input.js';
 import { tierOf } from '../play/skill.js';
@@ -59,6 +60,7 @@ export function settingsHtml(p, show = {}) {
           .map(([val, n]) => `<option value="${val}" ${String(p.showFps === false ? 0 : p.showFps === 2 ? 2 : 1) === val ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
         ${check('netGraph', 'Performance graph (frame time, draws: net_graph)', !!p.netGraph, 'root')}
         ${check('showSpeed', 'Speed bar (how fast you\'re going, in units per second: cl_showpos)', !!p.showSpeed, 'root')}
+        <label class="ps-check"><input type="checkbox" data-match-chat ${matchChatOn() ? 'checked' : ''}> Text chat: other players' and the bots' messages, and typing yours (Y, U). Radio calls show either way</label>
         <h4>Video</h4>
         ${videoHtml(p)}
         <label>Frame rate cap (fps_max)<select class="input" data-s="root.fpsMax">${FPS_CAPS.map(([v, n]) => `<option value="${v}" ${(p.fpsMax || 0) === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
@@ -113,6 +115,8 @@ export function bindSettings(el, prefs, savePrefs, rerender) {
     save();
     emit('volume');
   });
+  // The match chat switch (the Settings page's too: Chat), which a running match follows.
+  el.querySelector('[data-match-chat]')?.addEventListener('change', (e) => setChat('matchChat', e.target.checked));
   // The unlocked frame rate is the app's (it needs a restart), not the match's.
   el.querySelectorAll('[data-display]').forEach((input) => input.addEventListener('change', async () => {
     await window.native.setDisplay({ [input.dataset.display]: input.checked });

@@ -412,6 +412,12 @@ export function post(so, id, from, text, extra = {}, now = Date.now()) {
   if (t.length > 80) t.splice(0, t.length - 80);
   if (from === 'npc') so.unread[id] = (so.unread[id] || 0) + 1;
 }
+// How many of an NPC's messages you haven't read: all of them, or with chat false (the friends chat off, Settings: Chat)
+// only the trade offers among them (they're the newest `unread` of the thread).
+export function unreadOf(so, id, chat = true) {
+  const n = so?.unread?.[id] || 0;
+  return !n || chat ? n : (so.threads[id] || []).slice(-n).filter((m) => m.offer).length;
+}
 function short(it) {
   const name = I.itemName(it);
   const w = it.t === 'skin' && it.fl != null ? ` (${WEAR_BY_KEY[wearOf(it.fl)].k})` : '';

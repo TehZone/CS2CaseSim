@@ -13,6 +13,7 @@ import { rankInfo } from '../engine/ranks.js';
 import { loadRankArt, emblemHtml, rankKey } from '../rank.js';
 import { levelHtml } from '../profile.js';
 import { ownedWorth } from '../stored.js';
+import { matchChatOn, friendsChatOn } from '../chatprefs.js';
 
 let root;
 
@@ -89,6 +90,14 @@ function draw() {
       <div class="setting"><div>Reset progress<p>Deletes your money, inventory, upgrades and stats.</p></div><button class="btn danger" data-a="reset" ${online() ? 'disabled title="Log out to reset your offline save"' : ''}>Reset save</button></div>
     </div>
 
+    <div class="section-title">Chat</div>
+    <div class="settings">
+      <div class="setting"><div>Match chat<p>Other players' and the bots' text messages in a match, and typing your own (Y, U, the console's say). Off, none of them show and you can't type any; radio calls and the game's own lines (who joined, who left) still show. You can change it in a match too, in its settings.</p></div>
+        <input type="checkbox" data-s="matchChat" ${matchChatOn() ? 'checked' : ''}></div>
+      <div class="setting"><div>Friends chat<p>Messages on the Friends page: the chats, their pop-ups and sounds, and their count at the top. Off, they're hidden and you can't send any, nor a message with a trade offer. Messages sent to you are kept and show again when you turn it back on. Friends, friend requests, profiles and trade offers still work, and offline the traders' offers still come in.</p></div>
+        <input type="checkbox" data-s="friendsChat" ${friendsChatOn() ? 'checked' : ''}></div>
+    </div>
+
     <div class="section-title">About</div>
     <p class="muted" style="max-width:860px;line-height:1.6;font-size:13px">
       Fan-made simulator, not affiliated with or endorsed by Valve. Counter-Strike, CS2 and all item names and images are property of Valve Corporation.
@@ -105,6 +114,7 @@ function draw() {
     save();
     if (k === 'volume') { emit('volume'); sfx.click(); }
     if (k === 'compressCache') Promise.resolve(setCompress(el.checked)).finally(refreshPrepare);
+    if (k === 'matchChat' || k === 'friendsChat') emit('chatPrefs', k);
   }));
   root.querySelectorAll('[data-a]').forEach((b) => b.addEventListener('click', () => action(b.dataset.a, b)));
   const bgSel = root.querySelector('[data-menubg]');

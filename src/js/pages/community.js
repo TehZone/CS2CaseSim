@@ -24,6 +24,7 @@ import { avatarHtml as faceHtml, myFace, npcFace, badgesBoxHtml, badgeList, make
 import { badgeItem } from '../engine/badges.js';
 import { PIC_SIZE } from '../engine/picture.js';
 import { render as renderOnline, destroy as destroyOnline, unreadCount as unreadOnline } from './community-online.js';
+import { friendsChatOn, setChat } from '../chatprefs.js';
 
 const view = { pane: 'chat', who: null, q: '', tab: 'showcase', haggle: null };
 let root = null, offs = [];
@@ -32,7 +33,9 @@ const so = () => S.social;
 const people = () => (so() ? N.crowd(so().seed) : []);
 const stateOf = (id) => so()?.npcs[id] || null;
 const npc = (id) => (so() ? N.npcOf(so().seed, id) : null);
-export const unreadCount = () => (online() ? unreadOnline() : Object.values(so()?.unread || {}).reduce((t, n) => t + n, 0) + people().filter((n) => stateOf(n.id)?.friend === 2).length);
+// Unread messages from an NPC: with the friends chat off (Settings: Chat), only the trade offers among them.
+const unreadOf = (id) => N.unreadOf(so(), id, friendsChatOn());
+export const unreadCount = () => (online() ? unreadOnline() : Object.keys(so()?.unread || {}).reduce((t, id) => t + unreadOf(id), 0) + people().filter((n) => stateOf(n.id)?.friend === 2).length);
 
 export function openChat(id) { view.pane = 'chat'; view.who = id; view.haggle = null; window.dispatchEvent(new CustomEvent('app:go', { detail: 'community' })); }
 export function openPerson(id) { view.pane = 'profile'; view.who = id; view.tab = 'showcase'; window.dispatchEvent(new CustomEvent('app:go', { detail: 'community' })); }
@@ -43,10 +46,10 @@ export function render(r) {
   // (Nothing here draws online: `root` stays empty, so the page on screen is only ever the other file's.)
   if (online()) { root = null; renderOnline(r); return; }
   root = r;
-  offs = [on('social', () => drawAll()), on('inv', () => view.pane === 'profile' && drawMain())];
+  offs = [on('social', () => drawAll()), on('inv', () => view.pane === 'profile' && drawMain()), on('chatPrefs', (k) => k === 'friendsChat' && drawAll())];
   root.innerHTML = '<div class="page community"><div class="cm-grid"><aside class="fr-panel" data-list></aside><section class="cm-main" data-main></section></div></div>';
   if (!so()) act('npc.tick').then(drawAll).catch((e) => toast(esc(e.message), 'bad'));
-  if (!view.who) { const first = people().find((n) => so()?.unread[n.id]) || people().find((n) => stateOf(n.id)?.friend === 1); view.who = first?.id || 'me'; view.pane = first ? 'chat' : 'profile'; }
+  if (!view.who) { const first = people().find((n) => unreadOf(n.id)) || people().find((n) => stateOf(n.id)?.friend === 1); view.who = first?.id || 'me'; view.pane = first ? 'chat' : 'profile'; }
   drawAll();
 }
 export function destroy() { offs.forEach((o) => o()); offs = []; root = null; destroyOnline(); }
@@ -82,7 +85,7 @@ function drawList() {
     ['People you may know', all.filter((n) => !stateOf(n.id)?.friend && (so().threads[n.id] || so().feed.some((f) => f.npc === n.id))).slice(0, 12)],
   ];
   const row = (n, req) => {
-    const p = pres(n), un = so().unread[n.id] || 0, on_ = view.who === n.id;
+    const p = pres(n), un = unreadOf(n.id), on_ = view.who === n.id;
     return `<div class="fr-row ${on_ ? 'on' : ''} st-${p.s}" data-who="${n.id}">${avatarHtml(n.id, 34, p.s)}
       <div class="fr-txt"><div class="fr-name">${esc(n.name)}${kindTag(n)}</div><div class="fr-st">${esc(p.label)}</div></div>
       ${req ? `<button class="btn sm primary" data-acc="${n.id}">Accept</button>` : un ? `<span class="pill">${un}</span>` : ''}</div>`;
@@ -144,7 +147,7 @@ function headerHtml(n) {
   const st = stateOf(n.id), p = N.presence(n);
   return `<div class="ch-head">${avatarHtml(n.id, 44, p.s)}
     <div class="grow"><div class="ch-name">${cc(n.country)}${esc(n.name)} <span class="fr-tag">${esc(kindLabel(n))}</span></div><div class="fr-st st-${p.s}">${esc(p.label)}</div></div>
-    <button class="btn sm ${view.pane === 'chat' ? 'primary' : ''}" data-pane="chat">Chat</button>
+    <button class="btn sm ${view.pane === 'chat' ? 'primary' : ''}" data-pane="chat">${friendsChatOn() ? 'Chat' : 'Offers'}</button>
     <button class="btn sm ${view.pane === 'profile' ? 'primary' : ''}" data-pane="profile">Profile</button>
     <button class="btn sm gold" data-offer>Make offer</button>
     ${st?.friend === 1 ? '<button class="btn sm ghost" data-unfriend>Remove friend</button>' : st?.friend === 2 ? '<button class="btn sm primary" data-friend>Accept request</button>'
@@ -158,19 +161,28 @@ function wireHeader(el, n) {
 }
 
 // ---- chat --------------------------------------------------------------------------------------------------------------------
+// With the friends chat off (Settings: Chat): their trade offers only, each card where it was made (Accept, Haggle and
+// Decline work from the card), and no box to write in.
 function drawChat(el, id) {
-  const n = npc(id), msgs = so().threads[id] || [];
+  const n = npc(id), talk = friendsChatOn(), all = so().threads[id] || [];
+  const msgs = talk ? all : all.filter((m) => m.offer);
   const lastFor = new Map();
   msgs.forEach((m, i) => { if (m.offer) lastFor.set(m.offer, i); });
   el.innerHTML = `${headerHtml(n)}
     <div class="msgs" data-msgs>${msgs.length ? msgs.map((m, i) => `<div class="msg ${m.from}">
       ${m.from === 'npc' ? avatarHtml(id, 28) : ''}<div class="bub"><div class="txt">${esc(m.text)}</div><div class="when">${timeAgo(m.at)}</div>
-      ${m.offer && lastFor.get(m.offer) === i ? offerHtml(m.offer) : ''}</div></div>`).join('') : `<div class="empty" style="padding:40px">Say hi to ${esc(n.name)}.</div>`}</div>
-    <form class="composer" data-form><input class="input" data-text maxlength="300" placeholder="Message ${esc(n.name)}… (you can haggle here: “would you do $500? it’s a low float”)" autocomplete="off"><button class="btn primary">Send</button></form>`;
+      ${m.offer && lastFor.get(m.offer) === i ? offerHtml(m.offer) : ''}</div></div>`).join('') : `<div class="empty" style="padding:40px">${talk ? `Say hi to ${esc(n.name)}.` : `No trade offers with ${esc(n.name)}.`}</div>`}</div>
+    ${talk ? `<form class="composer" data-form><input class="input" data-text maxlength="300" placeholder="Message ${esc(n.name)}… (you can haggle here: “would you do $500? it’s a low float”)" autocomplete="off"><button class="btn primary">Send</button></form>`
+      : '<div class="composer muted">Chat is off: only trade offers show here. <button class="btn sm primary" data-chat-on>Turn chat on</button></div>'}`;
   wireHeader(el, n);
   const box = el.querySelector('[data-msgs]');
   box.scrollTop = box.scrollHeight;
   wireOffers(el);
+  if (!talk) {
+    el.querySelector('[data-chat-on]').addEventListener('click', () => setChat('friendsChat', true));
+    if (so().unread[id]) act('npc.read', { npc: id }).catch(() => {});
+    return;
+  }
   const form = el.querySelector('[data-form]'), input = el.querySelector('[data-text]');
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -251,7 +263,7 @@ export function offerModal(id) {
     body: `<div class="offer-sides">
       <div class="offer-side"><h4>You give · <span class="green" data-give>$0.00</span></h4><label class="check" style="margin-bottom:8px">Money <input class="input" type="number" min="0" step="0.01" data-mym value="0" style="width:110px"></label><div data-mine></div></div>
       <div class="offer-side"><h4>You get · <span class="green" data-get>$0.00</span></h4><label class="check" style="margin-bottom:8px">Money <input class="input" type="number" min="0" step="0.01" data-thm value="0" style="width:110px"> <span class="muted">(they have ${money(s?.money || 0)})</span></label><div data-theirs></div></div>
-    </div><input class="input" data-msg maxlength="200" placeholder="Message (optional)" style="width:100%;margin-top:10px">`,
+    </div>${friendsChatOn() ? '<input class="input" data-msg maxlength="200" placeholder="Message (optional)" style="width:100%;margin-top:10px">' : ''}`,
     foot: `<span class="muted" style="font-size:12px">${n.type === 'collector' ? `${esc(n.name)} collects ${esc(N.FOCUS[n.focus].n.toLowerCase())} items: they pay more for those, and want a lot for theirs.`
       : n.type === 'beginner' ? `${esc(n.name)} is new to trading: they go by an item's plain price for its name and wear (floats, patterns, stickers and serials don't register) and misjudge some skins.`
       : `${esc(n.name)} trades at about market price.`}</span><span class="spacer"></span><button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-send>Send offer</button>`,
@@ -266,7 +278,7 @@ export function offerModal(id) {
   m.el.querySelector('[data-mym]').addEventListener('input', (e) => { myMoney = Math.max(0, +e.target.value || 0); totals(); });
   m.el.querySelector('[data-thm]').addEventListener('input', (e) => { theirMoney = Math.max(0, +e.target.value || 0); totals(); });
   m.el.querySelector('[data-send]').addEventListener('click', async () => {
-    const msg = m.el.querySelector('[data-msg]').value;
+    const msg = friendsChatOn() ? m.el.querySelector('[data-msg]')?.value || '' : ''; // (a note is a message: none with the friends chat off)
     m.close();
     view.who = id; view.pane = 'chat';
     if (root) drawAll(); else openChat(id);
@@ -328,7 +340,7 @@ function drawProfile(el, id) {
         <div class="sp-stat"><span>Items</span><b>${p.inv.length}</b></div>
         <div class="sp-stat"><span>Friends</span><b>${p.friends}</b></div>
         ${mine ? `<div class="sp-stat"><span>Passive income</span><b class="green">${passiveText(S.prof.medals)}</b></div><div class="sp-stat"><span>Trades with players</span><b>${S.stats.npcTrades || 0}</b></div><div class="sp-stat"><span>Matches won</span><b>${S.stats.playWins || 0}</b></div>`
-          : `<div class="sp-stat"><span>Trades with you</span><b>${p.trades}</b></div><button class="btn primary" data-msg>Message</button><button class="btn gold" data-offer3>Make offer</button>`}
+          : `<div class="sp-stat"><span>Trades with you</span><b>${p.trades}</b></div>${friendsChatOn() ? '<button class="btn primary" data-msg>Message</button>' : ''}<button class="btn gold" data-offer3>Make offer</button>`}
       </div>
     </div></div>`;
   if (!mine) wireHeader(el, npc(id));
