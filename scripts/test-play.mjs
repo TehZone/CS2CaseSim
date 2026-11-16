@@ -2578,6 +2578,34 @@ const shotAt = (p, from, elev, dist = 500) => {
   ok(play.PLAY_VERSION >= 12, 'map exports: version 12 brings the windows\' and glass\'s textures and the sky\'s brightness');
 }
 
+// ---- a map's fog (cs2/play.cjs mapFog, fog.js): its env_cubemap_fog and env_gradient_fog as CS2 sets them ----------------
+{
+  const play = (await import('node:module')).createRequire(import.meta.url)('../cs2/play.cjs');
+  // Train's: both, each with height fog (the cube's start height above its end).
+  const train = play.mapFog([
+    { classname: 'env_cubemap_fog', startdisabled: 'false', cubemapfogstartdistance: '128.0', cubemapfogenddistance: '7000.0', cubemapfogfalloffexponent: '1.1', cubemapfogmaxopacity: '0.9',
+      cubemapheightfog: 'true', cubemapfogheightstart: '2413.129883', cubemapfogheightend: '-3327.73999', cubemapfogheightexponent: '1.5', cubemapfoglodbiase: '1.0' },
+    { classname: 'env_gradient_fog', startdisabled: 'false', fogcolor: '[ 136, 156, 178 ]', fogstrength: '1.0', fogmaxopacity: '1.0', fogstart: '300.0', fogend: '3800.0',
+      fogfalloffexponent: '1.0', heightfog: 'true', fogstartheight: '-500.0', fogendheight: '200.0', fogverticalexponent: '1.5' },
+  ]);
+  ok(train.cube.start === 128 && train.cube.end === 7000 && train.cube.maxOpacity === 0.9 && train.cube.height && train.cube.heightStart === 2413.129883 && train.cube.heightEnd === -3327.73999
+    && train.cube.lodBias === 1 && train.gradient.color.join() === '136,156,178' && train.gradient.height && train.gradient.heightStart === -500 && train.gradient.heightExponent === 1.5,
+    "map fog: Train's cubemap and gradient fog, distances, heights and exponents as its entities have them");
+  const off = play.mapFog([{ classname: 'env_cubemap_fog', startdisabled: 'true' }, { classname: 'env_gradient_fog', startdisabled: '0', heightfog: 'false' }]);
+  ok(off.cube === null && off.gradient && !off.gradient.height && off.gradient.maxOpacity === 1 && play.mapFog([]) === null && play.mapInfo([]).fog === null,
+    'map fog: one that starts switched off is none, height fog only when it says so, none at all is null');
+  // The fog's curves as the shaders use them (fog.js): nothing at the start distance, all (times the most it covers) at
+  // the end, and the height term all of it at the start height, none at the end height (as Source 2 sets them).
+  const { fogUniforms } = await import('../src/js/play/fog.js');
+  const u = fogUniforms(train, { image: { width: 2048 } }, 2);
+  const part = (d, z, p, h) => Math.pow(Math.min(1, Math.max(1e-4, (d - p.x) * p.y)), p.z) * (h.w > 0.5 ? Math.pow(Math.min(1, Math.max(1e-4, (z - h.x) * h.y)), h.z) : 1);
+  const g = u.fogGrad.value, gh = u.fogGradH.value;
+  ok(part(300, -500, g, gh) < 1e-3 && Math.abs(part(3800, -500, g, gh) - 1) < 1e-9 && part(3800, 200, g, gh) < 1e-3 && Math.abs(part(2050, -150, g, gh) - 0.5 * Math.pow(0.5, 1.5)) < 1e-9,
+    'map fog: the gradient fog grows from its start distance to its end, and is thickest at its start height, gone at its end height');
+  ok(u.fogCubeOn.value && u.fogGradOn.value && u.fogSkyLod.value.x === 6 && u.fogSkyLod.value.y === 1 && u.fogSkyBright.value === 2 && !fogUniforms(train, null).fogCubeOn.value,
+    "map fog: the cube fog's sky blurred to a cube face's three-texel mip, by its lod bias; with no sky to take its colour from, no cube fog");
+}
+
 // ---- the screen's shape (screen.js): CS2's 4:3 stretched or with black bars, 16:10, 16:9, its resolutions ----------
 {
   const { screenLayout } = await import('../src/js/play/screen.js');
@@ -3395,6 +3423,19 @@ const shotAt = (p, from, elev, dist = 500) => {
   const first = marks[0], near = radarMarks(info, { ...view, mates: [], pings: [], bomb: { pos: [0, 200, 0], carried: true } }, marks);
   ok(near === marks && near[0] === first && near.length === 2 && near[1].kind === 'c4 carried' && !near[1].edge && Math.abs(near[1].y - (115 - (200 / info.scale) * RADAR_SCALE)) < 1e-9,
     "radar: a near bomb where it is, and a frame's marks in the last frame's objects");
+  // Floors (Nuke's verticalsections: the default image above -495, the lower one below): the one your feet are in, else
+  // the nearest; a mark keeps its height so the radar can dim one on another floor.
+  {
+    const { radarFloor } = await import('../src/js/play/radar.js');
+    const nuke = { ...info, layers: [{ image: 'a', min: -495, max: 10000 }, { image: 'b', min: -10000, max: -495 }] };
+    ok(radarFloor(nuke, -416) === 0 && radarFloor(nuke, -768) === 1 && radarFloor(nuke, -495) === 0 && radarFloor(nuke, 20000) === 0 && radarFloor(nuke, -20000) === 1,
+      "radar floors: Nuke's upper floor above -495, the lower below, and past either end the nearest");
+    const boulder = { ...info, layers: [{ image: 'a', min: 62.7, max: 16384 }, { image: 'b', min: -16384, max: 62.7 }] };
+    ok(radarFloor(boulder, 100) === 0 && radarFloor(boulder, 0) === 1 && radarFloor(info, -768) === 0 && radarFloor({ ...info, layers: [{ image: 'a', min: null, max: null }] }, 5) === 0 && radarFloor(nuke, NaN) === 0,
+      'radar floors: any order (Boulder lists its upper floor first), and a map with one floor (or none listed) always the first');
+    const hi = radarMarks(info, { ...view, mates: [{ pos: [0, 0, -768], alive: true }], enemies: [], pings: [], bomb: null });
+    ok(hi.length === 1 && hi[0].z === -768, 'radar floors: a mark keeps the height it was at');
+  }
 
   // A frame as game.js has it: you at the camera's eye, the bots `a` of the way between their last two ticks.
   const me = { team: 'CT', squad: 1, alive: true }, mate = { team: 'CT', squad: 1, alive: true }, seen = { team: 'T', squad: 2, alive: true, spottedBy: 1, spottedAt: 0 }, unseen = { team: 'T', squad: 2, alive: true };
@@ -3405,6 +3446,9 @@ const shotAt = (p, from, elev, dist = 500) => {
   let d = g.radarData();
   ok(d.center[0] === 10 && d.center[1] === 20 && d.yaw === 120 && d.mates.length === 1 && d.enemies.length === 1 && d.enemies[0].pos[0] === 800 && g.radarData() === d,
     "radar: centred on the camera's eye (not the tick's origin), turned with your view, enemies only once your team has seen them, the same objects each frame");
+  g.player.origin[2] = -768;
+  ok(g.radarData().center[2] === -768, "radar: its floor goes by your feet (the tick's origin), not your eye");
+  g.player.origin[2] = 0;
   g.now = 2;
   ok(g.radarData().enemies.length === 0, 'radar: an enemy seen 2 s ago is off it again');
   // A teammate running at 250 u/s, ticks 64 a second, frames 144: on the radar it moves the same each frame (at its ticks
@@ -3433,6 +3477,7 @@ const shotAt = (p, from, elev, dist = 500) => {
   g.acc = TICK / 2; me.alive = false; g.spectating = bots[0];
   d = g.radarData();
   ok(d.center[0] === 30 && d.yaw === 90 && d.mates.length === 1, `radar: spectating, centred on the teammate as drawn (${d.center[0]}) and turned with their aim (${d.yaw})`);
+  ok(Number.isFinite(d.center[2]), `radar: spectating, the floor goes by the teammate's height (${d.center[2]})`);
   me.alive = true; g.spectating = null; me.team = mate.team = 'T'; seen.team = unseen.team = 'CT';
   g.match.bomb = { state: 'carried', carrier: mate, pos: null };
   d = g.radarData();

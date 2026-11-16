@@ -47,15 +47,29 @@ export function radarPoint(info, center, yaw, p, out = [0, 0]) {
   return out;
 }
 
+// The floor (an index into info.layers, see CS2Service.playRadar) a height (game units, feet) is on: the one whose
+// heights it's in, else the nearest. One floor: 0.
+export function radarFloor(info, z) {
+  const L = info.layers;
+  if (!L || L.length < 2 || !Number.isFinite(z)) return 0;
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < L.length; i++) {
+    const lo = L[i].min ?? -Infinity, hi = L[i].max ?? Infinity;
+    const d = z < lo ? lo - z : z >= hi ? z - hi : 0;
+    if (d < bestD) { best = i; bestD = d; }
+  }
+  return best;
+}
+
 // A frame's marks, in drawing order (the bomb last, on top): { kind, x, y, edge } in radar pixels, into `out` (its
 // objects reused). Teammates alive, the enemies given (those your team has seen), pings, the bomb held on the radar's
 // edge when it's further off.
 export function radarMarks(info, { center, yaw, mates = [], enemies = [], bomb = null, pings = [], myTeam }, out = []) {
   let n = 0;
   const add = (kind, pos) => {
-    const m = (out[n++] ||= { kind: '', x: 0, y: 0, edge: false, at: [0, 0] });
+    const m = (out[n++] ||= { kind: '', x: 0, y: 0, z: 0, edge: false, at: [0, 0] });
     radarPoint(info, center, yaw, pos, m.at);
-    m.kind = kind; m.x = m.at[0]; m.y = m.at[1]; m.edge = false;
+    m.kind = kind; m.x = m.at[0]; m.y = m.at[1]; m.z = pos[2] ?? 0; m.edge = false;
     return m;
   };
   const mine = myTeam === 'CT' ? 'dot ct' : 'dot t';
@@ -165,8 +179,9 @@ export class Radar {
     this.scene = new THREE.Scene();
     this.camera = new THREE.Camera(); // (not used: the shader places the quads)
     this.sheet = this.makeSheet();
-    this.mapTex = new THREE.Texture();
-    this.setup(this.mapTex);
+    // The overview: a texture for each floor (Nuke's upper and lower...), the one you're on drawn.
+    this.floors = (info.layers?.length ? info.layers : [{ image: info.image }]).map(() => ({ tex: this.setup(new THREE.Texture()), ready: false }));
+    this.mapTex = this.floors[0].tex;
     this.quads = [];
     this.bg = this.quad(); // the radar's dark round
     this.map = this.quad(this.mapTex);
@@ -175,14 +190,17 @@ export class Radar {
     renderer.compile(this.scene, this.camera);
     renderer.initTexture(this.sheet.tex);
     for (const q of this.quads) q.visible = false;
-    const img = new Image();
-    img.src = info.image;
-    img.decode().then(() => {
-      if (this.disposed) return;
-      this.mapTex.image = img; this.mapTex.needsUpdate = true;
-      renderer.initTexture(this.mapTex);
-      this.mapReady = true;
-    }, () => {});
+    (info.layers?.length ? info.layers : [{ image: info.image }]).forEach((l, i) => {
+      const img = new Image(), f = this.floors[i];
+      img.src = l.image;
+      img.decode().then(() => {
+        if (this.disposed) return;
+        f.tex.image = img; f.tex.needsUpdate = true;
+        renderer.initTexture(f.tex);
+        f.ready = true;
+        if (i === 0) this.mapReady = true;
+      }, () => {});
+    });
   }
 
   setup(t) {
@@ -255,15 +273,20 @@ export class Radar {
     const bg = next();
     this.place(bg, 0, 0, SIZE, SIZE);
     bg.material.uniforms.tint.value.set(10 / 255, 14 / 255, 20 / 255, 0.75);
+    // Your floor's overview; a mark on another floor is dimmer (where they are, a floor up or down).
+    const floor = radarFloor(this.info, d.center[2]), several = this.floors.length > 1;
     const map = next(), v = mapMatrix(this.info, d.center, d.yaw, this.view), mu = map.material.uniforms;
+    mu.tex.value = this.floors[floor].tex;
     mu.xa.value.set(v[0] * 1024, v[2] * 1024, v[4]);
     mu.xb.value.set(v[1] * 1024, v[3] * 1024, v[5]);
     mu.tint.value.set(1, 1, 1, 0.9);
-    map.visible = !!this.mapReady;
+    map.visible = this.floors[floor].ready;
+    this.floor = floor;
     const t = performance.now() - this.beepAt, beeping = !!bm && bm.kind === 'c4 planted' && t < 650;
     for (const m of marks) {
-      if (m.kind.charCodeAt(0) === 100) sprite(sheet.dot, m.x, m.y, 1, TINT[m.kind], 1); // ('dot ...')
-      else if (m.kind === 'ping') sprite(sheet.ping, m.x, m.y, 1, WHITE, 1);
+      const away = several && radarFloor(this.info, m.z) !== floor ? 0.45 : 1;
+      if (m.kind.charCodeAt(0) === 100) sprite(sheet.dot, m.x, m.y, 1, TINT[m.kind], away); // ('dot ...')
+      else if (m.kind === 'ping') sprite(sheet.ping, m.x, m.y, 1, WHITE, away);
       else {
         // The bomb: on the edge a little see-through; a planted one's beep flashes it and sends a ring out.
         const a = m.edge ? 0.9 : 1, b = beeping && t < 260 ? 1.9 - 0.9 * easeOut(t / 260) : 1;
@@ -290,7 +313,7 @@ export class Radar {
     for (const q of this.quads || []) q.material.dispose();
     this.geo?.dispose();
     this.sheet?.tex.dispose();
-    this.mapTex?.dispose();
+    for (const f of this.floors || []) f.tex.dispose();
     this.el.remove();
   }
 }

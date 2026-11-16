@@ -32,6 +32,8 @@ const STICKER_META_VERSION = 1;
 // Folders whose textures were made smaller carry this stamp. Version 1 was written by Electron's resizer, which
 // premultiplied alpha (textures keeping a mask in alpha came out dark or black), so those folders are exported again.
 const SHRUNK = '.shrunk2';
+// radar.json's format (2: an image per floor, community maps' from their addons; 3: the scale for the image's own size).
+const RADAR_VERSION = 3;
 
 // A model attachment from Source2Viewer's dump of the model's MDAT block: { bone, offset: [x, y, z] (inches),
 // rotation: [x, y, z, w] } in the bone's space, or null.
@@ -969,6 +971,8 @@ class CS2Service {
             while (steps[meta.version]) meta = await this[steps[meta.version]](id, vpk, dir, meta, say);
             if (await this.wingmanChanged(meta)) { await settle(); meta = await this.upgradeMapWingman(id, vpk, dir, meta, say); }
             if (!meta.sky && !meta.skyChecked) { await settle(); meta = await this.upgradeMapSky(id, vpk, dir, meta, say); }
+            if (!meta.addonChecked && this.addonVpk(id)) { await settle(); meta = await this.upgradeMapAddon(id, vpk, dir, meta, say); }
+            if (meta.fog === undefined) { await settle(); meta = await this.upgradeMapFog(id, vpk, dir, meta, say); }
           } catch (e) { this.log('map upgrade: ' + e.message); this.playJobs.delete('map:' + id); } // (the next load tries again)
           this.progress.delete('map:' + id);
           if (meta !== was) this.compactor?.schedule('map'); // (what an upgrade rewrote is stored unpacked again)
@@ -1017,7 +1021,7 @@ class CS2Service {
       // (That failing costs the map only its Wingman version: exported as the version before it, the next load tries again.)
       const wingman = await this.playWingman(id, vpk, dir, ents, json, volumes.bombsites).catch((e) => { this.log('wingman: ' + e.message); return null; });
       say('Exporting the map\'s 3D skybox…');
-      const sky3d = await this.playSky3d(dir, ents);
+      const sky3d = await this.playSky3d(dir, ents, id);
       const layers = await this.playLayers(vpk, dir, json);
 
       say('Optimising textures…');
@@ -1041,7 +1045,7 @@ class CS2Service {
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(entPhysFile, { force: true });
       const meta = {
-        version: wingman ? play.PLAY_VERSION : 13, stamp, content, id, name: nameOf(id), ...info, ...volumes, lightmap, sky, skyChecked, layers, lighting, hidden, hurts, doors, glass, sky3d,
+        version: wingman ? play.PLAY_VERSION : 13, stamp, content, id, name: nameOf(id), ...info, ...volumes, lightmap, sky, skyChecked, addonChecked: true, layers, lighting, hidden, hurts, doors, glass, sky3d,
         soundscapes: play.mapSoundscapes(ents), ...wingman,
         collision: { tris: col.tris, surfaces: col.surfaces, flags: { player: play.F_PLAYER, bullet: play.F_BULLET, grenade: play.F_GRENADE } },
       };
@@ -1066,8 +1070,9 @@ class CS2Service {
       return fs.existsSync(d) ? fs.readdirSync(d).filter((n) => re.test(n)).sort().map((n) => path.join(d, n)) : [];
     };
     const have = (f) => (/\.vtex$/.test(f) ? slices(f, /dlshd/.test(f) ? 'png' : 'exr').length > 0 : fs.existsSync(path.join(tmp, f)));
-    // Files the map made are in its own VPK, the rest in the game's.
-    for (const src of [vpk, cs2.vpk]) {
+    // Files the map made are in its own VPK, the rest in the game's, or a community map's addon (Debris's, Boulder's
+    // post processing: without it they had none, no colour grading or tone curve).
+    for (const src of [vpk, this.addonVpk(path.basename(vpk, '.vpk')), cs2.vpk].filter(Boolean)) {
       const missing = want.filter((w) => !have(w));
       if (missing.length) await cs2.run(['-i', src, '-f', missing.map((w) => w + '_c').join(','), '-d', '-o', tmp]).catch(() => {});
     }
@@ -1223,13 +1228,32 @@ class CS2Service {
   // CS2's 3D skybox: the prefab map a skybox_reference names (Inferno's hills and town, Nuke's plant...), drawn around
   // the map at its sky_camera's scale. Exported as sky3d.glb; { origin (the sky_camera, skybox units), scale, offset
   // (the skybox_reference's origin) }, or null when the map has none installed.
-  async playSky3d(dir, ents) {
+  async playSky3d(dir, ents, id = null) {
     const ref = ents.find((e) => e.classname === 'skybox_reference' && e.targetmapname);
     const vmap = ref && String(ref.targetmapname).replace(/^resource_name:"?|"$/g, '').replace(/\.vmap$/, '');
-    const vpk = vmap && path.join(this.gameDir, vmap + '.vpk');
-    if (!vpk || !fs.existsSync(vpk)) return null;
+    if (!vmap) return null;
     const cs2 = this.ensureCS2();
-    const glb = path.join(dir, 'sky3d.glb'), tmp = path.join(dir, 'tmp-sky3d');
+    const glb = path.join(dir, 'sky3d.glb'), tmp = path.join(dir, 'tmp-sky3d'), own = path.join(dir, 'tmp-sky3d-map');
+    let vpk = path.join(this.gameDir, vmap + '.vpk');
+    // A community map's is in its addon (Debris's maps/de_debris_skybox.vpk, Fachwerk's maps/prefabs/skybox_1.vpk), a
+    // VPK in a VPK. Taken out into a folder of its own, it's read as the map it belongs to (named after it, beside a
+    // gameinfo.gi naming the game's folders and where the addons are): the extractor mounts the map's addon by the map's
+    // name, and the skybox's materials are in it.
+    if (!fs.existsSync(vpk)) {
+      const addon = id && this.addonVpk(id);
+      if (!addon) return null;
+      const mod = path.join(own, 'csgo'), game = path.dirname(this.gameDir);
+      await cs2.run(['-i', addon, '-f', vmap + '.vpk', '-o', path.join(own, 'x')]).catch(() => {});
+      const got = path.join(own, 'x', vmap + '.vpk');
+      if (!fs.existsSync(got)) { fs.rmSync(own, { recursive: true, force: true }); return null; }
+      fs.mkdirSync(path.join(mod, 'maps'), { recursive: true });
+      vpk = path.join(mod, 'maps', id + '.vpk');
+      fs.renameSync(got, vpk);
+      const q = (p) => '"' + p.replace(/\\/g, '/') + '"';
+      fs.writeFileSync(path.join(mod, 'gameinfo.gi'), `"GameInfo"\n{\n\tgame\t"Counter-Strike 2"\n\tFileSystem\n\t{\n\t\tSearchPaths\n\t\t{\n`
+        + `\t\t\tGame\t${q(this.gameDir)}\n\t\t\tGame\t${q(path.join(game, 'core'))}\n\t\t\tMod\t${q(this.gameDir)}\n`
+        + `\t\t\tOfficialAddonRoot\t${q(path.join(game, 'csgo_community_addons'))}\n\t\t}\n\t}\n}\n`);
+    }
     // The skybox's textures land next to the world's, some under the same names: those go back to the size the world
     // export gave them (else full size, gigabytes of them), the skybox's own to 256 (it's far away).
     const pngSize = (f) => { try { const b = fs.readFileSync(path.join(dir, f)); return Math.max(b.readUInt32BE(16), b.readUInt32BE(20)); } catch { return 0; } };
@@ -1249,7 +1273,41 @@ class CS2Service {
       const vec = (s) => String(s || '').replace(/[[\]]/g, '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
       return { origin: cam ? vec(cam.origin) : [0, 0, 0], scale: +cam?.scale || 16, offset: vec(ref.origin).length === 3 ? vec(ref.origin) : [0, 0, 0] };
     } catch (e) { this.log('3d skybox: ' + e.message); return null; }
-    finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+    finally { fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(own, { recursive: true, force: true }); }
+  }
+
+  // An export made before the fog was read (fog.js) reads it from the map's entities, once: no version bump, so nothing
+  // else is done again. null is the answer for a map with none.
+  async upgradeMapFog(id, vpk, dir, meta, say) {
+    say('Updating the map\'s fog…');
+    const tmp = path.join(dir, 'tmp-ents');
+    await this.ensureCS2().run(['-i', vpk, '-f', `maps/${id}/entities/default_ents.vents_c`, '-d', '-o', tmp]);
+    const entFile = path.join(tmp, 'maps', id, 'entities', 'default_ents.vents');
+    const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (!ents.length) throw new Error('no entities');
+    const next = { ...meta, fog: play.mapFog(ents) };
+    fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
+    return next;
+  }
+
+  // A community map exported before its addon was looked in for its post processing and its 3D skybox (Debris's,
+  // Boulder's, Poseidon's: they came out with no colour grading and nothing around the map) looks again, once
+  // (addonChecked): no version bump, so no other map is touched. A look that fails leaves it as it was, to try again.
+  async upgradeMapAddon(id, vpk, dir, meta, say) {
+    say('Updating the map\'s lighting and 3D skybox…');
+    const tmp = path.join(dir, 'tmp-ents');
+    await this.ensureCS2().run(['-i', vpk, '-f', `maps/${id}/entities/default_ents.vents_c`, '-d', '-o', tmp]);
+    const entFile = path.join(tmp, 'maps', id, 'entities', 'default_ents.vents');
+    const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (!ents.length) throw new Error('no entities');
+    const info = play.mapInfo(ents);
+    const lighting = await this.playLighting(vpk, dir, ents, info);
+    const sky3d = await this.playSky3d(dir, ents, id);
+    const next = { ...meta, exposure: info.exposure, postProcessing: info.postProcessing, lighting, sky3d, addonChecked: true };
+    fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
+    return next;
   }
 
   // Version 7's 3D skybox export could leave the world's textures at full size (up to 4096, gigabytes of video memory):
@@ -1279,7 +1337,7 @@ class CS2Service {
     const entFile = path.join(tmp, 'maps', id, 'entities', 'default_ents.vents');
     const ents = fs.existsSync(entFile) ? play.parseEntities(fs.readFileSync(entFile, 'utf8')) : [];
     fs.rmSync(tmp, { recursive: true, force: true });
-    const next = { ...meta, sky3d: await this.playSky3d(dir, ents), version: 7 };
+    const next = { ...meta, sky3d: await this.playSky3d(dir, ents, id), version: 7 };
     fs.writeFileSync(path.join(dir, 'map.json'), JSON.stringify(next));
     return next;
   }
@@ -1708,23 +1766,75 @@ class CS2Service {
     return out;
   }
 
-  // The map's radar (CS2's overview image and its placement): { image, x, y, scale } or null.
+  // The map's radar: CS2's overview image and its placement (resource/overviews/<map>.txt), { image, x, y, scale,
+  // layers: [{ image, min, max }] } or null. A map with floors over each other (Nuke, Vertigo, Train, Boulder) has an
+  // image for each, its verticalsections saying which heights (game units, your feet) each one is for; the radar shows
+  // the one you're on. A community map's (Debris, El Dorado, Poseidon, Boulder, Fachwerk, Shelter) are in its own files,
+  // its addon. Kept in radar.json (RADAR_VERSION) with the images, at most 1024 px (the addons' are 2048).
   async playRadar(id, dir) {
-    const meta = path.join(dir, 'radar.json'), img = path.join(dir, 'radar.png');
-    if (!fs.existsSync(meta)) {
+    const meta = path.join(dir, 'radar.json');
+    let r = null;
+    try { r = JSON.parse(fs.readFileSync(meta, 'utf8')); } catch {}
+    if (r?.v !== RADAR_VERSION) {
       try {
-        const cs2 = this.ensureCS2();
-        const txt = `resource/overviews/${id}.txt`, tex = `panorama/images/overheadmaps/${id}_radar_psd.vtex`;
-        const files = await cs2.extract([txt, tex]);
-        const local = files[tex + '_c'], ovr = files[txt];
-        if (!local || !ovr) return null;
-        const kv = parseKV1(fs.readFileSync(ovr, 'utf8'));
-        const o = kv[id] || Object.values(kv)[0] || {};
-        fs.copyFileSync(local, img);
-        fs.writeFileSync(meta, JSON.stringify({ x: +o.pos_x || 0, y: +o.pos_y || 0, scale: +o.scale || 1 }));
-      } catch (e) { this.log('radar: ' + e.message); return null; }
+        await this.compactor?.settle('play/' + id); // (its old files may be being compressed: see playMap)
+        r = await this.exportRadar(id, dir);
+      } catch (e) { this.log('radar: ' + e.message); return null; } // (not noted: the next load tries again)
+      fs.writeFileSync(meta, JSON.stringify(r));
     }
-    return { image: this.url(img), ...JSON.parse(fs.readFileSync(meta, 'utf8')) };
+    if (!r.layers?.length) return null;
+    const layers = r.layers.map((l) => ({ image: this.url(path.join(dir, l.file)), min: l.min, max: l.max }));
+    return { image: layers[0].image, x: r.x, y: r.y, scale: r.scale, layers };
+  }
+
+  async exportRadar(id, dir) {
+    const cs2 = this.ensureCS2(), addon = this.addonVpk(id), tmp = path.join(dir, 'tmp-radar');
+    const txt = `resource/overviews/${id}.txt`, pics = 'panorama/images/overheadmaps/';
+    try {
+      // The overview: the game's, else the addon's.
+      let ovr = (await cs2.extract([txt]))[txt];
+      if (!ovr && addon) {
+        await cs2.run(['-i', addon, '-f', txt, '-o', tmp]);
+        if (fs.existsSync(path.join(tmp, txt))) ovr = path.join(tmp, txt);
+      }
+      if (!ovr) return { v: RADAR_VERSION, layers: [] }; // (a map CS2 has no radar for: none, and that's the answer)
+      const kv = parseKV1(fs.readFileSync(ovr, 'utf8'));
+      const o = kv[id] || Object.values(kv)[0] || {};
+      // Each floor's heights and image: the default one is <map>_radar, another <map>_<name>_radar (Nuke's
+      // de_nuke_lower_radar, Boulder's de_boulder_higher1_radar), a .psd's or a .tga's.
+      const sections = o.verticalsections && typeof o.verticalsections === 'object' ? Object.entries(o.verticalsections) : [];
+      const floors = (sections.length ? sections : [['default', {}]]).map(([name, s]) => ({
+        name, min: Number.isFinite(+s?.AltitudeMin) ? +s.AltitudeMin : null, max: Number.isFinite(+s?.AltitudeMax) ? +s.AltitudeMax : null,
+        want: ['psd', 'tga'].map((k) => `${pics}${name === 'default' ? id : `${id}_${name}`}_radar_${k}.vtex_c`),
+      }));
+      const game = await cs2.listing().catch(() => new Map());
+      const mine = addon ? new Set((await cs2.run(['-i', addon, '-l']).catch(() => '')).split(/\r?\n/).map((l) => / CRC:/.test(l) ? l.slice(0, l.indexOf(' CRC:')) : '').filter(Boolean)) : new Set();
+      const layers = [];
+      let width = 1024; // (the overview's own width: see scale below)
+      const pngWidth = (p) => { try { const b = fs.readFileSync(p); return b.toString('latin1', 12, 16) === 'IHDR' ? b.readUInt32BE(16) : 0; } catch { return 0; } };
+      for (const f of floors) {
+        const inGame = f.want.find((w) => game.has(w)), inAddon = !inGame && f.want.find((w) => mine.has(w));
+        let local = null;
+        if (inGame) local = (await cs2.extract([inGame]))[inGame];
+        else if (inAddon) {
+          await cs2.run(['-i', addon, '-f', inAddon, '-d', '-o', tmp]);
+          const p = path.join(tmp, inAddon.replace(/\.vtex_c$/, '.png'));
+          if (fs.existsSync(p)) local = p;
+        }
+        if (!local) continue; // (a floor with no picture: the others still show)
+        const file = f.name === 'default' ? 'radar.png' : `radar_${f.name.replace(/[^a-z0-9_]/gi, '')}.png`;
+        if (!layers.length || file === 'radar.png') width = pngWidth(local) || 1024;
+        fs.copyFileSync(local, path.join(dir, file));
+        if (this.shrinkImages) await this.shrinkImages([path.join(dir, file)], 1024);
+        layers.push({ file, min: f.min, max: f.max });
+      }
+      // The default floor first (what shows before you're placed).
+      layers.sort((a, b) => (b.file === 'radar.png') - (a.file === 'radar.png'));
+      if (!layers.length) throw new Error('no overview image for ' + id);
+      // The scale is game units to the overview's pixels, as big as it is: Valve's are 1024 px, the community maps'
+      // (made with RadGen) 2048. The radar works in 1024 px (and the images are shrunk to that).
+      return { v: RADAR_VERSION, x: +o.pos_x || 0, y: +o.pos_y || 0, scale: (+o.scale || 1) * (width / 1024), layers };
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
 
   // CS2's equipment icons (the white silhouettes of every gun, knife, grenade and piece of gear that its buy menu and

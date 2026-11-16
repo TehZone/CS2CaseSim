@@ -338,7 +338,30 @@ function mapInfo(ents) {
     sky: ents.find((e) => e.classname === 'env_sky')?.skyname?.replace(/^resource_name:"?|"$/g, '') || '',
     // How bright CS2 draws the sky (env_sky's brightness scale: Cache's is 4).
     skyBrightness: Number.isFinite(+ents.find((e) => e.classname === 'env_sky')?.brightnessscale) ? +ents.find((e) => e.classname === 'env_sky').brightnessscale : 1,
+    fog: mapFog(ents),
   };
+}
+
+// The map's fog (src/js/play/fog.js draws it): its env_cubemap_fog (the sky's colour) and env_gradient_fog (a colour of
+// its own), the first of each that starts on: { cube, gradient }, each { start, end, falloff, maxOpacity, height,
+// heightStart, heightEnd, heightExponent } (game units), the cube's lodBias, the gradient's color (sRGB 0-255) and
+// strength. null when it has neither.
+function mapFog(ents) {
+  const on = (cls) => ents.find((e) => e.classname === cls && !/^(true|1)$/i.test(String(e.startdisabled ?? '')));
+  const n = (v, d) => (Number.isFinite(+v) && String(v).trim() !== '' ? +v : d);
+  const yes = (v) => /^(true|1)$/i.test(String(v ?? ''));
+  const c = on('env_cubemap_fog'), g = on('env_gradient_fog');
+  const cube = c ? {
+    start: n(c.cubemapfogstartdistance, 0), end: n(c.cubemapfogenddistance, 10000), falloff: n(c.cubemapfogfalloffexponent, 1), maxOpacity: n(c.cubemapfogmaxopacity, 1),
+    height: yes(c.cubemapheightfog), heightStart: n(c.cubemapfogheightstart, 0), heightEnd: n(c.cubemapfogheightend, 4000), heightExponent: n(c.cubemapfogheightexponent, 1),
+    lodBias: n(c.cubemapfoglodbiase, 0.5),
+  } : null;
+  const gradient = g ? {
+    color: vec(g.fogcolor).length >= 3 ? vec(g.fogcolor).slice(0, 3) : [255, 255, 255], strength: n(g.fogstrength, 1),
+    start: n(g.fogstart, 0), end: n(g.fogend, 10000), falloff: n(g.fogfalloffexponent, 1), maxOpacity: n(g.fogmaxopacity, 1),
+    height: yes(g.heightfog), heightStart: n(g.fogstartheight, 0), heightEnd: n(g.fogendheight, 4000), heightExponent: n(g.fogverticalexponent, 1),
+  } : null;
+  return cube || gradient ? { cube, gradient } : null;
 }
 
 // ---- lighting -------------------------------------------------------------------------------------------
@@ -847,7 +870,7 @@ function mapSoundscapes(ents) {
 }
 
 module.exports = {
-  PLAY_VERSION, DATA_VERSION, F_PLAYER, F_BULLET, F_GRENADE, IRR_MAX, readGlb, buildCollision, brushSolid, gameVolumes, mapInfo, bakeLightmap, bakeSky,
+  PLAY_VERSION, DATA_VERSION, F_PLAYER, F_BULLET, F_GRENADE, IRR_MAX, readGlb, buildCollision, brushSolid, gameVolumes, mapInfo, mapFog, bakeLightmap, bakeSky,
   probeVolumes, bakeProbes, toneMapping, disabledNodes, hurtVolume, surfaceImpacts, doorNodes, glassNodes,
   WINGMAN_POOL, wingmanPool, pulseGraphs, wingmanSteps, wingmanEntities, wingmanSolids, wingmanCollision, wingmanReach, wingmanSite, wingmanSetup,
   weaponStats, soundEventFiles, modelPath, propBreakData, soundEventInfo, reverbPreset, mapSoundscapes, parseEntities, compactNav, NAV_VERSION, parseKV3,

@@ -284,6 +284,7 @@ export class Game {
     this.lineups = (await loadLineups(this.mapId, this.collision).catch(() => [])).filter((l) => this.mode !== 'wingman' || this.nav.findArea(l.pos));
     this.post = new Post(this.renderer, { samples: this.msaa, smoke: this.nades.volume });
     this.post.setLighting(this.world);
+    this.post.setFog(this.world.fog); // (the map's fog: fog.js)
     // The map's post processing: its tone curve, auto exposure range and colour grading LUT.
     const lut = map.lut ? await fetch(map.lut).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null) : null;
     this.post.setGrading({ tone: map.info.lighting?.tonemap, exposure: map.info.exposure, lut: lut && { data: new Uint8Array(lut), size: map.info.lighting.lut.size } });
@@ -2579,10 +2580,11 @@ export class Game {
   // in objects kept from frame to frame.
   radarData() {
     const m = this.match, me = this.me, a = this.paused ? 1 : this.acc / TICK;
-    const d = (this.radarFrame ||= { center: [0, 0], yaw: 0, myTeam: null, bomb: null, pings: null, mates: [], enemies: [], pool: [], bombAt: { pos: [0, 0, 0], planted: false, carried: false } });
+    const d = (this.radarFrame ||= { center: [0, 0, 0], yaw: 0, myTeam: null, bomb: null, pings: null, mates: [], enemies: [], pool: [], bombAt: { pos: [0, 0, 0], planted: false, carried: false } });
     const s = !me.alive && this.spectating;
-    if (s) { const [eye, , yaw] = s.eyeAt(a); d.center[0] = eye[0]; d.center[1] = eye[1]; d.yaw = yaw; }
-    else { const p = me.alive && this.camEye ? this.camEye : this.player.origin; d.center[0] = p[0]; d.center[1] = p[1]; d.yaw = this.input.yaw; }
+    // (And the height of their feet: which floor's overview shows, on Nuke, Vertigo, Train.)
+    if (s) { const [eye, , yaw] = s.eyeAt(a); d.center[0] = eye[0]; d.center[1] = eye[1]; d.center[2] = eye[2] - 64; d.yaw = yaw; }
+    else { const p = me.alive && this.camEye ? this.camEye : this.player.origin; d.center[0] = p[0]; d.center[1] = p[1]; d.center[2] = this.player.origin[2]; d.yaw = this.input.yaw; }
     d.myTeam = me.team; d.pings = this.pings;
     let n = 0, nm = 0, ne = 0;
     for (const c of this.combatants) {

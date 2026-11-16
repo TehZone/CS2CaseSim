@@ -10,6 +10,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { hidePoints } from '../cs2/rig.js';
 import { TextureArrays, slotsOf, batchMaterial, materialTable, addPieces, SLOTS, SRGB } from './batch.js';
 import { ProbeField } from './probes.js';
+import { fogUniforms, fogSkyMaterials } from './fog.js';
 
 export const IN = 0.0254;
 // Game (x, y, z; inches, Z up) <-> glTF scene (metres, Y up).
@@ -22,8 +23,10 @@ export function angleDir(pitch, yaw) {
 }
 export const dirGl = (d, out = new THREE.Vector3()) => out.set(d[1], d[2], d[0]);
 
-// Materials that never draw in game (tool textures), or need CS2 shaders we don't have.
-const HIDDEN = /toolsskybox|tools\/|toolsnodraw|nodraw|toolsclip|toolsplayerclip|toolsinvisible|toolstrigger|skybox/i;
+// Materials that never draw in game (tool textures), or need CS2 shaders we don't have. (Not anything named "skybox":
+// that's the scenery around the map, Inferno's hills, Nuke's and Vertigo's buildings, Mirage's hotels, Ancient's
+// jungle; the sky itself is sky.vfx, below.)
+const HIDDEN = /toolsskybox|tools\/|toolsnodraw|nodraw|toolsclip|toolsplayerclip|toolsinvisible|toolstrigger/i;
 const HIDDEN_SHADERS = /csgo_effects|sky\.vfx|spritecard/i;
 // Physics props kept out of the static world: the soccer ball.
 const BALL = /soccer_?ball/i;
@@ -373,15 +376,19 @@ function unlitMaterial(src) {
 // Glass (csgo_glass; the exporter gives it neither colour nor transparency, so it came out a solid white slab) and
 // water (csgo_water_fancy, left out before): see-through, reflecting the map's sky more at glancing angles like CS2's,
 // water tinted its g_vWaterFogColor with waves running over it.
+// Water's colour is its fog colour through its decay colour (what it lets through: Debris's sea, brown silt through
+// cyan, comes out teal). Further off it turns opaque, as CS2's depth fog makes deep water (a sea with nothing under it
+// showed the sky's white lower half through it), and the ripples fade out there (they flickered into a grid).
 function clearMaterial(src, vm, sky, water) {
-  const V = vm.VectorParams || {};
+  const V = vm.VectorParams || {}, F = vm.FloatParams || {};
   const c = (v, d) => new THREE.Color().setRGB(...(v || d).slice(0, 3), THREE.SRGBColorSpace);
   const m = new THREE.MeshStandardMaterial({
-    color: water ? c(V.g_vWaterFogColor, [0.3, 0.4, 0.4]).multiplyScalar(0.3) : c(V.GlassTintColor, [1, 1, 1]).multiplyScalar(0.6),
+    color: water ? c(V.g_vWaterFogColor, [0.3, 0.4, 0.4]).multiply(c(V.g_vWaterDecayColor, [1, 1, 1])).multiplyScalar(0.3) : c(V.GlassTintColor, [1, 1, 1]).multiplyScalar(0.6),
     roughness: water ? 0.3 : 0.1, metalness: 0, envMap: sky, envMapIntensity: water ? 0.9 : 0.7,
     transparent: true, depthWrite: false, side: water ? THREE.FrontSide : THREE.DoubleSide,
   });
   const [near, far] = water ? [0.35, 0.92] : [0.1, 0.55]; // see-through looking down into it, a mirror at a glance
+  const fresnel = water ? Math.min(8, Math.max(1, F.g_flFresnelExponent ?? 3)) : 3;
   m.onBeforeCompile = (sh) => {
     if (water) {
       sh.uniforms.cs2Time = CS2_TIME;
@@ -390,9 +397,11 @@ function clearMaterial(src, vm, sky, water) {
 	{
 		// Waves: a few travelling ripples of different sizes (metres), as the surface's slope.
 		vec2 p = vCs2World.xz, s = vec2( 0.0 );
+		float cs2Near = 1.0 - smoothstep( 10.0, 60.0, length( vViewPosition ) ); // (metres: gone by ~2400 units)
 		s += vec2( cos( p.x * 2.1 + cs2Time * 1.3 ), cos( p.y * 1.7 - cs2Time * 1.1 ) ) * 0.05;
 		s += vec2( cos( ( p.x + p.y ) * 4.3 - cs2Time * 1.9 ), cos( ( p.x - p.y ) * 3.7 + cs2Time * 1.6 ) ) * 0.03;
 		s += vec2( cos( p.y * 9.1 + p.x * 2.0 + cs2Time * 2.7 ), cos( p.x * 8.3 - p.y * 1.5 - cs2Time * 2.3 ) ) * 0.015;
+		s *= cs2Near;
 		normal = normalize( ( viewMatrix * vec4( normalize( vec3( -s.x, 1.0, -s.y ) ), 0.0 ) ).xyz );
 	}`);
     }
@@ -400,7 +409,8 @@ function clearMaterial(src, vm, sky, water) {
     sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
 	reflectedLight.directSpecular *= ${water ? '0.25' : '0.5'};`);
     sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', `#include <opaque_fragment>
-	gl_FragColor.a = mix( ${near.toFixed(2)}, ${far.toFixed(2)}, pow( 1.0 - abs( dot( normal, normalize( vViewPosition ) ) ), 3.0 ) );`);
+	gl_FragColor.a = mix( ${near.toFixed(2)}, ${far.toFixed(2)}, pow( 1.0 - abs( dot( normal, normalize( vViewPosition ) ) ), ${fresnel.toFixed(2)} ) );
+	${water ? 'gl_FragColor.a = max( gl_FragColor.a, smoothstep( 20.0, 70.0, length( vViewPosition ) ) );' : ''}`);
   };
   m.customProgramCacheKey = () => (water ? 'cs2water' : 'cs2glass');
   m.userData.basic = true; // lit by the sun and the sky, no probe light per vertex
@@ -1113,6 +1123,8 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
 
   // The 3D skybox (see CS2Service.playSky3d): a scene of its own, at its own scale, lit by the sun and the sky; Game
   // draws it first from a camera that moves 1/scale as far as yours, then the map over it.
+  // CS2's fog (fog.js): the post pass fogs the map, the 3D skybox's materials themselves.
+  const fog = info.fog ? fogUniforms(info.fog, sky, skyBrightness) : null;
   let sky3d = null;
   if (withSky3d && map.sky3d && info.sky3d) {
     try {
@@ -1129,6 +1141,9 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
         const m = o.material, vm = m.userData?.vmat || {};
         if (HIDDEN.test(m.name || '') || HIDDEN.test(vm.Name || '') || HIDDEN_SHADERS.test(vm.ShaderName || '')) { o.visible = false; return; }
         if (!mats.has(m) && isUnlit(m, vm) && !/static_overlay|csgo_glass|csgo_water/.test(vm.ShaderName || '')) mats.set(m, unlitMaterial(m));
+        // Its sea (Debris's, Poseidon's, Anubis's) as the map's water, opaque: it's all far off (as a plain copy, half
+        // see-through, it showed the sky's white lower half through it).
+        if (!mats.has(m) && /csgo_water/.test(vm.ShaderName || '')) { const w = clearMaterial(m, vm, sky, true); w.transparent = false; w.depthWrite = true; mats.set(m, w); }
         if (!mats.has(m)) {
           const v = m.clone();
           v.vertexColors = false; v.envMap = null;
@@ -1187,12 +1202,13 @@ export async function loadWorld(map, renderer, { onProgress = () => {}, anisotro
       const t = info.sky3d;
       sky3d = { scene: skyScene, camera: new THREE.PerspectiveCamera(), origin: toGl(t.origin), offset: toGl(t.offset), scale: t.scale || 16, materials: mats,
         dispose() { skyArrays.dispose(); for (const tb of skyTables) tb.dispose(); for (const m of skyBatchMats) m.dispose(); } };
+      if (fog) fogSkyMaterials(skyScene, fog, sky3d);
       for (const m of mats.keys()) m.dispose();
     } catch (e) { console.warn('3D skybox unavailable:', e); }
   }
 
   return {
-    scene, world, sun, sky, ambient, bounds, probes, balls, doors, glass, sky3d,
+    scene, world, sun, sky, ambient, bounds, probes, balls, doors, glass, sky3d, fog,
     // A breakable's batched pieces shown or hidden (its own meshes, if it has any, are glass[i].meshes).
     setBroken(piece, on) { broken.image.data[piece * 4] = on ? 255 : 0; broken.needsUpdate = true; },
     layerTextures: [...layerTextures.values()], // (in the shaders' own uniforms)

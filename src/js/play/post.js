@@ -2,10 +2,12 @@
 // volumetric smokes are ray-marched against the world's depth (so walls in front hide them and they end at walls) at
 // half resolution, like CS2 does, then a full-screen pass puts it all on screen: it blends the smoke back in
 // (depth-aware, so it doesn't bleed over edges in front of it), adds the flashbang's afterimage, lays the weapon over
-// it, and finishes like CS2's post processing: the exposure (auto exposure within the map's range), CS2's filmic tone
-// curve with the map's parameters, sRGB, then the map's colour grading LUT.
+// it, and finishes like CS2's post processing (the map's fog first, from its depth: fog.js): the exposure (auto
+// exposure within the map's range), CS2's filmic tone curve with the map's parameters, sRGB, then the map's colour
+// grading LUT.
 import * as THREE from 'three';
 import { VOX, NX, NY, NZ, SLOTS, LIGHT_SCALE } from './smoke.js';
+import { fogUniforms, FOG_GLSL } from './fog.js';
 
 const vertexShader = /* glsl */ `
 varying vec2 vUv;
@@ -110,7 +112,11 @@ uniform vec4 tmToe; // toe numerator, toe denominator, white point, 1 / curve(wh
 uniform sampler3D tLut;
 uniform bool lutOn;
 uniform vec2 lutRange;
+uniform bool fogOn;
+uniform mat4 fogProjInv;
+uniform mat4 fogCamWorld;
 varying vec2 vUv;
+${FOG_GLSL}
 
 // CS2's tone curve (Hable's filmic curve with the map's parameters, after a 2.8x pre-scale clamped at the white point).
 vec3 cs2Curve(vec3 x) {
@@ -142,6 +148,14 @@ vec4 smokeHere() {
 
 void main() {
   vec4 col = texture(tColor, vUv);
+  // The fog over the map (not the sky, nor the 3D skybox, which fogs itself: nothing in the depth there).
+  if (fogOn) {
+    float depth = texture(tDepth, vUv).r;
+    if (depth < 1.0) {
+      vec4 v = fogProjInv * vec4(vUv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+      col.rgb = applyFog(col.rgb, (fogCamWorld * vec4(v.xyz / v.w, 1.0)).xyz);
+    }
+  }
   if (flashImage > 0.0) col.rgb = mix(col.rgb, texture(tFlash, vUv).rgb * 1.4, flashImage);
   if (smokeOn) { vec4 s = smokeHere(); col.rgb = col.rgb * s.a + s.rgb; }
   if (vmOn) { vec4 v = texture(tVm, vUv); col.rgb = col.rgb * (1.0 - v.a) + v.rgb; }
@@ -217,6 +231,7 @@ export class Post {
         smokeOn: { value: false }, flashImage: { value: 0 }, cameraNear: { value: 0.05 }, cameraFar: { value: 400 },
         exposure: { value: 1 }, tExposure: { value: null }, autoOn: { value: false }, tmCurve: { value: new THREE.Vector4() }, tmToe: { value: new THREE.Vector4() },
         tLut: { value: null }, lutOn: { value: false }, lutRange: { value: new THREE.Vector2(1, 0) },
+        fogOn: { value: false }, fogProjInv: { value: new THREE.Matrix4() }, fogCamWorld: { value: new THREE.Matrix4() }, ...fogUniforms(null, null),
       },
     });
     this.smokeScene = pass(this.smokeMat);
@@ -275,6 +290,14 @@ export class Post {
     u.lutOn.value = !!this.lut;
   }
 
+  // The map's fog (fog.js fogUniforms: shared with the 3D skybox's materials, so the camera set here is theirs too).
+  setFog(fog) {
+    const u = this.material.uniforms;
+    if (fog) Object.assign(u, fog);
+    u.fogOn.value = !!fog && (fog.fogCubeOn.value || fog.fogGradOn.value);
+    this.fog = fog;
+  }
+
   // Auto exposure: a few times a second, the image's average (log) luminance sets where the exposure heads, within the
   // map's range, at its speeds. Read back when the GPU has it (waiting for it stalled the frame).
   updateExposure(dt) {
@@ -331,6 +354,12 @@ export class Post {
   // sky3d: the map's 3D skybox ({ scene, camera }), drawn first, behind everything.
   render(scene, camera, { camPos, flashImage = 0, captureFlash = false, overlay = null, dt = 0, sky3d = null }) {
     const r = this.renderer, u = this.material.uniforms, su = this.smokeMat.uniforms;
+    if (this.fog) {
+      camera.updateMatrixWorld();
+      u.fogProjInv.value.copy(camera.projectionMatrixInverse);
+      u.fogCamWorld.value.copy(camera.matrixWorld);
+      this.fog.fogCam.value.setFromMatrixPosition(camera.matrixWorld);
+    }
     r.setRenderTarget(this.rt);
     r.clear();
     if (sky3d) {
