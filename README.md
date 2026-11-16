@@ -341,7 +341,8 @@ What's in a match:
   draw; every texture uploaded and new guns' shaders compiled before they're seen; the radar moved by the page's
   compositor, not redrawn. Bots move with your movement code on a collision test that allocates
   nothing, and their sight lines stop at the first wall. `CS2SIM_SMOKE=perf` measures each map's frame rate with the
-  bots playing (`CS2SIM_SMOKE_SHOTS`: a screenshot of each view, three bots stopped in front of you).
+  bots playing (`CS2SIM_SMOKE_SHOTS`: a screenshot of each view, three bots stopped in front of you;
+  `CS2SIM_SMOKE_LOADPROFILE`: how long each step of the map's load took, and a CPU profile of it).
 - No stutters: everything a match shows is loaded behind the loading screen (every gun bots carry, as it lies on the
   floor and in a bot's hands, your viewmodels and the plain ones you see spectating, the bomb, the effects, the whole
   3D skybox, the flashbang's afterimage), with its shaders compiled and first used, its textures (its shader's own too:

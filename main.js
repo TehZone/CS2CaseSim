@@ -483,18 +483,58 @@ async function smokeMapIds(win) {
   return ids;
 }
 
+// A CPU profile (DevTools' Profiler.stop) as text: its `self` functions by their own time, then its `total` ones (in
+// the game's code) by their time with what they called.
+function profileSummary(profile, self = 30, total = 40) {
+  const own = new Map(), dt = new Map(), byId = new Map(profile.nodes.map((n) => [n.id, n])), parent = new Map();
+  for (const n of profile.nodes) for (const c of n.children || []) parent.set(c, n.id);
+  profile.samples.forEach((id, k) => dt.set(id, (dt.get(id) || 0) + (profile.timeDeltas[k] || 0)));
+  const key = (f) => `${f.functionName || '(anon)'} ${f.url.replace(/.*\//, '')}:${f.lineNumber + 1}`;
+  let sum = 0;
+  const incl = new Map();
+  for (const n of profile.nodes) {
+    const t = (dt.get(n.id) || 0) / 1000;
+    own.set(key(n.callFrame), (own.get(key(n.callFrame)) || 0) + t); sum += t;
+    // (each sample's time to every function on its stack, once)
+    const seen = new Set();
+    for (let p = n.id; p != null; p = parent.get(p)) { const k = key(byId.get(p).callFrame); if (!seen.has(k)) { seen.add(k); incl.set(k, (incl.get(k) || 0) + t); } }
+  }
+  const line = ([k, t]) => `  ${t.toFixed(0).padStart(6)} ${((t / sum) * 100).toFixed(1).padStart(5)}%  ${k}`;
+  return `(ms of ${sum.toFixed(0)} ms) self:\n` + [...own].sort((a, b) => b[1] - a[1]).slice(0, self).map(line).join('\n')
+    + '\n total:\n' + [...incl].filter(([k]) => /\.js:/.test(k)).sort((a, b) => b[1] - a[1]).slice(0, total).map(line).join('\n');
+}
+
 // Starts a competitive match on a map (exporting it first if needed), a private one (it starts at once, with the
 // lobby's settings): whether it's running (window.__playGame).
 async function smokeStartMap(win, id, label) {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const js = (code) => win.webContents.executeJavaScript(code);
+  // CS2SIM_SMOKE_LOADPROFILE: how long each of the load's steps took (its status lines) and a CPU profile of the load,
+  // its functions by their own time and by their total.
+  const loadProf = process.env.CS2SIM_SMOKE_LOADPROFILE ? win.webContents.debugger : null;
+  if (loadProf) {
+    if (!loadProf.isAttached()) loadProf.attach('1.3');
+    await loadProf.sendCommand('Profiler.enable'); await loadProf.sendCommand('Profiler.setSamplingInterval', { interval: 500 }); await loadProf.sendCommand('Profiler.start');
+    await js(`window.__phases = []; (() => { let last = ''; const look = () => { const s = document.querySelector('.play-root [data-status]')?.textContent || '';
+      const k = s.replace(/[\\d.]+%|\\d+ of \\d+/g, '#'); if (k && k !== last) { window.__phases.push([performance.now(), k]); last = k; }
+      if (window.__playGame?.raf) window.__phases.push([performance.now(), 'running']); else setTimeout(look, 25); }; look(); })(); 1`);
+  }
   await js(`(() => { const k = 'cs2sim.play'; const p = JSON.parse(localStorage.getItem(k) || '{}'); localStorage.setItem(k, JSON.stringify({ ...p, lobby: 'private' })); })();
     window.__cs2Debug = true; window.__playGame = null; document.querySelector('#topbar [data-page=play]').click();
     setTimeout(() => { document.querySelector('[data-map="${id}"]')?.click(); setTimeout(() => document.querySelector('[data-start]').click(), 400); }, 300); 1`);
   const t0 = Date.now();
   for (let i = 0; i < 900; i++) {
     await wait(1000);
-    if (await js(`!!window.__playGame?.raf`)) { console.log('SMOKE', label, id, 'loaded in', ((Date.now() - t0) / 1000).toFixed(0), 's'); return true; }
+    if (await js(`!!window.__playGame?.raf`)) {
+      console.log('SMOKE', label, id, 'loaded in', ((Date.now() - t0) / 1000).toFixed(0), 's');
+      if (loadProf) {
+        const ph = JSON.parse(await js('JSON.stringify(window.__phases)'));
+        console.log('SMOKE', label, id, 'load steps\n' + ph.slice(0, -1).map(([t, k], j) => `  ${(ph[j + 1][0] - t).toFixed(0).padStart(6)} ms  ${k}`).join('\n'));
+        const { profile } = await loadProf.sendCommand('Profiler.stop');
+        console.log('SMOKE', label, id, 'load profile\n' + profileSummary(profile, 30, 45));
+      }
+      return true;
+    }
     if (i > 2 && !(await js(`!!document.querySelector('.play-root')`))) break; // it gave up (the error is in a toast)
     if (i % 30 === 29) console.log('SMOKE', label, id, 'loading', await js(`document.querySelector('.play-root [data-status]')?.textContent || ''`));
   }
